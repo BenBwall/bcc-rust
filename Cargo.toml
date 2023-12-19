@@ -1,0 +1,62 @@
+[package]
+name = "bcc-rust"
+version = "0.1.0"
+edition = "2021"
+description = "C99 Compliant C Compiler"
+license-file = "LICENSE"
+readme = "README.md"
+repository = "https://www.github.com/bwallker/bcc-rust"
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+
+[lints.clippy]
+cargo = "warn"
+pedantic = "warn"
+cast-possible-wrap = "allow"
+cast-sign-loss = "allow"
+perf = "warn"
+
+
+# Enable provenance lints when strict provenance is stable
+# Enable must-not-suspend and nont-exhaustive-omitted-patterns when they are stable
+[lints.rust]
+absolute-paths-not-starting-with-crate = "forbid"
+elided-lifetimes-in-paths = "warn"
+explicit-outlives-requirements = "warn"
+# fuzzy-provenance-casts = "forbid"
+let-underscore-drop = "warn"
+# lossy-provenance-casts = "forbid"
+macro-use-extern-crate = "warn"
+missing-abi = "forbid"
+missing-debug-implementations = "warn"
+missing-docs = "warn"
+# must-not-suspend = "forbid"
+# non-exhaustive-omitted-patterns = "warn"
+pointer-structural-match = "forbid"
+single-use-lifetimes = "warn"
+trivial-casts = "warn"
+trivial-numeric-casts = "warn"
+unsafe-op-in-unsafe-fn = "forbid"
+unused-crate-dependencies = "warn"
+unused-extern-crates = "warn"
+unused-import-braces = "warn"
+unused-lifetimes = "warn"
+unused-macro-rules = "warn"
+unused-qualifications = "warn"
+unused-results = "warn"
+unused-tuple-struct-fields = "warn"
+variant-size-differences = "warn"
+
+
+[dependencies]
+
+rustc-hash = "1.1.0"
+string-interner = "0.14.0"
+thiserror = "1.0.51"
+
+[dev-dependencies]
+pretty_assertions = "1.4.0"
+proptest = "1.4.0"
+rstest = "0.18.2"
