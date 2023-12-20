@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use bigdecimal::{num_bigint::BigInt, num_bigint::BigUint, num_traits::Pow, BigDecimal};
+use bigdecimal::{num_bigint::BigInt, num_traits::Pow, BigDecimal};
 
 use crate::{
     util::string_cache::{Id as StringCacheId, StringCache},
@@ -9,7 +9,8 @@ use crate::{
 
 trait StrExt {
     /// Returns the character at the given index,
-    /// or `None` if the index is out of bounds or index is in the middle of a character.
+    /// or `None` if the index is out of bounds or index is in the middle of a
+    /// character.
     fn char_at(&self, index: usize) -> Option<char>;
 }
 
@@ -139,7 +140,7 @@ where
         + Iterator<
             Item = Result<
                 PreprocessorToken<Prev::SavePoint>,
-                PreprocessorTokenizerError<Prev::SavePoint>,
+                PreprocessorTokenizerError<Prev::SavePoint, Prev::Error>,
             >,
         > + AsMut<StringCache>
         + AsRef<StringCache>,
@@ -185,6 +186,7 @@ where
             | _ => todo!(),
         }
     }
+
     fn parse_hexadecimal_float(
         &mut self,
         token: PreprocessorToken<Prev::SavePoint>,
@@ -272,7 +274,7 @@ where
         + Iterator<
             Item = Result<
                 PreprocessorToken<Prev::SavePoint>,
-                PreprocessorTokenizerError<Prev::SavePoint>,
+                PreprocessorTokenizerError<Prev::SavePoint, Prev::Error>,
             >,
         > + AsMut<StringCache>
         + AsRef<StringCache>,
@@ -295,22 +297,27 @@ where
         + Iterator<
             Item = Result<
                 PreprocessorToken<Prev::SavePoint>,
-                PreprocessorTokenizerError<Prev::SavePoint>,
+                PreprocessorTokenizerError<Prev::SavePoint, Prev::Error>,
             >,
         > + AsMut<StringCache>
         + AsRef<StringCache>,
 {
+    type Error = PreprocessorError<SavePoint<Prev::SavePoint>>;
     type SavePoint = SavePoint<Prev::SavePoint>;
+    type Yield = Token<SavePoint<Prev::SavePoint>>;
+
     fn save(&self) -> Self::SavePoint {
         SavePoint {
             inner: self.previous_phase.save(),
             tokenizer_stack: self.tokenizer_stack.clone(),
         }
     }
+
     fn restore(&mut self, save_point: Self::SavePoint) {
         self.previous_phase.restore(save_point.inner);
         self.tokenizer_stack = save_point.tokenizer_stack;
     }
+
     fn current_position(&self) -> Position {
         self.previous_phase.current_position()
     }

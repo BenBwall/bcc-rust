@@ -2,10 +2,10 @@ use std::fmt::Display;
 
 use smallstr::SmallString;
 use thiserror::Error;
-use crate::util::string_cache::{Id as StringCacheId, StringCache};
 
-use super::{Position, SavePoint as ISavePoint, TranslationPhase, GetSeverity, ErrorSeverity};
-#[derive(Debug, PartialEq, Eq)] 
+use super::{ErrorSeverity, GetSeverity, Position, SavePoint as ISavePoint, TranslationPhase};
+use crate::util::string_cache::{Id as StringCacheId, StringCache};
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PreprocessorTokenizer<Prev> {
     previous_phase: Prev,
     is_lexing_include_directive: bool,
@@ -56,6 +56,8 @@ pub(crate) struct InnerPreprocessorTokenizerError<SavePoint> {
     contents: StringCacheId,
 }
 
+impl<SavePoint: ISavePoint> std::error::Error for InnerPreprocessorTokenizerError<SavePoint> {}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Error)]
 pub(crate) enum PreprocessorTokenizerError<PrevSavePoint, PrevError> {
     #[error(transparent)]
@@ -70,8 +72,8 @@ where
 {
     fn severity(&self) -> ErrorSeverity {
         match self {
-            Self::Inner(e) => e.severity(),
-            Self::TokenizerError(e) => e.severity(),
+            | Self::Inner(e) => e.severity(),
+            | Self::TokenizerError(e) => e.severity(),
         }
     }
 }
@@ -79,19 +81,26 @@ where
 impl<PrevSavePoint> GetSeverity for InnerPreprocessorTokenizerError<SavePoint<PrevSavePoint>> {
     fn severity(&self) -> ErrorSeverity {
         match self.error_type {
-            PreprocessorErrorType::UnknownToken => ErrorSeverity::Error,
-            PreprocessorErrorType::UnterminatedCharacter => ErrorSeverity::Error,
-            PreprocessorErrorType::UnterminatedString => ErrorSeverity::Error,
-            PreprocessorErrorType::UnterminatedAngleBracketString => ErrorSeverity::Error,
-            PreprocessorErrorType::UnterminatedIncludeString => ErrorSeverity::Error,
+            | PreprocessorErrorType::UnknownToken => ErrorSeverity::Error,
+            | PreprocessorErrorType::UnterminatedCharacter => ErrorSeverity::Error,
+            | PreprocessorErrorType::UnterminatedString => ErrorSeverity::Error,
+            | PreprocessorErrorType::UnterminatedAngleBracketString => ErrorSeverity::Error,
+            | PreprocessorErrorType::UnterminatedIncludeString => ErrorSeverity::Error,
         }
     }
 }
 
-impl<SavePoint> Display for InnerPreprocessorTokenizerError<SavePoint> where SavePoint : ISavePoint {
+impl<SavePoint> Display for InnerPreprocessorTokenizerError<SavePoint>
+where
+    SavePoint: ISavePoint,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let current_position = self.start_save.current_position();
-        write!(f, "{:?} at {}:{}", self.error_type, current_position.line, current_position.column)
+        write!(
+            f,
+            "{:?} at {}:{}",
+            self.error_type, current_position.line, current_position.column
+        )
     }
 }
 
@@ -99,10 +108,16 @@ impl<Prev> Iterator for PreprocessorTokenizer<Prev>
 where
     Prev: TranslationPhase<Yield = char>,
 {
-    type Item = Result<PreprocessorToken<SavePoint<Prev::SavePoint>>, PreprocessorTokenizerError<SavePoint<Prev::SavePoint>, Prev::Error>>;
-    fn next(&mut self) -> Option<Self::Item> {
+    type Item = Result<
+        PreprocessorToken<SavePoint<Prev::SavePoint>>,
+        PreprocessorTokenizerError<SavePoint<Prev::SavePoint>, Prev::Error>,
+    >;
 
-        fn inner<Prev: TranslationPhase + Iterator<Item = char>, const NUM_PARSER_FUNCTIONS: usize>(tokenizer: &mut PreprocessorTokenizer<Prev>, parser_functions: [ParserFunction<Prev>; NUM_PARSER_FUNCTIONS]) -> Option<<PreprocessorTokenizer::<Prev> as Iterator>::Item> {
+    fn next(&mut self) -> Option<Self::Item> {
+        fn inner<Prev: TranslationPhase<Yield = char>, const NUM_PARSER_FUNCTIONS: usize>(
+            tokenizer: &mut PreprocessorTokenizer<Prev>,
+            parser_functions: [ParserFunction<Prev>; NUM_PARSER_FUNCTIONS],
+        ) -> Option<<PreprocessorTokenizer<Prev> as Iterator>::Item> {
             let save_point: SavePoint<<Prev as TranslationPhase>::SavePoint> = tokenizer.save();
             for (i, parser_function) in parser_functions.iter().enumerate() {
                 let index_before = tokenizer.current_position().index;
@@ -110,16 +125,17 @@ where
                     Some(result.map_err(Into::into))
                 }
                 let index_after = tokenizer.current_position().index;
-                assert_eq!(index_after, index_before, 
-                        "Compiler bug: Tokenize function number {i} Swallowed {} characters.",
-                        index_after - index_before,
-                    );
+                assert_eq!(
+                    index_after,
+                    index_before,
+                    "Compiler bug: Tokenize function number {i} Swallowed {} characters.",
+                    index_after - index_before,
+                );
             }
             if tokenizer.previous_phase.next().is_some() {
-                let result = Some(Err(tokenizer.generate_error(
-                    PreprocessorErrorType::UnknownToken,
-                    save_point,
-                )));
+                let result = Some(Err(
+                    tokenizer.generate_error(PreprocessorErrorType::UnknownToken, save_point)
+                ));
                 return result;
             }
             None
@@ -135,23 +151,27 @@ where
         }
 
         if self.is_lexing_include_directive {
-            inner(self, [
-                PreprocessorTokenizer::tokenize_angle_bracket_string,
-                PreprocessorTokenizer::tokenize_include_string,
-            ])
+            inner(
+                self,
+                [
+                    PreprocessorTokenizer::tokenize_angle_bracket_string,
+                    PreprocessorTokenizer::tokenize_include_string,
+                ],
+            )
         } else {
-            inner(self, [
-                PreprocessorTokenizer::tokenize_tag,
-                PreprocessorTokenizer::tokenize_newline,
-                PreprocessorTokenizer::tokenize_number,
-                PreprocessorTokenizer::tokenize_keyword,
-                PreprocessorTokenizer::tokenize_identifier,
-                PreprocessorTokenizer::tokenize_string,
-                PreprocessorTokenizer::tokenize_char,
-            ])
+            inner(
+                self,
+                [
+                    PreprocessorTokenizer::tokenize_tag,
+                    PreprocessorTokenizer::tokenize_newline,
+                    PreprocessorTokenizer::tokenize_number,
+                    PreprocessorTokenizer::tokenize_keyword,
+                    PreprocessorTokenizer::tokenize_identifier,
+                    PreprocessorTokenizer::tokenize_string,
+                    PreprocessorTokenizer::tokenize_char,
+                ],
+            )
         }
-
-        
     }
 }
 
@@ -159,19 +179,22 @@ impl<Prev> TranslationPhase for PreprocessorTokenizer<Prev>
 where
     Prev: TranslationPhase<Yield = char>,
 {
-    type Yield = PreprocessorToken<SavePoint<Prev::SavePoint>>;
     type Error = PreprocessorTokenizerError<SavePoint<Prev::SavePoint>, Prev::Error>;
     type SavePoint = SavePoint<Prev::SavePoint>;
+    type Yield = PreprocessorToken<SavePoint<Prev::SavePoint>>;
+
     fn save(&self) -> Self::SavePoint {
         SavePoint {
             inner: self.previous_phase.save(),
             is_lexing_include_directive: self.is_lexing_include_directive,
         }
     }
+
     fn restore(&mut self, save_point: Self::SavePoint) {
         self.previous_phase.restore(save_point.inner);
         self.is_lexing_include_directive = save_point.is_lexing_include_directive;
     }
+
     fn current_position(&self) -> Position {
         self.previous_phase.current_position()
     }
@@ -179,7 +202,7 @@ where
 
 impl<Prev> PreprocessorTokenizer<Prev>
 where
-    Prev: TranslationPhase + Iterator<Item = char>,
+    Prev: TranslationPhase<Yield = char>,
 {
     fn generate_error(
         &mut self,
@@ -216,7 +239,7 @@ where
             .collect();
         self.restore(current_save);
         let start_position = start_save.current_position();
-        
+
         PreprocessorToken {
             start_save,
             length: self.current_position().index - start_position.index,
@@ -227,7 +250,11 @@ where
 
     fn step_over_whitespace(&mut self) {
         let mut save_point = self.save();
-        while self.previous_phase.next().is_some_and(|c| c.is_whitespace() && c != '\n') {
+        while self
+            .previous_phase
+            .next()
+            .is_some_and(|c| c.is_whitespace() && c != '\n')
+        {
             save_point = self.save();
         }
         self.restore(save_point);
@@ -397,7 +424,12 @@ where
 
     fn tokenize_angle_bracket_string(&mut self) -> ParserReturn<SavePoint<Prev::SavePoint>> {
         self.tokenize_string_like(
-            '<', '>', true, PreprocessorTokenType::AngleBracketString, PreprocessorErrorType::UnterminatedAngleBracketString,)
+            '<',
+            '>',
+            true,
+            PreprocessorTokenType::AngleBracketString,
+            PreprocessorErrorType::UnterminatedAngleBracketString,
+        )
     }
 
     fn tokenize_include_string(&mut self) -> ParserReturn<SavePoint<Prev::SavePoint>> {
@@ -626,10 +658,11 @@ static KEYWORDS: [Keyword; 1] = [Keyword {
 }];
 
 pub(crate) fn phase_3_preprocessor_tokenizer<Prev>(
-    previous_phase: Prev, string_cache: StringCache,
+    previous_phase: Prev,
+    string_cache: StringCache,
 ) -> PreprocessorTokenizer<Prev>
 where
-    Prev: TranslationPhase + Iterator<Item = char>,
+    Prev: TranslationPhase<Yield = char>,
 {
     PreprocessorTokenizer::new(previous_phase, string_cache)
 }
@@ -638,15 +671,20 @@ where
 mod tests {
     use std::convert::Infallible;
 
+    use pretty_assertions::assert_eq;
+    use rstest::rstest;
+
     use super::*;
     use crate::{
         translation_phases::{
-            phase_1_map_character_sets::SavePoint as MapCharacterSetsSavePoint, phase_2_remove_escaped_newlines::{State as RemoveEscapedNewLinesState, SavePoint as RemoveEscapedNewLinesSavePoint, RemoveEscapedNewlinesError},
+            phase_1_map_character_sets::SavePoint as MapCharacterSetsSavePoint,
+            phase_2_remove_escaped_newlines::{
+                RemoveEscapedNewlinesError, SavePoint as RemoveEscapedNewLinesSavePoint,
+                State as RemoveEscapedNewLinesState,
+            },
         },
-        util::string_cache::{StringCache, Id as StringCacheId},
+        util::string_cache::{Id as StringCacheId, StringCache},
     };
-    use pretty_assertions::assert_eq;
-    use rstest::rstest;
 
     #[rstest]
     #[case("", vec![
@@ -670,7 +708,7 @@ mod tests {
             },
             length: 0,
             contents: StringCacheId::from_usize(1),
-        
+
         })
     ])]
     #[case("int x = @1;\n", vec![
@@ -1053,7 +1091,7 @@ mod tests {
                         state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
-                }, 
+                },
                 length: 1,
                 contents: StringCacheId::from_usize(10),
             }),
@@ -1062,7 +1100,7 @@ mod tests {
                 start_save: SavePoint {
                     inner: RemoveEscapedNewLinesSavePoint {
                         inner: MapCharacterSetsSavePoint {
-                            inner: Position { 
+                            inner: Position {
                                 index: 31,
                                 line: 2,
                                 column: 7,
@@ -1081,7 +1119,7 @@ mod tests {
                 token_type: PreprocessorTokenType::Colon,
                 start_save: SavePoint {
                     inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint { 
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 38,
                                 line: 3,
@@ -1100,7 +1138,7 @@ mod tests {
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
                 start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: RemoveEscapedNewLinesSavePoint {
                         inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 40,
@@ -1121,7 +1159,7 @@ mod tests {
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Newline,
                 start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: RemoveEscapedNewLinesSavePoint {
                         inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 41,
@@ -1144,7 +1182,7 @@ mod tests {
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
                     inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 0,
@@ -1164,7 +1202,7 @@ mod tests {
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
                     inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 6,
@@ -1177,14 +1215,14 @@ mod tests {
                     state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
-            }, 
+            },
             length: 4,
             contents: StringCacheId::from_usize(2),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Asterisk,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
                     inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 11,
@@ -1197,14 +1235,14 @@ mod tests {
                     state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
-            }, 
+            },
             length: 1,
             contents: StringCacheId::from_usize(3),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
                     inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 12,
@@ -1217,14 +1255,14 @@ mod tests {
                     state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
-            }, 
+            },
             length: 3,
             contents: StringCacheId::from_usize(4),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Equals,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
                     inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 16,
@@ -1237,14 +1275,14 @@ mod tests {
                     state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
-            }, 
+            },
             length: 1,
             contents: StringCacheId::from_usize(5),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::String,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
                     inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 18,
@@ -1257,14 +1295,14 @@ mod tests {
                     state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
-            }, 
+            },
             length: 17,
             contents: StringCacheId::from_usize(6),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::SemiColon,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
                     inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 35,
@@ -1277,14 +1315,14 @@ mod tests {
                     state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
-            }, 
+            },
             length: 1,
             contents: StringCacheId::from_usize(7),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
                     inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 36,
@@ -1297,7 +1335,7 @@ mod tests {
                     state: RemoveEscapedNewLinesState::Done,
                 },
                 is_lexing_include_directive: false,
-            }, 
+            },
             length: 1,
             contents: StringCacheId::from_usize(8),
         }),
@@ -1306,8 +1344,8 @@ mod tests {
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::String,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
-                    inner: MapCharacterSetsSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 0,
                             line: 1,
@@ -1317,9 +1355,9 @@ mod tests {
                     },
                     last_was_newline: false,
                     state: RemoveEscapedNewLinesState::Normal,
-                }, 
+                },
                 is_lexing_include_directive: false,
-            }, 
+            },
             length: 4,
             contents: StringCacheId::from_usize(1),
         }),
@@ -1327,8 +1365,8 @@ mod tests {
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
             start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint { 
-                    inner: MapCharacterSetsSavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 4,
                             line: 1,
@@ -1338,9 +1376,9 @@ mod tests {
                     },
                     last_was_newline: false,
                     state: RemoveEscapedNewLinesState::Done,
-                }, 
+                },
                 is_lexing_include_directive: false,
-            }, 
+            },
             length: 0,
             contents: StringCacheId::from_usize(2),
         }),
@@ -1348,7 +1386,15 @@ mod tests {
     fn test_phase_3_preprocessor_tokenizer(
         #[case] input: &str,
         #[case] expected: Vec<
-            Result<PreprocessorToken<RemoveEscapedNewLinesSavePoint<MapCharacterSetsSavePoint<Position>>>, PreprocessorTokenizerError<RemoveEscapedNewLinesSavePoint<MapCharacterSetsSavePoint<Position>>, RemoveEscapedNewlinesError<Infallible>>>
+            Result<
+                PreprocessorToken<
+                    RemoveEscapedNewLinesSavePoint<MapCharacterSetsSavePoint<Position>>,
+                >,
+                PreprocessorTokenizerError<
+                    RemoveEscapedNewLinesSavePoint<MapCharacterSetsSavePoint<Position>>,
+                    RemoveEscapedNewlinesError<Infallible>,
+                >,
+            >,
         >,
     ) {
         use crate::translation_phases::{
@@ -1359,13 +1405,14 @@ mod tests {
         };
 
         let mut string_cache = StringCache::new();
-        let mut tokenizer = phase_3_preprocessor_tokenizer(phase_2_remove_escaped_newlines(
-            phase_1_map_character_sets(phase_0_newline_tracking(input, &mut string_cache)),
-        ), string_cache);
-        let actual = tokenizer
-            .by_ref()
-            .collect::<Vec<_>>();
+        let mut tokenizer = phase_3_preprocessor_tokenizer(
+            phase_2_remove_escaped_newlines(phase_1_map_character_sets(phase_0_newline_tracking(
+                input,
+                &mut string_cache,
+            ))),
+            string_cache,
+        );
+        let actual = tokenizer.by_ref().collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
- 
 }
