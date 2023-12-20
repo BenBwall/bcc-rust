@@ -21,36 +21,37 @@ where
 
 impl<Prev> Iterator for MapCharacterSets<Prev>
 where
-    Prev: TranslationPhase + Iterator<Item = char>,
+    Prev: TranslationPhase<Yield = char> + Iterator<Item = Result<char, Prev::Error>>,
 {
-    type Item = char;
-    fn next(&mut self) -> Option<char> {
-        let c = self.previous_phase.next()?;
+    type Item = Result<char, Prev::Error>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let c = self.previous_phase.next()??;
         let save_point = self.save();
         let next = self.previous_phase.next();
         if c == '\r' && next == Some('\n') {
-            return Some('\n');
+            return Some(Ok('\n'));
         }
         if c == '\r' {
             self.restore(save_point);
-            return Some('\n');
+            return Some(Ok('\n'));
         }
         if c != '?' {
             self.restore(save_point);
-            return Some(c);
+            return Some(Ok(c));
         }
         let Some(next) = next else {
             self.restore(save_point);
-            return Some(c);
+            return Some(Ok(c));
         };
         if next != '?' {
             self.restore(save_point);
-            return Some(c);
+            return Some(Ok(c));
         }
         let Some(trigraph) = self.previous_phase.next() else {
             self.restore(save_point);
-            return Some(c);
+            return Some(Ok(c));
         };
+        let trigraph = trigraph?;
         let to_yield = match trigraph {
             // Top left to bottom right order based on the table in the C99 standard.
             | '=' => '#',
@@ -64,10 +65,10 @@ where
             | '-' => '~',
             | _ => {
                 self.restore(save_point);
-                return Some(c);
+                return Some(Ok(c));
             },
         };
-        Some(to_yield)
+        Some(Ok(to_yield))
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.previous_phase.size_hint()
@@ -76,8 +77,10 @@ where
 
 impl<Prev> TranslationPhase for MapCharacterSets<Prev>
 where
-    Prev: TranslationPhase + Iterator<Item = char>,
+    Prev: TranslationPhase<Yield = char> + Iterator<Item = Result<char, Prev::Error>>,
 {
+    type Yield = char;
+    type Error = Prev::Error;
     type SavePoint = SavePoint<Prev::SavePoint>;
     fn save(&self) -> Self::SavePoint {
         SavePoint {

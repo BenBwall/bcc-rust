@@ -51,8 +51,10 @@ variant-size-differences = "warn"
 
 
 [dependencies]
+bigdecimal = "0.4.2"
 
 rustc-hash = "1.1.0"
+smallstr = "0.3.0"
 string-interner = "0.14.0"
 thiserror = "1.0.51"
 

@@ -1,10 +1,27 @@
-use std::{error::Error, fmt::Display};
+use std::fmt::Display;
 
-use super::{Position, SavePoint as ISavePoint, TranslationPhase};
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+use smallstr::SmallString;
+use thiserror::Error;
+use crate::util::string_cache::{Id as StringCacheId, StringCache};
+
+use super::{Position, SavePoint as ISavePoint, TranslationPhase, GetSeverity, ErrorSeverity};
+#[derive(Debug, PartialEq, Eq)] 
 pub(crate) struct PreprocessorTokenizer<Prev> {
     previous_phase: Prev,
     is_lexing_include_directive: bool,
+    string_cache: StringCache,
+}
+
+impl<Prev> AsRef<StringCache> for PreprocessorTokenizer<Prev> {
+    fn as_ref(&self) -> &StringCache {
+        &self.string_cache
+    }
+}
+
+impl<Prev> AsMut<StringCache> for PreprocessorTokenizer<Prev> {
+    fn as_mut(&mut self) -> &mut StringCache {
+        &mut self.string_cache
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -32,15 +49,46 @@ pub(crate) enum PreprocessorErrorType {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct PreprocessorTokenizerError<SavePoint> {
+pub(crate) struct InnerPreprocessorTokenizerError<SavePoint> {
     start_save: SavePoint,
     length: usize,
     error_type: PreprocessorErrorType,
+    contents: StringCacheId,
 }
 
-impl<SavePoint> Error for PreprocessorTokenizerError<SavePoint> where SavePoint : ISavePoint {}
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Error)]
+pub(crate) enum PreprocessorTokenizerError<PrevSavePoint, PrevError> {
+    #[error(transparent)]
+    Inner(PrevError),
+    #[error(transparent)]
+    TokenizerError(InnerPreprocessorTokenizerError<SavePoint<PrevSavePoint>>),
+}
 
-impl<SavePoint> Display for PreprocessorTokenizerError<SavePoint> where SavePoint : ISavePoint {
+impl<PrevSavePoint, PrevError> GetSeverity for PreprocessorTokenizerError<PrevSavePoint, PrevError>
+where
+    PrevError: GetSeverity,
+{
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            Self::Inner(e) => e.severity(),
+            Self::TokenizerError(e) => e.severity(),
+        }
+    }
+}
+
+impl<PrevSavePoint> GetSeverity for InnerPreprocessorTokenizerError<SavePoint<PrevSavePoint>> {
+    fn severity(&self) -> ErrorSeverity {
+        match self.error_type {
+            PreprocessorErrorType::UnknownToken => ErrorSeverity::Error,
+            PreprocessorErrorType::UnterminatedCharacter => ErrorSeverity::Error,
+            PreprocessorErrorType::UnterminatedString => ErrorSeverity::Error,
+            PreprocessorErrorType::UnterminatedAngleBracketString => ErrorSeverity::Error,
+            PreprocessorErrorType::UnterminatedIncludeString => ErrorSeverity::Error,
+        }
+    }
+}
+
+impl<SavePoint> Display for InnerPreprocessorTokenizerError<SavePoint> where SavePoint : ISavePoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let current_position = self.start_save.current_position();
         write!(f, "{:?} at {}:{}", self.error_type, current_position.line, current_position.column)
@@ -49,9 +97,9 @@ impl<SavePoint> Display for PreprocessorTokenizerError<SavePoint> where SavePoin
 
 impl<Prev> Iterator for PreprocessorTokenizer<Prev>
 where
-    Prev: TranslationPhase + Iterator<Item = char>,
+    Prev: TranslationPhase<Yield = char>,
 {
-    type Item = Result<PreprocessorToken<SavePoint<Prev::SavePoint>>, PreprocessorTokenizerError<SavePoint<Prev::SavePoint>>>;
+    type Item = Result<PreprocessorToken<SavePoint<Prev::SavePoint>>, PreprocessorTokenizerError<SavePoint<Prev::SavePoint>, Prev::Error>>;
     fn next(&mut self) -> Option<Self::Item> {
 
         fn inner<Prev: TranslationPhase + Iterator<Item = char>, const NUM_PARSER_FUNCTIONS: usize>(tokenizer: &mut PreprocessorTokenizer<Prev>, parser_functions: [ParserFunction<Prev>; NUM_PARSER_FUNCTIONS]) -> Option<<PreprocessorTokenizer::<Prev> as Iterator>::Item> {
@@ -59,8 +107,7 @@ where
             for (i, parser_function) in parser_functions.iter().enumerate() {
                 let index_before = tokenizer.current_position().index;
                 if let Some(result) = parser_function(tokenizer) {
-                    println!("Returning result: {result:#?}");
-                    return Some(result);
+                    Some(result.map_err(Into::into))
                 }
                 let index_after = tokenizer.current_position().index;
                 assert_eq!(index_after, index_before, 
@@ -73,10 +120,8 @@ where
                     PreprocessorErrorType::UnknownToken,
                     save_point,
                 )));
-                println!("Returning error: {result:#?}");
                 return result;
             }
-            println!("Returning None");
             None
         }
 
@@ -112,8 +157,10 @@ where
 
 impl<Prev> TranslationPhase for PreprocessorTokenizer<Prev>
 where
-    Prev: TranslationPhase + Iterator<Item = char>,
+    Prev: TranslationPhase<Yield = char>,
 {
+    type Yield = PreprocessorToken<SavePoint<Prev::SavePoint>>;
+    type Error = PreprocessorTokenizerError<SavePoint<Prev::SavePoint>, Prev::Error>;
     type SavePoint = SavePoint<Prev::SavePoint>;
     fn save(&self) -> Self::SavePoint {
         SavePoint {
@@ -138,12 +185,21 @@ where
         &mut self,
         error_type: PreprocessorErrorType,
         start_save: SavePoint<Prev::SavePoint>,
-    ) -> PreprocessorTokenizerError<SavePoint<Prev::SavePoint>> {
+    ) -> InnerPreprocessorTokenizerError<SavePoint<Prev::SavePoint>> {
+        let current_save = self.save();
+        self.restore(start_save);
+        let contents: SmallString<[u8; 1024]> = self
+            .previous_phase
+            .take_while(|_| self.current_position().index < current_save.current_position().index)
+            .collect();
+        self.restore(current_save);
         let start_position = start_save.current_position();
-        PreprocessorTokenizerError {
+
+        InnerPreprocessorTokenizerError {
             start_save,
             length: self.current_position().index - start_position.index,
             error_type,
+            contents: self.string_cache.intern(contents.as_str()),
         }
     }
 
@@ -152,11 +208,20 @@ where
         token_type: PreprocessorTokenType,
         start_save: SavePoint<Prev::SavePoint>,
     ) -> PreprocessorToken<SavePoint<Prev::SavePoint>> {
+        let current_save = self.save();
+        self.restore(start_save);
+        let contents: SmallString<[u8; 1024]> = self
+            .previous_phase
+            .take_while(|_| self.current_position().index < current_save.current_position().index)
+            .collect();
+        self.restore(current_save);
         let start_position = start_save.current_position();
+        
         PreprocessorToken {
             start_save,
             length: self.current_position().index - start_position.index,
             token_type,
+            contents: self.string_cache.intern(contents.as_str()),
         }
     }
 
@@ -198,10 +263,11 @@ where
         self.restore(save_point);
     }
 
-    fn new(previous_phase: Prev) -> Self {
+    fn new(previous_phase: Prev, string_cache: StringCache) -> Self {
         Self {
             previous_phase,
             is_lexing_include_directive: false,
+            string_cache,
         }
     }
 
@@ -388,7 +454,7 @@ where
 }
 
 type ParserReturn<Inner> = Option<ParserResult<Inner>>;
-type ParserResult<Inner> = Result<PreprocessorToken<Inner>, PreprocessorTokenizerError<Inner>>;
+type ParserResult<Inner> = Result<PreprocessorToken<Inner>, InnerPreprocessorTokenizerError<Inner>>;
 #[allow(type_alias_bounds)]
 type ParserFunction<Prev>
 where
@@ -475,6 +541,7 @@ pub(crate) enum PreprocessorTokenType {
 pub(crate) struct PreprocessorToken<SavePoint> {
     pub(crate) token_type: PreprocessorTokenType,
     pub(crate) start_save: SavePoint,
+    pub(crate) contents: StringCacheId,
     pub(crate) length: usize,
 }
 
@@ -559,50 +626,50 @@ static KEYWORDS: [Keyword; 1] = [Keyword {
 }];
 
 pub(crate) fn phase_3_preprocessor_tokenizer<Prev>(
-    previous_phase: Prev,
+    previous_phase: Prev, string_cache: StringCache,
 ) -> PreprocessorTokenizer<Prev>
 where
     Prev: TranslationPhase + Iterator<Item = char>,
 {
-    PreprocessorTokenizer::new(previous_phase)
+    PreprocessorTokenizer::new(previous_phase, string_cache)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use super::*;
     use crate::{
         translation_phases::{
-            phase_1_map_character_sets, phase_2_remove_escaped_newlines,
+            phase_1_map_character_sets::SavePoint as MapCharacterSetsSavePoint, phase_2_remove_escaped_newlines::{State as RemoveEscapedNewLinesState, SavePoint as RemoveEscapedNewLinesSavePoint, RemoveEscapedNewlinesError},
         },
-        util::string_cache::{StringCache, Id},
+        util::string_cache::{StringCache, Id as StringCacheId},
     };
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    type Token = PreprocessorToken<
-        SavePoint<phase_2_remove_escaped_newlines::SavePoint<phase_1_map_character_sets::SavePoint<Position>>>>;
-    type Error = PreprocessorTokenizerError<
-        SavePoint<phase_2_remove_escaped_newlines::SavePoint<phase_1_map_character_sets::SavePoint<Position>>>>;
-
     #[rstest]
     #[case("", vec![
+        Err(PreprocessorTokenizerError::Inner(RemoveEscapedNewlinesError::MissingFinalNewLine)),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint {
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 0,
                             line: 1,
                             column: 1,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Done,
                 },
                 is_lexing_include_directive: false,
             },
             length: 0,
+            contents: StringCacheId::from_usize(1),
         
         })
     ])]
@@ -610,128 +677,142 @@ mod tests {
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint {
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 0,
                             line: 1,
                             column: 1,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             },
             length: 3,
+            contents: StringCacheId::from_usize(1),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint {
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 4,
                             line: 1,
                             column: 5,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             },
             length: 1,
+            contents: StringCacheId::from_usize(2),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Equals,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint {
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 6,
                             line: 1,
                             column: 7,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             },
             length: 1,
+            contents: StringCacheId::from_usize(3),
         }),
-        Err(PreprocessorTokenizerError {
+        Err(PreprocessorTokenizerError::TokenizerError(InnerPreprocessorTokenizerError {
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint {
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 8,
                             line: 1,
                             column: 9,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             },
             length: 1,
             error_type: PreprocessorErrorType::UnknownToken,
-        }),
+            contents: StringCacheId::from_usize(4),
+        })),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Number,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint {
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 9,
                             line: 1,
                             column: 10,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             },
             length: 1,
+            contents: StringCacheId::from_usize(5),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::SemiColon,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint {
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 10,
                             line: 1,
                             column: 11,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             },
             length: 1,
+            contents: StringCacheId::from_usize(6),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint {
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint {
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 11,
                             line: 1,
                             column: 12,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Done,
                 },
                 is_lexing_include_directive: false,
             },
             length: 1,
+            contents: StringCacheId::from_usize(7),
         }),
     ])]
     #[case("#define MAX(A, B) A > B\\\n    ? A\\\n    : B",
@@ -739,290 +820,323 @@ mod tests {
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Hash,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 0,
                                 line: 1,
                                 column: 1,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(1),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 1,
                                 line: 1,
                                 column: 2,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 6,
+                contents: StringCacheId::from_usize(2),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 8,
                                 line: 1,
                                 column: 9,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 3,
+                contents: StringCacheId::from_usize(3),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::OpeningParenthesis,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 11,
                                 line: 1,
                                 column: 12,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(4),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 12,
                                 line: 1,
                                 column: 13,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(5),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Comma,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 13,
                                 line: 1,
                                 column: 14,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(6),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 15,
                                 line: 1,
                                 column: 16,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(7),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::ClosingParenthesis,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 16,
                                 line: 1,
                                 column: 17,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(8),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 18,
                                 line: 1,
                                 column: 19,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(5),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::GreaterThan,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 20,
                                 line: 1,
                                 column: 21,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(9),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 22,
                                 line: 1,
                                 column: 23,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(7),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::QuestionMark,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 29,
                                 line: 2,
                                 column: 5,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 }, 
                 length: 1,
+                contents: StringCacheId::from_usize(10),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position { 
                                 index: 31,
                                 line: 2,
                                 column: 7,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(5),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Colon,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint {
-                        inner: phase_1_map_character_sets::SavePoint { 
+                    inner: RemoveEscapedNewLinesSavePoint {
+                        inner: MapCharacterSetsSavePoint { 
                             inner: Position {
                                 index: 38,
                                 line: 3,
                                 column: 5,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(11),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint { 
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint { 
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 40,
                                 line: 3,
                                 column: 7,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Normal,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 1,
+                contents: StringCacheId::from_usize(7),
             }),
+            Err(PreprocessorTokenizerError::Inner(RemoveEscapedNewlinesError::MissingFinalNewLine)),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Newline,
                 start_save: SavePoint {
-                    inner: phase_2_remove_escaped_newlines::SavePoint { 
-                        inner: phase_1_map_character_sets::SavePoint {
+                    inner: RemoveEscapedNewLinesSavePoint { 
+                        inner: MapCharacterSetsSavePoint {
                             inner: Position {
                                 index: 41,
                                 line: 3,
                                 column: 8,
-                                source_file: Id::from_usize(0),
+                                source_file: StringCacheId::from_usize(0),
                             },
                         },
                         last_was_newline: false,
+                        state: RemoveEscapedNewLinesState::Done,
                     },
                     is_lexing_include_directive: false,
                 },
                 length: 0,
+                contents: StringCacheId::from_usize(12),
             }),
         ]
     )]
@@ -1030,190 +1144,211 @@ mod tests {
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 0,
                             line: 1,
                             column: 1,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             },
             length: 5,
+            contents: StringCacheId::from_usize(1),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 6,
                             line: 1,
                             column: 7,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             }, 
             length: 4,
+            contents: StringCacheId::from_usize(2),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Asterisk,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 11,
                             line: 1,
                             column: 12,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             }, 
             length: 1,
+            contents: StringCacheId::from_usize(3),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 12,
                             line: 1,
                             column: 13,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             }, 
             length: 3,
+            contents: StringCacheId::from_usize(4),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Equals,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 16,
                             line: 1,
                             column: 17,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             }, 
             length: 1,
+            contents: StringCacheId::from_usize(5),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::String,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 18,
                             line: 1,
                             column: 19,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             }, 
             length: 17,
+            contents: StringCacheId::from_usize(6),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::SemiColon,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 35,
                             line: 1,
                             column: 36,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 },
                 is_lexing_include_directive: false,
             }, 
             length: 1,
+            contents: StringCacheId::from_usize(7),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint {
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint {
                         inner: Position {
                             index: 36,
                             line: 1,
                             column: 37,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Done,
                 },
                 is_lexing_include_directive: false,
             }, 
             length: 1,
+            contents: StringCacheId::from_usize(8),
         }),
     ])]
     #[case("\"\\\"\"", vec![
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::String,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint { 
                         inner: Position {
                             index: 0,
                             line: 1,
                             column: 1,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Normal,
                 }, 
                 is_lexing_include_directive: false,
             }, 
             length: 4,
+            contents: StringCacheId::from_usize(1),
         }),
+        Err(PreprocessorTokenizerError::Inner(RemoveEscapedNewlinesError::MissingFinalNewLine)),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
             start_save: SavePoint {
-                inner: phase_2_remove_escaped_newlines::SavePoint { 
-                    inner: phase_1_map_character_sets::SavePoint { 
+                inner: RemoveEscapedNewLinesSavePoint { 
+                    inner: MapCharacterSetsSavePoint { 
                         inner: Position {
                             index: 4,
                             line: 1,
                             column: 5,
-                            source_file: Id::from_usize(0),
+                            source_file: StringCacheId::from_usize(0),
                         },
                     },
                     last_was_newline: false,
+                    state: RemoveEscapedNewLinesState::Done,
                 }, 
                 is_lexing_include_directive: false,
             }, 
             length: 0,
+            contents: StringCacheId::from_usize(2),
         }),
     ])]
     fn test_phase_3_preprocessor_tokenizer(
         #[case] input: &str,
         #[case] expected: Vec<
-            Result<Token, Error>
+            Result<PreprocessorToken<RemoveEscapedNewLinesSavePoint<MapCharacterSetsSavePoint<Position>>>, PreprocessorTokenizerError<RemoveEscapedNewLinesSavePoint<MapCharacterSetsSavePoint<Position>>, RemoveEscapedNewlinesError<Infallible>>>
         >,
     ) {
         use crate::translation_phases::{
@@ -1226,7 +1361,7 @@ mod tests {
         let mut string_cache = StringCache::new();
         let mut tokenizer = phase_3_preprocessor_tokenizer(phase_2_remove_escaped_newlines(
             phase_1_map_character_sets(phase_0_newline_tracking(input, &mut string_cache)),
-        ));
+        ), string_cache);
         let actual = tokenizer
             .by_ref()
             .collect::<Vec<_>>();
