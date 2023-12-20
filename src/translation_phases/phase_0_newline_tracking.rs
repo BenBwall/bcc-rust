@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use crate::util::{string_cache::StringCache, Captures};
 
 use super::{Position, TranslationPhase};
@@ -43,8 +45,8 @@ impl<'a> NewlineTracking<'a> {
 }
 
 impl Iterator for NewlineTracking<'_> {
-    type Item = char;
-    fn next(&mut self) -> Option<char> {
+    type Item = Result<char, Infallible>;
+    fn next(&mut self) -> Option<Self::Item> {
         let c = self.input.get(self.position.index..)?.chars().next()?;
         let next = self
             .input
@@ -56,14 +58,14 @@ impl Iterator for NewlineTracking<'_> {
             self.position.column = 1;
             self.position.line += 1;
             self.is_middle_of_windows_newline = true;
-            return Some(c);
+            return Some(Ok(c));
         }
 
         if c == '\n' && !self.is_middle_of_windows_newline {
             self.position.index += 1;
             self.position.column = 1;
             self.position.line += 1;
-            return Some(c);
+            return Some(Ok(c));
         }
 
         if c == '\r' {
@@ -71,12 +73,12 @@ impl Iterator for NewlineTracking<'_> {
             self.position.column = 1;
             self.position.line += 1;
             self.is_middle_of_windows_newline = false;
-            return Some('\n');
+            return Some(Ok('\n'));
         }
         self.is_middle_of_windows_newline = false;
         self.position.index += c.len_utf8();
         self.position.column += c.len_utf8();
-        Some(c)
+        Some(Ok(c))
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.input
@@ -87,6 +89,8 @@ impl Iterator for NewlineTracking<'_> {
 
 impl TranslationPhase for NewlineTracking<'_> {
     type SavePoint = Position;
+    type Error = Infallible;
+    type Yield = char;
     fn save(&self) -> Self::SavePoint {
         self.position
     }

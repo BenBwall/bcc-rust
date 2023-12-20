@@ -1,13 +1,11 @@
 use std::hash::BuildHasherDefault;
 
 use rustc_hash::FxHasher;
-use string_interner::{
-    backend::StringBackend, symbol::SymbolUsize, StringInterner as Inner, Symbol,
-};
+use string_interner::{backend::StringBackend, symbol::SymbolUsize, StringInterner, Symbol};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StringCache {
-    inner: Inner<StringBackend<SymbolUsize>, BuildHasherDefault<FxHasher>>,
+    inner: StringInterner<StringBackend<SymbolUsize>, BuildHasherDefault<FxHasher>>,
 }
 
 #[repr(transparent)]
@@ -50,7 +48,7 @@ impl StringCache {
     /// Creates a new empty `StringCache`. Does not allocate.
     pub(crate) fn new() -> Self {
         Self {
-            inner: Inner::new(),
+            inner: StringInterner::new(),
         }
     }
 
@@ -62,7 +60,7 @@ impl StringCache {
         inner(self, s.as_ref())
     }
 
-    /// Returns the string for the given ID if it exists in.
+    /// Returns the string for the given ID if it exists in the cache.
     pub(crate) fn get(&self, id: impl Into<Id>) -> Option<&str> {
         fn inner(interner: &StringCache, id: Id) -> Option<&str> {
             interner.inner.resolve(SymbolUsize::try_from_usize(id.id)?)
@@ -76,5 +74,10 @@ impl StringCache {
             interner.inner.get(string).is_some()
         }
         inner(self, string.as_ref())
+    }
+
+    /// Returns the number of strings interned in the cache.
+    pub(crate) fn len(&self) -> usize {
+        self.inner.len()
     }
 }
