@@ -14,503 +14,993 @@ use crate::util::string_cache::{
     Id as StringCacheId,
     StringCache,
 };
-#[derive(Debug, PartialEq, Eq,)]
-pub(crate) struct PreprocessorTokenizer<Prev,> {
-    previous_phase:              Prev,
-    is_lexing_include_directive: bool,
-    string_cache:                StringCache,
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PreprocessorTokenizer<Prev, PrevSavePoint> {
+    previous_phase: Prev,
+    state: State<PrevSavePoint>,
+    is_tokenizing_include_directive: bool,
+    string_cache: StringCache,
+    current_token_start: PrevSavePoint,
 }
 
-impl<Prev,> AsRef<StringCache,> for PreprocessorTokenizer<Prev,> {
-    fn as_ref(&self,) -> &StringCache {
+impl<Prev, PrevSavePoint> AsRef<StringCache> for PreprocessorTokenizer<Prev, PrevSavePoint> {
+    fn as_ref(&self) -> &StringCache {
         &self.string_cache
     }
 }
 
-impl<Prev,> AsMut<StringCache,> for PreprocessorTokenizer<Prev,> {
-    fn as_mut(&mut self,) -> &mut StringCache {
+impl<Prev, PrevSavePoint> AsMut<StringCache> for PreprocessorTokenizer<Prev, PrevSavePoint> {
+    fn as_mut(&mut self) -> &mut StringCache {
         &mut self.string_cache
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug,)]
-pub(crate) struct SavePoint<Inner,> {
-    inner: Inner,
-    is_lexing_include_directive: bool,
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub(crate) enum State<PrevSavePoint> {
+    Default,
+    BetweenHashes,
+    MiddleOfIdentifier,
+    MiddleOfWideStringOrIdentifier,
+    MiddleOfNumberOrPeriod,
+    MiddleOfNumber,
+    MiddleOfExponent,
+    MiddleOfCharacter,
+    MiddleOfString,
+    MiddleOfIncludeString,
+    MiddleOfAngleBracketString,
+    MiddleOfForwardSlash,
+    MiddleOfPercent,
+    MiddleOfHashDigraph,
+    MiddleOfDoubleHashDigraph {
+        end_of_first_half: Option<Box<PrevSavePoint>>,
+    },
+    MiddleOfEllipsis {
+        end_of_first_period: Option<Box<PrevSavePoint>>,
+    },
+    MiddleOfColon,
+    MiddleOfLeftAngleBracket,
+    MiddleOfLeftShift,
+    MiddleOfRightAngleBracket,
+    MiddleOfRightShift,
+    MiddleOfPlus,
+    MiddleOfMinus,
+    MiddleOfAsterisk,
+    MiddleOfCaret,
+    MiddleOfAmpersand,
+    MiddleOfPipe,
+    MiddleOfExclamationMark,
+    MiddleOfEquals,
+    MiddleOfLineComment,
+    MiddleOfBlockComment,
+    BeforeBlockCommentEnd,
+    Done,
 }
 
-impl<Inner,> super::SavePoint for SavePoint<Inner,>
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct SavePoint<PrevSavePoint> {
+    inner: PrevSavePoint,
+    state: State<PrevSavePoint>,
+    is_tokenizing_include_directive: bool,
+    current_token_start: PrevSavePoint,
+}
+
+impl<PrevSavePoint> super::SavePoint for SavePoint<PrevSavePoint>
 where
-    Inner: super::SavePoint,
+    PrevSavePoint: super::SavePoint,
 {
-    fn current_position(&self,) -> Position {
+    fn current_position(&self) -> Position {
         self.inner.current_position()
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug,)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum PreprocessorErrorType {
     UnknownToken,
     UnterminatedCharacter,
     UnterminatedString,
     UnterminatedAngleBracketString,
     UnterminatedIncludeString,
+    NewlineInCharacter,
+    NewlineInString,
+    NewlineInIncludeString,
+    NewlineInAngleBracketString,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash,)]
-pub(crate) struct InnerPreprocessorTokenizerError<SavePoint,> {
-    start_save: SavePoint,
-    length:     usize,
-    error_type: PreprocessorErrorType,
-    contents:   StringCacheId,
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct InnerPreprocessorTokenizerError {
+    start_position: Position,
+    length:         usize,
+    error_type:     PreprocessorErrorType,
+    contents:       StringCacheId,
 }
 
-impl<SavePoint: ISavePoint,> std::error::Error for InnerPreprocessorTokenizerError<SavePoint,> {}
+impl std::error::Error for InnerPreprocessorTokenizerError {}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Error,)]
-pub(crate) enum PreprocessorTokenizerError<PrevSavePoint, PrevError,> {
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Error)]
+pub(crate) enum PreprocessorTokenizerError<PrevError> {
     #[error(transparent)]
-    Inner(PrevError,),
+    ErrorFromPrev(PrevError),
     #[error(transparent)]
-    TokenizerError(InnerPreprocessorTokenizerError<SavePoint<PrevSavePoint,>,>,),
+    TokenizerError(InnerPreprocessorTokenizerError),
 }
 
-impl<PrevSavePoint, PrevError,> GetSeverity for PreprocessorTokenizerError<PrevSavePoint, PrevError,>
+impl<PrevError> GetSeverity for PreprocessorTokenizerError<PrevError>
 where
     PrevError: GetSeverity,
 {
-    fn severity(&self,) -> ErrorSeverity {
+    fn severity(&self) -> ErrorSeverity {
         match self {
-            | Self::Inner(e,) => e.severity(),
-            | Self::TokenizerError(e,) => e.severity(),
+            | Self::ErrorFromPrev(e) => e.severity(),
+            | Self::TokenizerError(e) => e.severity(),
         }
     }
 }
 
-impl<PrevSavePoint,> GetSeverity for InnerPreprocessorTokenizerError<SavePoint<PrevSavePoint,>,> {
-    fn severity(&self,) -> ErrorSeverity {
+impl GetSeverity for InnerPreprocessorTokenizerError {
+    fn severity(&self) -> ErrorSeverity {
         match self.error_type {
-            | PreprocessorErrorType::UnknownToken => ErrorSeverity::Error,
-            | PreprocessorErrorType::UnterminatedCharacter => ErrorSeverity::Error,
-            | PreprocessorErrorType::UnterminatedString => ErrorSeverity::Error,
-            | PreprocessorErrorType::UnterminatedAngleBracketString => ErrorSeverity::Error,
-            | PreprocessorErrorType::UnterminatedIncludeString => ErrorSeverity::Error,
+            | PreprocessorErrorType::UnknownToken
+            | PreprocessorErrorType::UnterminatedCharacter
+            | PreprocessorErrorType::UnterminatedString
+            | PreprocessorErrorType::UnterminatedAngleBracketString
+            | PreprocessorErrorType::UnterminatedIncludeString
+            | PreprocessorErrorType::NewlineInCharacter
+            | PreprocessorErrorType::NewlineInString
+            | PreprocessorErrorType::NewlineInIncludeString
+            | PreprocessorErrorType::NewlineInAngleBracketString => ErrorSeverity::Error,
         }
     }
 }
 
-impl<SavePoint,> Display for InnerPreprocessorTokenizerError<SavePoint,>
-where
-    SavePoint: ISavePoint,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_,>,) -> std::fmt::Result {
-        let current_position = self.start_save.current_position();
+impl Display for InnerPreprocessorTokenizerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{:?} at {}:{}",
-            self.error_type, current_position.line, current_position.column
+            self.error_type, self.start_position.line, self.start_position.column
         )
     }
 }
 
-impl<Prev,> Iterator for PreprocessorTokenizer<Prev,>
+impl<Prev> Iterator for PreprocessorTokenizer<Prev, Prev::SavePoint>
 where
-    Prev: TranslationPhase<Yield = char,>,
+    Prev: TranslationPhase<Yield = char>,
 {
-    type Item = Result<
-        PreprocessorToken<SavePoint<Prev::SavePoint,>,>,
-        PreprocessorTokenizerError<SavePoint<Prev::SavePoint,>, Prev::Error,>,
-    >;
+    type Item = Result<PreprocessorToken, PreprocessorTokenizerError<Prev::Error>>;
 
-    fn next(&mut self,) -> Option<Self::Item,> {
-        fn inner<Prev: TranslationPhase<Yield = char,>, const NUM_PARSER_FUNCTIONS: usize,>(
-            tokenizer: &mut PreprocessorTokenizer<Prev,>,
-            parser_functions: [ParserFunction<Prev,>; NUM_PARSER_FUNCTIONS],
-        ) -> Option<<PreprocessorTokenizer<Prev,> as Iterator>::Item,> {
-            let save_point: SavePoint<<Prev as TranslationPhase>::SavePoint,> = tokenizer.save();
-            for (i, parser_function,) in parser_functions.iter().enumerate() {
-                let index_before = tokenizer.current_position().index;
-                if let Some(result,) = parser_function(tokenizer,) {
-                    Some(result.map_err(Into::into,),)
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(match self.state {
+            | State::Done => return None,
+            | State::BetweenHashes => self.tokenize_hash(),
+            | State::MiddleOfIdentifier => self.tokenize_identifier(),
+            | State::MiddleOfWideStringOrIdentifier => self.tokenize_wide_string_or_identifier(),
+            | State::MiddleOfNumberOrPeriod => self.tokenize_period_or_number(),
+            | State::MiddleOfNumber => self.tokenize_number(),
+            | State::MiddleOfExponent => self.tokenize_exponent_sign(),
+            | State::MiddleOfCharacter => self.tokenize_char(),
+            | State::MiddleOfString => self.tokenize_string(),
+            | State::MiddleOfIncludeString => self.tokenize_include_string(),
+            | State::MiddleOfAngleBracketString => self.tokenize_angle_bracket_string(),
+            | State::MiddleOfForwardSlash => return self.tokenize_or_step_over_forward_slash(),
+            | State::MiddleOfPercent => self.tokenize_percent(),
+            | State::MiddleOfHashDigraph => self.tokenize_hash_digraph(),
+            | State::MiddleOfLeftAngleBracket => self.tokenize_left_angle_bracket(),
+            | State::MiddleOfLeftShift => self.tokenize_left_shift(),
+            | State::MiddleOfRightAngleBracket => self.tokenize_right_angle_bracket(),
+            | State::MiddleOfRightShift => self.tokenize_right_shift(),
+            | State::MiddleOfDoubleHashDigraph {
+                ref mut end_of_first_half,
+            } => {
+                let end_of_first_half = end_of_first_half
+                    .take()
+                    .expect("double hash digraph without end of first half");
+                self.tokenize_double_hash_digraph(*end_of_first_half)
+            },
+            | State::MiddleOfEllipsis {
+                ref mut end_of_first_period,
+            } => {
+                let end_of_first_period = end_of_first_period
+                    .take()
+                    .expect("ellipsis without end of first period");
+                self.tokenize_ellipsis(*end_of_first_period)
+            },
+            | State::MiddleOfColon => self.tokenize_colon(),
+            | State::MiddleOfPlus => self.tokenize_plus(),
+            | State::MiddleOfMinus => self.tokenize_minus(),
+            | State::MiddleOfAsterisk => self.tokenize_asterisk(),
+            | State::MiddleOfCaret => self.tokenize_caret(),
+            | State::MiddleOfAmpersand => self.tokenize_ampersand(),
+            | State::MiddleOfPipe => self.tokenize_pipe(),
+            | State::MiddleOfExclamationMark => self.tokenize_exclamation_mark(),
+            | State::MiddleOfEquals => self.tokenize_equals(),
+            | State::MiddleOfLineComment => return self.step_over_line_comment(),
+            | State::MiddleOfBlockComment => return self.step_over_block_comment(),
+            | State::BeforeBlockCommentEnd => return self.step_over_block_comment_end(),
+            | State::Default => {
+                let result = self.tokenize();
+                if result.is_none() {
+                    self.state = State::Done;
                 }
-                let index_after = tokenizer.current_position().index;
-                assert_eq!(
-                    index_after,
-                    index_before,
-                    "Compiler bug: Tokenize function number {i} Swallowed {} characters.",
-                    index_after - index_before,
-                );
-            }
-            if tokenizer.previous_phase.next().is_some() {
-                let result = Some(Err(
-                    tokenizer.generate_error(PreprocessorErrorType::UnknownToken, save_point,),
-                ),);
                 return result;
-            }
-            None
-        }
-
-        let step_over_functions: [StepOverFunction<Prev,>; 3] = [
-            PreprocessorTokenizer::step_over_whitespace,
-            PreprocessorTokenizer::step_over_line_comment,
-            PreprocessorTokenizer::step_over_block_comment,
-        ];
-        for step_over_function in step_over_functions {
-            step_over_function(self,);
-        }
-
-        if self.is_lexing_include_directive {
-            inner(
-                self,
-                [
-                    PreprocessorTokenizer::tokenize_angle_bracket_string,
-                    PreprocessorTokenizer::tokenize_include_string,
-                ],
-            )
-        } else {
-            inner(
-                self,
-                [
-                    PreprocessorTokenizer::tokenize_tag,
-                    PreprocessorTokenizer::tokenize_newline,
-                    PreprocessorTokenizer::tokenize_number,
-                    PreprocessorTokenizer::tokenize_keyword,
-                    PreprocessorTokenizer::tokenize_identifier,
-                    PreprocessorTokenizer::tokenize_string,
-                    PreprocessorTokenizer::tokenize_char,
-                ],
-            )
-        }
+            },
+        })
     }
 }
 
-impl<Prev,> TranslationPhase for PreprocessorTokenizer<Prev,>
+impl<Prev> TranslationPhase for PreprocessorTokenizer<Prev, Prev::SavePoint>
 where
-    Prev: TranslationPhase<Yield = char,>,
+    Prev: TranslationPhase<Yield = char>,
 {
-    type Error = PreprocessorTokenizerError<SavePoint<Prev::SavePoint,>, Prev::Error,>;
-    type SavePoint = SavePoint<Prev::SavePoint,>;
-    type Yield = PreprocessorToken<SavePoint<Prev::SavePoint,>,>;
+    type Error = PreprocessorTokenizerError<Prev::Error>;
+    type SavePoint = SavePoint<Prev::SavePoint>;
+    type Yield = PreprocessorToken;
 
-    fn save(&self,) -> Self::SavePoint {
+    fn save(&self) -> Self::SavePoint {
         SavePoint {
             inner: self.previous_phase.save(),
-            is_lexing_include_directive: self.is_lexing_include_directive,
+            state: self.state.clone(),
+            is_tokenizing_include_directive: self.is_tokenizing_include_directive,
+            current_token_start: self.current_token_start.clone(),
         }
     }
 
-    fn restore(&mut self, save_point: Self::SavePoint,) {
-        self.previous_phase.restore(save_point.inner,);
-        self.is_lexing_include_directive = save_point.is_lexing_include_directive;
+    fn restore(&mut self, save_point: Self::SavePoint) {
+        self.previous_phase.restore(save_point.inner);
+        self.state = save_point.state;
+        self.is_tokenizing_include_directive = save_point.is_tokenizing_include_directive;
+        self.current_token_start = save_point.current_token_start;
     }
 
-    fn current_position(&self,) -> Position {
+    fn current_position(&self) -> Position {
         self.previous_phase.current_position()
     }
 }
 
-impl<Prev,> PreprocessorTokenizer<Prev,>
+impl<Prev> PreprocessorTokenizer<Prev, Prev::SavePoint>
 where
-    Prev: TranslationPhase<Yield = char,>,
+    Prev: TranslationPhase<Yield = char>,
 {
+    fn error_from_prev(
+        &self,
+        error: Prev::Error,
+    ) -> Result<<Self as TranslationPhase>::Yield, <Self as TranslationPhase>::Error> {
+        let _ = self;
+        Err(PreprocessorTokenizerError::ErrorFromPrev(error))
+    }
+
     fn generate_error(
         &mut self,
         error_type: PreprocessorErrorType,
-        start_save: SavePoint<Prev::SavePoint,>,
-    ) -> InnerPreprocessorTokenizerError<SavePoint<Prev::SavePoint,>,> {
-        let current_save = self.save();
-        self.restore(start_save,);
-        let contents: SmallString<[u8; 1024],> = self
-            .previous_phase
-            .take_while(|_| self.current_position().index < current_save.current_position().index,)
-            .collect();
-        self.restore(current_save,);
-        let start_position = start_save.current_position();
-
-        InnerPreprocessorTokenizerError {
-            start_save,
-            length: self.current_position().index - start_position.index,
-            error_type,
-            contents: self.string_cache.intern(contents.as_str(),),
+    ) -> Result<<Self as TranslationPhase>::Yield, <Self as TranslationPhase>::Error> {
+        let current_save = self.previous_phase.save();
+        self.previous_phase
+            .restore(self.current_token_start.clone());
+        let mut contents: SmallString<[u8; 1024]> = SmallString::new();
+        while self.previous_phase.current_position().index < current_save.current_position().index {
+            match self.previous_phase.next() {
+                | Some(Ok(c)) => contents.push(c),
+                | Some(Err(_)) => continue,
+                | None => break,
+            }
         }
+        self.previous_phase.restore(current_save);
+        let start_position = self.current_token_start.current_position();
+
+        Err(PreprocessorTokenizerError::TokenizerError(
+            InnerPreprocessorTokenizerError {
+                start_position,
+                length: self.current_position().index - start_position.index,
+                error_type,
+                contents: self.string_cache.intern(contents.as_str()),
+            },
+        ))
     }
 
     fn generate_token(
         &mut self,
         token_type: PreprocessorTokenType,
-        start_save: SavePoint<Prev::SavePoint,>,
-    ) -> PreprocessorToken<SavePoint<Prev::SavePoint,>,> {
-        let current_save = self.save();
-        self.restore(start_save,);
-        let contents: SmallString<[u8; 1024],> = self
-            .previous_phase
-            .take_while(|_| self.current_position().index < current_save.current_position().index,)
-            .collect();
-        self.restore(current_save,);
-        let start_position = start_save.current_position();
+    ) -> Result<<Self as TranslationPhase>::Yield, <Self as TranslationPhase>::Error> {
+        let current_save = self.previous_phase.save();
+        self.previous_phase
+            .restore(self.current_token_start.clone());
+        let mut contents: SmallString<[u8; 1024]> = SmallString::new();
+        while self.previous_phase.current_position().index < current_save.current_position().index {
+            match self.previous_phase.next() {
+                | Some(Ok(c)) => contents.push(c),
+                | Some(Err(_)) => continue,
+                | None => break,
+            }
+        }
+        self.previous_phase.restore(current_save);
+        let start_position = self.current_token_start.current_position();
+        println!("Token contains: {:?}", contents);
 
-        PreprocessorToken {
-            start_save,
+        Ok(PreprocessorToken {
+            start_position,
             length: self.current_position().index - start_position.index,
             token_type,
-            contents: self.string_cache.intern(contents.as_str(),),
-        }
+            contents: self.string_cache.intern(contents.as_str()),
+        })
     }
 
-    fn step_over_whitespace(&mut self,) {
+    fn step_over_whitespace(&mut self) -> ParserReturn<Prev::Error> {
         let mut save_point = self.save();
         while self
             .previous_phase
             .next()
-            .is_some_and(|c| c.is_whitespace() && c != '\n',)
+            .is_some_and(|r| r.is_ok_and(|c| c.is_whitespace() && c != '\n'))
         {
             save_point = self.save();
         }
-        self.restore(save_point,);
+        self.restore(save_point);
+        self.next()
     }
 
-    fn step_over_line_comment(&mut self,) {
-        let mut save_point = self.save();
+    fn tokenize_or_step_over_forward_slash(&mut self) -> ParserReturn<Prev::Error> {
         let current = self.previous_phase.next();
-        let next = self.previous_phase.next();
-        if current != Some('/',) || next != Some('/',) {
-            self.restore(save_point,);
-            return;
+        match current {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfForwardSlash;
+                Some(self.error_from_prev(e))
+            },
+            | Some(Ok('/')) => self.step_over_line_comment(),
+            | Some(Ok('*')) => self.step_over_block_comment(),
+            | Some(Ok('=')) => Some(self.generate_token(PreprocessorTokenType::ForwardSlashEquals)),
+            | Some(Ok(_)) | None => {
+                self.state = State::Default;
+                Some(self.generate_token(PreprocessorTokenType::ForwardSlash))
+            },
         }
-        while self.previous_phase.next().is_some_and(|c| c != '\n',) {
-            save_point = self.save();
-        }
-        self.restore(save_point,);
     }
 
-    fn step_over_block_comment(&mut self,) {
+    fn step_over_line_comment(&mut self) -> ParserReturn<Prev::Error> {
         let mut save_point = self.save();
-        let current = self.previous_phase.next();
-        let next = self.previous_phase.next();
-        if current != Some('/',) || next != Some('*',) {
-            self.restore(save_point,);
-            return;
+
+        loop {
+            match self.previous_phase.next() {
+                | None => {
+                    save_point = self.save();
+                    break;
+                },
+                | Some(Err(e)) => {
+                    self.state = State::MiddleOfLineComment;
+                    return Some(self.error_from_prev(e));
+                },
+                | Some(Ok('\n')) => break,
+                | Some(Ok(_)) => {
+                    save_point = self.save();
+                    continue;
+                },
+            }
         }
-        while self.previous_phase.next().is_some_and(|c| c != '*',)
-            && self.previous_phase.next().is_some_and(|c| c != '/',)
-        {
-            save_point = self.save();
-        }
-        self.restore(save_point,);
+
+        self.restore(save_point);
+        self.next()
     }
 
-    fn new(previous_phase: Prev, string_cache: StringCache,) -> Self {
+    fn step_over_block_comment(&mut self) -> ParserReturn<Prev::Error> {
+        let mut save_point = self.save();
+
+        loop {
+            match self.previous_phase.next() {
+                | None => break,
+                | Some(Err(e)) => {
+                    self.state = State::MiddleOfBlockComment;
+                    return Some(self.error_from_prev(e));
+                },
+                | Some(Ok('*')) => return self.step_over_block_comment_end(),
+                | Some(Ok(_)) => {
+                    save_point = self.save();
+                    continue;
+                },
+            }
+        }
+        self.restore(save_point);
+        self.next()
+    }
+
+    fn step_over_block_comment_end(&mut self) -> ParserReturn<Prev::Error> {
+        let mut save_point = self.save();
+
+        loop {
+            match self.previous_phase.next() {
+                | None => break,
+                | Some(Err(e)) => {
+                    self.state = State::BeforeBlockCommentEnd;
+                    return Some(self.error_from_prev(e));
+                },
+                | Some(Ok('/')) => {
+                    save_point = self.save();
+                    break;
+                },
+                | Some(Ok(_)) => {
+                    save_point = self.save();
+                    continue;
+                },
+            }
+        }
+        self.restore(save_point);
+        self.next()
+    }
+
+    fn new(previous_phase: Prev, string_cache: StringCache) -> Self {
         Self {
+            current_token_start: previous_phase.save(),
             previous_phase,
-            is_lexing_include_directive: false,
+            state: State::Default,
             string_cache,
+            is_tokenizing_include_directive: false,
         }
     }
 
-    fn tokenize_tag(&mut self,) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
+    fn tokenize(&mut self) -> ParserReturn<Prev::Error> {
+        self.current_token_start = self.previous_phase.save();
+        let result = self.previous_phase.next()?;
+
+        let result = match result {
+            | Ok(c) => c,
+            | Err(e) => return Some(self.error_from_prev(e)),
+        };
+        Some(match result {
+            | '\n' => self.generate_token(PreprocessorTokenType::Newline),
+            | '0'..='9' => self.tokenize_number(),
+            | '{' => self.generate_token(PreprocessorTokenType::OpeningCurlyBrace),
+            | '}' => self.generate_token(PreprocessorTokenType::ClosingCurlyBrace),
+            | '(' => self.generate_token(PreprocessorTokenType::OpeningParenthesis),
+            | ')' => self.generate_token(PreprocessorTokenType::ClosingParenthesis),
+            | '[' => self.generate_token(PreprocessorTokenType::OpeningSquareBracket),
+            | ']' => self.generate_token(PreprocessorTokenType::ClosingSquareBracket),
+            | 'L' => self.tokenize_wide_string_or_identifier(),
+            | c if c.is_alphabetic() || c == '_' => self.tokenize_keyword_or_identifier(),
+            | '.' => self.tokenize_period_or_number(),
+            | '"' => self.tokenize_string(),
+            | '\'' => self.tokenize_char(),
+            | '#' => self.tokenize_hash(),
+            | ' ' => return self.step_over_whitespace(),
+            | '/' => return self.tokenize_or_step_over_forward_slash(),
+            | '%' => self.tokenize_percent(),
+            | '<' => self.tokenize_left_angle_bracket(),
+            | '>' => self.tokenize_right_angle_bracket(),
+            | ',' => self.generate_token(PreprocessorTokenType::Comma),
+            | ';' => self.generate_token(PreprocessorTokenType::SemiColon),
+            | '?' => self.generate_token(PreprocessorTokenType::QuestionMark),
+            | '~' => self.generate_token(PreprocessorTokenType::Tilde),
+            | ':' => self.tokenize_colon(),
+            | '+' => self.tokenize_plus(),
+            | '-' => self.tokenize_minus(),
+            | '*' => self.tokenize_asterisk(),
+            | '^' => self.tokenize_caret(),
+            | '&' => self.tokenize_ampersand(),
+            | '|' => self.tokenize_pipe(),
+            | '!' => self.tokenize_exclamation_mark(),
+            | '=' => self.tokenize_equals(),
+            | _ => self.generate_error(PreprocessorErrorType::UnknownToken),
+        })
+    }
+
+    fn tokenize_hash(&mut self) -> ParserResult<Prev::Error> {
         let save_point = self.save();
-        'outer: for tag in &TAGS {
-            for c in tag.tag.chars() {
-                if self.previous_phase.next() != Some(c,) {
-                    self.restore(save_point.clone(),);
-                    continue 'outer;
-                }
-            }
-            return Some(Ok(self.generate_token(tag.token_type, save_point,),),);
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::BetweenHashes;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('#')) => self.generate_token(PreprocessorTokenType::HashHash),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Hash)
+            },
         }
-        None
     }
 
-    fn tokenize_newline(&mut self,) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
+    fn tokenize_identifier(&mut self) -> ParserResult<Prev::Error> {
+        let mut save_point = self.save();
+
+        loop {
+            break match self.previous_phase.next() {
+                | Some(Err(e)) => {
+                    self.state = State::MiddleOfIdentifier;
+                    self.error_from_prev(e)
+                },
+                | Some(Ok(c)) if c.is_alphanumeric() || c == '_' => {
+                    save_point = self.save();
+                    continue;
+                },
+                | None | Some(Ok(_)) => {
+                    self.restore(save_point);
+                    self.state = State::Default;
+                    self.generate_token(PreprocessorTokenType::Identifier)
+                },
+            };
+        }
+    }
+
+    fn tokenize_keyword_or_identifier(&mut self) -> ParserResult<Prev::Error> {
+        let mut res = self.tokenize_identifier()?;
+        if self.string_cache.get(res.contents) == Some("defined") {
+            res.token_type = PreprocessorTokenType::Defined;
+        }
+        Ok(res)
+    }
+
+    fn tokenize_wide_string_or_identifier(&mut self) -> ParserResult<Prev::Error> {
         let save_point = self.save();
-        if self.previous_phase.next() == Some('\n',) {
-            Some(Ok(
-                self.generate_token(PreprocessorTokenType::Newline, save_point,),
-            ),)
-        } else {
-            self.restore(save_point,);
-            None
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfIdentifier;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('"')) => self.tokenize_string(),
+            | Some(Ok('\'')) => self.tokenize_char(),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.tokenize_keyword_or_identifier()
+            },
         }
     }
 
-    fn tokenize_identifier(&mut self,) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
-        let save_point = self.save();
-        if !self
-            .previous_phase
-            .next()
-            .is_some_and(|c| c.is_alphabetic() || c == '_',)
-        {
-            self.restore(save_point,);
-            return None;
-        }
-        let mut save_point2 = self.save();
-        while self
-            .previous_phase
-            .next()
-            .is_some_and(|c| c.is_alphanumeric() || c == '_',)
-        {
-            save_point2 = self.save();
-        }
-        self.restore(save_point2,);
-        Some(Ok(self.generate_token(
-            PreprocessorTokenType::Identifier,
-            save_point,
-        ),),)
-    }
-
-    fn tokenize_keyword(&mut self,) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
-        let save_point = self.save();
-        'outer: for keyword in &KEYWORDS {
-            for c in keyword.keyword.chars() {
-                if self.previous_phase.next() != Some(c,) {
-                    self.restore(save_point.clone(),);
-                    continue 'outer;
-                }
-            }
-            return Some(Ok(self.generate_token(keyword.token_type, save_point,),),);
-        }
-        None
-    }
-
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn tokenize_string_like(
         &mut self,
-        start_char: char,
         end_char: char,
         ignore_escapes: bool,
         return_token_type: PreprocessorTokenType,
-        error_type: PreprocessorErrorType,
-    ) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
-        let save_point = self.save();
-
-        if self.previous_phase.next() != Some('L',) {
-            self.restore(save_point.clone(),);
-        }
-
-        if self.previous_phase.next() != Some(start_char,) {
-            self.restore(save_point,);
-            return None;
-        }
-
-        while let Some(current,) = self.previous_phase.next() {
+        unterminated_error_type: PreprocessorErrorType,
+        newline_error_type: PreprocessorErrorType,
+        middle_of_state: State<Prev::SavePoint>,
+    ) -> ParserResult<Prev::Error> {
+        loop {
+            let current = match self.previous_phase.next() {
+                | None => return self.generate_error(unterminated_error_type),
+                | Some(Err(e)) => {
+                    self.state = middle_of_state;
+                    return self.error_from_prev(e);
+                },
+                | Some(Ok(current)) => current,
+            };
             if !ignore_escapes {
                 let save_point = self.save();
                 let next = self.previous_phase.next();
-                if current == '\\' && next == Some(end_char,) {
+                if current == '\\' && matches!(next, Some(Ok(v)) if v == end_char) {
                     continue;
                 }
-                self.restore(save_point.clone(),);
+                self.restore(save_point.clone());
             }
             if current == end_char {
                 break;
             }
             if current == '\n' {
-                return Some(Err(self.generate_error(error_type, save_point,),),);
+                self.state = middle_of_state;
+                return self.generate_error(newline_error_type);
             }
         }
 
-        Some(Ok(self.generate_token(return_token_type, save_point,),),)
+        self.generate_token(return_token_type)
     }
 
-    fn tokenize_string(&mut self,) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
+    fn tokenize_string(&mut self) -> ParserResult<Prev::Error> {
         self.tokenize_string_like(
-            '"',
             '"',
             false,
             PreprocessorTokenType::String,
             PreprocessorErrorType::UnterminatedString,
+            PreprocessorErrorType::NewlineInString,
+            State::MiddleOfString,
         )
     }
 
-    fn tokenize_char(&mut self,) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
+    fn tokenize_char(&mut self) -> ParserResult<Prev::Error> {
         self.tokenize_string_like(
-            '\'',
             '\'',
             false,
             PreprocessorTokenType::Character,
             PreprocessorErrorType::UnterminatedCharacter,
+            PreprocessorErrorType::NewlineInCharacter,
+            State::MiddleOfCharacter,
         )
     }
 
-    fn tokenize_angle_bracket_string(&mut self,) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
+    fn tokenize_angle_bracket_string(&mut self) -> ParserResult<Prev::Error> {
         self.tokenize_string_like(
-            '<',
             '>',
             true,
             PreprocessorTokenType::AngleBracketString,
             PreprocessorErrorType::UnterminatedAngleBracketString,
+            PreprocessorErrorType::NewlineInAngleBracketString,
+            State::MiddleOfAngleBracketString,
         )
     }
 
-    fn tokenize_include_string(&mut self,) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
+    fn tokenize_include_string(&mut self) -> ParserResult<Prev::Error> {
         self.tokenize_string_like(
-            '"',
             '"',
             true,
             PreprocessorTokenType::IncludeString,
             PreprocessorErrorType::UnterminatedIncludeString,
+            PreprocessorErrorType::NewlineInIncludeString,
+            State::MiddleOfIncludeString,
         )
     }
 
-    fn tokenize_number(&mut self,) -> ParserReturn<SavePoint<Prev::SavePoint,>,> {
-        let save_point = self.save();
+    fn tokenize_period_or_number(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.previous_phase.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfNumberOrPeriod;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('.')) => self.tokenize_ellipsis(save_point),
+            | Some(Ok(v)) if v.is_ascii_digit() => self.tokenize_number(),
+            | None | Some(Ok(_)) => {
+                self.previous_phase.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Period)
+            },
+        }
+    }
 
-        if self.previous_phase.next() != Some('.',) {
-            self.restore(save_point.clone(),);
-        }
-        if !self
-            .previous_phase
-            .next()
-            .is_some_and(|c| c.is_ascii_digit(),)
-        {
-            self.restore(save_point,);
-            return None;
-        }
-        let mut save_point2 = self.save();
-        while let Some(current,) = self.previous_phase.next() {
-            const EXPONENTS: [&str; 8] = ["e-", "E-", "e+", "E+", "p-", "P-", "p+", "P+",];
-            let save_point = self.save();
-            let next = self.previous_phase.next();
-            if EXPONENTS.iter().any(|exponent| {
-                let &[b1, b2] = exponent.as_bytes() else {
-                    unreachable!()
+    fn tokenize_ellipsis(
+        &mut self,
+        end_of_first_period: Prev::SavePoint,
+    ) -> ParserResult<Prev::Error> {
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfEllipsis {
+                    end_of_first_period: Some(Box::new(end_of_first_period)),
                 };
-                current == b1 as char && next == Some(b2 as char,)
-            },)
-            {
-                save_point2 = self.save();
-                continue;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('.')) => self.generate_token(PreprocessorTokenType::Ellipsis),
+            | None | Some(Ok(_)) => {
+                self.previous_phase.restore(end_of_first_period);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Period)
+            },
+        }
+    }
+
+    fn tokenize_exponent_sign(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfExponent;
+                self.error_from_prev(e)
+            },
+            | Some(Ok(v)) if v == '+' || v == '-' => self.tokenize_number(),
+            | None | Some(Ok(_)) => {
+                self.state = State::Default;
+                self.restore(save_point);
+                self.tokenize_number()
+            },
+        }
+    }
+
+    fn tokenize_number(&mut self) -> ParserResult<Prev::Error> {
+        let mut save_point = self.save();
+
+        loop {
+            let current = match self.previous_phase.next() {
+                | Some(Err(e)) => {
+                    self.state = State::MiddleOfNumber;
+                    return self.error_from_prev(e);
+                },
+                | None => {
+                    self.restore(save_point);
+                    self.state = State::Default;
+                    return self.generate_token(PreprocessorTokenType::Number);
+                },
+                | Some(Ok(v)) => v,
+            };
+
+            let save_point2 = self.save();
+
+            if matches!(current, 'e' | 'E' | 'p' | 'P') {
+                match self.previous_phase.next() {
+                    | None => return self.generate_token(PreprocessorTokenType::Number),
+                    | Some(Err(e)) => {
+                        self.state = State::MiddleOfExponent;
+                        return self.error_from_prev(e);
+                    },
+                    | Some(Ok(next)) =>
+                        if matches!(next, '+' | '-') {
+                            save_point = self.save();
+                            continue;
+                        },
+                }
             }
-            self.restore(save_point,);
+
+            self.restore(save_point2);
 
             if current.is_alphanumeric() || current == '.' {
-                save_point2 = self.save();
                 continue;
             }
-            self.restore(save_point2,);
+            self.restore(save_point);
+
             break;
         }
-        Some(Ok(
-            self.generate_token(PreprocessorTokenType::Number, save_point,),
-        ),)
+        self.generate_token(PreprocessorTokenType::Number)
+    }
+
+    fn tokenize_percent(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfPercent;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::PercentEquals),
+            | Some(Ok('>')) => self.generate_token(PreprocessorTokenType::ClosingCurlyBrace),
+            | Some(Ok(':')) => self.tokenize_hash_digraph(),
+            | Some(Ok(_)) | None => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Percent)
+            },
+        }
+    }
+
+    fn tokenize_hash_digraph(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.previous_phase.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfHashDigraph;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('%')) => self.tokenize_double_hash_digraph(save_point),
+            | None | Some(Ok(_)) => {
+                self.previous_phase.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Hash)
+            },
+        }
+    }
+
+    fn tokenize_double_hash_digraph(
+        &mut self,
+        end_of_first_half: Prev::SavePoint,
+    ) -> ParserResult<Prev::Error> {
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfDoubleHashDigraph {
+                    end_of_first_half: Some(Box::new(end_of_first_half)),
+                };
+                self.error_from_prev(e)
+            },
+            | Some(Ok(':')) => self.generate_token(PreprocessorTokenType::HashHash),
+            | None | Some(Ok(_)) => {
+                self.previous_phase.restore(end_of_first_half);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Hash)
+            },
+        }
+    }
+
+    fn tokenize_left_angle_bracket(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfLeftAngleBracket;
+                self.error_from_prev(e)
+            },
+            | Some(Ok(':')) => self.generate_token(PreprocessorTokenType::OpeningSquareBracket),
+            | Some(Ok('%')) => self.generate_token(PreprocessorTokenType::OpeningCurlyBrace),
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::LessThanEquals),
+            | Some(Ok('<')) => self.tokenize_left_shift(),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::LessThan)
+            },
+        }
+    }
+
+    fn tokenize_left_shift(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfLeftShift;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::LessThanLessThanEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::LessThanLessThan)
+            },
+        }
+    }
+
+    fn tokenize_right_angle_bracket(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfRightAngleBracket;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('>')) => self.tokenize_right_shift(),
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::GreaterThanEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::GreaterThan)
+            },
+        }
+    }
+
+    fn tokenize_right_shift(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfRightShift;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('=')) =>
+                self.generate_token(PreprocessorTokenType::GreaterThanGreaterThanEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::GreaterThanGreaterThan)
+            },
+        }
+    }
+
+    fn tokenize_colon(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfColon;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('>')) => self.generate_token(PreprocessorTokenType::ClosingSquareBracket),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Colon)
+            },
+        }
+    }
+
+    fn tokenize_plus(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfPlus;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('+')) => self.generate_token(PreprocessorTokenType::PlusPlus),
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::PlusEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Plus)
+            },
+        }
+    }
+
+    fn tokenize_minus(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfMinus;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('-')) => self.generate_token(PreprocessorTokenType::MinusMinus),
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::MinusEquals),
+            | Some(Ok('>')) => self.generate_token(PreprocessorTokenType::Arrow),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Minus)
+            },
+        }
+    }
+
+    fn tokenize_asterisk(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfAsterisk;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::AsteriskEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Asterisk)
+            },
+        }
+    }
+
+    fn tokenize_caret(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfCaret;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::CaretEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Caret)
+            },
+        }
+    }
+
+    fn tokenize_ampersand(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfAmpersand;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('&')) => self.generate_token(PreprocessorTokenType::AmpersandAmpersand),
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::AmpersandEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Ampersand)
+            },
+        }
+    }
+
+    fn tokenize_pipe(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfPipe;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('|')) => self.generate_token(PreprocessorTokenType::PipePipe),
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::PipeEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Pipe)
+            },
+        }
+    }
+
+    fn tokenize_exclamation_mark(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfExclamationMark;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::ExclamationMarkEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::ExclamationMark)
+            },
+        }
+    }
+
+    fn tokenize_equals(&mut self) -> ParserResult<Prev::Error> {
+        let save_point = self.save();
+        match self.previous_phase.next() {
+            | Some(Err(e)) => {
+                self.state = State::MiddleOfEquals;
+                self.error_from_prev(e)
+            },
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::EqualsEquals),
+            | None | Some(Ok(_)) => {
+                self.restore(save_point);
+                self.state = State::Default;
+                self.generate_token(PreprocessorTokenType::Equals)
+            },
+        }
     }
 }
 
-type ParserReturn<Inner,> = Option<ParserResult<Inner,>,>;
-type ParserResult<Inner,> =
-    Result<PreprocessorToken<Inner,>, InnerPreprocessorTokenizerError<Inner,>,>;
-#[allow(type_alias_bounds)]
-type ParserFunction<Prev,>
-where
-    Prev: TranslationPhase,
-= fn(&mut PreprocessorTokenizer<Prev,>,) -> ParserReturn<SavePoint<Prev::SavePoint,>,>;
+type ParserReturn<PrevError> = Option<ParserResult<PrevError>>;
+type ParserResult<PrevError> = Result<PreprocessorToken, PreprocessorTokenizerError<PrevError>>;
 
-#[allow(type_alias_bounds)]
-type StepOverFunction<Prev,>
-where
-    Prev: TranslationPhase,
-= fn(&mut PreprocessorTokenizer<Prev,>,);
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash,)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum PreprocessorTokenType {
     // Literals
     Identifier,
@@ -580,84 +1070,84 @@ pub(crate) enum PreprocessorTokenType {
     HashHash,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash,)]
-pub(crate) struct PreprocessorToken<SavePoint,> {
-    pub(crate) token_type: PreprocessorTokenType,
-    pub(crate) start_save: SavePoint,
-    pub(crate) contents:   StringCacheId,
-    pub(crate) length:     usize,
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PreprocessorToken {
+    pub(crate) token_type:     PreprocessorTokenType,
+    pub(crate) start_position: Position,
+    pub(crate) contents:       StringCacheId,
+    pub(crate) length:         usize,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash,)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 struct Tag {
     tag:        &'static str,
     token_type: PreprocessorTokenType,
 }
 
-const fn tag(tag: &'static str, token_type: PreprocessorTokenType,) -> Tag {
-    Tag { tag, token_type, }
+const fn tag(tag: &'static str, token_type: PreprocessorTokenType) -> Tag {
+    Tag { tag, token_type }
 }
 
 type Ptt = PreprocessorTokenType;
 
 const TAGS: [Tag; 54] = [
-    tag("[", Ptt::OpeningSquareBracket,),
-    tag("]", Ptt::ClosingSquareBracket,),
-    tag("(", Ptt::OpeningParenthesis,),
-    tag(")", Ptt::ClosingParenthesis,),
-    tag("{", Ptt::OpeningCurlyBrace,),
-    tag("}", Ptt::ClosingCurlyBrace,),
-    tag("...", Ptt::Ellipsis,),
-    tag(".", Ptt::Period,),
-    tag("->", Ptt::Arrow,),
-    tag("++", Ptt::PlusPlus,),
-    tag("--", Ptt::MinusMinus,),
-    tag("<<=", Ptt::LessThanLessThanEquals,),
-    tag(">>=", Ptt::GreaterThanGreaterThanEquals,),
-    tag("+=", Ptt::PlusEquals,),
-    tag("-=", Ptt::MinusEquals,),
-    tag("*=", Ptt::AsteriskEquals,),
-    tag("/=", Ptt::ForwardSlashEquals,),
-    tag("%=", Ptt::PercentEquals,),
-    tag("&=", Ptt::AmpersandEquals,),
-    tag("^=", Ptt::CaretEquals,),
-    tag("|=", Ptt::PipeEquals,),
-    tag("<:", Ptt::OpeningSquareBracket,),
-    tag(":>", Ptt::ClosingSquareBracket,),
-    tag("<%", Ptt::OpeningCurlyBrace,),
-    tag("%>", Ptt::ClosingCurlyBrace,),
-    tag("%:%:", Ptt::HashHash,),
-    tag("%:", Ptt::Hash,),
-    tag("<<", Ptt::LessThanLessThan,),
-    tag(">>", Ptt::GreaterThanGreaterThan,),
-    tag("<=", Ptt::LessThanEquals,),
-    tag(">=", Ptt::GreaterThanEquals,),
-    tag("==", Ptt::EqualsEquals,),
-    tag("!=", Ptt::ExclamationMarkEquals,),
-    tag("<", Ptt::LessThan,),
-    tag(">", Ptt::GreaterThan,),
-    tag("&&", Ptt::AmpersandAmpersand,),
-    tag("||", Ptt::PipePipe,),
-    tag("*", Ptt::Asterisk,),
-    tag("+", Ptt::Plus,),
-    tag("-", Ptt::Minus,),
-    tag("~", Ptt::Tilde,),
-    tag("!", Ptt::ExclamationMark,),
-    tag("/", Ptt::ForwardSlash,),
-    tag("%", Ptt::Percent,),
-    tag("&", Ptt::Ampersand,),
-    tag("^", Ptt::Caret,),
-    tag("|", Ptt::Pipe,),
-    tag("?", Ptt::QuestionMark,),
-    tag(":", Ptt::Colon,),
-    tag(";", Ptt::SemiColon,),
-    tag("=", Ptt::Equals,),
-    tag(",", Ptt::Comma,),
-    tag("##", Ptt::HashHash,),
-    tag("#", Ptt::Hash,),
+    tag("[", Ptt::OpeningSquareBracket),
+    tag("]", Ptt::ClosingSquareBracket),
+    tag("(", Ptt::OpeningParenthesis),
+    tag(")", Ptt::ClosingParenthesis),
+    tag("{", Ptt::OpeningCurlyBrace),
+    tag("}", Ptt::ClosingCurlyBrace),
+    tag("...", Ptt::Ellipsis),
+    tag(".", Ptt::Period),
+    tag("->", Ptt::Arrow),
+    tag("++", Ptt::PlusPlus),
+    tag("--", Ptt::MinusMinus),
+    tag("<<=", Ptt::LessThanLessThanEquals),
+    tag(">>=", Ptt::GreaterThanGreaterThanEquals),
+    tag("+=", Ptt::PlusEquals),
+    tag("-=", Ptt::MinusEquals),
+    tag("*=", Ptt::AsteriskEquals),
+    tag("/=", Ptt::ForwardSlashEquals),
+    tag("%=", Ptt::PercentEquals),
+    tag("&=", Ptt::AmpersandEquals),
+    tag("^=", Ptt::CaretEquals),
+    tag("|=", Ptt::PipeEquals),
+    tag("<:", Ptt::OpeningSquareBracket),
+    tag(":>", Ptt::ClosingSquareBracket),
+    tag("<%", Ptt::OpeningCurlyBrace),
+    tag("%>", Ptt::ClosingCurlyBrace),
+    tag("%:%:", Ptt::HashHash),
+    tag("%:", Ptt::Hash),
+    tag("<<", Ptt::LessThanLessThan),
+    tag(">>", Ptt::GreaterThanGreaterThan),
+    tag("<=", Ptt::LessThanEquals),
+    tag(">=", Ptt::GreaterThanEquals),
+    tag("==", Ptt::EqualsEquals),
+    tag("!=", Ptt::ExclamationMarkEquals),
+    tag("<", Ptt::LessThan),
+    tag(">", Ptt::GreaterThan),
+    tag("&&", Ptt::AmpersandAmpersand),
+    tag("||", Ptt::PipePipe),
+    tag("*", Ptt::Asterisk),
+    tag("+", Ptt::Plus),
+    tag("-", Ptt::Minus),
+    tag("~", Ptt::Tilde),
+    tag("!", Ptt::ExclamationMark),
+    tag("/", Ptt::ForwardSlash),
+    tag("%", Ptt::Percent),
+    tag("&", Ptt::Ampersand),
+    tag("^", Ptt::Caret),
+    tag("|", Ptt::Pipe),
+    tag("?", Ptt::QuestionMark),
+    tag(":", Ptt::Colon),
+    tag(";", Ptt::SemiColon),
+    tag("=", Ptt::Equals),
+    tag(",", Ptt::Comma),
+    tag("##", Ptt::HashHash),
+    tag("#", Ptt::Hash),
 ];
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash,)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 struct Keyword {
     keyword:    &'static str,
     token_type: PreprocessorTokenType,
@@ -666,16 +1156,16 @@ struct Keyword {
 static KEYWORDS: [Keyword; 1] = [Keyword {
     keyword:    "defined",
     token_type: PreprocessorTokenType::Defined,
-},];
+}];
 
-pub(crate) fn phase_3_preprocessor_tokenizer<Prev,>(
+pub(crate) fn phase_3_preprocessor_tokenizer<Prev>(
     previous_phase: Prev,
     string_cache: StringCache,
-) -> PreprocessorTokenizer<Prev,>
+) -> PreprocessorTokenizer<Prev, Prev::SavePoint>
 where
-    Prev: TranslationPhase<Yield = char,>,
+    Prev: TranslationPhase<Yield = char>,
 {
-    PreprocessorTokenizer::new(previous_phase, string_cache,)
+    PreprocessorTokenizer::new(previous_phase, string_cache)
 }
 
 #[cfg(test)]
@@ -687,14 +1177,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        translation_phases::{
-            phase_1_map_character_sets::SavePoint as MapCharacterSetsSavePoint,
-            phase_2_remove_escaped_newlines::{
-                RemoveEscapedNewlinesError,
-                SavePoint as RemoveEscapedNewLinesSavePoint,
-                State as RemoveEscapedNewLinesState,
-            },
-        },
+        translation_phases::phase_2_remove_escaped_newlines::RemoveEscapedNewlinesError,
         util::string_cache::{
             Id as StringCacheId,
             StringCache,
@@ -703,23 +1186,14 @@ mod tests {
 
     #[rstest]
     #[case("", vec![
-        Err(PreprocessorTokenizerError::Inner(RemoveEscapedNewlinesError::MissingFinalNewLine)),
+        Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine)),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 0,
-                            line: 1,
-                            column: 1,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Done,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 0,
+                line: 1,
+                column: 1,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 0,
             contents: StringCacheId::from_usize(1),
@@ -729,79 +1203,43 @@ mod tests {
     #[case("int x = @1;\n", vec![
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 0,
-                            line: 1,
-                            column: 1,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 0,
+                line: 1,
+                column: 1,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 3,
             contents: StringCacheId::from_usize(1),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 4,
-                            line: 1,
-                            column: 5,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 4,
+                line: 1,
+                column: 5,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             contents: StringCacheId::from_usize(2),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Equals,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 6,
-                            line: 1,
-                            column: 7,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 6,
+                line: 1,
+                column: 7,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             contents: StringCacheId::from_usize(3),
         }),
         Err(PreprocessorTokenizerError::TokenizerError(InnerPreprocessorTokenizerError {
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 8,
-                            line: 1,
-                            column: 9,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 8,
+                line: 1,
+                column: 9,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             error_type: PreprocessorErrorType::UnknownToken,
@@ -809,60 +1247,33 @@ mod tests {
         })),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Number,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 9,
-                            line: 1,
-                            column: 10,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 9,
+                line: 1,
+                column: 10,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             contents: StringCacheId::from_usize(5),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::SemiColon,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 10,
-                            line: 1,
-                            column: 11,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 10,
+                line: 1,
+                column: 11,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             contents: StringCacheId::from_usize(6),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 11,
-                            line: 1,
-                            column: 12,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Done,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 11,
+                line: 1,
+                column: 12,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             contents: StringCacheId::from_usize(7),
@@ -872,321 +1283,177 @@ mod tests {
         vec![
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Hash,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 0,
-                                line: 1,
-                                column: 1,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 0,
+                    line: 1,
+                    column: 1,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(1),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 1,
-                                line: 1,
-                                column: 2,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 1,
+                    line: 1,
+                    column: 2,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 6,
                 contents: StringCacheId::from_usize(2),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 8,
-                                line: 1,
-                                column: 9,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 8,
+                    line: 1,
+                    column: 9,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 3,
                 contents: StringCacheId::from_usize(3),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::OpeningParenthesis,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 11,
-                                line: 1,
-                                column: 12,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 11,
+                    line: 1,
+                    column: 12,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(4),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 12,
-                                line: 1,
-                                column: 13,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 12,
+                    line: 1,
+                    column: 13,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(5),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Comma,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 13,
-                                line: 1,
-                                column: 14,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 13,
+                    line: 1,
+                    column: 14,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(6),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 15,
-                                line: 1,
-                                column: 16,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 15,
+                    line: 1,
+                    column: 16,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(7),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::ClosingParenthesis,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 16,
-                                line: 1,
-                                column: 17,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 16,
+                    line: 1,
+                    column: 17,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(8),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 18,
-                                line: 1,
-                                column: 19,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 18,
+                    line: 1,
+                    column: 19,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(5),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::GreaterThan,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 20,
-                                line: 1,
-                                column: 21,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 20,
+                    line: 1,
+                    column: 21,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(9),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 22,
-                                line: 1,
-                                column: 23,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 22,
+                    line: 1,
+                    column: 23,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(7),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::QuestionMark,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 29,
-                                line: 2,
-                                column: 5,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 29,
+                    line: 2,
+                    column: 5,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(10),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 31,
-                                line: 2,
-                                column: 7,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 31,
+                    line: 2,
+                    column: 7,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(5),
             }),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Colon,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 38,
-                                line: 3,
-                                column: 5,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 38,
+                    line: 3,
+                    column: 5,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(11),
             }),
+            Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine)),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Identifier,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 40,
-                                line: 3,
-                                column: 7,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Normal,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 40,
+                    line: 3,
+                    column: 7,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
                 contents: StringCacheId::from_usize(7),
             }),
-            Err(PreprocessorTokenizerError::Inner(RemoveEscapedNewlinesError::MissingFinalNewLine)),
             Ok(PreprocessorToken {
                 token_type: PreprocessorTokenType::Newline,
-                start_save: SavePoint {
-                    inner: RemoveEscapedNewLinesSavePoint {
-                        inner: MapCharacterSetsSavePoint {
-                            inner: Position {
-                                index: 41,
-                                line: 3,
-                                column: 8,
-                                source_file: StringCacheId::from_usize(0),
-                            },
-                        },
-                        last_was_newline: false,
-                        state: RemoveEscapedNewLinesState::Done,
-                    },
-                    is_lexing_include_directive: false,
+                start_position: Position {
+                    index: 41,
+                    line: 3,
+                    column: 8,
+                    source_file: StringCacheId::from_usize(0),
                 },
                 length: 0,
                 contents: StringCacheId::from_usize(12),
@@ -1196,160 +1463,88 @@ mod tests {
     #[case("const char *str = \"Hello, World!\\n\";\n", vec![
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 0,
-                            line: 1,
-                            column: 1,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 0,
+                line: 1,
+                column: 1,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 5,
             contents: StringCacheId::from_usize(1),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 6,
-                            line: 1,
-                            column: 7,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 6,
+                line: 1,
+                column: 7,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 4,
             contents: StringCacheId::from_usize(2),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Asterisk,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 11,
-                            line: 1,
-                            column: 12,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 11,
+                line: 1,
+                column: 12,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             contents: StringCacheId::from_usize(3),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Identifier,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 12,
-                            line: 1,
-                            column: 13,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 12,
+                line: 1,
+                column: 13,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 3,
             contents: StringCacheId::from_usize(4),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Equals,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 16,
-                            line: 1,
-                            column: 17,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 16,
+                line: 1,
+                column: 17,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             contents: StringCacheId::from_usize(5),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::String,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 18,
-                            line: 1,
-                            column: 19,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 18,
+                line: 1,
+                column: 19,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 17,
             contents: StringCacheId::from_usize(6),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::SemiColon,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 35,
-                            line: 1,
-                            column: 36,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 35,
+                line: 1,
+                column: 36,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             contents: StringCacheId::from_usize(7),
         }),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 36,
-                            line: 1,
-                            column: 37,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Done,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 36,
+                line: 1,
+                column: 37,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 1,
             contents: StringCacheId::from_usize(8),
@@ -1358,41 +1553,23 @@ mod tests {
     #[case("\"\\\"\"", vec![
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::String,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 0,
-                            line: 1,
-                            column: 1,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Normal,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 0,
+                line: 1,
+                column: 1,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 4,
             contents: StringCacheId::from_usize(1),
         }),
-        Err(PreprocessorTokenizerError::Inner(RemoveEscapedNewlinesError::MissingFinalNewLine)),
+        Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine)),
         Ok(PreprocessorToken {
             token_type: PreprocessorTokenType::Newline,
-            start_save: SavePoint {
-                inner: RemoveEscapedNewLinesSavePoint {
-                    inner: MapCharacterSetsSavePoint {
-                        inner: Position {
-                            index: 4,
-                            line: 1,
-                            column: 5,
-                            source_file: StringCacheId::from_usize(0),
-                        },
-                    },
-                    last_was_newline: false,
-                    state: RemoveEscapedNewLinesState::Done,
-                },
-                is_lexing_include_directive: false,
+            start_position: Position {
+                index: 4,
+                line: 1,
+                column: 5,
+                source_file: StringCacheId::from_usize(0),
             },
             length: 0,
             contents: StringCacheId::from_usize(2),
@@ -1402,13 +1579,8 @@ mod tests {
         #[case] input: &str,
         #[case] expected: Vec<
             Result<
-                PreprocessorToken<
-                    RemoveEscapedNewLinesSavePoint<MapCharacterSetsSavePoint<Position,>,>,
-                >,
-                PreprocessorTokenizerError<
-                    RemoveEscapedNewLinesSavePoint<MapCharacterSetsSavePoint<Position,>,>,
-                    RemoveEscapedNewlinesError<Infallible,>,
-                >,
+                PreprocessorToken,
+                PreprocessorTokenizerError<RemoveEscapedNewlinesError<Infallible>>,
             >,
         >,
     ) {
@@ -1424,10 +1596,10 @@ mod tests {
             phase_2_remove_escaped_newlines(phase_1_map_character_sets(phase_0_newline_tracking(
                 input,
                 &mut string_cache,
-            ),),),
+            ))),
             string_cache,
         );
-        let actual = tokenizer.by_ref().collect::<Vec<_,>>();
+        let actual = tokenizer.by_ref().collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
 }

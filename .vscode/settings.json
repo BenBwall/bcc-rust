@@ -1,3 +1,11 @@
 {
-  "cSpell.words": ["interner", "rstest"]
+  "cSpell.words": [
+    "abcabcbb",
+    "interner",
+    "proptest",
+    "Rewinded",
+    "rstest",
+    "smallstr",
+    "thiserror"
+  ]
 }
