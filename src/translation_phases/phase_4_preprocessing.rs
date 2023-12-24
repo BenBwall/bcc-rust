@@ -97,6 +97,9 @@ pub(crate) fn prefix_binding_power<PrevError>(
         | PreprocessorTokenType::Plus
         | PreprocessorTokenType::ExclamationMark
         | PreprocessorTokenType::Tilde => Ok(Some(((), 2))),
+        | PreprocessorTokenType::PlusPlus => construct_error(ForbiddenPrefixOperator::PreIncrement),
+        | PreprocessorTokenType::MinusMinus =>
+            construct_error(ForbiddenPrefixOperator::PreDecrement),
         | PreprocessorTokenType::Asterisk => construct_error(ForbiddenPrefixOperator::Dereference),
         | PreprocessorTokenType::Ampersand => construct_error(ForbiddenPrefixOperator::AddressOf),
         | PreprocessorTokenType::Hash =>
@@ -208,8 +211,6 @@ fn postfix_binding_power<PrevError>(
     match op.kind {
         | PreprocessorTokenType::OpeningParenthesis =>
             construct_error(ForbiddenPostfixOperator::OpeningParenthesis),
-        //| PreprocessorTokenType::ClosingParenthesis =>
-        //    construct_error(ForbiddenPostfixOperator::ClosingParenthesis),
         | PreprocessorTokenType::PlusPlus =>
             construct_error(ForbiddenPostfixOperator::PostIncrement),
         | PreprocessorTokenType::MinusMinus =>
@@ -242,6 +243,7 @@ fn postfix_binding_power<PrevError>(
     }
 }
 
+#[allow(variant_size_differences)]
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum PreprocessorAtomKind {
     Number(i128),
@@ -351,6 +353,7 @@ pub(crate) enum SignedIntegerLiteralType {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum UnsignedIntegerLiteralType {
     UnsignedInt,
     UnsignedLong,
@@ -360,7 +363,6 @@ pub(crate) enum UnsignedIntegerLiteralType {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum State {
     Default,
-    MiddleOfDirective,
     Done,
 }
 
@@ -400,15 +402,15 @@ pub(crate) enum FloatTokenType {
 impl Display for FloatTokenType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            | Self::Float(v) => write!(f, "{}", v),
-            | Self::Double(v) => write!(f, "{}", v),
-            | Self::LongDouble(v) => write!(f, "{}", v),
+            | Self::Float(v) => write!(f, "{v}"),
+            | Self::Double(v) => write!(f, "{v}"),
+            | Self::LongDouble(v) => write!(f, "{v}"),
         }
     }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum KeywordTokenType {
+pub(crate) enum KeywordTokenType {
     Auto,
     Break,
     Case,
@@ -508,7 +510,6 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::NoConditionInElifDirective => ErrorSeverity::Error,
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
-            | PreprocessorErrorType::UnsignedIntLiteralOverflow
             | PreprocessorErrorType::ForcedUnsignedPromotion { .. }
             | PreprocessorErrorType::ForcedSignedPromotion { .. }
             | PreprocessorErrorType::HashMustBeFirstCharacterOnLine
@@ -593,7 +594,6 @@ pub(crate) enum ForbiddenPostfixOperator {
     ClosingCurlyBrace,
     DigraphClosingCurlyBrace,
     OpeningParenthesis,
-    ClosingParenthesis,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -606,7 +606,6 @@ pub(crate) enum PreprocessorErrorType {
     InvalidOctalIntegerLiteral,
     InvalidDecimalIntegerLiteral,
     IntegerLiteralOverflow,
-    UnsignedIntLiteralOverflow,
     ForcedSignedToUnsignedConversion {
         from: SignedIntegerLiteralType,
         to:   UnsignedIntegerLiteralType,
@@ -646,7 +645,6 @@ pub(crate) enum PreprocessorErrorType {
     },
 }
 
-#[allow(clippy::too_many_lines)]
 impl Display for PreprocessorErrorType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -693,12 +691,6 @@ impl Display for PreprocessorErrorType {
                 write!(
                     f,
                     "Overflow while parsing integer literal. Must be smaller than UINT64_MAX"
-                )
-            },
-            | Self::UnsignedIntLiteralOverflow => {
-                write!(
-                    f,
-                    "Overflow while parsing unsigned int literal. Must be smaller than UINT32_MAX"
                 )
             },
             | Self::ForcedSignedToUnsignedConversion { from, to } => {
@@ -821,7 +813,6 @@ impl Display for PreprocessorErrorType {
                     "Postfix operator '{}' is not allowed in preprocessor constant expressions!",
                     match forbidden_postfix_operator {
                         | ForbiddenPostfixOperator::OpeningParenthesis => "(",
-                        | ForbiddenPostfixOperator::ClosingParenthesis => ")",
                         | ForbiddenPostfixOperator::PostIncrement => "++",
                         | ForbiddenPostfixOperator::PostDecrement => "--",
                         | ForbiddenPostfixOperator::ArraySubscript => "[",
@@ -1145,7 +1136,6 @@ where
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     fn next_preprocessor_token(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
@@ -1462,7 +1452,6 @@ where
             self.last_preprocessor_token.map(|p| p.kind),
             None | Some(PreprocessorTokenType::Newline)
         ) {
-            self.state = State::MiddleOfDirective;
             self.last_preprocessor_token = Some(token);
             return Some(Err(PreprocessorError::InnerPreprocessorError(
                 InnerPreprocessorError {
@@ -1473,13 +1462,16 @@ where
             )));
         }
         self.last_preprocessor_token = Some(token);
-        let directive = match self.next_preprocessor_token_no_expand() {
-            | Some(Err(e)) => {
-                self.state = State::MiddleOfDirective;
-                return Some(Err(PreprocessorError::PreviousPhaseError(e)));
-            },
-            | Some(Ok(d)) => d,
-            | None => return None,
+        let directive = loop {
+            match self.next_preprocessor_token_no_expand() {
+                | Some(Err(e)) => {
+                    self.pending_results
+                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                    continue;
+                },
+                | Some(Ok(d)) => break d,
+                | None => return None,
+            }
         };
         match directive.kind {
             // Null directive.
@@ -1519,13 +1511,12 @@ where
         })
     }
 
-    fn eval_preprocessor_expression(&mut self, expression: PreprocessorExpression) -> bool {
-        println!("Evaluating preprocessor expression: {expression:#?}");
+    fn eval_preprocessor_expression(&mut self, expression: &PreprocessorExpression) -> bool {
         let result = self.eval_preprocessor_sub_expression(
             &expression.sub_expressions,
             expression.sub_expressions.len() - 1,
         );
-        println!("Main sub expression returned {}", result);
+        println!("Main sub expression returned {result}");
         result != 0
     }
 
@@ -1539,24 +1530,14 @@ where
                 | PreprocessorAtomKind::Character(c) => c as i128,
                 | PreprocessorAtomKind::Number(i) => i,
             },
-            | PreprocessorSubExpressionKind::Defined { name } => {
-                if self.macro_definitions.contains_key(name) {
-                    1
-                } else {
-                    0
-                }
-            },
+            | PreprocessorSubExpressionKind::Defined { name } =>
+                i128::from(self.macro_definitions.contains_key(name)),
             | PreprocessorSubExpressionKind::UnaryOperator { operator, operand } => {
                 let operand = self.eval_preprocessor_sub_expression(sub_expressions, *operand);
                 match operator {
                     | PreprocessorTokenType::Minus => -operand,
                     | PreprocessorTokenType::Plus => operand,
-                    | PreprocessorTokenType::ExclamationMark =>
-                        if operand == 0 {
-                            1
-                        } else {
-                            0
-                        },
+                    | PreprocessorTokenType::ExclamationMark => i128::from(operand == 0),
                     | PreprocessorTokenType::Tilde => !operand,
                     | _ => unreachable!(),
                 }
@@ -1567,9 +1548,7 @@ where
                 right,
             } => {
                 let left = self.eval_preprocessor_sub_expression(sub_expressions, *left);
-                println!("Left sub expression returned {}", left);
                 let right = self.eval_preprocessor_sub_expression(sub_expressions, *right);
-                println!("Right sub expression returned {}", right);
                 match operator {
                     | PreprocessorTokenType::Asterisk => left * right,
                     | PreprocessorTokenType::ForwardSlash => left / right,
@@ -1578,57 +1557,18 @@ where
                     | PreprocessorTokenType::Minus => left - right,
                     | PreprocessorTokenType::LessThanLessThan => left << right,
                     | PreprocessorTokenType::GreaterThanGreaterThan => left >> right,
-                    | PreprocessorTokenType::LessThan =>
-                        if left < right {
-                            1
-                        } else {
-                            0
-                        },
-                    | PreprocessorTokenType::LessThanEquals =>
-                        if left <= right {
-                            1
-                        } else {
-                            0
-                        },
-                    | PreprocessorTokenType::GreaterThan =>
-                        if left > right {
-                            1
-                        } else {
-                            0
-                        },
-                    | PreprocessorTokenType::GreaterThanEquals =>
-                        if left >= right {
-                            1
-                        } else {
-                            0
-                        },
-                    | PreprocessorTokenType::EqualsEquals =>
-                        if left == right {
-                            1
-                        } else {
-                            0
-                        },
-                    | PreprocessorTokenType::ExclamationMarkEquals =>
-                        if left != right {
-                            1
-                        } else {
-                            0
-                        },
+                    | PreprocessorTokenType::LessThan => i128::from(left < right),
+                    | PreprocessorTokenType::LessThanEquals => i128::from(left <= right),
+                    | PreprocessorTokenType::GreaterThan => i128::from(left > right),
+                    | PreprocessorTokenType::GreaterThanEquals => i128::from(left >= right),
+                    | PreprocessorTokenType::EqualsEquals => i128::from(left == right),
+                    | PreprocessorTokenType::ExclamationMarkEquals => i128::from(left != right),
                     | PreprocessorTokenType::Ampersand => left & right,
                     | PreprocessorTokenType::Caret => left ^ right,
                     | PreprocessorTokenType::Pipe => left | right,
                     | PreprocessorTokenType::AmpersandAmpersand =>
-                        if left != 0 && right != 0 {
-                            1
-                        } else {
-                            0
-                        },
-                    | PreprocessorTokenType::PipePipe =>
-                        if left != 0 || right != 0 {
-                            1
-                        } else {
-                            0
-                        },
+                        i128::from(left != 0 && right != 0),
+                    | PreprocessorTokenType::PipePipe => i128::from(left != 0 || right != 0),
                     | _ => unreachable!(),
                 }
             },
@@ -1645,7 +1585,6 @@ where
                 }
             },
         };
-        println!("Sub expression returned {}", res);
         res
     }
 
@@ -1671,18 +1610,17 @@ where
                 )),
             | Err(e) => return Err(e),
         }
-        println!("current index: {}", self.current_position().index);
-        println!("then index: {}", current_position.index);
         expression.length = self.current_position().index - current_position.index;
         Ok(expression)
     }
 
+    #[allow(clippy::similar_names)]
     fn parse_preprocessor_sub_expression(
         &mut self,
         max_binding_power: u32,
         sub_expressions: &mut Vec<PreprocessorSubExpression>,
     ) -> Result<Option<PreprocessorSubExpression>, PreprocessorError<Prev::Error>> {
-        let mut lhs = 'lhs: loop {
+        let lhs = 'lhs: loop {
             match self.next_preprocessor_token() {
                 | Some(Err(e)) => self.pending_results.push_back(Err(e)),
                 | Some(Ok(token)) => match token.kind {
@@ -1769,9 +1707,9 @@ where
                                 let position = name_or_paren.start_position;
                                 let kind = PreprocessorSubExpressionKind::Defined { name };
                                 return Ok(Some(PreprocessorSubExpression {
+                                    kind,
                                     position,
                                     length,
-                                    kind,
                                 }));
                             }
                             let position = self.current_position();
@@ -1840,15 +1778,15 @@ where
                                 name: name.contents,
                             };
                             return Ok(Some(PreprocessorSubExpression {
+                                kind,
                                 position,
                                 length,
-                                kind,
                             }));
                         }
-                        let rhs = match self.parse_preprocessor_sub_expression(r_bp, sub_expressions)? {
-                            | Some(rhs) => rhs,
-                            | None => {
-                                return Err(PreprocessorError::InnerPreprocessorError(
+                        let Some(rhs) =
+                            self.parse_preprocessor_sub_expression(r_bp, sub_expressions)?
+                        else {
+                            return Err(PreprocessorError::InnerPreprocessorError(
                                     InnerPreprocessorError {
                                         error_type:
                                             PreprocessorErrorType::NoExpressionAfterPrefixOperatorInPreprocessorExpression(
@@ -1857,8 +1795,7 @@ where
                                         start_position: token.start_position,
                                         contents:       token.contents,
                                     },
-                                ))
-                            },
+                                ));
                         };
                         sub_expressions.push(rhs);
                         return Ok(Some(PreprocessorSubExpression {
@@ -1875,7 +1812,7 @@ where
             }
         };
         let save_point = self.save();
-        loop {
+        'outer: {
             let op = loop {
                 match self.next_preprocessor_token() {
                     | Some(Err(e)) => {
@@ -1888,7 +1825,7 @@ where
             };
             if let Some((l_bp, ())) = postfix_binding_power(op)? {
                 if l_bp > max_binding_power {
-                    break;
+                    break 'outer;
                 }
                 let lhs_index = sub_expressions.len();
                 sub_expressions.push(lhs);
@@ -1900,13 +1837,11 @@ where
                         operand:  lhs_index,
                     },
                 }));
-            } else {
-                self.restore(save_point);
-                break;
             }
+            self.restore(save_point);
         }
         let save_point = self.save();
-        loop {
+        'outer: {
             let op = loop {
                 match self.next_preprocessor_token() {
                     | Some(Err(e)) => {
@@ -1920,26 +1855,24 @@ where
 
             if let Some((l_bp, r_bp)) = infix_binding_power(op)? {
                 if l_bp > max_binding_power {
-                    break;
+                    break 'outer;
                 }
                 let lhs_index = sub_expressions.len();
                 sub_expressions.push(lhs);
                 #[allow(clippy::redundant_else)]
                 if op.kind == PreprocessorTokenType::QuestionMark {
-                    let mhs = match self.parse_preprocessor_sub_expression(u32::MAX, sub_expressions)? {
-                        | Some(mhs) => mhs,
-                        | None => {
-                            return Err(PreprocessorError::InnerPreprocessorError(
+                    let Some(mhs) =
+                        self.parse_preprocessor_sub_expression(u32::MAX, sub_expressions)?
+                    else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::NoExpressionAfterQuestionMarkInConditionalExpression,
                                     start_position: op.start_position,
                                     contents:       op.contents,
                                 },
-                            ))
-                        },
+                            ));
                     };
-                    println!("mhs: {:#?}", mhs);
                     match self.next_preprocessor_token() {
                         | Some(Err(e)) => self.pending_results.push_back(Err(e)),
                         | Some(Ok(token))
@@ -1966,20 +1899,20 @@ where
                             ));
                         },
                     };
+
                     let mhs_index = sub_expressions.len();
                     sub_expressions.push(mhs);
-                    let rhs = match self.parse_preprocessor_sub_expression(r_bp, sub_expressions)? {
-                        | Some(rhs) => rhs,
-                        | None => {
-                            return Err(PreprocessorError::InnerPreprocessorError(
+                    let Some(rhs) =
+                        self.parse_preprocessor_sub_expression(r_bp, sub_expressions)?
+                    else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::NoExpressionAfterColonInConditionalExpression,
                                     start_position: op.start_position,
                                     contents:       op.contents,
                                 },
-                            ))
-                        },
+                            ));
                     };
                     let rhs_index = sub_expressions.len();
                     sub_expressions.push(rhs);
@@ -1993,10 +1926,10 @@ where
                         },
                     }));
                 } else {
-                    let rhs = match self.parse_preprocessor_sub_expression(r_bp, sub_expressions)? {
-                        | Some(rhs) => rhs,
-                        | None => {
-                            return Err(PreprocessorError::InnerPreprocessorError(
+                    let Some(rhs) =
+                        self.parse_preprocessor_sub_expression(r_bp, sub_expressions)?
+                    else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::NoExpressionAfterInfixOperatorInPreprocessorExpression(
@@ -2005,8 +1938,7 @@ where
                                     start_position: op.start_position,
                                     contents:       op.contents,
                                 },
-                            ))
-                        },
+                            ));
                     };
                     let rhs_index = sub_expressions.len();
                     sub_expressions.push(rhs);
@@ -2020,12 +1952,10 @@ where
                         },
                     }));
                 }
-            } else {
-                self.restore(save_point);
-                break;
             }
+            self.restore(save_point);
         }
-        return Ok(Some(lhs));
+        Ok(Some(lhs))
     }
 
     fn parse_preprocessor_atom(
@@ -2063,12 +1993,11 @@ where
                 };
 
                 let number = match i {
-                    | IntegerTokenType::UnsignedLongLong(i) => i as i128,
-                    | IntegerTokenType::LongLong(i) => i as i128,
-                    | IntegerTokenType::UnsignedLong(i) => i as i128,
-                    | IntegerTokenType::Long(i) => i as i128,
-                    | IntegerTokenType::UnsignedInt(i) => i as i128,
-                    | IntegerTokenType::Int(i) => i as i128,
+                    | IntegerTokenType::UnsignedLongLong(i) | IntegerTokenType::UnsignedLong(i) =>
+                        i128::from(i),
+                    | IntegerTokenType::LongLong(i) | IntegerTokenType::Long(i) => i128::from(i),
+                    | IntegerTokenType::UnsignedInt(i) => i128::from(i),
+                    | IntegerTokenType::Int(i) => i128::from(i),
                 };
                 Ok(PreprocessorAtom {
                     position: token.start_position,
@@ -2107,8 +2036,7 @@ where
         directive: PreprocessorToken,
     ) -> Result<Token, PreprocessorError<Prev::Error>> {
         let expression = self.parse_preprocessor_expression(directive)?;
-        let result = self.eval_preprocessor_expression(expression);
-        println!("result: {result}");
+        let result = self.eval_preprocessor_expression(&expression);
         todo!();
     }
 
@@ -2157,7 +2085,6 @@ where
     }
 
     #[allow(clippy::inline_always)]
-    #[allow(clippy::too_many_lines)]
     #[inline(always)]
     fn parse_integer_radix(
         &mut self,
@@ -2406,7 +2333,6 @@ where
     }
 
     #[allow(clippy::inline_always)]
-    #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     fn parse_float(
@@ -2415,6 +2341,7 @@ where
         token: PreprocessorToken,
         contents: &mut SmallString<[u8; 1024]>,
     ) -> Result<Token, PreprocessorError<Prev::Error>> {
+        _ = self;
         contents.push('\0');
         let contents = guard(contents, |contents| {
             let _ = contents.pop();
@@ -2425,16 +2352,12 @@ where
                 string_to_long_double(contents.as_str()).map(FloatTokenType::LongDouble),
             | _ => string_to_double(contents.as_str()).map(FloatTokenType::Double),
         };
-        println!("res: {res:#?}");
         match res {
-            | Ok(kind) => {
-                println!("Float: {kind}");
-                Ok(Token {
-                    kind:           TokenType::Float(kind),
-                    start_position: token.start_position,
-                    contents:       token.contents,
-                })
-            },
+            | Ok(kind) => Ok(Token {
+                kind:           TokenType::Float(kind),
+                start_position: token.start_position,
+                contents:       token.contents,
+            }),
             | Err(ParseFloatError::Invalid) => Err(PreprocessorError::InnerPreprocessorError(
                 InnerPreprocessorError {
                     error_type:     invalid_float_literal_error,

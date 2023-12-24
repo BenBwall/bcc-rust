@@ -26,13 +26,8 @@ pub(crate) struct LongDouble {
 impl Display for LongDouble {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let s = long_double_to_string(*self).unwrap();
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
-}
-
-pub(crate) enum LongDoubleToStringError {
-    BufferTooSmall,
-    InvalidLongDouble,
 }
 
 fn long_double_to_string_get_size(long_double: LongDouble) -> Result<usize, i32> {
@@ -56,9 +51,9 @@ fn long_double_to_string(long_double: LongDouble) -> Result<String, i32> {
         bytes: long_double.value,
     };
     let mut error = 0;
-    let bytes_written = unsafe {
-        ffi::long_double_to_string(ld, buffer.as_mut_ptr() as *mut i8, capacity, &mut error)
-    };
+    let ptr: *mut u8 = buffer.as_mut_ptr();
+    let bytes_written =
+        unsafe { ffi::long_double_to_string(ld, ptr.cast::<c_char>(), capacity, &mut error) };
     if error != 0 {
         return Err(error);
     }
