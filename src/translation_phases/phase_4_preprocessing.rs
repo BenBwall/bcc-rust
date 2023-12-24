@@ -263,6 +263,9 @@ pub(crate) enum PreprocessorSubExpressionKind {
         left:     usize,
         right:    usize,
     },
+    Defined {
+        name: StringCacheId,
+    },
     UnaryOperator {
         operator: PreprocessorTokenType,
         operand:  usize,
@@ -496,6 +499,11 @@ impl GetSeverity for InnerPreprocessorError {
                 ..
             }
             | PreprocessorErrorType::ExpectedAtomInPreprocessorExpression(_)
+            | PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(
+                ..,
+            )
+            | PreprocessorErrorType::MissingIdentifierInDefinedDirective(..)
+            | PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(..)
             | PreprocessorErrorType::NoConditionInIfDirective
             | PreprocessorErrorType::NoConditionInElifDirective => ErrorSeverity::Error,
             | PreprocessorErrorType::FloatLiteralOverflow(..)
@@ -626,6 +634,9 @@ pub(crate) enum PreprocessorErrorType {
     NoExpressionAfterColonInConditionalExpression,
     NoExpressionAfterInfixOperatorInPreprocessorExpression(PreprocessorTokenType),
     ExpectedAtomInPreprocessorExpression(PreprocessorTokenType),
+    MissingOpeningParenthesisOrIdentifierInDefinedDirective(PreprocessorTokenType),
+    MissingIdentifierInDefinedDirective(PreprocessorTokenType),
+    MissingClosingParenthesisInDefinedDirective(PreprocessorTokenType),
     NoConditionInIfDirective,
     NoConditionInElifDirective,
     UnexpectedEndOfInput(&'static str),
@@ -925,6 +936,26 @@ impl Display for PreprocessorErrorType {
                      integer literal, or a character literal. Found instead {tt:#?}"
                 )
             },
+            | Self::MissingOpeningParenthesisOrIdentifierInDefinedDirective(tt) => {
+                write!(
+                    f,
+                    "Missing opening parenthesis or identifier in 'defined' directive! Found \
+                     instead {tt:#?}"
+                )
+            },
+            | Self::MissingIdentifierInDefinedDirective(tt) => {
+                write!(
+                    f,
+                    "Missing identifier in 'defined' directive! Found instead {tt:#?}"
+                )
+            },
+            | Self::MissingClosingParenthesisInDefinedDirective(tt) => {
+                write!(
+                    f,
+                    "Missing closing parenthesis in 'defined' directive! Found instead {tt:#?}"
+                )
+            },
+
             | Self::NoConditionInIfDirective => {
                 write!(
                     f,
@@ -1508,6 +1539,13 @@ where
                 | PreprocessorAtomKind::Character(c) => c as i128,
                 | PreprocessorAtomKind::Number(i) => i,
             },
+            | PreprocessorSubExpressionKind::Defined { name } => {
+                if self.macro_definitions.contains_key(name) {
+                    1
+                } else {
+                    0
+                }
+            },
             | PreprocessorSubExpressionKind::UnaryOperator { operator, operand } => {
                 let operand = self.eval_preprocessor_sub_expression(sub_expressions, *operand);
                 match operator {
@@ -1695,6 +1733,118 @@ where
                                 kind:     PreprocessorSubExpressionKind::Atom(atom),
                             };
                         };
+                        if token.kind == PreprocessorTokenType::Defined {
+                            let position = self.current_position();
+                            let name_or_paren = loop {
+                                match self.next_preprocessor_token_no_expand() {
+                                | Some(Err(e)) => {self.pending_results.push_back(Err(PreprocessorError::PreviousPhaseError(e))); continue},
+                                | Some(Ok(token @ PreprocessorToken {kind: PreprocessorTokenType::OpeningParenthesis |PreprocessorTokenType::Identifier, ..})) =>
+                                    break token,
+                                | Some(Ok(token)) => {
+                                    return Err(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(token.kind),
+                                            start_position: token.start_position,
+                                            contents:       token.contents,
+                                        },
+                                    ))
+                                },
+                                | None => {
+                                    let contents = self.insert_into_cache("EOF");
+                                    return Err(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::UnexpectedEndOfInput("parsing defined directive"),
+                                            start_position: position,
+                                            contents,
+                                        },
+                                    ));
+                                },
+                            }
+                            };
+                            if name_or_paren.kind == PreprocessorTokenType::Identifier {
+                                let name = name_or_paren.contents;
+                                let length = name_or_paren.length;
+                                let position = name_or_paren.start_position;
+                                let kind = PreprocessorSubExpressionKind::Defined { name };
+                                return Ok(Some(PreprocessorSubExpression {
+                                    position,
+                                    length,
+                                    kind,
+                                }));
+                            }
+                            let position = self.current_position();
+                            let name = loop {
+                                match self.next_preprocessor_token_no_expand() {
+                                | Some(Err(e)) => {self.pending_results.push_back(Err(PreprocessorError::PreviousPhaseError(e))); continue},
+                                | Some(Ok(token @ PreprocessorToken {kind: PreprocessorTokenType::Identifier, ..})) =>
+                                    break token,
+                                | Some(Ok(token)) => {
+                                    return Err(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::MissingIdentifierInDefinedDirective(
+                                                    token.kind,
+                                                ),
+                                            start_position: token.start_position,
+                                            contents:       token.contents,
+                                        },
+                                    ))
+                                },
+                                | None => {
+                                    let contents = self.insert_into_cache("EOF");
+                                    return Err(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::UnexpectedEndOfInput("parsing defined directive"),
+                                            start_position: position,
+                                            contents,
+                                        },
+                                    ));
+                                },
+                            }
+                            };
+                            let closing_paren = loop {
+                                match self.next_preprocessor_token_no_expand() {
+                                | Some(Err(e)) => {self.pending_results.push_back(Err(PreprocessorError::PreviousPhaseError(e))); continue},
+                                | Some(Ok(token @ PreprocessorToken {kind: PreprocessorTokenType::ClosingParenthesis, ..})) =>
+                                    break token,
+                                | Some(Ok(token)) => {
+                                    return Err(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(
+                                                    token.kind,
+                                                ),
+                                            start_position: token.start_position,
+                                            contents:       token.contents,
+                                        },
+                                    ))
+                                },
+                                | None => {
+                                    let contents = self.insert_into_cache("EOF");
+                                    return Err(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::UnexpectedEndOfInput("parsing defined directive"),
+                                            start_position: position,
+                                            contents,
+                                        },
+                                    ));
+                                },
+                            }
+                            };
+                            let length = closing_paren.start_position.index - position.index;
+                            let kind = PreprocessorSubExpressionKind::Defined {
+                                name: name.contents,
+                            };
+                            return Ok(Some(PreprocessorSubExpression {
+                                position,
+                                length,
+                                kind,
+                            }));
+                        }
                         let rhs = match self.parse_preprocessor_sub_expression(r_bp, sub_expressions)? {
                             | Some(rhs) => rhs,
                             | None => {
@@ -1809,7 +1959,7 @@ where
                             return Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
                                     error_type:
-                                        PreprocessorErrorType::NoExpressionAfterQuestionMarkInConditionalExpression,
+                                        PreprocessorErrorType::UnexpectedEndOfInput("parsing ternary expression"),
                                     start_position: mhs.position,
                                     contents,
                                 },
