@@ -51,9 +51,13 @@ variant-size-differences = "warn"
 
 
 [dependencies]
-bigdecimal = "0.4.2"
+chrono = "0.4.31"
+clap = { version = "4.4.11", features = ["derive"] }
+libc = "0.2.151"
+owo-colors = "4.0.0"
 
 rustc-hash = "1.1.0"
+scopeguard = "1.2.0"
 smallstr = "0.3.0"
 string-interner = "0.14.0"
 thiserror = "1.0.51"
@@ -62,3 +66,7 @@ thiserror = "1.0.51"
 pretty_assertions = "1.4.0"
 proptest = "1.4.0"
 rstest = "0.18.2"
+
+[build-dependencies]
+bindgen = "0.69.1"
+cc = "1.0.83"

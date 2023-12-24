@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use super::{
     ErrorSeverity,
+    GetPosition,
     GetSeverity,
     Position,
     TranslationPhase,
@@ -16,11 +17,15 @@ pub(crate) struct RemoveEscapedNewlines<Prev> {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Error)]
+#[error("missing final newline")]
+pub(crate) struct MissingNewlineError(pub(crate) Position);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Error)]
 pub(crate) enum RemoveEscapedNewlinesError<PrevError> {
     #[error(transparent)]
     Inner(PrevError),
-    #[error("missing final newline")]
-    MissingFinalNewLine,
+    #[error(transparent)]
+    MissingFinalNewLine(MissingNewlineError),
 }
 
 impl<PrevError> GetSeverity for RemoveEscapedNewlinesError<PrevError>
@@ -30,7 +35,19 @@ where
     fn severity(&self) -> ErrorSeverity {
         match self {
             | Self::Inner(e) => e.severity(),
-            | Self::MissingFinalNewLine => ErrorSeverity::Warning,
+            | Self::MissingFinalNewLine(_) => ErrorSeverity::Warning,
+        }
+    }
+}
+
+impl<PrevError> GetPosition for RemoveEscapedNewlinesError<PrevError>
+where
+    PrevError: GetPosition,
+{
+    fn position(&self) -> Position {
+        match self {
+            | Self::Inner(e) => e.position(),
+            | Self::MissingFinalNewLine(e) => e.0,
         }
     }
 }
@@ -59,7 +76,7 @@ where
 }
 
 impl<Prev> RemoveEscapedNewlines<Prev> {
-    fn new(previous_phase: Prev) -> Self {
+    pub(crate) fn new(previous_phase: Prev) -> Self {
         Self {
             inner:            Inner { previous_phase },
             last_was_newline: false,
@@ -88,7 +105,9 @@ where
                         None
                     } else {
                         self.state = State::EscapedNewline;
-                        Some(Err(RemoveEscapedNewlinesError::MissingFinalNewLine))
+                        Some(Err(RemoveEscapedNewlinesError::MissingFinalNewLine(
+                            MissingNewlineError(self.current_position()),
+                        )))
                     },
             },
             | State::EscapedNewline => {
@@ -167,12 +186,6 @@ where
     }
 }
 
-pub(crate) fn phase_2_remove_escaped_newlines<Prev>(
-    previous_stage: Prev,
-) -> RemoveEscapedNewlines<Prev> {
-    RemoveEscapedNewlines::new(previous_stage)
-}
-
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
@@ -180,22 +193,48 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    use super::{
-        super::phase_1_map_character_sets::phase_1_map_character_sets,
-        *,
-    };
+    use super::*;
     use crate::{
-        translation_phases::phase_0_newline_tracking::NewlineTracking,
-        util::string_cache::StringCache,
+        translation_phases::{
+            phase_0_newline_tracking::NewlineTracking,
+            phase_1_map_character_sets::{
+                MapCharacterSets,
+                MapCharacterSetsError,
+            },
+        },
+        util::string_cache::{
+            Id as StringCacheId,
+            StringCache,
+        },
     };
 
     #[rstest]
-    #[case("", vec![Err(RemoveEscapedNewlinesError::MissingFinalNewLine), Ok('\n')])]
-    #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine), Ok('\n')])]
+    #[case("", vec![Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        index:       0,
+        line:        1,
+        column:      1,
+        source_file: StringCacheId::from_usize(0),
+    }))), Ok('\n')])]
+    #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        index:       1,
+        line:        1,
+        column:      2,
+        source_file: StringCacheId::from_usize(0),
+    }))), Ok('\n')])]
     #[case("a\n", vec![Ok('a'), Ok('\n')])]
-    #[case("a\\\n", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine), Ok('\n')])]
+    #[case("a\\\n", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        index:       3,
+        line:        2,
+        column:      1,
+        source_file: StringCacheId::from_usize(0),
+    }))), Ok('\n')])]
     #[case("abc\n", vec![Ok('a'), Ok('b'), Ok('c'), Ok('\n')])]
-    #[case("abcabcbb", vec![Ok('a'), Ok('b'), Ok('c'), Ok('a'), Ok('b'), Ok('c'), Ok('b'), Ok('b'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine), Ok('\n')])]
+    #[case("abcabcbb", vec![Ok('a'), Ok('b'), Ok('c'), Ok('a'), Ok('b'), Ok('c'), Ok('b'), Ok('b'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        index:       8,
+        line:        1,
+        column:      9,
+        source_file: StringCacheId::from_usize(0),
+    }))), Ok('\n')])]
     #[case(
         "#define MAX(a, b) (a > b) \\\n ? a \\\n : b\n",
         vec![Ok('#'), Ok('d'), Ok('e'), Ok('f'), Ok('i'), Ok('n'), Ok('e'), Ok(' '), Ok('M'), Ok('A'), Ok('X'), Ok('('), Ok('a'), Ok(','), Ok(' '), Ok('b'), Ok(')'), Ok(' '), Ok('('), Ok('a'), Ok(' '), Ok('>'), Ok(' '), Ok('b'), Ok(')'), Ok(' '), Ok(' '), Ok('?'), Ok(' '), Ok('a'), Ok(' '), Ok(' '), Ok(':'), Ok(' '), Ok('b'), Ok('\n')]
@@ -206,23 +245,43 @@ mod tests {
         #[case] input: &str,
         #[case] expected: Vec<Result<char, RemoveEscapedNewlinesError<Infallible>>>,
     ) {
+        let mut string_cache = StringCache::new();
         let actual =
-            phase_2_remove_escaped_newlines(NewlineTracking::new(input, &mut StringCache::new()))
+            RemoveEscapedNewlines::new(NewlineTracking::new(input, string_cache.intern("<input>")))
                 .collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
     #[rstest]
-    #[case("", vec![Err(RemoveEscapedNewlinesError::MissingFinalNewLine), Ok('\n')])]
-    #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine), Ok('\n')])]
-    #[case("??=", vec![Ok('#'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine), Ok('\n')])]
+    #[case("", vec![Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        index:       0,
+        line:        1,
+        column:      1,
+        source_file: StringCacheId::from_usize(0),
+    }))), Ok('\n')])]
+    #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        index:       1,
+        line:        1,
+        column:      2,
+        source_file: StringCacheId::from_usize(0),
+    }))), Ok('\n')])]
+    #[case("??=", vec![Ok('#'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        index:       3,
+        line:        1,
+        column:      4,
+        source_file: StringCacheId::from_usize(0),
+    }))), Ok('\n')])]
     #[case("??=define FOO 1\\\r\n\r\n", vec![Ok('#'), Ok('d'), Ok('e'), Ok('f'), Ok('i'), Ok('n'), Ok('e'), Ok(' '), Ok('F'), Ok('O'), Ok('O'), Ok(' '), Ok('1'), Ok('\n')])]
     fn test_phase_1_and_2(
         #[case] input: &str,
-        #[case] expected: Vec<Result<char, RemoveEscapedNewlinesError<Infallible>>>,
+        #[case] expected: Vec<
+            Result<char, RemoveEscapedNewlinesError<MapCharacterSetsError<Infallible>>>,
+        >,
     ) {
-        let actual = phase_2_remove_escaped_newlines(phase_1_map_character_sets(
-            NewlineTracking::new(input, &mut StringCache::new()),
-        ))
+        let mut string_cache = StringCache::new();
+        let actual = RemoveEscapedNewlines::new(MapCharacterSets::new(NewlineTracking::new(
+            input,
+            string_cache.intern("<input>"),
+        )))
         .collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }

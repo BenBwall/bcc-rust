@@ -1,11 +1,22 @@
 {
   "cSpell.words": [
     "abcabcbb",
+    "bigdecimal",
+    "Deque",
+    "endptr",
+    "ERANGE",
+    "errno",
     "interner",
+    "libc",
+    "Ppte",
+    "Pptsp",
     "proptest",
     "Rewinded",
     "rstest",
     "smallstr",
+    "strtod",
+    "strtof",
+    "strtold",
     "thiserror"
   ]
 }

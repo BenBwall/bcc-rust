@@ -1,7 +1,14 @@
 use std::{
     convert::Infallible,
-    fmt::Debug,
+    fmt::{
+        Debug,
+        Display,
+        Formatter,
+        Result as FmtResult,
+    },
 };
+
+use owo_colors::OwoColorize;
 
 use crate::util::string_cache::Id as StringCacheId;
 
@@ -27,6 +34,16 @@ pub(crate) enum ErrorSeverity {
     Warning,
     Error,
     Note,
+}
+
+impl Display for ErrorSeverity {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            | Self::Warning => write!(f, "{}", "Warning".bright_yellow()),
+            | Self::Error => write!(f, "{}", "Error".bright_red()),
+            | Self::Note => write!(f, "{}", "Note".bright_blue()),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
@@ -63,12 +80,28 @@ impl GetSeverity for Infallible {
     }
 }
 
+pub(crate) trait GetPosition {
+    fn position(&self) -> Position;
+}
+
+impl GetPosition for Position {
+    fn position(&self) -> Position {
+        *self
+    }
+}
+
+impl GetPosition for Infallible {
+    fn position(&self) -> Position {
+        match *self {}
+    }
+}
+
 pub(crate) trait TranslationPhase:
     Iterator<Item = Result<Self::Yield, Self::Error>>
 {
     type Yield;
     type SavePoint: SavePoint;
-    type Error: std::error::Error + GetSeverity;
+    type Error: std::error::Error + GetSeverity + GetPosition;
     fn save(&self) -> Self::SavePoint;
     fn restore(&mut self, save_point: Self::SavePoint);
     fn current_position(&self) -> Position;
