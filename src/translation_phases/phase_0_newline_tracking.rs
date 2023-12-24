@@ -5,32 +5,32 @@ use super::{
     TranslationPhase,
 };
 use crate::util::{
-    string_cache::StringCache,
+    string_cache::Id as StringCacheId,
     Captures,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct NewlineTracking<'a> {
-    input: &'a str,
+    source: &'a str,
     position: Position,
     is_middle_of_windows_newline: bool,
 }
 
-impl<'a> NewlineTracking<'a> {
-    pub(crate) fn new(input: &'a str, string_cache: &mut StringCache) -> Self {
+impl<'input> NewlineTracking<'input> {
+    pub(crate) fn new(source: &'input str, source_file: StringCacheId) -> Self {
         Self {
             is_middle_of_windows_newline: false,
-            input,
+            source,
             position: Position {
-                index:       0,
-                line:        1,
-                column:      1,
-                source_file: string_cache.intern("<stdin>"),
+                index: 0,
+                line: 1,
+                column: 1,
+                source_file,
             },
         }
     }
 
-    pub(crate) fn positions(self) -> impl Iterator<Item = Position> + Captures<&'a ()> {
+    pub(crate) fn positions(self) -> impl Iterator<Item = Position> + Captures<&'input ()> {
         struct Positions<'b> {
             super_: NewlineTracking<'b>,
         }
@@ -55,9 +55,9 @@ impl Iterator for NewlineTracking<'_> {
     type Item = Result<char, Infallible>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let c = self.input.get(self.position.index..)?.chars().next()?;
+        let c = self.source.get(self.position.index..)?.chars().next()?;
         let next = self
-            .input
+            .source
             .get(self.position.index + c.len_utf8()..)
             .and_then(|s| s.chars().next());
 
@@ -90,7 +90,7 @@ impl Iterator for NewlineTracking<'_> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.input
+        self.source
             .get(self.position.index..)
             .map_or((0, Some(0)), |s| s.chars().size_hint())
     }
@@ -114,13 +114,6 @@ impl TranslationPhase for NewlineTracking<'_> {
     }
 }
 
-pub(crate) fn phase_0_newline_tracking<'a>(
-    input: &'a str,
-    string_cache: &mut StringCache,
-) -> NewlineTracking<'a> {
-    NewlineTracking::new(input, string_cache)
-}
-
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -137,7 +130,8 @@ mod tests {
     proptest! {
         #[test]
         fn test_noop_translation_phase(input in String::arbitrary()) {
-            let phase = super::NewlineTracking::new(&input, &mut StringCache::new());
+            let mut string_cache = StringCache::new();
+            let phase = super::NewlineTracking::new(&input, string_cache.intern("<input>"));
             prop_assert!(phase.map(|r| r.unwrap_or_else(|e| match e{})).collect::<String>() == input, "phase.collect() != input");
         }
     }
@@ -179,7 +173,8 @@ mod tests {
         position(2, 2, 1),
     ])]
     fn test_current_position(#[case] input: &str, #[case] expected: Vec<Position>) {
-        let phase = super::NewlineTracking::new(input, &mut StringCache::new());
+        let mut string_cache = StringCache::new();
+        let phase = super::NewlineTracking::new(input, string_cache.intern("<input>"));
         let actual = phase.positions().collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }

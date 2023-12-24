@@ -1,12 +1,40 @@
+use thiserror::Error;
+
 use super::{
+    ErrorSeverity,
+    GetPosition,
+    GetSeverity,
     Position,
     TranslationPhase,
 };
-use crate::bail;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct MapCharacterSets<Prev> {
     pub(crate) previous_phase: Prev,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Error)]
+#[error(transparent)]
+pub(crate) struct MapCharacterSetsError<PrevError> {
+    inner: PrevError,
+}
+
+impl<PrevError> GetSeverity for MapCharacterSetsError<PrevError>
+where
+    PrevError: GetSeverity,
+{
+    fn severity(&self) -> ErrorSeverity {
+        self.inner.severity()
+    }
+}
+
+impl<PrevError> GetPosition for MapCharacterSetsError<PrevError>
+where
+    PrevError: GetPosition,
+{
+    fn position(&self) -> Position {
+        self.inner.position()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -25,12 +53,15 @@ where
 
 impl<Prev> Iterator for MapCharacterSets<Prev>
 where
-    Prev: TranslationPhase<Yield = char> + Iterator<Item = Result<char, Prev::Error>>,
+    Prev: TranslationPhase<Yield = char>,
 {
-    type Item = Result<char, Prev::Error>;
+    type Item = Result<char, MapCharacterSetsError<Prev::Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let c = bail!(self.previous_phase.next()?);
+        let c = match self.previous_phase.next()? {
+            | Ok(c) => c,
+            | Err(e) => return Some(Err(MapCharacterSetsError { inner: e })),
+        };
         let save_point = self.save();
         let next = self.previous_phase.next();
         if c == '\r' && matches!(next, Some(Ok('\n',),)) {
@@ -82,9 +113,9 @@ where
 
 impl<Prev> TranslationPhase for MapCharacterSets<Prev>
 where
-    Prev: TranslationPhase<Yield = char> + Iterator<Item = Result<char, Prev::Error>>,
+    Prev: TranslationPhase<Yield = char>,
 {
-    type Error = Prev::Error;
+    type Error = MapCharacterSetsError<Prev::Error>;
     type SavePoint = SavePoint<Prev::SavePoint>;
     type Yield = char;
 
@@ -104,13 +135,9 @@ where
 }
 
 impl<Prev> MapCharacterSets<Prev> {
-    fn new(previous_phase: Prev) -> Self {
+    pub(crate) fn new(previous_phase: Prev) -> Self {
         Self { previous_phase }
     }
-}
-
-pub(crate) fn phase_1_map_character_sets<Prev>(previous_phase: Prev) -> MapCharacterSets<Prev> {
-    MapCharacterSets::new(previous_phase)
 }
 
 #[cfg(test)]
@@ -119,7 +146,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::translation_phases::phase_0_newline_tracking::phase_0_newline_tracking;
+    use crate::translation_phases::phase_0_newline_tracking::NewlineTracking;
     #[rstest]
     #[case("", "")]
     #[case("a", "a")]
@@ -132,11 +159,13 @@ mod tests {
     #[case("int long y = 5;\r", "int long y = 5;\n")]
     fn test_phase_1_map_character_sets(#[case] input: &str, #[case] expected: &str) {
         use crate::util::string_cache::StringCache;
+
+        let mut string_cache = StringCache::new();
         let actual =
-            phase_1_map_character_sets(phase_0_newline_tracking(input, &mut StringCache::new()));
+            MapCharacterSets::new(NewlineTracking::new(input, string_cache.intern("<input>")));
         assert_eq!(
             actual
-                .map(|r| r.unwrap_or_else(|e| match e {}))
+                .map(|r| r.unwrap_or_else(|e| match e.inner {}))
                 .collect::<String>(),
             expected
         );
