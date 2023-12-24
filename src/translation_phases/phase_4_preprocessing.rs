@@ -248,6 +248,7 @@ fn postfix_binding_power<PrevError>(
 pub(crate) enum PreprocessorAtomKind {
     Number(i128),
     Character(char),
+    Identifier(StringCacheId),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -508,6 +509,7 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(..)
             | PreprocessorErrorType::NoConditionInIfDirective
             | PreprocessorErrorType::NoConditionInElifDirective => ErrorSeverity::Error,
+            | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
             | PreprocessorErrorType::ForcedUnsignedPromotion { .. }
@@ -638,6 +640,7 @@ pub(crate) enum PreprocessorErrorType {
     MissingClosingParenthesisInDefinedDirective(PreprocessorTokenType),
     NoConditionInIfDirective,
     NoConditionInElifDirective,
+    UndefinedIdentifierInPreprocessorExpression,
     UnexpectedEndOfInput(&'static str),
     WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
         expected: usize,
@@ -963,6 +966,13 @@ impl Display for PreprocessorErrorType {
             },
             | Self::UnexpectedEndOfInput(message) => {
                 write!(f, "Unexpected end of input while {message}!")
+            },
+            | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Undefined identifier in preprocessor constant expression! Will be treated as \
+                     if it had a value of 0."
+                )
             },
         }
     }
@@ -1529,6 +1539,7 @@ where
             | PreprocessorSubExpressionKind::Atom(atom) => match atom.kind {
                 | PreprocessorAtomKind::Character(c) => c as i128,
                 | PreprocessorAtomKind::Number(i) => i,
+                | PreprocessorAtomKind::Identifier(_) => 0,
             },
             | PreprocessorSubExpressionKind::Defined { name } =>
                 i128::from(self.macro_definitions.contains_key(name)),
@@ -1963,6 +1974,22 @@ where
         token: PreprocessorToken,
     ) -> Result<PreprocessorAtom, PreprocessorError<Prev::Error>> {
         match token.kind {
+            | PreprocessorTokenType::Identifier => {
+                self.pending_results
+                    .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression,
+                            start_position: token.start_position,
+                            contents:       token.contents,
+                        },
+                    )));
+                Ok(PreprocessorAtom {
+                    position: token.start_position,
+                    length:   self.current_position().index - token.start_position.index,
+                    kind:     PreprocessorAtomKind::Identifier(token.contents),
+                })
+            },
             | PreprocessorTokenType::Character => Ok(PreprocessorAtom {
                 position: token.start_position,
                 length:   self.current_position().index - token.start_position.index,
