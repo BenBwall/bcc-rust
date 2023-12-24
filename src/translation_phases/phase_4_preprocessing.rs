@@ -1535,7 +1535,8 @@ where
         sub_expressions: &[PreprocessorSubExpression],
         current_index: usize,
     ) -> i128 {
-        let res = match &sub_expressions[current_index].kind {
+        
+        match &sub_expressions[current_index].kind {
             | PreprocessorSubExpressionKind::Atom(atom) => match atom.kind {
                 | PreprocessorAtomKind::Character(c) => c as i128,
                 | PreprocessorAtomKind::Number(i) => i,
@@ -1595,8 +1596,7 @@ where
                     self.eval_preprocessor_sub_expression(sub_expressions, *if_false)
                 }
             },
-        };
-        res
+        }
     }
 
     fn parse_preprocessor_expression(
