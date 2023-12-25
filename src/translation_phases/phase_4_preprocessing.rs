@@ -7,6 +7,7 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
+    ops::ControlFlow,
     sync::Arc,
 };
 
@@ -514,7 +515,11 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::ExpectedIdentifierInPreprocessorDirective(..)
             | PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives
             | PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
-            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective => ErrorSeverity::Error,
+            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective
+            | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
+            | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
+            | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..) =>
+                ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -650,6 +655,9 @@ pub(crate) enum PreprocessorErrorType {
     MoreIfDirectivesThanEndifDirectives,
     MoreEndifDirectivesThanIfDirectives,
     ElifDirectiveWithoutIfDirective,
+    ElseDirectiveWithoutIfDirective,
+    ExpectedIdentifierInIfdefDirective(PreprocessorTokenType),
+    ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
     UndefinedIdentifierInPreprocessorExpression,
     UnexpectedEndOfInput(&'static str),
     WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
@@ -1001,6 +1009,24 @@ impl Display for PreprocessorErrorType {
                     "'elif' directive without preceding 'if', 'ifdef' or 'ifndef' directive!"
                 )
             },
+            | Self::ElseDirectiveWithoutIfDirective => {
+                write!(
+                    f,
+                    "'else' directive without preceding 'if', 'ifdef' or 'ifndef' directive!"
+                )
+            },
+            | Self::ExpectedIdentifierInIfdefDirective(tt) => {
+                write!(
+                    f,
+                    "Expected identifier in 'ifdef' directive! Found instead {tt:#?}"
+                )
+            },
+            | Self::ExpectedIdentifierInIfndefDirective(tt) => {
+                write!(
+                    f,
+                    "Expected identifier in 'ifndef' directive! Found instead {tt:#?}"
+                )
+            },
             | Self::UnexpectedEndOfInput(message) => {
                 write!(f, "Unexpected end of input while {message}!")
             },
@@ -1112,6 +1138,91 @@ where
         + AsRef<StringCache>,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
 {
+    fn expect_token_no_expand(
+        &mut self,
+        mut is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
+        mut on_previous_phase_error: impl FnMut(
+            &mut Self,
+            Prev::Error,
+        )
+            -> ControlFlow<<Self as TranslationPhase>::Error>,
+        mut on_wrong_token_type: impl FnMut(
+            &mut Self,
+            PreprocessorToken,
+        ) -> ControlFlow<<Self as TranslationPhase>::Error>,
+        eof_message: &'static str,
+    ) -> Result<PreprocessorToken, <Self as TranslationPhase>::Error> {
+        loop {
+            match self.next_preprocessor_token_no_expand() {
+                | Some(Ok(token)) => {
+                    if is_correct_token(self, token) {
+                        return Ok(token);
+                    }
+                    match on_wrong_token_type(self, token) {
+                        | ControlFlow::Continue(()) => continue,
+                        | ControlFlow::Break(e) => break Err(e),
+                    }
+                },
+                | Some(Err(e)) => match on_previous_phase_error(self, e) {
+                    | ControlFlow::Continue(()) => continue,
+                    | ControlFlow::Break(e) => break Err(e),
+                },
+                | None => {
+                    let contents = self.insert_into_cache("EOF");
+                    break Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
+                            start_position: self.previous_phase.current_position(),
+                            contents,
+                        },
+                    ));
+                },
+            }
+        }
+    }
+
+    fn expect_token(
+        &mut self,
+        mut is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
+        mut on_error: impl FnMut(
+            &mut Self,
+            <Self as TranslationPhase>::Error,
+        ) -> ControlFlow<<Self as TranslationPhase>::Error>,
+        mut on_wrong_token_type: impl FnMut(
+            &mut Self,
+            PreprocessorToken,
+        ) -> ControlFlow<<Self as TranslationPhase>::Error>,
+        eof_message: &'static str,
+    ) -> Result<PreprocessorToken, <Self as TranslationPhase>::Error> {
+        loop {
+            match self.next_preprocessor_token() {
+                | Some(Ok(token)) => {
+                    if is_correct_token(self, token) {
+                        return Ok(token);
+                    }
+                    match on_wrong_token_type(self, token) {
+                        | ControlFlow::Continue(()) => continue,
+                        | ControlFlow::Break(e) => break Err(e),
+                    }
+                },
+                | Some(Err(e)) => match on_error(self, e) {
+                    | ControlFlow::Continue(()) => continue,
+                    | ControlFlow::Break(e) => break Err(e),
+                },
+                | None => {
+                    let contents = self.insert_into_cache("EOF");
+                    break Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
+                            start_position: self.previous_phase.current_position(),
+                            contents,
+                        },
+                    ));
+                },
+            }
+        }
+    }
+
     fn next_preprocessor_token_no_expand(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
@@ -1227,6 +1338,7 @@ where
                         is_variadic,
                     } => {
                         let save_point = self.save();
+
                         loop {
                             match self.next_preprocessor_token_no_expand() {
                                 | Some(Ok(token))
@@ -1455,7 +1567,7 @@ where
             },
             | PreprocessorTokenType::Newline => return None,
             | PreprocessorTokenType::Hash => match self.parse_directive(token, &contents) {
-                | Ok(()) => return self.next(),
+                | Ok(()) => return None,
                 | Err(e) => Err(e),
             },
             | PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined => Ok(Token {
@@ -1552,17 +1664,17 @@ where
         }
         match self.get_from_cache(directive.contents) {
             | "if" => self.parse_if_directive(directive),
-            | "ifdef" => self.parse_ifdef_directive(),
-            | "ifndef" => self.parse_ifndef_directive(),
-            | "elif" => self.parse_elif_directive(),
-            | "else" => self.parse_else_directive(),
+            | "ifdef" => self.parse_ifdef_directive(directive),
+            | "ifndef" => self.parse_ifndef_directive(directive),
+            | "elif" => self.parse_elif_directive(directive),
+            | "else" => self.parse_else_directive(directive),
             | "endif" => self.parse_endif_directive(directive),
-            | "include" => self.parse_include_directive(),
-            | "define" => self.parse_define_directive(),
-            | "undef" => self.parse_undef_directive(),
-            | "line" => self.parse_line_directive(),
-            | "error" => self.parse_error_directive(),
-            | "pragma" => self.parse_pragma_directive(),
+            | "include" => self.parse_include_directive(directive),
+            | "define" => self.parse_define_directive(directive),
+            | "undef" => self.parse_undef_directive(directive),
+            | "line" => self.parse_line_directive(directive),
+            | "error" => self.parse_error_directive(directive),
+            | "pragma" => self.parse_pragma_directive(directive),
             | _ => Err(PreprocessorError::InnerPreprocessorError(
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::UnknownDirective,
@@ -2200,21 +2312,38 @@ where
         Ok(())
     }
 
-    fn parse_elif_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_elif_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
         if self.if_directive_balance <= 0 {
             return Err(PreprocessorError::InnerPreprocessorError(
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
-                    start_position: self.current_position(),
-                    contents:       self.insert_into_cache("elif"),
+                    start_position: directive.start_position,
+                    contents:       directive.contents,
                 },
             ));
         }
+        // Elif directives only matter if we are currently skipping over dead code.
         Ok(())
     }
 
-    fn parse_else_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
-        todo!()
+    fn parse_else_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
+        if self.if_directive_balance <= 0 {
+            return Err(PreprocessorError::InnerPreprocessorError(
+                InnerPreprocessorError {
+                    error_type:     PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
+                    start_position: directive.start_position,
+                    contents:       directive.contents,
+                },
+            ));
+        }
+        // Else directives only matter if we are currently skipping over dead code.
+        Ok(())
     }
 
     fn parse_endif_directive(
@@ -2234,37 +2363,107 @@ where
         Ok(())
     }
 
-    fn parse_ifdef_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_ifdef_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
         self.if_directive_balance += 1;
-        todo!()
+        let name = self.expect_token_no_expand(
+            |_, t| t.kind == PreprocessorTokenType::Identifier,
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, token| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(
+                            token.kind,
+                        ),
+                        start_position: token.start_position,
+                        contents:       token.contents,
+                    },
+                ))
+            },
+            "parsing ifdef directive",
+        )?;
+        if !self.macro_definitions.contains_key(&name.contents) {
+            self.skip_over_dead_code()?;
+        }
+        Ok(())
     }
 
-    fn parse_ifndef_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_ifndef_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
         self.if_directive_balance += 1;
+        let name = self.expect_token_no_expand(
+            |_, t| t.kind == PreprocessorTokenType::Identifier,
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, token| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(
+                            token.kind,
+                        ),
+                        start_position: token.start_position,
+                        contents:       token.contents,
+                    },
+                ))
+            },
+            "parsing ifndef directive",
+        )?;
+        if self.macro_definitions.contains_key(&name.contents) {
+            self.skip_over_dead_code()?;
+        }
+        Ok(())
+    }
+
+    fn parse_include_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
         todo!()
     }
 
-    fn parse_include_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_define_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
         todo!()
     }
 
-    fn parse_define_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_undef_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
         todo!()
     }
 
-    fn parse_undef_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_line_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
         todo!()
     }
 
-    fn parse_line_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_error_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
         todo!()
     }
 
-    fn parse_error_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
-        todo!()
-    }
-
-    fn parse_pragma_directive(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_pragma_directive(
+        &mut self,
+        directive: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
         todo!()
     }
 
