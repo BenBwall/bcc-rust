@@ -527,12 +527,62 @@ pub(crate) enum KeywordTokenType {
     Imaginary,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum OperatorTokenType {
+    Plus,
+    Minus,
+    Asterisk,
+    ForwardSlash,
+    Percent,
+    LessThanLessThan,
+    GreaterThanGreaterThan,
+    LessThan,
+    LessThanEquals,
+    GreaterThan,
+    GreaterThanEquals,
+    EqualsEquals,
+    ExclamationMarkEquals,
+    Ampersand,
+    Caret,
+    Pipe,
+    AmpersandAmpersand,
+    PipePipe,
+    QuestionMark,
+    Colon,
+    SemiColon,
+    OpeningParenthesis,
+    ClosingParenthesis,
+    OpeningSquareBracket,
+    ClosingSquareBracket,
+    OpeningCurlyBrace,
+    ClosingCurlyBrace,
+    Period,
+    Arrow,
+    PlusPlus,
+    MinusMinus,
+    Comma,
+    Tilde,
+    ExclamationMark,
+    Equals,
+    PlusEquals,
+    MinusEquals,
+    AsteriskEquals,
+    ForwardSlashEquals,
+    PercentEquals,
+    LessThanLessThanEquals,
+    GreaterThanGreaterThanEquals,
+    AmpersandEquals,
+    CaretEquals,
+    PipeEquals,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenType {
     Integer(IntegerTokenType),
     Float(FloatTokenType),
     Identifier,
     Keyword(KeywordTokenType),
+    Operator(OperatorTokenType),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -595,7 +645,8 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
             | PreprocessorErrorType::HeaderNotFound
             | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible
-            | PreprocessorErrorType::HeaderFileInaccessible => ErrorSeverity::Error,
+            | PreprocessorErrorType::HeaderFileInaccessible
+            | PreprocessorErrorType::HashHashUsedOutsideOfMacro => ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -744,6 +795,7 @@ pub(crate) enum PreprocessorErrorType {
     HeaderNotFound,
     CurrentWorkingDirectoryInaccessible,
     HeaderFileInaccessible,
+    HashHashUsedOutsideOfMacro,
 }
 
 impl Display for PreprocessorErrorType {
@@ -1139,6 +1191,13 @@ impl Display for PreprocessorErrorType {
                     f,
                     "Header file inaccessible! The header file was deleted or moved while the \
                      preprocessor was trying to read it."
+                )
+            },
+            | PreprocessorErrorType::HashHashUsedOutsideOfMacro => {
+                write!(
+                    f,
+                    "'##' operator used outside of macro! The '##' operator can only be used \
+                     inside a macro definition."
                 )
             },
         }
@@ -1664,6 +1723,18 @@ where
         self.previous_phase.as_mut().intern(string)
     }
 
+    fn build_token(token: PreprocessorToken, kind: TokenType) -> Token {
+        Token {
+            kind,
+            contents: token.contents,
+            start_position: token.start_position,
+        }
+    }
+
+    fn build_operator_token(token: PreprocessorToken, kind: OperatorTokenType) -> Token {
+        Self::build_token(token, TokenType::Operator(kind))
+    }
+
     fn map_preprocessor_token(
         &mut self,
         token: PreprocessorToken,
@@ -1696,50 +1767,218 @@ where
                 | Ok(()) => return None,
                 | Err(e) => Err(e),
             },
-            | PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined => Ok(Token {
-                kind:           match self.get_from_cache(token.contents) {
-                    | "auto" => TokenType::Keyword(KeywordTokenType::Auto),
-                    | "break" => TokenType::Keyword(KeywordTokenType::Break),
-                    | "case" => TokenType::Keyword(KeywordTokenType::Case),
-                    | "char" => TokenType::Keyword(KeywordTokenType::Char),
-                    | "const" => TokenType::Keyword(KeywordTokenType::Const),
-                    | "continue" => TokenType::Keyword(KeywordTokenType::Continue),
-                    | "default" => TokenType::Keyword(KeywordTokenType::Default),
-                    | "do" => TokenType::Keyword(KeywordTokenType::Do),
-                    | "double" => TokenType::Keyword(KeywordTokenType::Double),
-                    | "else" => TokenType::Keyword(KeywordTokenType::Else),
-                    | "enum" => TokenType::Keyword(KeywordTokenType::Enum),
-                    | "extern" => TokenType::Keyword(KeywordTokenType::Extern),
-                    | "float" => TokenType::Keyword(KeywordTokenType::Float),
-                    | "for" => TokenType::Keyword(KeywordTokenType::For),
-                    | "goto" => TokenType::Keyword(KeywordTokenType::Goto),
-                    | "if" => TokenType::Keyword(KeywordTokenType::If),
-                    | "inline" => TokenType::Keyword(KeywordTokenType::Inline),
-                    | "int" => TokenType::Keyword(KeywordTokenType::Int),
-                    | "long" => TokenType::Keyword(KeywordTokenType::Long),
-                    | "register" => TokenType::Keyword(KeywordTokenType::Register),
-                    | "restrict" => TokenType::Keyword(KeywordTokenType::Restrict),
-                    | "return" => TokenType::Keyword(KeywordTokenType::Return),
-                    | "short" => TokenType::Keyword(KeywordTokenType::Short),
-                    | "signed" => TokenType::Keyword(KeywordTokenType::Signed),
-                    | "sizeof" => TokenType::Keyword(KeywordTokenType::Sizeof),
-                    | "static" => TokenType::Keyword(KeywordTokenType::Static),
-                    | "struct" => TokenType::Keyword(KeywordTokenType::Struct),
-                    | "switch" => TokenType::Keyword(KeywordTokenType::Switch),
-                    | "typedef" => TokenType::Keyword(KeywordTokenType::Typedef),
-                    | "union" => TokenType::Keyword(KeywordTokenType::Union),
-                    | "unsigned" => TokenType::Keyword(KeywordTokenType::Unsigned),
-                    | "void" => TokenType::Keyword(KeywordTokenType::Void),
-                    | "volatile" => TokenType::Keyword(KeywordTokenType::Volatile),
-                    | "while" => TokenType::Keyword(KeywordTokenType::While),
-                    | "_Bool" => TokenType::Keyword(KeywordTokenType::Bool),
-                    | "_Complex" => TokenType::Keyword(KeywordTokenType::Complex),
-                    | "_Imaginary" => TokenType::Keyword(KeywordTokenType::Imaginary),
-                    | _ => TokenType::Identifier,
-                },
-                contents:       token.contents,
-                start_position: token.start_position,
-            }),
+            | PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined =>
+                Ok(Self::build_token(
+                    token,
+                    match self.get_from_cache(token.contents) {
+                        | "auto" => TokenType::Keyword(KeywordTokenType::Auto),
+                        | "break" => TokenType::Keyword(KeywordTokenType::Break),
+                        | "case" => TokenType::Keyword(KeywordTokenType::Case),
+                        | "char" => TokenType::Keyword(KeywordTokenType::Char),
+                        | "const" => TokenType::Keyword(KeywordTokenType::Const),
+                        | "continue" => TokenType::Keyword(KeywordTokenType::Continue),
+                        | "default" => TokenType::Keyword(KeywordTokenType::Default),
+                        | "do" => TokenType::Keyword(KeywordTokenType::Do),
+                        | "double" => TokenType::Keyword(KeywordTokenType::Double),
+                        | "else" => TokenType::Keyword(KeywordTokenType::Else),
+                        | "enum" => TokenType::Keyword(KeywordTokenType::Enum),
+                        | "extern" => TokenType::Keyword(KeywordTokenType::Extern),
+                        | "float" => TokenType::Keyword(KeywordTokenType::Float),
+                        | "for" => TokenType::Keyword(KeywordTokenType::For),
+                        | "goto" => TokenType::Keyword(KeywordTokenType::Goto),
+                        | "if" => TokenType::Keyword(KeywordTokenType::If),
+                        | "inline" => TokenType::Keyword(KeywordTokenType::Inline),
+                        | "int" => TokenType::Keyword(KeywordTokenType::Int),
+                        | "long" => TokenType::Keyword(KeywordTokenType::Long),
+                        | "register" => TokenType::Keyword(KeywordTokenType::Register),
+                        | "restrict" => TokenType::Keyword(KeywordTokenType::Restrict),
+                        | "return" => TokenType::Keyword(KeywordTokenType::Return),
+                        | "short" => TokenType::Keyword(KeywordTokenType::Short),
+                        | "signed" => TokenType::Keyword(KeywordTokenType::Signed),
+                        | "sizeof" => TokenType::Keyword(KeywordTokenType::Sizeof),
+                        | "static" => TokenType::Keyword(KeywordTokenType::Static),
+                        | "struct" => TokenType::Keyword(KeywordTokenType::Struct),
+                        | "switch" => TokenType::Keyword(KeywordTokenType::Switch),
+                        | "typedef" => TokenType::Keyword(KeywordTokenType::Typedef),
+                        | "union" => TokenType::Keyword(KeywordTokenType::Union),
+                        | "unsigned" => TokenType::Keyword(KeywordTokenType::Unsigned),
+                        | "void" => TokenType::Keyword(KeywordTokenType::Void),
+                        | "volatile" => TokenType::Keyword(KeywordTokenType::Volatile),
+                        | "while" => TokenType::Keyword(KeywordTokenType::While),
+                        | "_Bool" => TokenType::Keyword(KeywordTokenType::Bool),
+                        | "_Complex" => TokenType::Keyword(KeywordTokenType::Complex),
+                        | "_Imaginary" => TokenType::Keyword(KeywordTokenType::Imaginary),
+                        | _ => TokenType::Identifier,
+                    },
+                )),
+            | PreprocessorTokenType::Plus =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Plus)),
+            | PreprocessorTokenType::Minus =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Minus)),
+            | PreprocessorTokenType::Asterisk => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::Asterisk,
+            )),
+            | PreprocessorTokenType::ForwardSlash => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::ForwardSlash,
+            )),
+            | PreprocessorTokenType::Percent => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::Percent,
+            )),
+            | PreprocessorTokenType::LessThanLessThan => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::LessThanLessThan,
+            )),
+            | PreprocessorTokenType::GreaterThanGreaterThan => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::GreaterThanGreaterThan,
+            )),
+            | PreprocessorTokenType::LessThan => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::LessThan,
+            )),
+            | PreprocessorTokenType::LessThanEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::LessThanEquals,
+            )),
+            | PreprocessorTokenType::GreaterThan => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::GreaterThan,
+            )),
+            | PreprocessorTokenType::GreaterThanEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::GreaterThanEquals,
+            )),
+            | PreprocessorTokenType::EqualsEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::EqualsEquals,
+            )),
+            | PreprocessorTokenType::ExclamationMarkEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::ExclamationMarkEquals,
+            )),
+            | PreprocessorTokenType::Ampersand => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::Ampersand,
+            )),
+            | PreprocessorTokenType::Caret =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Caret)),
+            | PreprocessorTokenType::Pipe =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Pipe)),
+            | PreprocessorTokenType::AmpersandAmpersand => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::AmpersandAmpersand,
+            )),
+            | PreprocessorTokenType::PipePipe => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::PipePipe,
+            )),
+            | PreprocessorTokenType::QuestionMark => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::QuestionMark,
+            )),
+            | PreprocessorTokenType::Colon =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Colon)),
+            | PreprocessorTokenType::SemiColon => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::SemiColon,
+            )),
+            | PreprocessorTokenType::OpeningParenthesis => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::OpeningParenthesis,
+            )),
+            | PreprocessorTokenType::ClosingParenthesis => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::ClosingParenthesis,
+            )),
+            | PreprocessorTokenType::OpeningSquareBracket => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::OpeningSquareBracket,
+            )),
+            | PreprocessorTokenType::ClosingSquareBracket => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::ClosingSquareBracket,
+            )),
+            | PreprocessorTokenType::OpeningCurlyBrace => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::OpeningCurlyBrace,
+            )),
+            | PreprocessorTokenType::ClosingCurlyBrace => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::ClosingCurlyBrace,
+            )),
+            | PreprocessorTokenType::Period =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Period)),
+            | PreprocessorTokenType::Arrow =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Arrow)),
+            | PreprocessorTokenType::PlusPlus => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::PlusPlus,
+            )),
+            | PreprocessorTokenType::MinusMinus => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::MinusMinus,
+            )),
+            | PreprocessorTokenType::AsteriskEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::AsteriskEquals,
+            )),
+            | PreprocessorTokenType::ForwardSlashEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::ForwardSlashEquals,
+            )),
+            | PreprocessorTokenType::PercentEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::PercentEquals,
+            )),
+            | PreprocessorTokenType::PlusEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::PlusEquals,
+            )),
+            | PreprocessorTokenType::MinusEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::MinusEquals,
+            )),
+            | PreprocessorTokenType::LessThanLessThanEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::LessThanLessThanEquals,
+            )),
+            | PreprocessorTokenType::GreaterThanGreaterThanEquals => Ok(
+                Self::build_operator_token(token, OperatorTokenType::GreaterThanGreaterThanEquals),
+            ),
+            | PreprocessorTokenType::AmpersandEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::AmpersandEquals,
+            )),
+            | PreprocessorTokenType::CaretEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::CaretEquals,
+            )),
+            | PreprocessorTokenType::PipeEquals => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::PipeEquals,
+            )),
+            | PreprocessorTokenType::Equals =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Equals)),
+            | PreprocessorTokenType::Comma =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Comma)),
+            | PreprocessorTokenType::Tilde =>
+                Ok(Self::build_operator_token(token, OperatorTokenType::Tilde)),
+            | PreprocessorTokenType::ExclamationMark => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::ExclamationMark,
+            )),
+            | PreprocessorTokenType::HashHash => {
+                return Some(Err(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::HashHashUsedOutsideOfMacro,
+                        start_position: token.start_position,
+                        contents:       token.contents,
+                    },
+                )));
+            },
 
             | x => todo!("Not implemented: {x:#?}"),
         })
