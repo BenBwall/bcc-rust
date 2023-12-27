@@ -18,11 +18,27 @@ use crate::util::string_cache::{
     Id as StringCacheId,
     StringCache,
 };
+
+pub(crate) trait IsTokenizingIncludeString {
+    fn is_tokenizing_include_string(&self) -> bool;
+    fn set_is_tokenizing_include_string(&mut self, value: bool);
+}
+
+impl<Prev, PrevSavePoint> IsTokenizingIncludeString for PreprocessorTokenizer<Prev, PrevSavePoint> {
+    fn is_tokenizing_include_string(&self) -> bool {
+        self.is_tokenizing_include_string
+    }
+
+    fn set_is_tokenizing_include_string(&mut self, value: bool) {
+        self.is_tokenizing_include_string = value;
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PreprocessorTokenizer<Prev, PrevSavePoint> {
     previous_phase: Prev,
     state: State<PrevSavePoint>,
-    is_tokenizing_include_directive: bool,
+    is_tokenizing_include_string: bool,
     pub(crate) string_cache: StringCache,
     current_token_start: PrevSavePoint,
 }
@@ -82,10 +98,10 @@ pub(crate) enum State<PrevSavePoint> {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct SavePoint<PrevSavePoint> {
-    inner: PrevSavePoint,
-    state: State<PrevSavePoint>,
-    is_tokenizing_include_directive: bool,
-    current_token_start: PrevSavePoint,
+    pub(crate) inner: PrevSavePoint,
+    pub(crate) state: State<PrevSavePoint>,
+    pub(crate) is_tokenizing_include_string: bool,
+    pub(crate) current_token_start: PrevSavePoint,
 }
 
 impl<PrevSavePoint> super::SavePoint for SavePoint<PrevSavePoint>
@@ -102,12 +118,10 @@ pub(crate) enum PreprocessorTokenizerErrorType {
     UnknownToken,
     UnterminatedCharacter,
     UnterminatedString,
-    UnterminatedAngleBracketString,
     UnterminatedIncludeString,
     NewlineInCharacter,
     NewlineInString,
     NewlineInIncludeString,
-    NewlineInAngleBracketString,
 }
 
 impl Display for PreprocessorTokenizerErrorType {
@@ -116,27 +130,18 @@ impl Display for PreprocessorTokenizerErrorType {
             | Self::UnknownToken => write!(f, "Unknown token"),
             | Self::UnterminatedCharacter => write!(f, "Unterminated character literal"),
             | Self::UnterminatedString => write!(f, "Unterminated string literal"),
-            | Self::UnterminatedAngleBracketString => {
-                write!(f, "Unterminated system header include string")
-            },
+
             | Self::UnterminatedIncludeString => write!(f, "Unterminated header include string"),
             | Self::NewlineInCharacter => write!(
                 f,
                 "Unescaped newlines are not allowed in character literals"
             ),
-            | Self::NewlineInString => {
-                write!(f, "Unescaped newlines are not allowed in string literals")
-            },
+            | Self::NewlineInString =>
+                write!(f, "Unescaped newlines are not allowed in string literals"),
             | Self::NewlineInIncludeString => write!(
                 f,
                 "Unescaped newlines are not allowed in header include strings"
             ),
-            | Self::NewlineInAngleBracketString => {
-                write!(
-                    f,
-                    "Unescaped newlines are not allowed in system header include strings"
-                )
-            },
         }
     }
 }
@@ -189,12 +194,10 @@ impl GetSeverity for InnerPreprocessorTokenizerError {
             | PreprocessorTokenizerErrorType::UnknownToken
             | PreprocessorTokenizerErrorType::UnterminatedCharacter
             | PreprocessorTokenizerErrorType::UnterminatedString
-            | PreprocessorTokenizerErrorType::UnterminatedAngleBracketString
             | PreprocessorTokenizerErrorType::UnterminatedIncludeString
             | PreprocessorTokenizerErrorType::NewlineInCharacter
             | PreprocessorTokenizerErrorType::NewlineInString
-            | PreprocessorTokenizerErrorType::NewlineInIncludeString
-            | PreprocessorTokenizerErrorType::NewlineInAngleBracketString => ErrorSeverity::Error,
+            | PreprocessorTokenizerErrorType::NewlineInIncludeString => ErrorSeverity::Error,
         }
     }
 }
@@ -226,8 +229,8 @@ where
             | State::MiddleOfCharacter => self.tokenize_char(),
             | State::MiddleOfString => self.tokenize_string(),
             | State::MiddleOfIncludeString => self.tokenize_include_string(),
-            | State::MiddleOfAngleBracketString => self.tokenize_angle_bracket_string(),
-            | State::MiddleOfForwardSlash => return self.tokenize_or_step_over_forward_slash(),
+            | State::MiddleOfAngleBracketString => return self.tokenize_angle_bracket_string(),
+            | State::MiddleOfForwardSlash => self.tokenize_or_step_over_forward_slash(),
             | State::MiddleOfPercent => self.tokenize_percent(),
             | State::MiddleOfHashDigraph => self.tokenize_hash_digraph(),
             | State::MiddleOfLeftAngleBracket => self.tokenize_left_angle_bracket(),
@@ -248,9 +251,9 @@ where
             | State::MiddleOfPipe => self.tokenize_pipe(),
             | State::MiddleOfExclamationMark => self.tokenize_exclamation_mark(),
             | State::MiddleOfEquals => self.tokenize_equals(),
-            | State::MiddleOfLineComment => return self.step_over_line_comment(),
-            | State::MiddleOfBlockComment => return self.step_over_block_comment(),
-            | State::BeforeBlockCommentEnd => return self.step_over_block_comment_end(),
+            | State::MiddleOfLineComment => self.step_over_line_comment(),
+            | State::MiddleOfBlockComment => self.step_over_block_comment(),
+            | State::BeforeBlockCommentEnd => self.step_over_block_comment_end(),
             | State::Default => {
                 let result = self.tokenize();
                 if result.is_none() {
@@ -274,7 +277,7 @@ where
         SavePoint {
             inner: self.previous_phase.save(),
             state: self.state.clone(),
-            is_tokenizing_include_directive: self.is_tokenizing_include_directive,
+            is_tokenizing_include_string: self.is_tokenizing_include_string,
             current_token_start: self.current_token_start.clone(),
         }
     }
@@ -282,7 +285,7 @@ where
     fn restore(&mut self, save_point: Self::SavePoint) {
         self.previous_phase.restore(save_point.inner);
         self.state = save_point.state;
-        self.is_tokenizing_include_directive = save_point.is_tokenizing_include_directive;
+        self.is_tokenizing_include_string = save_point.is_tokenizing_include_string;
         self.current_token_start = save_point.current_token_start;
     }
 
@@ -358,7 +361,7 @@ where
         })
     }
 
-    fn step_over_whitespace(&mut self) -> ParserReturn<Prev::Error> {
+    fn step_over_whitespace(&mut self) -> ParserResult<Prev::Error> {
         let mut save_point = self.save();
         while self
             .previous_phase
@@ -368,27 +371,32 @@ where
             save_point = self.save();
         }
         self.restore(save_point);
-        self.next()
+        let mut res = self.generate_token(PreprocessorTokenType::Whitespace);
+        let Ok(ref mut token) = res else {
+            unreachable!()
+        };
+        token.contents = self.string_cache.intern(" ");
+        res
     }
 
-    fn tokenize_or_step_over_forward_slash(&mut self) -> ParserReturn<Prev::Error> {
+    fn tokenize_or_step_over_forward_slash(&mut self) -> ParserResult<Prev::Error> {
         let current = self.previous_phase.next();
         match current {
             | Some(Err(e)) => {
                 self.state = State::MiddleOfForwardSlash;
-                Some(self.error_from_prev(e))
+                self.error_from_prev(e)
             },
             | Some(Ok('/')) => self.step_over_line_comment(),
             | Some(Ok('*')) => self.step_over_block_comment(),
-            | Some(Ok('=')) => Some(self.generate_token(PreprocessorTokenType::ForwardSlashEquals)),
+            | Some(Ok('=')) => self.generate_token(PreprocessorTokenType::ForwardSlashEquals),
             | Some(Ok(_)) | None => {
                 self.state = State::Default;
-                Some(self.generate_token(PreprocessorTokenType::ForwardSlash))
+                self.generate_token(PreprocessorTokenType::ForwardSlash)
             },
         }
     }
 
-    fn step_over_line_comment(&mut self) -> ParserReturn<Prev::Error> {
+    fn step_over_line_comment(&mut self) -> ParserResult<Prev::Error> {
         let mut save_point = self.save();
 
         loop {
@@ -399,7 +407,7 @@ where
                 },
                 | Some(Err(e)) => {
                     self.state = State::MiddleOfLineComment;
-                    return Some(self.error_from_prev(e));
+                    return self.error_from_prev(e);
                 },
                 | Some(Ok('\n')) => break,
                 | Some(Ok(_)) => {
@@ -410,10 +418,15 @@ where
         }
 
         self.restore(save_point);
-        self.next()
+        let mut res = self.generate_token(PreprocessorTokenType::Whitespace);
+        let Ok(ref mut token) = res else {
+            unreachable!()
+        };
+        token.contents = self.string_cache.intern(" ");
+        res
     }
 
-    fn step_over_block_comment(&mut self) -> ParserReturn<Prev::Error> {
+    fn step_over_block_comment(&mut self) -> ParserResult<Prev::Error> {
         let mut save_point = self.save();
 
         loop {
@@ -421,7 +434,7 @@ where
                 | None => break,
                 | Some(Err(e)) => {
                     self.state = State::MiddleOfBlockComment;
-                    return Some(self.error_from_prev(e));
+                    return self.error_from_prev(e);
                 },
                 | Some(Ok('*')) => return self.step_over_block_comment_end(),
                 | Some(Ok(_)) => {
@@ -431,10 +444,15 @@ where
             }
         }
         self.restore(save_point);
-        self.next()
+        let mut res = self.generate_token(PreprocessorTokenType::Whitespace);
+        let Ok(ref mut token) = res else {
+            unreachable!()
+        };
+        token.contents = self.string_cache.intern(" ");
+        res
     }
 
-    fn step_over_block_comment_end(&mut self) -> ParserReturn<Prev::Error> {
+    fn step_over_block_comment_end(&mut self) -> ParserResult<Prev::Error> {
         let mut save_point = self.save();
 
         loop {
@@ -442,7 +460,7 @@ where
                 | None => break,
                 | Some(Err(e)) => {
                     self.state = State::BeforeBlockCommentEnd;
-                    return Some(self.error_from_prev(e));
+                    return self.error_from_prev(e);
                 },
                 | Some(Ok('/')) => {
                     save_point = self.save();
@@ -455,7 +473,12 @@ where
             }
         }
         self.restore(save_point);
-        self.next()
+        let mut res = self.generate_token(PreprocessorTokenType::Whitespace);
+        let Ok(ref mut token) = res else {
+            unreachable!()
+        };
+        token.contents = self.string_cache.intern(" ");
+        res
     }
 
     pub(crate) fn new(previous_phase: Prev, string_cache: StringCache) -> Self {
@@ -464,7 +487,7 @@ where
             previous_phase,
             state: State::Default,
             string_cache,
-            is_tokenizing_include_directive: false,
+            is_tokenizing_include_string: false,
         }
     }
 
@@ -489,19 +512,19 @@ where
             | c if c.is_alphabetic() || c == '_' => self.tokenize_keyword_or_identifier(),
             | '.' => self.tokenize_period_or_number(),
             | '"' =>
-                if self.is_tokenizing_include_directive {
+                if self.is_tokenizing_include_string {
                     self.tokenize_include_string()
                 } else {
                     self.tokenize_string()
                 },
             | '\'' => self.tokenize_char(),
             | '#' => self.tokenize_hash(),
-            | ' ' => return self.step_over_whitespace(),
-            | '/' => return self.tokenize_or_step_over_forward_slash(),
+            | ' ' => self.step_over_whitespace(),
+            | '/' => self.tokenize_or_step_over_forward_slash(),
             | '%' => self.tokenize_percent(),
             | '<' =>
-                if self.is_tokenizing_include_directive {
-                    self.tokenize_angle_bracket_string()
+                if self.is_tokenizing_include_string {
+                    return self.tokenize_angle_bracket_string();
                 } else {
                     self.tokenize_left_angle_bracket()
                 },
@@ -648,15 +671,28 @@ where
         )
     }
 
-    fn tokenize_angle_bracket_string(&mut self) -> ParserResult<Prev::Error> {
-        self.tokenize_string_like(
-            '>',
-            true,
-            PreprocessorTokenType::AngleBracketString,
-            PreprocessorTokenizerErrorType::UnterminatedAngleBracketString,
-            PreprocessorTokenizerErrorType::NewlineInAngleBracketString,
-            State::MiddleOfAngleBracketString,
-        )
+    fn tokenize_angle_bracket_string(&mut self) -> Option<ParserResult<Prev::Error>> {
+        loop {
+            let current = match self.previous_phase.next() {
+                | None => {
+                    self.is_tokenizing_include_string = false;
+                    return self.tokenize();
+                },
+                | Some(Err(e)) => {
+                    self.state = State::MiddleOfAngleBracketString;
+                    return Some(self.error_from_prev(e));
+                },
+                | Some(Ok(current)) => current,
+            };
+            if current == '>' {
+                break;
+            }
+            if current == '\n' {
+                self.is_tokenizing_include_string = false;
+                return self.tokenize();
+            }
+        }
+        Some(self.generate_token(PreprocessorTokenType::AngleBracketString))
     }
 
     fn tokenize_include_string(&mut self) -> ParserResult<Prev::Error> {
@@ -1060,6 +1096,7 @@ pub(crate) enum PreprocessorTokenType {
 
     // Whitespace
     Newline,
+    Whitespace,
 
     // Keywords
     Defined,
@@ -1601,7 +1638,7 @@ mod tests {
         let mut string_cache = StringCache::new();
         let mut tokenizer = PreprocessorTokenizer::new(
             RemoveEscapedNewlines::new(MapCharacterSets::new(NewlineTracking::new(
-                input,
+                input.into(),
                 string_cache.intern("<input>"),
             ))),
             string_cache,

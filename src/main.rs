@@ -1,8 +1,11 @@
 //! BCC Compiler
 
 use std::{
+    env::var,
     fs::read_to_string,
     hash::BuildHasherDefault,
+    path::PathBuf,
+    sync::Arc,
 };
 
 use clap::{
@@ -32,45 +35,73 @@ pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefau
 #[command(author, version, about, long_about)]
 struct Cli {
     #[command(flatten)]
-    input: Input,
+    input:          Input,
+    /// Add directory to include search path.
+    #[clap(short = 'q', long = "iquote")]
+    quote_include:  Vec<PathBuf>,
+    /// Add directory to system include search path.
+    #[clap(short = 's', long = "isystem")]
+    system_include: Vec<PathBuf>,
 }
 
 #[derive(Args)]
 #[group(required = true, multiple = false)]
 struct Input {
+    /// Input string to be preprocessed.
     #[clap(short, long, conflicts_with = "input_file")]
-    input:      Option<String>,
+    input:      Option<Arc<str>>,
+    /// Input file to be preprocessed.
     #[clap(conflicts_with = "input")]
     input_file: Option<String>,
 }
 
 enum ParsedInput {
-    String(String),
-    File(String),
+    String(Arc<str>),
+    File(Arc<str>),
 }
 #[derive(Debug, Error)]
 enum MainError {
     #[error("Failed to open input file: {0}")]
     OpenInputFileError(#[from] std::io::Error),
+    #[error("Failed to parse command line arguments: {0}")]
+    ParseArgumentsError(#[from] clap::Error),
+}
+
+fn parse_include_env_var(env_var: &str, vec: &mut Vec<PathBuf>) {
+    vec.extend(
+        var(env_var)
+            .unwrap_or_default()
+            .split(':')
+            .map(PathBuf::from),
+    )
 }
 
 fn main() -> Result<(), MainError> {
-    let args = Cli::parse();
+    let mut args = Cli::try_parse()?;
     let mut string_cache = StringCache::new();
     println!("{}", "Printing all generated tokens:".bright_green());
     let parsed_input = if args.input.input.is_some() {
-        ParsedInput::String(args.input.input.unwrap())
+        ParsedInput::String(args.input.input.unwrap().into())
     } else {
-        ParsedInput::File(read_to_string(args.input.input_file.as_ref().unwrap())?)
+        ParsedInput::File(read_to_string(args.input.input_file.as_ref().unwrap())?.into())
     };
-    let (input_string, source_file) = match parsed_input {
-        | ParsedInput::String(ref s) => (s.as_str(), string_cache.intern("<input>")),
-        | ParsedInput::File(ref s) => (
-            s.as_str(),
+    let (input_string, source_filename) = match parsed_input {
+        | ParsedInput::String(s) => (s, string_cache.intern("<input>")),
+        | ParsedInput::File(s) => (
+            s,
             string_cache.intern(args.input.input_file.as_ref().unwrap()),
         ),
     };
-    let mut preprocessor = Preprocessor::new(input_string, source_file, string_cache);
+    parse_include_env_var("CPATH", &mut args.system_include);
+    parse_include_env_var("C_INCLUDE_PATH", &mut args.system_include);
+
+    let mut preprocessor = Preprocessor::new(
+        input_string,
+        source_filename,
+        string_cache,
+        Arc::new(args.quote_include),
+        Arc::new(args.system_include),
+    );
     while let Some(res) = preprocessor.next() {
         match res {
             | Ok(t) => println!("{t:?}"),
