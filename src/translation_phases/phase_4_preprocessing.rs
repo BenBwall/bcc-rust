@@ -1899,7 +1899,7 @@ where
                         #[allow(clippy::cast_possible_truncation)]
                         let code_point = (|| {
                             let mut code_point = c as u16 - '0' as u16;
-                            for _ in 0..1 {
+                            for _ in 0..2 {
                                 let Some(d) = string.char_at(index).and_then(|c| c.to_digit(8))
                                 else {
                                     break;

@@ -18,7 +18,13 @@ use thiserror::Error;
 
 use crate::{
     translation_phases::{
-        phase_4_preprocessing::Preprocessor,
+        phase_4_preprocessing::{
+            self,
+            Preprocessor,
+            StringLikeTokenType,
+            Token,
+            TokenType,
+        },
         GetPosition,
         GetSeverity,
     },
@@ -107,7 +113,40 @@ fn main() -> Result<(), MainError> {
     );
     while let Some(res) = preprocessor.next() {
         match res {
-            | Ok(t) => println!("{t:?}"),
+            | Ok(t) => println!(
+                "{}",
+                match t.kind {
+                    | TokenType::Identifier => format!(
+                        "Identifier: {}",
+                        preprocessor
+                            .previous_phase
+                            .string_cache
+                            .get(t.contents)
+                            .unwrap()
+                    ),
+                    | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
+                    | TokenType::StringLike(sltt) => format!(
+                        "String-like token: {}",
+                        match sltt {
+                            | StringLikeTokenType::WideString(s)
+                            | StringLikeTokenType::String(s) => {
+                                preprocessor
+                                    .previous_phase
+                                    .string_cache
+                                    .get(s)
+                                    .unwrap()
+                                    .to_string()
+                            },
+                            | StringLikeTokenType::WideChar(c) | StringLikeTokenType::Char(c) =>
+                                format!("{:#?}", c),
+                        }
+                    ),
+                    | TokenType::Keyword(k) => format!("Keyword: {:#?}", k),
+                    | TokenType::Integer(i) => format!("Integer: {:#?}", i),
+                    | TokenType::Float(f) => format!("Float: {:#?}", f),
+                }
+                .bright_magenta()
+            ),
             | Err(e) => {
                 let position = e.position();
                 eprintln!(

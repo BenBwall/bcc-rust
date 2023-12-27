@@ -19,6 +19,7 @@
     "proptest",
     "Rewinded",
     "rstest",
+    "sltt",
     "smallstr",
     "strtod",
     "strtof",
