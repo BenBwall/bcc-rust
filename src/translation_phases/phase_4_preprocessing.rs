@@ -7,7 +7,12 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
+    fs::read,
     ops::ControlFlow,
+    path::{
+        Path,
+        PathBuf,
+    },
     sync::Arc,
 };
 
@@ -24,12 +29,59 @@ use crate::{
         LongDouble,
         ParseFloatError,
     },
-    util::string_cache::{
-        Id as StringCacheId,
-        StringCache,
+    util::{
+        string_cache::{
+            Id as StringCacheId,
+            StringCache,
+        },
+        vec_to_string_lossy,
     },
     HashMap,
 };
+
+pub(crate) trait FromInput: ISavePoint {
+    type Prev;
+    type PrevError;
+    fn from_input(
+        input: Arc<str>,
+        source_file: StringCacheId,
+        preprocessor: &Preprocessor<Self::Prev, Self::PrevError, Self>,
+    ) -> Self;
+}
+
+impl FromInput for Pptsp {
+    type Prev = Ppt;
+    type PrevError = Ppte;
+
+    fn from_input(
+        input: Arc<str>,
+        source_file: StringCacheId,
+        preprocessor: &Preprocessor<Self::Prev, Self::PrevError, Self>,
+    ) -> Self {
+        let inner = RemoveEscapedNewlinesSavePoint {
+            inner:            MapCharacterSetsSavePoint {
+                inner: NewlineTrackingSavePoint {
+                    source: input,
+                    position: Position {
+                        index: 0,
+                        line: 1,
+                        column: 1,
+                        source_file,
+                    },
+                    is_middle_of_windows_newline: false,
+                },
+            },
+            last_was_newline: false,
+            state:            RemoveEscapedNewlinesState::Default,
+        };
+        Self {
+            current_token_start: inner.clone(),
+            inner,
+            state: PreprocessorTokenizerState::Default,
+            is_tokenizing_include_string: false,
+        }
+    }
+}
 
 trait StrExt {
     /// Returns the character at the given index,
@@ -42,6 +94,14 @@ trait StrExt {
     fn char_at_case_insensitive(&self, index: usize) -> Option<char> {
         self.char_at(index).map(|c| c.to_ascii_lowercase())
     }
+
+    /// Returns the string cloned into a [`TokenString`].
+    fn to_token_string(&self) -> TokenString
+    where
+        for<'a> &'a Self: Into<TokenString>,
+    {
+        self.into()
+    }
 }
 
 impl StrExt for str {
@@ -51,7 +111,10 @@ impl StrExt for str {
 }
 
 use super::{
-    phase_0_newline_tracking::NewlineTracking,
+    phase_0_newline_tracking::{
+        NewlineTracking,
+        SavePoint as NewlineTrackingSavePoint,
+    },
     phase_1_map_character_sets::{
         MapCharacterSets,
         MapCharacterSetsError,
@@ -61,20 +124,26 @@ use super::{
         RemoveEscapedNewlines,
         RemoveEscapedNewlinesError,
         SavePoint as RemoveEscapedNewlinesSavePoint,
+        State as RemoveEscapedNewlinesState,
     },
     phase_3_preprocessor_tokenizer::{
+        IsTokenizingIncludeString,
         PreprocessorToken,
         PreprocessorTokenType,
         PreprocessorTokenizer,
         PreprocessorTokenizerError,
         SavePoint as PreprocessorTokenizerSavePoint,
+        State as PreprocessorTokenizerState,
     },
     ErrorSeverity,
     GetPosition,
     GetSeverity,
     Position,
+    SavePoint as ISavePoint,
     TranslationPhase,
 };
+
+pub(crate) type TokenString = SmallString<[u8; 1024]>;
 
 // Lowest value has highest precedence.
 pub(crate) fn prefix_binding_power<PrevError>(
@@ -328,6 +397,21 @@ pub(crate) struct TokenizerFrame<InnerSavePoint> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
+    pub(crate) previous_phase: Prev,
+    tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
+    macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
+    pending_results: VecDeque<Result<Token, PreprocessorError<PrevError>>>,
+    state: State,
+    last_preprocessor_token: Option<PreprocessorToken>,
+    current_preprocessor_token: Option<PreprocessorToken>,
+    if_directive_balance: isize,
+    should_tokenize_whitespace: bool,
+    quote_include_directories: Arc<Vec<PathBuf>>,
+    system_include_directories: Arc<Vec<PathBuf>>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct SavePoint<PrevSavePoint, PrevError> {
     pub(crate) inner: PrevSavePoint,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
@@ -337,6 +421,9 @@ pub(crate) struct SavePoint<PrevSavePoint, PrevError> {
     pub(crate) current_preprocessor_token: Option<PreprocessorToken>,
     pub(crate) macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
     pub(crate) if_directive_balance: isize,
+    pub(crate) should_tokenize_whitespace: bool,
+    pub(crate) quote_include_directories: Arc<Vec<PathBuf>>,
+    pub(crate) system_include_directories: Arc<Vec<PathBuf>>,
 }
 
 impl<PrevSavePoint, PrevError> super::SavePoint for SavePoint<PrevSavePoint, PrevError>
@@ -518,8 +605,11 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::ElifDirectiveWithoutIfDirective
             | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
             | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
-            | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..) =>
-                ErrorSeverity::Error,
+            | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..)
+            | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
+            | PreprocessorErrorType::HeaderNotFound
+            | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible
+            | PreprocessorErrorType::HeaderFileInaccessible => ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -659,11 +749,15 @@ pub(crate) enum PreprocessorErrorType {
     ExpectedIdentifierInIfdefDirective(PreprocessorTokenType),
     ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
     UndefinedIdentifierInPreprocessorExpression,
+    ExpectedIncludeStringOrAngleBracketString(PreprocessorTokenType),
     UnexpectedEndOfInput(&'static str),
     WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
         expected: usize,
         found:    usize,
     },
+    HeaderNotFound,
+    CurrentWorkingDirectoryInaccessible,
+    HeaderFileInaccessible,
 }
 
 impl Display for PreprocessorErrorType {
@@ -1027,6 +1121,13 @@ impl Display for PreprocessorErrorType {
                     "Expected identifier in 'ifndef' directive! Found instead {tt:#?}"
                 )
             },
+            | Self::ExpectedIncludeStringOrAngleBracketString(tt) => {
+                write!(
+                    f,
+                    "Expected include string or angle bracket string in 'include' directive! \
+                     Found instead {tt:#?}"
+                )
+            },
             | Self::UnexpectedEndOfInput(message) => {
                 write!(f, "Unexpected end of input while {message}!")
             },
@@ -1037,20 +1138,25 @@ impl Display for PreprocessorErrorType {
                      if it had a value of 0."
                 )
             },
+            | PreprocessorErrorType::HeaderNotFound => {
+                write!(f, "Header not found!")
+            },
+            | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible => {
+                write!(
+                    f,
+                    "Current working directory inaccessible! The operating system returned an \
+                     error when trying to get the current working directory."
+                )
+            },
+            | PreprocessorErrorType::HeaderFileInaccessible => {
+                write!(
+                    f,
+                    "Header file inaccessible! The header file was deleted or moved while the \
+                     preprocessor was trying to read it."
+                )
+            },
         }
     }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
-    pub(crate) previous_phase: Prev,
-    tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
-    macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
-    pending_results: VecDeque<Result<Token, PreprocessorError<PrevError>>>,
-    state: State,
-    last_preprocessor_token: Option<PreprocessorToken>,
-    current_preprocessor_token: Option<PreprocessorToken>,
-    if_directive_balance: isize,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1064,6 +1170,8 @@ impl<Prev: TranslationPhase> Preprocessor<Prev, Prev::Error, Prev::SavePoint> {
         source_file: StringCacheId,
         previous_phase: Prev,
         string_cache: &mut StringCache,
+        quote_include_directories: Arc<Vec<PathBuf>>,
+        system_include_directories: Arc<Vec<PathBuf>>,
     ) -> Self {
         Self {
             tokenizer_stack: vec![TokenizerFrame {
@@ -1083,24 +1191,29 @@ impl<Prev: TranslationPhase> Preprocessor<Prev, Prev::Error, Prev::SavePoint> {
             last_preprocessor_token: None,
             current_preprocessor_token: None,
             if_directive_balance: 0,
+            should_tokenize_whitespace: false,
+            quote_include_directories,
+            system_include_directories,
         }
     }
 }
 
 type Pptsp = PreprocessorTokenizerSavePoint<
-    RemoveEscapedNewlinesSavePoint<MapCharacterSetsSavePoint<Position>>,
+    RemoveEscapedNewlinesSavePoint<MapCharacterSetsSavePoint<NewlineTrackingSavePoint>>,
 >;
-type Ppt<'input> = PreprocessorTokenizer<
-    RemoveEscapedNewlines<MapCharacterSets<NewlineTracking<'input>>>,
-    RemoveEscapedNewlinesSavePoint<MapCharacterSetsSavePoint<Position>>,
+type Ppt = PreprocessorTokenizer<
+    RemoveEscapedNewlines<MapCharacterSets<NewlineTracking>>,
+    RemoveEscapedNewlinesSavePoint<MapCharacterSetsSavePoint<NewlineTrackingSavePoint>>,
 >;
 type Ppte =
     PreprocessorTokenizerError<RemoveEscapedNewlinesError<MapCharacterSetsError<Infallible>>>;
-impl<'input> Preprocessor<Ppt<'input>, Ppte, Pptsp> {
+impl Preprocessor<Ppt, Ppte, Pptsp> {
     pub(crate) fn new(
-        source_string: &'input str,
+        source_string: Arc<str>,
         source_file: StringCacheId,
         mut string_cache: StringCache,
+        quote_include_directories: Arc<Vec<PathBuf>>,
+        system_include_directories: Arc<Vec<PathBuf>>,
     ) -> Self {
         let phase0 = NewlineTracking::new(source_string, source_file);
         let phase1 = MapCharacterSets::new(phase0);
@@ -1125,6 +1238,9 @@ impl<'input> Preprocessor<Ppt<'input>, Ppte, Pptsp> {
             last_preprocessor_token: None,
             current_preprocessor_token: None,
             if_directive_balance: 0,
+            should_tokenize_whitespace: false,
+            quote_include_directories,
+            system_include_directories,
         }
     }
 }
@@ -1135,8 +1251,10 @@ where
             Yield = PreprocessorToken,
             Error = PreprocessorTokenizerError<PrevPrevError>,
         > + AsMut<StringCache>
-        + AsRef<StringCache>,
+        + AsRef<StringCache>
+        + IsTokenizingIncludeString,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
+    Prev::SavePoint: FromInput<Prev = Prev, PrevError = Prev::Error>,
 {
     fn expect_token_no_expand(
         &mut self,
@@ -1181,6 +1299,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     fn expect_token(
         &mut self,
         mut is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
@@ -1247,6 +1366,12 @@ where
                                 .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
                             continue;
                         },
+                        | Some(Ok(token))
+                            if token.kind == PreprocessorTokenType::Whitespace
+                                && !self.should_tokenize_whitespace =>
+                        {
+                            continue;
+                        },
                         | Some(Ok(token)) => {
                             break Some(Ok(token));
                         },
@@ -1260,6 +1385,12 @@ where
                             | Some(Err(e)) => {
                                 self.pending_results
                                     .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                continue;
+                            },
+                            | Some(Ok(token))
+                                if token.kind == PreprocessorTokenType::Whitespace
+                                    && !self.should_tokenize_whitespace =>
+                            {
                                 continue;
                             },
                             | Some(Ok(token)) => {
@@ -1280,6 +1411,12 @@ where
                             | Some(Err(e)) => {
                                 self.pending_results
                                     .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                continue;
+                            },
+                            | Some(Ok(token))
+                                if token.kind == PreprocessorTokenType::Whitespace
+                                    && !self.should_tokenize_whitespace =>
+                            {
                                 continue;
                             },
                             | Some(Ok(token)) => {
@@ -1341,6 +1478,9 @@ where
 
                         loop {
                             match self.next_preprocessor_token_no_expand() {
+                                | Some(Ok(token))
+                                    if token.kind == PreprocessorTokenType::Whitespace =>
+                                    continue,
                                 | Some(Ok(token))
                                     if token.kind == PreprocessorTokenType::OpeningParenthesis =>
                                     break,
@@ -1542,7 +1682,7 @@ where
         &mut self,
         token: PreprocessorToken,
     ) -> Option<Result<Token, PreprocessorError<Prev::Error>>> {
-        let mut contents: SmallString<[u8; 1024]> = self.get_from_cache(token.contents).into();
+        let mut contents: TokenString = self.get_from_cache(token.contents).into();
 
         Some(match token.kind {
             | PreprocessorTokenType::Number => {
@@ -2161,7 +2301,7 @@ where
                 ),
             }),
             | PreprocessorTokenType::Number => {
-                let contents = SmallString::<[u8; 1024]>::from(self.get_from_cache(token.contents));
+                let contents = self.get_from_cache(token.contents).to_token_string();
                 let token = match if contents.starts_with("0x") || contents.starts_with("0X") {
                     self.parse_hexadecimal_integer(token, &contents)
                 } else if contents.starts_with("0b") || contents.starts_with("0B") {
@@ -2365,7 +2505,7 @@ where
 
     fn parse_ifdef_directive(
         &mut self,
-        directive: PreprocessorToken,
+        _directive: PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
         self.if_directive_balance += 1;
         let name = self.expect_token_no_expand(
@@ -2396,7 +2536,7 @@ where
 
     fn parse_ifndef_directive(
         &mut self,
-        directive: PreprocessorToken,
+        _directive: PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
         self.if_directive_balance += 1;
         let name = self.expect_token_no_expand(
@@ -2425,11 +2565,181 @@ where
         Ok(())
     }
 
+    fn search_for_header_in(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
+        for dir in dirs {
+            let mut header_path = dir.clone();
+            header_path.push(path);
+            if header_path.exists() {
+                return Some(header_path);
+            }
+        }
+        None
+    }
+
+    fn find_header_from_path(
+        &mut self,
+        include_token: PreprocessorToken,
+        path: &Path,
+        is_system_header: bool,
+    ) -> Result<PathBuf, <Self as TranslationPhase>::Error> {
+        println!(
+            "Including {}header from path: {:#?}",
+            if is_system_header { "system " } else { "" },
+            path
+        );
+        if path.is_absolute() {
+            if path.exists() {
+                return Ok(path.to_owned());
+            }
+            return Err(PreprocessorError::InnerPreprocessorError(
+                InnerPreprocessorError {
+                    error_type:     PreprocessorErrorType::HeaderNotFound,
+                    start_position: include_token.start_position,
+                    contents:       include_token.contents,
+                },
+            ));
+        }
+
+        if is_system_header {
+            if let Some(header) =
+                Self::search_for_header_in(&path, &self.system_include_directories)
+            {
+                return Ok(header);
+            }
+        }
+        if let Some(header) = Self::search_for_header_in(&path, &self.quote_include_directories) {
+            return Ok(header);
+        }
+
+        let cwd = std::env::current_dir().map_err(|e| {
+            PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                error_type:     PreprocessorErrorType::CurrentWorkingDirectoryInaccessible,
+                start_position: include_token.start_position,
+                contents:       include_token.contents,
+            })
+        })?;
+        if let Some(header) = Self::search_for_header_in(&path, &[cwd]) {
+            return Ok(header);
+        }
+
+        Err(PreprocessorError::InnerPreprocessorError(
+            InnerPreprocessorError {
+                error_type:     PreprocessorErrorType::HeaderNotFound,
+                start_position: include_token.start_position,
+                contents:       include_token.contents,
+            },
+        ))
+    }
+
     fn parse_include_directive(
         &mut self,
         directive: PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
-        todo!()
+        let include_string = self.expect_token(
+            |this, token| {
+                matches!(
+                    token.kind,
+                    PreprocessorTokenType::AngleBracketString
+                        | PreprocessorTokenType::IncludeString
+                        | _ if this.get_from_cache(token.contents).starts_with('<')
+                )
+            },
+            |_, e| ControlFlow::Break(e),
+            |_, token| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(
+                                token.kind,
+                            ),
+                        start_position: token.start_position,
+                        contents:       token.contents,
+                    },
+                ))
+            },
+            "parsing include directive",
+        )?;
+        let header_path = match include_string.kind {
+            | PreprocessorTokenType::IncludeString => {
+                let contents = self
+                    .get_from_cache(include_string.contents)
+                    .to_token_string();
+                let contents = &contents[1..contents.len() - 1];
+                let path = Path::new(contents);
+                self.find_header_from_path(include_string, path, false)
+            },
+            | PreprocessorTokenType::AngleBracketString => {
+                let contents = self
+                    .get_from_cache(include_string.contents)
+                    .to_token_string();
+                let contents = &contents[1..contents.len() - 1];
+                let path = Path::new(contents);
+                self.find_header_from_path(include_string, path, true)
+            },
+            | _ => {
+                self.should_tokenize_whitespace = true;
+                let mut contents = TokenString::new();
+                let start_index = include_string.start_position.index;
+                contents.push_str(&self.get_from_cache(include_string.contents)[1..]);
+                loop {
+                    match self.next_preprocessor_token() {
+                        | Some(Err(e)) => {
+                            self.pending_results.push_back(Err(e));
+                            continue;
+                        },
+                        | Some(Ok(token)) => {
+                            if token.kind == PreprocessorTokenType::Newline {
+                                break;
+                            }
+                            let token_contents = self.get_from_cache(token.contents);
+                            if let Some(idx) = token_contents.find('>') {
+                                contents.push_str(&token_contents[..idx]);
+                                break;
+                            }
+                            contents.push_str(self.get_from_cache(token.contents));
+                        },
+                        | None => {
+                            let contents = self.insert_into_cache("EOF");
+                            return Err(PreprocessorError::InnerPreprocessorError(
+                                InnerPreprocessorError {
+                                    error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                                        "parsing include directive",
+                                    ),
+                                    start_position: directive.start_position,
+                                    contents,
+                                },
+                            ));
+                        },
+                    }
+                }
+                self.should_tokenize_whitespace = false;
+                let path = Path::new(contents.as_str());
+                let synthetic_token = PreprocessorToken {
+                    start_position: include_string.start_position,
+                    contents:       self.insert_into_cache(&contents),
+                    kind:           PreprocessorTokenType::AngleBracketString,
+                    length:         self.current_position().index - start_index,
+                };
+                self.find_header_from_path(synthetic_token, path, true)
+            },
+        }?;
+        let header_vec = read(&header_path).map_err(|e| {
+            PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                error_type:     PreprocessorErrorType::HeaderFileInaccessible,
+                start_position: directive.start_position,
+                contents:       directive.contents,
+            })
+        })?;
+        let name = self.insert_into_cache(&header_path.to_string_lossy());
+        let header_string = vec_to_string_lossy(header_vec);
+        let save_point = Prev::SavePoint::from_input(Arc::from(header_string), name, &*self);
+        self.tokenizer_stack.push(TokenizerFrame {
+            save_point,
+            name,
+            frame_type: TokenizerFrameType::SourceFile,
+        });
+
+        Ok(())
     }
 
     fn parse_define_directive(
@@ -2722,7 +3032,7 @@ where
         &mut self,
         invalid_float_literal_error: PreprocessorErrorType,
         token: PreprocessorToken,
-        contents: &mut SmallString<[u8; 1024]>,
+        contents: &mut TokenString,
     ) -> Result<Token, PreprocessorError<Prev::Error>> {
         _ = self;
         contents.push('\0');
@@ -2761,7 +3071,7 @@ where
     fn parse_hexadecimal_float(
         &mut self,
         token: PreprocessorToken,
-        contents: &mut SmallString<[u8; 1024]>,
+        contents: &mut TokenString,
     ) -> Result<Token, PreprocessorError<Prev::Error>> {
         self.parse_float(
             PreprocessorErrorType::InvalidHexadecimalFloatLiteral,
@@ -2773,7 +3083,7 @@ where
     fn parse_decimal_float(
         &mut self,
         token: PreprocessorToken,
-        contents: &mut SmallString<[u8; 1024]>,
+        contents: &mut TokenString,
     ) -> Result<Token, PreprocessorError<Prev::Error>> {
         self.parse_float(
             PreprocessorErrorType::InvalidDecimalFloatLiteral,
@@ -2789,8 +3099,10 @@ where
             Yield = PreprocessorToken,
             Error = PreprocessorTokenizerError<PrevPrevError>,
         > + AsMut<StringCache>
-        + AsRef<StringCache>,
+        + AsRef<StringCache>
+        + IsTokenizingIncludeString,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
+    Prev::SavePoint: FromInput<Prev = Prev, PrevError = Prev::Error>,
 {
     type Item = Result<Token, PreprocessorError<Prev::Error>>;
 
@@ -2838,8 +3150,10 @@ where
             Yield = PreprocessorToken,
             Error = PreprocessorTokenizerError<PrevPrevError>,
         > + AsMut<StringCache>
-        + AsRef<StringCache>,
+        + AsRef<StringCache>
+        + IsTokenizingIncludeString,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
+    Prev::SavePoint: FromInput<Prev = Prev, PrevError = Prev::Error>,
 {
     type Error = PreprocessorError<Prev::Error>;
     type SavePoint = SavePoint<Prev::SavePoint, Prev::Error>;
@@ -2855,6 +3169,9 @@ where
             current_preprocessor_token: self.current_preprocessor_token,
             macro_definitions: self.macro_definitions.clone(),
             if_directive_balance: self.if_directive_balance,
+            should_tokenize_whitespace: self.should_tokenize_whitespace,
+            quote_include_directories: self.quote_include_directories.clone(),
+            system_include_directories: self.system_include_directories.clone(),
         }
     }
 
@@ -2867,6 +3184,9 @@ where
         self.current_preprocessor_token = save_point.current_preprocessor_token;
         self.macro_definitions = save_point.macro_definitions;
         self.if_directive_balance = save_point.if_directive_balance;
+        self.should_tokenize_whitespace = save_point.should_tokenize_whitespace;
+        self.quote_include_directories = save_point.quote_include_directories;
+        self.system_include_directories = save_point.system_include_directories;
     }
 
     fn current_position(&self) -> Position {

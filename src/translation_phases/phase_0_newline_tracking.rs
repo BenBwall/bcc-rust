@@ -1,23 +1,36 @@
-use std::convert::Infallible;
+use std::{
+    convert::Infallible,
+    sync::Arc,
+};
 
 use super::{
     Position,
     TranslationPhase,
 };
-use crate::util::{
-    string_cache::Id as StringCacheId,
-    Captures,
-};
+use crate::util::string_cache::Id as StringCacheId;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct NewlineTracking<'a> {
-    source: &'a str,
+pub(crate) struct NewlineTracking {
+    source: Arc<str>,
     position: Position,
     is_middle_of_windows_newline: bool,
 }
 
-impl<'input> NewlineTracking<'input> {
-    pub(crate) fn new(source: &'input str, source_file: StringCacheId) -> Self {
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub(crate) struct SavePoint {
+    pub(crate) source: Arc<str>,
+    pub(crate) position: Position,
+    pub(crate) is_middle_of_windows_newline: bool,
+}
+
+impl super::SavePoint for SavePoint {
+    fn current_position(&self) -> Position {
+        self.position
+    }
+}
+
+impl NewlineTracking {
+    pub(crate) fn new(source: Arc<str>, source_file: StringCacheId) -> Self {
         Self {
             is_middle_of_windows_newline: false,
             source,
@@ -30,11 +43,11 @@ impl<'input> NewlineTracking<'input> {
         }
     }
 
-    pub(crate) fn positions(self) -> impl Iterator<Item = Position> + Captures<&'input ()> {
-        struct Positions<'b> {
-            super_: NewlineTracking<'b>,
+    pub(crate) fn positions(self) -> impl Iterator<Item = Position> {
+        struct Positions {
+            super_: NewlineTracking,
         }
-        impl Iterator for Positions<'_> {
+        impl Iterator for Positions {
             type Item = Position;
 
             fn next(&mut self) -> Option<Position> {
@@ -51,7 +64,7 @@ impl<'input> NewlineTracking<'input> {
     }
 }
 
-impl Iterator for NewlineTracking<'_> {
+impl Iterator for NewlineTracking {
     type Item = Result<char, Infallible>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -96,17 +109,23 @@ impl Iterator for NewlineTracking<'_> {
     }
 }
 
-impl TranslationPhase for NewlineTracking<'_> {
+impl TranslationPhase for NewlineTracking {
     type Error = Infallible;
-    type SavePoint = Position;
+    type SavePoint = SavePoint;
     type Yield = char;
 
     fn save(&self) -> Self::SavePoint {
-        self.position
+        SavePoint {
+            source: self.source.clone(),
+            position: self.position,
+            is_middle_of_windows_newline: self.is_middle_of_windows_newline,
+        }
     }
 
     fn restore(&mut self, save_point: Self::SavePoint) {
-        self.position = save_point;
+        self.source = save_point.source;
+        self.position = save_point.position;
+        self.is_middle_of_windows_newline = save_point.is_middle_of_windows_newline;
     }
 
     fn current_position(&self) -> Position {
@@ -131,7 +150,7 @@ mod tests {
         #[test]
         fn test_noop_translation_phase(input in String::arbitrary()) {
             let mut string_cache = StringCache::new();
-            let phase = super::NewlineTracking::new(&input, string_cache.intern("<input>"));
+            let phase = super::NewlineTracking::new(input.as_str().into(), string_cache.intern("<input>"));
             prop_assert!(phase.map(|r| r.unwrap_or_else(|e| match e{})).collect::<String>() == input, "phase.collect() != input");
         }
     }
@@ -174,7 +193,7 @@ mod tests {
     ])]
     fn test_current_position(#[case] input: &str, #[case] expected: Vec<Position>) {
         let mut string_cache = StringCache::new();
-        let phase = super::NewlineTracking::new(input, string_cache.intern("<input>"));
+        let phase = super::NewlineTracking::new(input.into(), string_cache.intern("<input>"));
         let actual = phase.positions().collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }

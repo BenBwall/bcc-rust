@@ -13,6 +13,12 @@ pub(crate) struct StringCache {
     inner: StringInterner<StringBackend<SymbolUsize>, BuildHasherDefault<FxHasher>>,
 }
 
+impl Default for StringCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Id {
