@@ -1,4 +1,7 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    path::Path,
+};
 
 pub(crate) mod string_cache;
 
@@ -11,4 +14,9 @@ pub(crate) fn vec_to_string_lossy(vec: Vec<u8>) -> String {
         | Cow::Borrowed(..) => unsafe { String::from_utf8_unchecked(vec) },
         | Cow::Owned(s) => s,
     }
+}
+
+pub(crate) fn read_to_string_lossy(path: impl AsRef<Path>) -> std::io::Result<String> {
+    let buf = std::fs::read(path)?;
+    Ok(vec_to_string_lossy(buf))
 }
