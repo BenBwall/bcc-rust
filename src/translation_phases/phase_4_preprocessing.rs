@@ -7,6 +7,7 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
+    mem::take,
     ops::ControlFlow,
     path::{
         Path,
@@ -19,6 +20,11 @@ use chrono::Local;
 use scopeguard::guard;
 use smallstr::SmallString;
 use thiserror::Error;
+use utf16string::{
+    WString,
+    BE,
+    LE,
+};
 
 use crate::{
     float_parsing::{
@@ -576,6 +582,14 @@ pub(crate) enum OperatorTokenType {
     PipeEquals,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum StringLikeTokenType {
+    Char(char),
+    String(StringCacheId),
+    WideChar(char),
+    WideString(StringCacheId),
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenType {
     Integer(IntegerTokenType),
@@ -583,6 +597,7 @@ pub(crate) enum TokenType {
     Identifier,
     Keyword(KeywordTokenType),
     Operator(OperatorTokenType),
+    StringLike(StringLikeTokenType),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -646,7 +661,18 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::HeaderNotFound
             | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible
             | PreprocessorErrorType::HeaderFileInaccessible
-            | PreprocessorErrorType::HashHashUsedOutsideOfMacro => ErrorSeverity::Error,
+            | PreprocessorErrorType::HashHashUsedOutsideOfMacro
+            | PreprocessorErrorType::InvalidEscapeSequence
+            | PreprocessorErrorType::UnterminatedEscapeSequence
+            | PreprocessorErrorType::InvalidHexEscapeSequence
+            | PreprocessorErrorType::HexEscapeSequenceTooLarge
+            | PreprocessorErrorType::InvalidOctalEscapeSequence
+            | PreprocessorErrorType::OctalEscapeSequenceTooLarge
+            | PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence
+            | PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort
+            | PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence
+            | PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
+            | PreprocessorErrorType::MultiCharacterLiteralsUnsupported => ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -796,6 +822,17 @@ pub(crate) enum PreprocessorErrorType {
     CurrentWorkingDirectoryInaccessible,
     HeaderFileInaccessible,
     HashHashUsedOutsideOfMacro,
+    InvalidEscapeSequence,
+    UnterminatedEscapeSequence,
+    InvalidHexEscapeSequence,
+    HexEscapeSequenceTooLarge,
+    InvalidOctalEscapeSequence,
+    OctalEscapeSequenceTooLarge,
+    InvalidSmallUnicodeEscapeSequence,
+    SmallUnicodeEscapeSequenceTooShort,
+    InvalidLargeUnicodeEscapeSequence,
+    LargeUnicodeEscapeSequenceTooSmall,
+    MultiCharacterLiteralsUnsupported,
 }
 
 impl Display for PreprocessorErrorType {
@@ -1200,6 +1237,63 @@ impl Display for PreprocessorErrorType {
                      inside a macro definition."
                 )
             },
+            | PreprocessorErrorType::InvalidEscapeSequence => {
+                write!(
+                    f,
+                    "Invalid escape sequence! Expected one of 0..7, x, u or U"
+                )
+            },
+            | PreprocessorErrorType::UnterminatedEscapeSequence => {
+                write!(
+                    f,
+                    "Lonely backslash detected! Backslash must be followed by an escape sequence"
+                )
+            },
+            | PreprocessorErrorType::InvalidHexEscapeSequence => {
+                write!(f, "Hexadecimal escape sequence was not a valid codepoint!")
+            },
+            | PreprocessorErrorType::HexEscapeSequenceTooLarge => {
+                write!(
+                    f,
+                    "Overflow while trying to parse hexadecimal escape sequence!"
+                )
+            },
+            | PreprocessorErrorType::InvalidOctalEscapeSequence => {
+                write!(f, "Octal escape sequence was not a valid codepoint!")
+            },
+            | PreprocessorErrorType::OctalEscapeSequenceTooLarge => {
+                write!(f, "Overflow while trying to parse octal escape sequence!")
+            },
+            | PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence => {
+                write!(
+                    f,
+                    "Small unicode escape sequence was not a valid codepoint!"
+                )
+            },
+            | PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort => {
+                write!(
+                    f,
+                    "Overflow while trying to parse small unicode escape sequence!"
+                )
+            },
+            | PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence => {
+                write!(
+                    f,
+                    "Large unicode escape sequence was not a valid codepoint!"
+                )
+            },
+            | PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall => {
+                write!(
+                    f,
+                    "Overflow while trying to parse large unicode escape sequence!"
+                )
+            },
+            | PreprocessorErrorType::MultiCharacterLiteralsUnsupported => {
+                write!(
+                    f,
+                    "Multi-character literals are not supported by BCC!"
+                )
+            },
         }
     }
 }
@@ -1241,6 +1335,16 @@ impl<Prev: TranslationPhase> Preprocessor<Prev, Prev::Error, Prev::SavePoint> {
             system_include_directories,
         }
     }
+}
+
+macro_rules! get_from_cache {
+    ($self:expr, $id:expr) => {
+        ($self)
+            .previous_phase
+            .as_ref()
+            .get($id)
+            .unwrap_or_else(|| panic!("Compiler bug: StringCacheId is out of bounds: {:#?}", $id))
+    };
 }
 
 type Pptsp = PreprocessorTokenizerSavePoint<
@@ -1397,6 +1501,9 @@ where
                     | TokenizerFrameType::FunctionLikeMacroArgument((index, ref argument)) => {
                         if index >= argument.tokens.len() {
                             drop(self.tokenizer_stack.pop());
+                            if let Some(last) = self.tokenizer_stack.last() {
+                                self.previous_phase.restore(last.save_point.clone());
+                            }
                             continue;
                         }
                         let token = argument.tokens[index];
@@ -1420,6 +1527,9 @@ where
                         },
                         | None => {
                             drop(self.tokenizer_stack.pop());
+                            if let Some(last) = self.tokenizer_stack.last() {
+                                self.previous_phase.restore(last.save_point.clone());
+                            }
                             continue;
                         },
                     },
@@ -1443,6 +1553,9 @@ where
                             },
                             | None => {
                                 drop(self.tokenizer_stack.pop());
+                                if let Some(last) = self.tokenizer_stack.last() {
+                                    self.previous_phase.restore(last.save_point.clone());
+                                }
                                 continue;
                             },
                         }
@@ -1467,6 +1580,9 @@ where
                             },
                             | None => {
                                 drop(self.tokenizer_stack.pop());
+                                if let Some(last) = self.tokenizer_stack.last() {
+                                    self.previous_phase.restore(last.save_point.clone());
+                                }
                                 continue;
                             },
                         }
@@ -1617,10 +1733,10 @@ where
                         self.previous_phase.restore(start_save_point);
                         continue;
                     },
-                    | MacroDefinition::BuiltIn => match self.get_from_cache(token.contents) {
+                    | MacroDefinition::BuiltIn => match get_from_cache!(self, token.contents) {
                         | "__FILE__" => {
                             let length =
-                                self.get_from_cache(token.start_position.source_file).len();
+                                get_from_cache!(self, token.start_position.source_file).len();
                             let file_name = self.insert_into_cache("__builtin__macros");
                             return Some(Ok(PreprocessorToken {
                                 kind: PreprocessorTokenType::String,
@@ -1712,11 +1828,197 @@ where
         }
     }
 
-    fn get_from_cache(&self, id: StringCacheId) -> &str {
-        self.previous_phase
-            .as_ref()
-            .get(id)
-            .unwrap_or_else(|| panic!("Compiler bug: StringCacheId is out of bounds: {id:#?}"))
+    fn eval_escape_sequences(
+        &mut self,
+        token: PreprocessorToken,
+    ) -> Result<String, <Self as TranslationPhase>::Error> {
+        let mut ret = String::new();
+        let mut index = 0;
+        let mut pending_results = guard(take(&mut self.pending_results), |pending_results| {
+            self.pending_results = pending_results;
+        });
+        let string = get_from_cache!(self, token.contents);
+        while let Some(c) = string.char_at(index) {
+            if c == '\\' {
+                let Some(c) = string.char_at(index + 1) else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:     PreprocessorErrorType::UnterminatedEscapeSequence,
+                            start_position: token.start_position,
+                            contents:       token.contents,
+                        },
+                    ));
+                };
+                index += 2;
+                ret.push(match c {
+                    | 'a' => '\x07',
+                    | 'b' => '\x08',
+                    | 'f' => '\x0C',
+                    | 'n' => '\n',
+                    | 'r' => '\r',
+                    | 't' => '\t',
+                    | 'v' => '\x0B',
+                    | '\'' => '\'',
+                    | '"' => '"',
+                    | '?' => '?',
+                    | '\\' => '\\',
+                    | 'x' => {
+                        let code_point = (|| {
+                            let mut code_point = 0u32;
+                            while let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16)) {
+                                index += 1;
+                                code_point = code_point.checked_mul(16)?;
+                                code_point = code_point.checked_add(d)?;
+                            }
+                            Some(code_point)
+                        })();
+                        let Some(code_point) = code_point else {
+                            pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                                InnerPreprocessorError {
+                                    error_type:
+                                        PreprocessorErrorType::HexEscapeSequenceTooLarge,
+                                    start_position: token.start_position,
+                                    contents:       token.contents,
+                                },
+                            )));
+                            continue;
+                        };
+                        let Ok(c) = char::try_from(code_point) else {
+                            pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                                InnerPreprocessorError {
+                                    error_type:     PreprocessorErrorType::InvalidHexEscapeSequence,
+                                    start_position: token.start_position,
+                                    contents:       token.contents,
+                                },
+                            )));
+                            continue;
+                        };
+                        c
+                    },
+                    | '0'..='7' => {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let code_point = (|| {
+                            let mut code_point = c as u16 - '0' as u16;
+                            for _ in 0..1 {
+                                let Some(d) = string.char_at(index).and_then(|c| c.to_digit(8))
+                                else {
+                                    break;
+                                };
+                                index += 1;
+                                code_point = code_point.checked_mul(8)?;
+                                
+                                code_point = code_point.checked_add(d as u16)?;
+                            }
+                            Some(code_point)
+                        })();
+
+                        let Some(code_point) = code_point else {
+                            pending_results.push_back(Err(
+                                PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                                    error_type:
+                                        PreprocessorErrorType::OctalEscapeSequenceTooLarge,
+                                    start_position: token.start_position,
+                                    contents:       token.contents,
+                                }),
+                            ));
+                            continue;
+                        };
+                        let Ok(c) = char::try_from(u32::from(code_point)) else {
+                            pending_results.push_back(Err(
+                                PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                                    error_type:
+                                        PreprocessorErrorType::InvalidOctalEscapeSequence,
+                                    start_position: token.start_position,
+                                    contents:       token.contents,
+                                }),
+                            ));
+                            continue;
+                        };
+                        c
+                    },
+                    | 'u' => {
+                        let mut code_point = 0u32;
+                        for _ in 0..4 {
+                            let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16))
+                            else {
+                                pending_results.push_back(
+                                    Err(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
+                                            start_position: token.start_position,
+                                            contents:       token.contents,
+                                        },
+                                    )),
+                                );
+                                break;
+                            };
+                            index += 1;
+                            code_point *= 16;
+                            code_point += d;
+                        }
+                        let Ok(c) = char::try_from(code_point) else {
+                            pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                                InnerPreprocessorError {
+                                    error_type:     PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence,
+                                    start_position: token.start_position,
+                                    contents:       token.contents,
+                                },
+                            )));
+                            continue;
+                        };
+                        c
+                    },
+                    | 'U' => {
+                        let mut code_point = 0u32;
+                        for _ in 0..8 {
+                            let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16))
+                            else {
+                                pending_results.push_back(
+                                    Err(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall,
+                                            start_position: token.start_position,
+                                            contents:       token.contents,
+                                        },
+                                    )),
+                                );
+                                break;
+                            };
+                            index += 1;
+                            code_point *= 16;
+                            code_point += d;
+                        }
+                        let Ok(c) = char::try_from(code_point) else {
+                            pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                                InnerPreprocessorError {
+                                    error_type:     PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence,
+                                    start_position: token.start_position,
+                                    contents:       token.contents,
+                                },
+                            )));
+                            continue;
+                        };
+                        c
+                    }
+                    | _ => {
+                        pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::InvalidEscapeSequence,
+                                start_position: token.start_position,
+                                contents:       token.contents,
+                            },
+                        )));
+                        continue;
+                    }
+                });
+            } else {
+                ret.push(c);
+                index += c.len_utf8();
+            }
+        }
+        Ok(ret)
     }
 
     fn insert_into_cache(&mut self, string: &str) -> StringCacheId {
@@ -1739,7 +2041,7 @@ where
         &mut self,
         token: PreprocessorToken,
     ) -> Option<Result<Token, PreprocessorError<Prev::Error>>> {
-        let mut contents: TokenString = self.get_from_cache(token.contents).into();
+        let mut contents = get_from_cache!(self, token.contents).to_token_string();
 
         Some(match token.kind {
             | PreprocessorTokenType::Number => {
@@ -1767,10 +2069,49 @@ where
                 | Ok(()) => return None,
                 | Err(e) => Err(e),
             },
+            | PreprocessorTokenType::String => {
+                self.eval_escape_sequences(token).map(|contents| {
+                    let cached_contents = self.insert_into_cache(&contents);
+                    let string_like_token_type = if get_from_cache!(self, token.contents).starts_with('L') {
+                        StringLikeTokenType::WideString(cached_contents)
+                    } else {
+                        StringLikeTokenType::String(cached_contents)
+                    };
+                    Token {
+                        kind:           TokenType::StringLike(string_like_token_type),
+                        contents:       token.contents,
+                        start_position: token.start_position,
+                    }
+                })
+            }
+            | PreprocessorTokenType::Character =>
+                self.eval_escape_sequences(token).map(|contents| {
+                    if contents.chars().take(2).count() != 1 {
+                        self.pending_results.push_back(Err(
+                            PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
+                                start_position: token.start_position,
+                                contents:       token.contents,
+                            }),
+                        ));
+                    }
+                    let char = contents.chars().next().unwrap();
+                    let string_like_token_type = if get_from_cache!(self, token.contents).starts_with('L') {
+                        StringLikeTokenType::WideChar(char)
+                    } else {
+                        StringLikeTokenType::Char(char)
+                    };
+                    Token {
+                        kind:           TokenType::StringLike(string_like_token_type),
+                        contents:       token.contents,
+                        start_position: token.start_position,
+                    }
+                }),
             | PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined =>
                 Ok(Self::build_token(
                     token,
-                    match self.get_from_cache(token.contents) {
+                    match get_from_cache!(self, token.contents) {
                         | "auto" => TokenType::Keyword(KeywordTokenType::Auto),
                         | "break" => TokenType::Keyword(KeywordTokenType::Break),
                         | "case" => TokenType::Keyword(KeywordTokenType::Case),
@@ -2027,7 +2368,7 @@ where
                     },
                 )),
         }
-        match self.get_from_cache(directive.contents) {
+        match get_from_cache!(self, directive.contents) {
             | "if" => self.parse_if_directive(directive),
             | "ifdef" => self.parse_ifdef_directive(directive),
             | "ifndef" => self.parse_ifndef_directive(directive),
@@ -2522,11 +2863,11 @@ where
                 position: token.start_position,
                 length:   self.current_position().index - token.start_position.index,
                 kind:     PreprocessorAtomKind::Character(
-                    self.get_from_cache(token.contents).char_at(1).unwrap(),
+                    get_from_cache!(self, token.contents).char_at(1).unwrap(),
                 ),
             }),
             | PreprocessorTokenType::Number => {
-                let contents = self.get_from_cache(token.contents).to_token_string();
+                let contents = get_from_cache!(self, token.contents).to_token_string();
                 let token = match if contents.starts_with("0x") || contents.starts_with("0X") {
                     self.parse_hexadecimal_integer(token, &contents)
                 } else if contents.starts_with("0b") || contents.starts_with("0B") {
@@ -2637,7 +2978,7 @@ where
                                 ))
                             }
                         };
-                        match self.get_from_cache(directive_name.contents) {
+                        match get_from_cache!(self, directive_name.contents) {
                             | "endif" => {
                                 self.if_directive_balance -= 1;
                             },
@@ -2866,7 +3207,7 @@ where
             |this, token| match token.kind {
                 | PreprocessorTokenType::AngleBracketString
                 | PreprocessorTokenType::IncludeString => true,
-                | _ if this.get_from_cache(token.contents).starts_with('<') => true,
+                | _ if get_from_cache!(this, token.contents).starts_with('<') => true,
                 | _ => false,
             },
             |_, e| ControlFlow::Break(e),
@@ -2887,26 +3228,22 @@ where
         self.previous_phase.set_is_tokenizing_include_string(false);
         let header_path = match include_string.kind {
             | PreprocessorTokenType::IncludeString => {
-                let contents = self
-                    .get_from_cache(include_string.contents)
-                    .to_token_string();
-                let contents = &contents[1..contents.len() - 1];
-                let path = Path::new(contents);
+                let contents = get_from_cache!(self, include_string.contents);
+                let contents = &contents[1..contents.len() - 1].to_token_string();
+                let path = Path::new(contents.as_str());
                 self.find_header_from_path(include_string, path, false)
             },
             | PreprocessorTokenType::AngleBracketString => {
-                let contents = self
-                    .get_from_cache(include_string.contents)
-                    .to_token_string();
-                let contents = &contents[1..contents.len() - 1];
-                let path = Path::new(contents);
+                let contents = get_from_cache!(self, include_string.contents);
+                let contents = &contents[1..contents.len() - 1].to_token_string();
+                let path = Path::new(contents.as_str());
                 self.find_header_from_path(include_string, path, true)
             },
             | _ => {
                 self.should_tokenize_whitespace = true;
                 let mut contents = TokenString::new();
                 let start_index = include_string.start_position.index;
-                contents.push_str(&self.get_from_cache(include_string.contents)[1..]);
+                contents.push_str(&get_from_cache!(self, include_string.contents)[1..]);
                 loop {
                     match self.next_preprocessor_token() {
                         | Some(Err(e)) => {
@@ -2917,12 +3254,12 @@ where
                             if token.kind == PreprocessorTokenType::Newline {
                                 break;
                             }
-                            let token_contents = self.get_from_cache(token.contents);
+                            let token_contents = get_from_cache!(self, token.contents);
                             if let Some(idx) = token_contents.find('>') {
                                 contents.push_str(&token_contents[..idx]);
                                 break;
                             }
-                            contents.push_str(self.get_from_cache(token.contents));
+                            contents.push_str(get_from_cache!(self, token.contents));
                         },
                         | None => {
                             let contents = self.insert_into_cache("EOF");
@@ -3262,9 +3599,6 @@ where
     ) -> Result<Token, PreprocessorError<Prev::Error>> {
         _ = self;
         contents.push('\0');
-        let contents = guard(contents, |contents| {
-            let _ = contents.pop();
-        });
         let res = match contents.char_at(contents.len() - 2) {
             | Some('f' | 'F') => string_to_float(contents.as_str()).map(FloatTokenType::Float),
             | Some('l' | 'L') =>
