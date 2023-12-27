@@ -22,7 +22,10 @@ use crate::{
         GetPosition,
         GetSeverity,
     },
-    util::string_cache::StringCache,
+    util::{
+        read_to_string_lossy,
+        string_cache::StringCache,
+    },
 };
 
 pub(crate) mod float_parsing;
@@ -73,7 +76,7 @@ fn parse_include_env_var(env_var: &str, vec: &mut Vec<PathBuf>) {
             .unwrap_or_default()
             .split(':')
             .map(PathBuf::from),
-    )
+    );
 }
 
 fn main() -> Result<(), MainError> {
@@ -81,9 +84,9 @@ fn main() -> Result<(), MainError> {
     let mut string_cache = StringCache::new();
     println!("{}", "Printing all generated tokens:".bright_green());
     let parsed_input = if args.input.input.is_some() {
-        ParsedInput::String(args.input.input.unwrap().into())
+        ParsedInput::String(args.input.input.unwrap())
     } else {
-        ParsedInput::File(read_to_string(args.input.input_file.as_ref().unwrap())?.into())
+        ParsedInput::File(read_to_string_lossy(args.input.input_file.as_ref().unwrap())?.into())
     };
     let (input_string, source_filename) = match parsed_input {
         | ParsedInput::String(s) => (s, string_cache.intern("<input>")),

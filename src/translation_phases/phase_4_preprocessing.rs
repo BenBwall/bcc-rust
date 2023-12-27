@@ -7,7 +7,6 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
-    fs::read,
     ops::ControlFlow,
     path::{
         Path,
@@ -30,34 +29,21 @@ use crate::{
         ParseFloatError,
     },
     util::{
+        read_to_string_lossy,
         string_cache::{
             Id as StringCacheId,
             StringCache,
         },
-        vec_to_string_lossy,
     },
     HashMap,
 };
 
 pub(crate) trait FromInput: ISavePoint {
-    type Prev;
-    type PrevError;
-    fn from_input(
-        input: Arc<str>,
-        source_file: StringCacheId,
-        preprocessor: &Preprocessor<Self::Prev, Self::PrevError, Self>,
-    ) -> Self;
+    fn from_input(input: Arc<str>, source_file: StringCacheId) -> Self;
 }
 
 impl FromInput for Pptsp {
-    type Prev = Ppt;
-    type PrevError = Ppte;
-
-    fn from_input(
-        input: Arc<str>,
-        source_file: StringCacheId,
-        preprocessor: &Preprocessor<Self::Prev, Self::PrevError, Self>,
-    ) -> Self {
+    fn from_input(input: Arc<str>, source_file: StringCacheId) -> Self {
         let inner = RemoveEscapedNewlinesSavePoint {
             inner:            MapCharacterSetsSavePoint {
                 inner: NewlineTrackingSavePoint {
@@ -1254,7 +1240,7 @@ where
         + AsRef<StringCache>
         + IsTokenizingIncludeString,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
-    Prev::SavePoint: FromInput<Prev = Prev, PrevError = Prev::Error>,
+    Prev::SavePoint: FromInput,
 {
     fn expect_token_no_expand(
         &mut self,
@@ -1362,9 +1348,7 @@ where
                     },
                     | TokenizerFrameType::SourceFile => match self.previous_phase.next() {
                         | Some(Err(e)) => {
-                            self.pending_results
-                                .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                            continue;
+                            break Some(Err(e));
                         },
                         | Some(Ok(token))
                             if token.kind == PreprocessorTokenType::Whitespace
@@ -1383,9 +1367,7 @@ where
                     | TokenizerFrameType::ObjectLikeMacroInvocation => {
                         match self.previous_phase.next() {
                             | Some(Err(e)) => {
-                                self.pending_results
-                                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                                continue;
+                                break Some(Err(e));
                             },
                             | Some(Ok(token))
                                 if token.kind == PreprocessorTokenType::Whitespace
@@ -1409,9 +1391,7 @@ where
                     | TokenizerFrameType::FunctionLikeMacroInvocation { .. } => {
                         match self.previous_phase.next() {
                             | Some(Err(e)) => {
-                                self.pending_results
-                                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                                continue;
+                                break Some(Err(e));
                             },
                             | Some(Ok(token))
                                 if token.kind == PreprocessorTokenType::Whitespace
@@ -1467,6 +1447,7 @@ where
                             save_point: start_save_point.clone(),
                             name:       token.contents,
                         });
+                        self.previous_phase.restore(start_save_point);
                         continue;
                     },
                     | MacroDefinition::FunctionLike {
@@ -1565,6 +1546,8 @@ where
                                 },
                             )));
                         }
+                        self.tokenizer_stack.last_mut().unwrap().save_point =
+                            self.previous_phase.save();
                         self.tokenizer_stack.push(TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                 arguments,
@@ -1572,6 +1555,7 @@ where
                             save_point: start_save_point.clone(),
                             name:       token.contents,
                         });
+                        self.previous_phase.restore(start_save_point);
                         continue;
                     },
                     | MacroDefinition::BuiltIn => match self.get_from_cache(token.contents) {
@@ -1657,6 +1641,8 @@ where
                                 save_point: self.previous_phase.save(),
                                 name:       token.contents,
                             };
+                            self.tokenizer_stack.last_mut().unwrap().save_point =
+                                self.previous_phase.save();
                             self.tokenizer_stack.push(frame);
                             continue;
                         }
@@ -2567,8 +2553,10 @@ where
 
     fn search_for_header_in(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
         for dir in dirs {
+            println!("Searching for header in {dir:#?}");
             let mut header_path = dir.clone();
             header_path.push(path);
+            println!("Synthesized path: {header_path:#?}");
             if header_path.exists() {
                 return Some(header_path);
             }
@@ -2601,24 +2589,23 @@ where
         }
 
         if is_system_header {
-            if let Some(header) =
-                Self::search_for_header_in(&path, &self.system_include_directories)
+            if let Some(header) = Self::search_for_header_in(path, &self.system_include_directories)
             {
                 return Ok(header);
             }
         }
-        if let Some(header) = Self::search_for_header_in(&path, &self.quote_include_directories) {
+        if let Some(header) = Self::search_for_header_in(path, &self.quote_include_directories) {
             return Ok(header);
         }
 
-        let cwd = std::env::current_dir().map_err(|e| {
+        let cwd = std::env::current_dir().map_err(|_| {
             PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
                 error_type:     PreprocessorErrorType::CurrentWorkingDirectoryInaccessible,
                 start_position: include_token.start_position,
                 contents:       include_token.contents,
             })
         })?;
-        if let Some(header) = Self::search_for_header_in(&path, &[cwd]) {
+        if let Some(header) = Self::search_for_header_in(path, &[cwd]) {
             return Ok(header);
         }
 
@@ -2635,14 +2622,13 @@ where
         &mut self,
         directive: PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
+        self.previous_phase.set_is_tokenizing_include_string(true);
         let include_string = self.expect_token(
-            |this, token| {
-                matches!(
-                    token.kind,
-                    PreprocessorTokenType::AngleBracketString
-                        | PreprocessorTokenType::IncludeString
-                        | _ if this.get_from_cache(token.contents).starts_with('<')
-                )
+            |this, token| match token.kind {
+                | PreprocessorTokenType::AngleBracketString
+                | PreprocessorTokenType::IncludeString => true,
+                | _ if this.get_from_cache(token.contents).starts_with('<') => true,
+                | _ => false,
             },
             |_, e| ControlFlow::Break(e),
             |_, token| {
@@ -2659,6 +2645,7 @@ where
             },
             "parsing include directive",
         )?;
+        self.previous_phase.set_is_tokenizing_include_string(false);
         let header_path = match include_string.kind {
             | PreprocessorTokenType::IncludeString => {
                 let contents = self
@@ -2723,7 +2710,7 @@ where
                 self.find_header_from_path(synthetic_token, path, true)
             },
         }?;
-        let header_vec = read(&header_path).map_err(|e| {
+        let header_string = read_to_string_lossy(&header_path).map_err(|_| {
             PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderFileInaccessible,
                 start_position: directive.start_position,
@@ -2731,14 +2718,14 @@ where
             })
         })?;
         let name = self.insert_into_cache(&header_path.to_string_lossy());
-        let header_string = vec_to_string_lossy(header_vec);
-        let save_point = Prev::SavePoint::from_input(Arc::from(header_string), name, &*self);
+        self.tokenizer_stack.last_mut().unwrap().save_point = self.previous_phase.save();
+        let save_point = Prev::SavePoint::from_input(Arc::from(header_string), name);
         self.tokenizer_stack.push(TokenizerFrame {
-            save_point,
+            save_point: save_point.clone(),
             name,
             frame_type: TokenizerFrameType::SourceFile,
         });
-
+        self.previous_phase.restore(save_point);
         Ok(())
     }
 
@@ -3102,7 +3089,7 @@ where
         + AsRef<StringCache>
         + IsTokenizingIncludeString,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
-    Prev::SavePoint: FromInput<Prev = Prev, PrevError = Prev::Error>,
+    Prev::SavePoint: FromInput,
 {
     type Item = Result<Token, PreprocessorError<Prev::Error>>;
 
@@ -3153,7 +3140,7 @@ where
         + AsRef<StringCache>
         + IsTokenizingIncludeString,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
-    Prev::SavePoint: FromInput<Prev = Prev, PrevError = Prev::Error>,
+    Prev::SavePoint: FromInput,
 {
     type Error = PreprocessorError<Prev::Error>;
     type SavePoint = SavePoint<Prev::SavePoint, Prev::Error>;
