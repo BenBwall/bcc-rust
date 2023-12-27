@@ -61,6 +61,7 @@ scopeguard = "1.2.0"
 smallstr = "0.3.0"
 string-interner = "0.14.0"
 thiserror = "1.0.51"
+utf16string = "0.2.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
