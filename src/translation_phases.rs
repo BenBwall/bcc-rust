@@ -101,7 +101,7 @@ pub(crate) trait TranslationPhase:
 {
     type Yield;
     type SavePoint: SavePoint;
-    type Error: std::error::Error + GetSeverity + GetPosition;
+    type Error: std::error::Error + GetSeverity + GetPosition + PartialEq;
     fn save(&self) -> Self::SavePoint;
     fn restore(&mut self, save_point: Self::SavePoint);
     fn current_position(&self) -> Position;

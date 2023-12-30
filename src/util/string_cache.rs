@@ -1,4 +1,11 @@
-use std::hash::BuildHasherDefault;
+use std::{
+    fmt,
+    fmt::{
+        Display,
+        Formatter,
+    },
+    hash::BuildHasherDefault,
+};
 
 use rustc_hash::FxHasher;
 use string_interner::{
@@ -16,6 +23,20 @@ pub(crate) struct StringCache {
 impl Default for StringCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Display for StringCache {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "StringCache:")?;
+        for i in 0usize.. {
+            if let Some(s) = self.get(i) {
+                writeln!(f, "\t{i}: {s}")?;
+            } else {
+                break;
+            }
+        }
+        Ok(())
     }
 }
 

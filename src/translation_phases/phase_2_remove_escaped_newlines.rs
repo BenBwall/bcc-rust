@@ -246,9 +246,11 @@ mod tests {
         #[case] expected: Vec<Result<char, RemoveEscapedNewlinesError<Infallible>>>,
     ) {
         let mut string_cache = StringCache::new();
-        let actual =
-            RemoveEscapedNewlines::new(NewlineTracking::new(input.into(), string_cache.intern("<input>")))
-                .collect::<Vec<_>>();
+        let actual = RemoveEscapedNewlines::new(NewlineTracking::new(
+            input.into(),
+            string_cache.intern("<input>"),
+        ))
+        .collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
     #[rstest]
