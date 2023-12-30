@@ -161,8 +161,10 @@ mod tests {
         use crate::util::string_cache::StringCache;
 
         let mut string_cache = StringCache::new();
-        let actual =
-            MapCharacterSets::new(NewlineTracking::new(input.into(), string_cache.intern("<input>")));
+        let actual = MapCharacterSets::new(NewlineTracking::new(
+            input.into(),
+            string_cache.intern("<input>"),
+        ));
         assert_eq!(
             actual
                 .map(|r| r.unwrap_or_else(|e| match e.inner {}))

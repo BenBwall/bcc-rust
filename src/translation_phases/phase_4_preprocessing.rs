@@ -20,11 +20,6 @@ use chrono::Local;
 use scopeguard::guard;
 use smallstr::SmallString;
 use thiserror::Error;
-use utf16string::{
-    WString,
-    BE,
-    LE,
-};
 
 use crate::{
     float_parsing::{
@@ -359,22 +354,26 @@ pub(crate) struct PreprocessorExpression {
 const PREDEFINED_MACRO_NAMES: [&str; 4] = ["__LINE__", "__FILE__", "__DATE__", "__TIME__"];
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum TokenizerFrameType {
+pub(crate) enum TokenizerFrameType<PrevSavePoint> {
     SourceFile,
     ObjectLikeMacroInvocation,
     FunctionLikeMacroInvocation {
-        arguments: Vec<FunctionLikeMacroArgument>,
+        arguments:   HashMap<StringCacheId, FunctionLikeMacroArgument<PrevSavePoint>>,
+        is_variadic: bool,
     },
-    FunctionLikeMacroArgument((usize, FunctionLikeMacroArgument)),
+    FunctionLikeMacroArgument {
+        argument:    FunctionLikeMacroArgument<PrevSavePoint>,
+        paren_depth: usize,
+    },
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum MacroDefinition<PrevSavePoint> {
     ObjectLike {
         start_save_point: PrevSavePoint,
     },
     FunctionLike {
-        argument_names:   Arc<Vec<StringCacheId>>,
+        argument_names:   Arc<[StringCacheId]>,
         start_save_point: PrevSavePoint,
         is_variadic:      bool,
     },
@@ -382,9 +381,9 @@ pub(crate) enum MacroDefinition<PrevSavePoint> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct TokenizerFrame<InnerSavePoint> {
-    frame_type: TokenizerFrameType,
-    save_point: InnerSavePoint,
+pub(crate) struct TokenizerFrame<PrevSavePoint> {
+    frame_type: TokenizerFrameType<PrevSavePoint>,
+    save_point: PrevSavePoint,
     name:       StringCacheId,
 }
 
@@ -657,6 +656,8 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
             | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
             | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..)
+            | PreprocessorErrorType::ExpectedIdentifierInDefineDirective(..)
+            | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
             | PreprocessorErrorType::HeaderNotFound
             | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible
@@ -672,7 +673,14 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort
             | PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence
             | PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
-            | PreprocessorErrorType::MultiCharacterLiteralsUnsupported => ErrorSeverity::Error,
+            | PreprocessorErrorType::MultiCharacterLiteralsUnsupported
+            | PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(..)
+            | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
+            | PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(..)
+            | PreprocessorErrorType::VariadicMacroMustBeLastParameter(..)
+            | PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(..)
+            | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(..) =>
+                ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -762,7 +770,7 @@ pub(crate) enum ForbiddenPostfixOperator {
     OpeningParenthesis,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum PreprocessorErrorType {
     InvalidHexadecimalFloatLiteral,
     InvalidDecimalFloatLiteral,
@@ -811,6 +819,8 @@ pub(crate) enum PreprocessorErrorType {
     ElseDirectiveWithoutIfDirective,
     ExpectedIdentifierInIfdefDirective(PreprocessorTokenType),
     ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
+    ExpectedIdentifierInDefineDirective(PreprocessorTokenType),
+    RedefinitionOfBuiltInMacro(String),
     UndefinedIdentifierInPreprocessorExpression,
     ExpectedIncludeStringOrAngleBracketString(PreprocessorTokenType),
     UnexpectedEndOfInput(&'static str),
@@ -833,9 +843,16 @@ pub(crate) enum PreprocessorErrorType {
     InvalidLargeUnicodeEscapeSequence,
     LargeUnicodeEscapeSequenceTooSmall,
     MultiCharacterLiteralsUnsupported,
+    RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(String),
+    RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(String),
+    ExpectedIdentifierInMacroDefinition(PreprocessorTokenType),
+    VariadicMacroMustBeLastParameter(String),
+    ExpectedCommaOrClosingParenthesisInMacroDefinition(PreprocessorTokenType),
+    MacroRedefinedWithDifferentDefinition(String),
 }
 
 impl Display for PreprocessorErrorType {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             | Self::WrongNumberOfArgumentsInFunctionLikeMacroInvocation { expected, found } => {
@@ -1196,6 +1213,18 @@ impl Display for PreprocessorErrorType {
                     "Expected identifier in 'ifndef' directive! Found instead {tt:#?}"
                 )
             },
+            | Self::ExpectedIdentifierInDefineDirective(tt) => {
+                write!(
+                    f,
+                    "Expected identifier in 'define' directive! Found instead {tt:#?}"
+                )
+            },
+            | Self::RedefinitionOfBuiltInMacro(name) => {
+                write!(
+                    f,
+                    "Redefinition of built-in macro '{name}'! Built-in macros cannot be redefined."
+                )
+            },
             | Self::ExpectedIncludeStringOrAngleBracketString(tt) => {
                 write!(
                     f,
@@ -1206,92 +1235,131 @@ impl Display for PreprocessorErrorType {
             | Self::UnexpectedEndOfInput(message) => {
                 write!(f, "Unexpected end of input while {message}!")
             },
-            | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression => {
+            | Self::UndefinedIdentifierInPreprocessorExpression => {
                 write!(
                     f,
                     "Undefined identifier in preprocessor constant expression! Will be treated as \
                      if it had a value of 0."
                 )
             },
-            | PreprocessorErrorType::HeaderNotFound => {
+            | Self::HeaderNotFound => {
                 write!(f, "Header not found!")
             },
-            | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible => {
+            | Self::CurrentWorkingDirectoryInaccessible => {
                 write!(
                     f,
                     "Current working directory inaccessible! The operating system returned an \
                      error when trying to get the current working directory."
                 )
             },
-            | PreprocessorErrorType::HeaderFileInaccessible => {
+            | Self::HeaderFileInaccessible => {
                 write!(
                     f,
                     "Header file inaccessible! The header file was deleted or moved while the \
                      preprocessor was trying to read it."
                 )
             },
-            | PreprocessorErrorType::HashHashUsedOutsideOfMacro => {
+            | Self::HashHashUsedOutsideOfMacro => {
                 write!(
                     f,
                     "'##' operator used outside of macro! The '##' operator can only be used \
                      inside a macro definition."
                 )
             },
-            | PreprocessorErrorType::InvalidEscapeSequence => {
+            | Self::InvalidEscapeSequence => {
                 write!(
                     f,
                     "Invalid escape sequence! Expected one of 0..7, x, u or U"
                 )
             },
-            | PreprocessorErrorType::UnterminatedEscapeSequence => {
+            | Self::UnterminatedEscapeSequence => {
                 write!(
                     f,
                     "Lonely backslash detected! Backslash must be followed by an escape sequence"
                 )
             },
-            | PreprocessorErrorType::InvalidHexEscapeSequence => {
+            | Self::InvalidHexEscapeSequence => {
                 write!(f, "Hexadecimal escape sequence was not a valid codepoint!")
             },
-            | PreprocessorErrorType::HexEscapeSequenceTooLarge => {
+            | Self::HexEscapeSequenceTooLarge => {
                 write!(
                     f,
                     "Overflow while trying to parse hexadecimal escape sequence!"
                 )
             },
-            | PreprocessorErrorType::InvalidOctalEscapeSequence => {
+            | Self::InvalidOctalEscapeSequence => {
                 write!(f, "Octal escape sequence was not a valid codepoint!")
             },
-            | PreprocessorErrorType::OctalEscapeSequenceTooLarge => {
+            | Self::OctalEscapeSequenceTooLarge => {
                 write!(f, "Overflow while trying to parse octal escape sequence!")
             },
-            | PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence => {
+            | Self::InvalidSmallUnicodeEscapeSequence => {
                 write!(
                     f,
                     "Small unicode escape sequence was not a valid codepoint!"
                 )
             },
-            | PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort => {
+            | Self::SmallUnicodeEscapeSequenceTooShort => {
                 write!(
                     f,
                     "Overflow while trying to parse small unicode escape sequence!"
                 )
             },
-            | PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence => {
+            | Self::InvalidLargeUnicodeEscapeSequence => {
                 write!(
                     f,
                     "Large unicode escape sequence was not a valid codepoint!"
                 )
             },
-            | PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall => {
+            | Self::LargeUnicodeEscapeSequenceTooSmall => {
                 write!(
                     f,
                     "Overflow while trying to parse large unicode escape sequence!"
                 )
             },
-            | PreprocessorErrorType::MultiCharacterLiteralsUnsupported => {
+            | Self::MultiCharacterLiteralsUnsupported => {
+                write!(f, "Multi-character literals are not supported by BCC!")
+            },
+            | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(name) => {
                 write!(
                     f,
-                    "Multi-character literals are not supported by BCC!"
+                    "Redefinition of function-like macro '{name}' as object-like macro! \
+                     Function-like macros cannot be redefined as object-like macros without \
+                     undefining them first."
+                )
+            },
+            | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(name) => {
+                write!(
+                    f,
+                    "Redefinition of object-like macro '{name}' as function-like macro! \
+                     Object-like macros cannot be redefined as function-like macros without \
+                     undefining them first."
+                )
+            },
+            | Self::ExpectedIdentifierInMacroDefinition(tt) => {
+                write!(
+                    f,
+                    "Expected identifier in macro definition! Found instead {tt:#?}"
+                )
+            },
+            | Self::VariadicMacroMustBeLastParameter(name) => {
+                write!(
+                    f,
+                    "Variadic macro '{name}' must be the last parameter in the macro definition!"
+                )
+            },
+            | Self::ExpectedCommaOrClosingParenthesisInMacroDefinition(tt) => {
+                write!(
+                    f,
+                    "Expected ',' or ')' in macro definition! Found instead {tt:#?}"
+                )
+            },
+            | Self::MacroRedefinedWithDifferentDefinition(name) => {
+                write!(
+                    f,
+                    "Macro '{name}' redefined with different definition! All definitions of a \
+                     macro must be identical. If you want to change the definition of a macro, \
+                     you must first undefine it first."
                 )
             },
         }
@@ -1299,9 +1367,9 @@ impl Display for PreprocessorErrorType {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct FunctionLikeMacroArgument {
-    name:   StringCacheId,
-    tokens: Arc<Vec<PreprocessorToken>>,
+pub(crate) struct FunctionLikeMacroArgument<PrevSavePoint> {
+    name:             StringCacheId,
+    start_save_point: PrevSavePoint,
 }
 
 impl<Prev: TranslationPhase> Preprocessor<Prev, Prev::Error, Prev::SavePoint> {
@@ -1402,7 +1470,7 @@ where
         > + AsMut<StringCache>
         + AsRef<StringCache>
         + IsTokenizingIncludeString,
-    PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
+    PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
     Prev::SavePoint: FromInput,
 {
     fn expect_token_no_expand(
@@ -1496,96 +1564,71 @@ where
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
         let ret = loop {
             self.last_preprocessor_token = self.current_preprocessor_token;
-            if let Some(tokenizer_frame) = self.tokenizer_stack.last_mut() {
-                match tokenizer_frame.frame_type {
-                    | TokenizerFrameType::FunctionLikeMacroArgument((index, ref argument)) => {
-                        if index >= argument.tokens.len() {
-                            drop(self.tokenizer_stack.pop());
-                            if let Some(last) = self.tokenizer_stack.last() {
-                                self.previous_phase.restore(last.save_point.clone());
-                            }
-                            continue;
+            if self.tokenizer_stack.last().is_some() {
+                match self.previous_phase.next() {
+                    | Some(Err(e)) => {
+                        break Some(Err(e));
+                    },
+                    | Some(Ok(token))
+                        if token.kind == PreprocessorTokenType::Whitespace
+                            && (!self.should_tokenize_whitespace
+                                || self.last_preprocessor_token.as_ref().map(|t| t.kind)
+                                    == Some(PreprocessorTokenType::Whitespace)) =>
+                    {
+                        continue;
+                    },
+                    | Some(Ok(token)) => {
+                        match self.tokenizer_stack.last_mut().unwrap() {
+                            | TokenizerFrame {
+                                frame_type:
+                                    TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                                    | TokenizerFrameType::ObjectLikeMacroInvocation,
+                                ..
+                            } =>
+                                if token.kind == PreprocessorTokenType::Newline {
+                                    drop(self.tokenizer_stack.pop());
+                                    if let Some(last) = self.tokenizer_stack.last() {
+                                        self.previous_phase.restore(last.save_point.clone());
+                                    }
+                                    continue;
+                                },
+                            | TokenizerFrame {
+                                frame_type:
+                                    TokenizerFrameType::FunctionLikeMacroArgument {
+                                        paren_depth, ..
+                                    },
+                                ..
+                            } => {
+                                if (token.kind == PreprocessorTokenType::Comma)
+                                    || (token.kind == PreprocessorTokenType::ClosingParenthesis
+                                        && *paren_depth == 1)
+                                {
+                                    drop(self.tokenizer_stack.pop());
+                                    if let Some(last) = self.tokenizer_stack.last() {
+                                        self.previous_phase.restore(last.save_point.clone());
+                                    }
+                                    continue;
+                                }
+                                if token.kind == PreprocessorTokenType::OpeningParenthesis {
+                                    *paren_depth += 1;
+                                }
+                                if token.kind == PreprocessorTokenType::ClosingParenthesis {
+                                    *paren_depth -= 1;
+                                }
+                            },
+                            | TokenizerFrame {
+                                frame_type: TokenizerFrameType::SourceFile,
+                                ..
+                            } => (),
                         }
-                        let token = argument.tokens[index];
-                        tokenizer_frame.frame_type = TokenizerFrameType::FunctionLikeMacroArgument(
-                            (index + 1, argument.clone()),
-                        );
                         break Some(Ok(token));
                     },
-                    | TokenizerFrameType::SourceFile => match self.previous_phase.next() {
-                        | Some(Err(e)) => {
-                            break Some(Err(e));
-                        },
-                        | Some(Ok(token))
-                            if token.kind == PreprocessorTokenType::Whitespace
-                                && !self.should_tokenize_whitespace =>
-                        {
-                            continue;
-                        },
-                        | Some(Ok(token)) => {
-                            break Some(Ok(token));
-                        },
-                        | None => {
-                            drop(self.tokenizer_stack.pop());
-                            if let Some(last) = self.tokenizer_stack.last() {
-                                self.previous_phase.restore(last.save_point.clone());
-                            }
-                            continue;
-                        },
-                    },
-                    | TokenizerFrameType::ObjectLikeMacroInvocation => {
-                        match self.previous_phase.next() {
-                            | Some(Err(e)) => {
-                                break Some(Err(e));
-                            },
-                            | Some(Ok(token))
-                                if token.kind == PreprocessorTokenType::Whitespace
-                                    && !self.should_tokenize_whitespace =>
-                            {
-                                continue;
-                            },
-                            | Some(Ok(token)) => {
-                                if token.kind == PreprocessorTokenType::Newline {
-                                    drop(self.tokenizer_stack.pop());
-                                    continue;
-                                }
-                                break Some(Ok(token));
-                            },
-                            | None => {
-                                drop(self.tokenizer_stack.pop());
-                                if let Some(last) = self.tokenizer_stack.last() {
-                                    self.previous_phase.restore(last.save_point.clone());
-                                }
-                                continue;
-                            },
+                    | None => {
+                        drop(self.tokenizer_stack.pop());
+                        if let Some(last) = self.tokenizer_stack.last() {
+                            self.previous_phase.restore(last.save_point.clone());
                         }
-                    },
-                    | TokenizerFrameType::FunctionLikeMacroInvocation { .. } => {
-                        match self.previous_phase.next() {
-                            | Some(Err(e)) => {
-                                break Some(Err(e));
-                            },
-                            | Some(Ok(token))
-                                if token.kind == PreprocessorTokenType::Whitespace
-                                    && !self.should_tokenize_whitespace =>
-                            {
-                                continue;
-                            },
-                            | Some(Ok(token)) => {
-                                if token.kind == PreprocessorTokenType::Newline {
-                                    drop(self.tokenizer_stack.pop());
-                                    continue;
-                                }
-                                break Some(Ok(token));
-                            },
-                            | None => {
-                                drop(self.tokenizer_stack.pop());
-                                if let Some(last) = self.tokenizer_stack.last() {
-                                    self.previous_phase.restore(last.save_point.clone());
-                                }
-                                continue;
-                            },
-                        }
+                        continue;
                     },
                 }
             }
@@ -1617,11 +1660,12 @@ where
                     | MacroDefinition::ObjectLike { start_save_point } => {
                         let save_point = self.previous_phase.save();
                         self.tokenizer_stack.last_mut().unwrap().save_point = save_point;
-                        self.tokenizer_stack.push(TokenizerFrame {
+                        let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::ObjectLikeMacroInvocation,
                             save_point: start_save_point.clone(),
                             name:       token.contents,
-                        });
+                        };
+                        self.tokenizer_stack.push(frame);
                         self.previous_phase.restore(start_save_point);
                         continue;
                     },
@@ -1664,48 +1708,61 @@ where
                             }
                         }
                         let mut i = 0;
-                        let mut arguments = Vec::new();
-                        loop {
-                            let mut argument_tokens = Vec::new();
-                            match self.next_preprocessor_token() {
-                                | Some(Ok(token))
-                                    if token.kind == PreprocessorTokenType::ClosingParenthesis =>
-                                {
-                                    arguments.push(FunctionLikeMacroArgument {
-                                        name:   argument_names[i],
-                                        tokens: Arc::new(argument_tokens),
-                                    });
+                        let mut arguments = HashMap::default();
+                        'outer: loop {
+                            let start_save_point = self.previous_phase.save();
+                            loop {
+                                match self.next_preprocessor_token() {
+                                    | Some(Ok(token))
+                                        if token.kind
+                                            == PreprocessorTokenType::ClosingParenthesis =>
+                                    {
+                                        drop(arguments.insert(
+                                            argument_names[i],
+                                            FunctionLikeMacroArgument {
+                                                name:             argument_names[i],
+                                                start_save_point: start_save_point.clone(),
+                                            },
+                                        ));
 
-                                    break;
-                                },
-                                | Some(Ok(token)) if token.kind == PreprocessorTokenType::Comma => {
-                                    arguments.push(FunctionLikeMacroArgument {
-                                        name:   argument_names[i],
-                                        tokens: Arc::new(argument_tokens),
-                                    });
-                                    i += 1;
-                                    continue;
-                                },
-                                | Some(Ok(token)) => {
-                                    argument_tokens.push(token);
-                                    continue;
-                                },
-                                | Some(Err(e)) => {
-                                    self.pending_results.push_back(Err(e));
-                                    continue;
-                                },
-                                | None => {
-                                    return Some(Err(PreprocessorError::InnerPreprocessorError(
-                                        InnerPreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::UnexpectedEndOfInput(
-                                                    "parsing function-like macro invocation",
-                                                ),
-                                            start_position: token.start_position,
-                                            contents:       token.contents,
-                                        },
-                                    )));
-                                },
+                                        break 'outer;
+                                    },
+                                    | Some(Ok(token))
+                                        if token.kind == PreprocessorTokenType::Comma =>
+                                    {
+                                        drop(arguments.insert(
+                                            argument_names[i],
+                                            FunctionLikeMacroArgument {
+                                                name:             argument_names[i],
+                                                start_save_point: start_save_point.clone(),
+                                            },
+                                        ));
+                                        i += 1;
+                                        continue 'outer;
+                                    },
+                                    | Some(Ok(_)) => {
+                                        continue;
+                                    },
+                                    | Some(Err(e)) => {
+                                        self.pending_results.push_back(Err(e));
+                                        continue;
+                                    },
+                                    | None => {
+                                        return Some(Err(
+                                            PreprocessorError::InnerPreprocessorError(
+                                                InnerPreprocessorError {
+                                                    error_type:
+                                                        PreprocessorErrorType::UnexpectedEndOfInput(
+                                                            "parsing function-like macro \
+                                                             invocation",
+                                                        ),
+                                                    start_position: token.start_position,
+                                                    contents:       token.contents,
+                                                },
+                                            ),
+                                        ));
+                                    },
+                                }
                             }
                         }
 
@@ -1723,13 +1780,15 @@ where
                         }
                         self.tokenizer_stack.last_mut().unwrap().save_point =
                             self.previous_phase.save();
-                        self.tokenizer_stack.push(TokenizerFrame {
+                        let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                 arguments,
+                                is_variadic,
                             },
                             save_point: start_save_point.clone(),
                             name:       token.contents,
-                        });
+                        };
+                        self.tokenizer_stack.push(frame);
                         self.previous_phase.restore(start_save_point);
                         continue;
                     },
@@ -1804,21 +1863,25 @@ where
                 }
             } else {
                 if let Some(tokenizer_frame) = self.tokenizer_stack.last() {
-                    if let TokenizerFrameType::FunctionLikeMacroInvocation { ref arguments } =
-                        tokenizer_frame.frame_type
+                    if let TokenizerFrameType::FunctionLikeMacroInvocation {
+                        ref arguments,
+                        is_variadic: _,
+                    } = tokenizer_frame.frame_type
                     {
-                        if let Some(arg) = arguments.iter().find(|a| a.name == token.contents) {
+                        if let Some(arg) = arguments.get(&token.contents) {
                             let frame = TokenizerFrame {
-                                frame_type: TokenizerFrameType::FunctionLikeMacroArgument((
-                                    0,
-                                    arg.clone(),
-                                )),
-                                save_point: self.previous_phase.save(),
+                                frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
+                                    argument:    arg.clone(),
+                                    paren_depth: 1,
+                                },
+                                save_point: arg.start_save_point.clone(),
                                 name:       token.contents,
                             };
+                            let start_save_point = arg.start_save_point.clone();
                             self.tokenizer_stack.last_mut().unwrap().save_point =
                                 self.previous_phase.save();
                             self.tokenizer_stack.push(frame);
+                            self.previous_phase.restore(start_save_point);
                             continue;
                         }
                     }
@@ -1906,7 +1969,7 @@ where
                                 };
                                 index += 1;
                                 code_point = code_point.checked_mul(8)?;
-                                
+
                                 code_point = code_point.checked_add(d as u16)?;
                             }
                             Some(code_point)
@@ -2069,21 +2132,20 @@ where
                 | Ok(()) => return None,
                 | Err(e) => Err(e),
             },
-            | PreprocessorTokenType::String => {
-                self.eval_escape_sequences(token).map(|contents| {
-                    let cached_contents = self.insert_into_cache(&contents);
-                    let string_like_token_type = if get_from_cache!(self, token.contents).starts_with('L') {
+            | PreprocessorTokenType::String => self.eval_escape_sequences(token).map(|contents| {
+                let cached_contents = self.insert_into_cache(&contents);
+                let string_like_token_type =
+                    if get_from_cache!(self, token.contents).starts_with('L') {
                         StringLikeTokenType::WideString(cached_contents)
                     } else {
                         StringLikeTokenType::String(cached_contents)
                     };
-                    Token {
-                        kind:           TokenType::StringLike(string_like_token_type),
-                        contents:       token.contents,
-                        start_position: token.start_position,
-                    }
-                })
-            }
+                Token {
+                    kind:           TokenType::StringLike(string_like_token_type),
+                    contents:       token.contents,
+                    start_position: token.start_position,
+                }
+            }),
             | PreprocessorTokenType::Character =>
                 self.eval_escape_sequences(token).map(|contents| {
                     if contents.chars().take(2).count() != 1 {
@@ -2097,11 +2159,12 @@ where
                         ));
                     }
                     let char = contents.chars().next().unwrap();
-                    let string_like_token_type = if get_from_cache!(self, token.contents).starts_with('L') {
-                        StringLikeTokenType::WideChar(char)
-                    } else {
-                        StringLikeTokenType::Char(char)
-                    };
+                    let string_like_token_type =
+                        if get_from_cache!(self, token.contents).starts_with('L') {
+                            StringLikeTokenType::WideChar(char)
+                        } else {
+                            StringLikeTokenType::Char(char)
+                        };
                     Token {
                         kind:           TokenType::StringLike(string_like_token_type),
                         contents:       token.contents,
@@ -2471,6 +2534,7 @@ where
     fn parse_preprocessor_expression(
         &mut self,
         directive: PreprocessorToken,
+        no_condition_error_type: PreprocessorErrorType,
     ) -> Result<PreprocessorExpression, PreprocessorError<Prev::Error>> {
         let current_position = self.current_position();
         let mut expression = PreprocessorExpression {
@@ -2483,14 +2547,17 @@ where
             | Ok(None) =>
                 return Err(PreprocessorError::InnerPreprocessorError(
                     InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::NoConditionInIfDirective,
+                        error_type:     no_condition_error_type,
                         start_position: directive.start_position,
                         contents:       directive.contents,
                     },
                 )),
             | Err(e) => return Err(e),
         }
-        expression.length = self.current_position().index - current_position.index;
+        expression.length = self
+            .current_position()
+            .index
+            .saturating_sub(current_position.index);
         Ok(expression)
     }
 
@@ -2653,7 +2720,10 @@ where
                                 },
                             }
                             };
-                            let length = closing_paren.start_position.index - position.index;
+                            let length = closing_paren
+                                .start_position
+                                .index
+                                .saturating_sub(position.index);
                             let kind = PreprocessorSubExpressionKind::Defined {
                                 name: name.contents,
                             };
@@ -2680,7 +2750,10 @@ where
                         sub_expressions.push(rhs);
                         return Ok(Some(PreprocessorSubExpression {
                             position: token.start_position,
-                            length:   self.current_position().index - token.start_position.index,
+                            length:   self
+                                .current_position()
+                                .index
+                                .saturating_sub(token.start_position.index),
                             kind:     PreprocessorSubExpressionKind::UnaryOperator {
                                 operator: token.kind,
                                 operand:  sub_expressions.len() - 1,
@@ -2711,7 +2784,10 @@ where
                 sub_expressions.push(lhs);
                 return Ok(Some(PreprocessorSubExpression {
                     position: op.start_position,
-                    length:   self.current_position().index - op.start_position.index,
+                    length:   self
+                        .current_position()
+                        .index
+                        .saturating_sub(op.start_position.index),
                     kind:     PreprocessorSubExpressionKind::UnaryOperator {
                         operator: op.kind,
                         operand:  lhs_index,
@@ -2798,7 +2874,10 @@ where
                     sub_expressions.push(rhs);
                     return Ok(Some(PreprocessorSubExpression {
                         position: op.start_position,
-                        length:   self.current_position().index - op.start_position.index,
+                        length:   self
+                            .current_position()
+                            .index
+                            .saturating_sub(op.start_position.index),
                         kind:     PreprocessorSubExpressionKind::TernaryOperator {
                             condition: lhs_index,
                             if_true:   mhs_index,
@@ -2824,7 +2903,10 @@ where
                     sub_expressions.push(rhs);
                     return Ok(Some(PreprocessorSubExpression {
                         position: op.start_position,
-                        length:   self.current_position().index - op.start_position.index,
+                        length:   self
+                            .current_position()
+                            .index
+                            .saturating_sub(op.start_position.index),
                         kind:     PreprocessorSubExpressionKind::BinaryOperator {
                             operator: op.kind,
                             left:     lhs_index,
@@ -2855,13 +2937,19 @@ where
                     )));
                 Ok(PreprocessorAtom {
                     position: token.start_position,
-                    length:   self.current_position().index - token.start_position.index,
+                    length:   self
+                        .current_position()
+                        .index
+                        .saturating_sub(token.start_position.index),
                     kind:     PreprocessorAtomKind::Identifier(token.contents),
                 })
             },
             | PreprocessorTokenType::Character => Ok(PreprocessorAtom {
                 position: token.start_position,
-                length:   self.current_position().index - token.start_position.index,
+                length:   self
+                    .current_position()
+                    .index
+                    .saturating_sub(token.start_position.index),
                 kind:     PreprocessorAtomKind::Character(
                     get_from_cache!(self, token.contents).char_at(1).unwrap(),
                 ),
@@ -2897,7 +2985,10 @@ where
                 };
                 Ok(PreprocessorAtom {
                     position: token.start_position,
-                    length:   self.current_position().index - token.start_position.index,
+                    length:   self
+                        .current_position()
+                        .index
+                        .saturating_sub(token.start_position.index),
                     kind:     PreprocessorAtomKind::Number(number),
                 })
             },
@@ -2986,8 +3077,10 @@ where
                                 self.if_directive_balance += 1;
                             },
                             | "elif" if self.if_directive_balance == start_balance => {
-                                let expression =
-                                    self.parse_preprocessor_expression(directive_name)?;
+                                let expression = self.parse_preprocessor_expression(
+                                    directive_name,
+                                    PreprocessorErrorType::NoConditionInElifDirective,
+                                )?;
                                 let result = self.eval_preprocessor_expression(&expression);
                                 if result {
                                     break;
@@ -3010,7 +3103,10 @@ where
         directive: PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
         self.if_directive_balance += 1;
-        let expression = self.parse_preprocessor_expression(directive)?;
+        let expression = self.parse_preprocessor_expression(
+            directive,
+            PreprocessorErrorType::NoConditionInIfDirective,
+        )?;
         let result = self.eval_preprocessor_expression(&expression);
         if !result {
             self.skip_over_dead_code()?;
@@ -3281,7 +3377,7 @@ where
                     start_position: include_string.start_position,
                     contents:       self.insert_into_cache(&contents),
                     kind:           PreprocessorTokenType::AngleBracketString,
-                    length:         self.current_position().index - start_index,
+                    length:         self.current_position().index.saturating_sub(start_index),
                 };
                 self.find_header_from_path(synthetic_token, path, true)
             },
@@ -3296,20 +3392,276 @@ where
         let name = self.insert_into_cache(&header_path.to_string_lossy());
         self.tokenizer_stack.last_mut().unwrap().save_point = self.previous_phase.save();
         let save_point = Prev::SavePoint::from_input(Arc::from(header_string), name);
-        self.tokenizer_stack.push(TokenizerFrame {
+        let frame = TokenizerFrame {
             save_point: save_point.clone(),
             name,
             frame_type: TokenizerFrameType::SourceFile,
-        });
+        };
+        self.tokenizer_stack.push(frame);
         self.previous_phase.restore(save_point);
         Ok(())
     }
 
     fn parse_define_directive(
         &mut self,
-        directive: PreprocessorToken,
+        _directive: PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
-        todo!()
+        let name = self.expect_token_no_expand(
+            |_, t| t.kind == PreprocessorTokenType::Identifier,
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, token| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::ExpectedIdentifierInDefineDirective(
+                            token.kind,
+                        ),
+                        start_position: token.start_position,
+                        contents:       token.contents,
+                    },
+                ))
+            },
+            "parsing define directive",
+        )?;
+        let old_definition = self.macro_definitions.get(&name.contents).cloned();
+        let save_point = self.previous_phase.save();
+        let old_save_point = match old_definition {
+            | None => None,
+            | Some(ref v) => match v {
+                | MacroDefinition::FunctionLike {
+                    start_save_point, ..
+                }
+                | MacroDefinition::ObjectLike { start_save_point } =>
+                    Some(start_save_point.clone()),
+                | MacroDefinition::BuiltIn => {
+                    self.pending_results.push_back(Err(
+                        PreprocessorError::<Prev::Error>::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::RedefinitionOfBuiltInMacro(
+                                    get_from_cache!(self, name.contents).to_owned(),
+                                ),
+                                start_position: name.start_position,
+                                contents:       name.contents,
+                            },
+                        ),
+                    ));
+                    None
+                },
+            },
+        };
+        let opening_paren = loop {
+            match self.next_preprocessor_token_no_expand() {
+                | Some(Err(e)) => {
+                    self.pending_results
+                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                    continue;
+                },
+                | Some(Ok(
+                    token @ PreprocessorToken {
+                        kind: PreprocessorTokenType::OpeningParenthesis,
+                        ..
+                    },
+                )) => break Some(token),
+                | Some(Ok(_)) => {
+                    break None;
+                },
+                | None => {
+                    let contents = self.insert_into_cache("EOF");
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                                "parsing macro definition",
+                            ),
+                            start_position: name.start_position,
+                            contents,
+                        },
+                    ));
+                },
+            }
+        };
+        if opening_paren.is_some() {
+            if old_definition.is_some_and(|d| match d {
+                | MacroDefinition::ObjectLike { .. } => true,
+                | MacroDefinition::FunctionLike { .. } => false,
+                | MacroDefinition::BuiltIn =>
+                    unreachable!("The case where name is a built-in macro is handled above"),
+            }) {
+                self.pending_results
+                    .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(
+                                get_from_cache!(self, name.contents).to_owned(),
+                            ),
+                        start_position: name.start_position,
+                        contents:       name.contents,
+                    },
+                )));
+            }
+            let mut argument_names = Vec::new();
+            let mut is_variadic = false;
+            loop {
+                let name_or_ellipsis = self.expect_token_no_expand(
+                    |_, t| {
+                        t.kind == PreprocessorTokenType::Identifier
+                            || t.kind == PreprocessorTokenType::Ellipsis
+                    },
+                    |this, e| {
+                        this.pending_results
+                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                        ControlFlow::Continue(())
+                    },
+                    |_, token| {
+                        ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(
+                                        token.kind,
+                                    ),
+                                start_position: token.start_position,
+                                contents:       token.contents,
+                            },
+                        ))
+                    },
+                    "parsing macro definition",
+                )?;
+                if is_variadic {
+                    self.pending_results
+                        .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::VariadicMacroMustBeLastParameter(
+                                        get_from_cache!(self, name.contents).to_owned(),
+                                    ),
+                                start_position: name.start_position,
+                                contents:       name.contents,
+                            },
+                        )));
+                }
+                if name_or_ellipsis.kind == PreprocessorTokenType::Ellipsis {
+                    is_variadic = true;
+                } else {
+                    argument_names.push(name_or_ellipsis.contents);
+                }
+
+                let comma_or_closing_parent = self.expect_token_no_expand(
+                    |_, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
+                    |this, e| {
+                        this.pending_results
+                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                        ControlFlow::Continue(())
+                    },
+                    |_, token| {
+                        ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(token.kind),
+                                start_position: token.start_position,
+                                contents:       token.contents,
+                            },
+                        ))
+                    },
+                    "parsing macro definition",
+                )?;
+                if comma_or_closing_parent.kind == PreprocessorTokenType::ClosingParenthesis {
+                    break;
+                }
+            }
+            let save_point = self.previous_phase.save();
+            drop(self.macro_definitions.insert(
+                name.contents,
+                MacroDefinition::FunctionLike {
+                    start_save_point: save_point,
+                    argument_names: argument_names.into(),
+                    is_variadic,
+                },
+            ));
+        } else {
+            if old_definition.is_some_and(|d| match d {
+                | MacroDefinition::ObjectLike { .. } => false,
+                | MacroDefinition::FunctionLike { .. } => true,
+                | MacroDefinition::BuiltIn =>
+                    unreachable!("The case where name is a built-in macro is handled above"),
+            }) {
+                self.pending_results
+                    .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(
+                                get_from_cache!(self, name.contents).to_owned(),
+                            ),
+                        start_position: name.start_position,
+                        contents:       name.contents,
+                    },
+                )));
+            }
+            drop(self.macro_definitions.insert(
+                name.contents,
+                MacroDefinition::ObjectLike {
+                    start_save_point: save_point.clone(),
+                },
+            ));
+        }
+        if let Some(mut old_save_point) = old_save_point {
+            let mut new_save_point = save_point;
+            loop {
+                self.previous_phase.restore(old_save_point);
+                let old_next = loop {
+                    match self.next_preprocessor_token_no_expand() {
+                        | Some(Err(_)) => {
+                            // Don't generate errors while validating macro definitions.
+                            continue;
+                        },
+                        | Some(Ok(token)) => break Some(token),
+                        | None => break None,
+                    }
+                };
+                old_save_point = self.previous_phase.save();
+                self.previous_phase.restore(new_save_point);
+                let new_next = loop {
+                    match self.next_preprocessor_token_no_expand() {
+                        | Some(Err(_)) => {
+                            // Don't generate errors while validating macro definitions.
+                            continue;
+                        },
+                        | Some(Ok(token)) => break Some(token),
+                        | None => break None,
+                    }
+                };
+                new_save_point = self.previous_phase.save();
+                if old_next != new_next {
+                    self.pending_results
+                        .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
+                                        get_from_cache!(self, name.contents).to_owned(),
+                                    ),
+                                start_position: name.start_position,
+                                contents:       name.contents,
+                            },
+                        )));
+                }
+                if !new_next.is_some_and(|t| t.kind != PreprocessorTokenType::Newline) {
+                    break;
+                }
+            }
+        } else {
+            loop {
+                match self.next_preprocessor_token_no_expand() {
+                    | Some(Err(_)) => {
+                        // Don't generate errors while validating macro definitions.
+                        continue;
+                    },
+                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline => break,
+                    | None => break,
+                    | Some(Ok(_)) => continue,
+                }
+            }
+        }
+        Ok(())
     }
 
     fn parse_undef_directive(
@@ -3661,7 +4013,7 @@ where
         > + AsMut<StringCache>
         + AsRef<StringCache>
         + IsTokenizingIncludeString,
-    PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
+    PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
     Prev::SavePoint: FromInput,
 {
     type Item = Result<Token, PreprocessorError<Prev::Error>>;
@@ -3712,7 +4064,7 @@ where
         > + AsMut<StringCache>
         + AsRef<StringCache>
         + IsTokenizingIncludeString,
-    PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone,
+    PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
     Prev::SavePoint: FromInput,
 {
     type Error = PreprocessorError<Prev::Error>;

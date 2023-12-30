@@ -2,7 +2,6 @@
 
 use std::{
     env::var,
-    fs::read_to_string,
     hash::BuildHasherDefault,
     path::PathBuf,
     sync::Arc,
@@ -19,10 +18,8 @@ use thiserror::Error;
 use crate::{
     translation_phases::{
         phase_4_preprocessing::{
-            self,
             Preprocessor,
             StringLikeTokenType,
-            Token,
             TokenType,
         },
         GetPosition,
@@ -138,12 +135,12 @@ fn main() -> Result<(), MainError> {
                                     .to_string()
                             },
                             | StringLikeTokenType::WideChar(c) | StringLikeTokenType::Char(c) =>
-                                format!("{:#?}", c),
+                                format!("{c:#?}"),
                         }
                     ),
-                    | TokenType::Keyword(k) => format!("Keyword: {:#?}", k),
-                    | TokenType::Integer(i) => format!("Integer: {:#?}", i),
-                    | TokenType::Float(f) => format!("Float: {:#?}", f),
+                    | TokenType::Keyword(k) => format!("Keyword: {k:#?}"),
+                    | TokenType::Integer(i) => format!("Integer: {i:#?}"),
+                    | TokenType::Float(f) => format!("Float: {f:#?}"),
                 }
                 .bright_magenta()
             ),
@@ -166,6 +163,11 @@ fn main() -> Result<(), MainError> {
     println!(
         "{}",
         "Finished printing all generated tokens.".bright_green()
+    );
+    println!(
+        "{}{}",
+        "String cache contents: ".bright_yellow(),
+        preprocessor.previous_phase.as_ref().bright_yellow()
     );
     Ok(())
 }

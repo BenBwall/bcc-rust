@@ -24,6 +24,7 @@
     "strtod",
     "strtof",
     "strtold",
-    "thiserror"
+    "thiserror",
+    "undefining"
   ]
 }
