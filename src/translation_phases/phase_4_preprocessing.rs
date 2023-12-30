@@ -1726,11 +1726,20 @@ where
                         let mut i = 0;
                         let mut arguments = HashMap::default();
                         let mut paren_depth = 1;
+                        macro_rules! at {
+                            () => {
+                                argument_names
+                                    .get(i)
+                                    .copied()
+                                    .unwrap_or(self.insert_into_cache("<undefined>"))
+                            };
+                        }
                         'outer: loop {
                             if is_variadic && i >= argument_names.len() {
                                 break;
                             }
                             let start_save_point = self.previous_phase.save();
+                            let mut has_seen_token = false;
                             loop {
                                 match self.next_preprocessor_token() {
                                     | Some(Ok(token))
@@ -1738,29 +1747,32 @@ where
                                             == PreprocessorTokenType::ClosingParenthesis =>
                                     {
                                         if paren_depth == 1 {
-                                            drop(arguments.insert(
-                                                argument_names[i],
-                                                FunctionLikeMacroArgument {
-                                                    name:             argument_names[i],
-                                                    start_save_point: start_save_point.clone(),
-                                                },
-                                            ));
-
+                                            if has_seen_token {
+                                                drop(arguments.insert(
+                                                    at!(),
+                                                    FunctionLikeMacroArgument {
+                                                        name:             at!(),
+                                                        start_save_point: start_save_point.clone(),
+                                                    },
+                                                ));
+                                            }
                                             break 'outer;
                                         }
+                                        has_seen_token = true;
                                         paren_depth -= 1;
                                     },
                                     | Some(Ok(token))
                                         if token.kind == PreprocessorTokenType::Comma =>
                                     {
                                         drop(arguments.insert(
-                                            argument_names[i],
+                                            at!(),
                                             FunctionLikeMacroArgument {
-                                                name:             argument_names[i],
+                                                name:             at!(),
                                                 start_save_point: start_save_point.clone(),
                                             },
                                         ));
                                         i += 1;
+                                        has_seen_token = true;
                                         continue 'outer;
                                     },
                                     | Some(Ok(token))
@@ -1768,9 +1780,11 @@ where
                                             == PreprocessorTokenType::OpeningParenthesis =>
                                     {
                                         paren_depth += 1;
+                                        has_seen_token = true;
                                         continue;
                                     },
                                     | Some(Ok(_)) => {
+                                        has_seen_token = true;
                                         continue;
                                     },
                                     | Some(Err(e)) => {
@@ -3591,6 +3605,8 @@ where
                     |_, t| {
                         t.kind == PreprocessorTokenType::Identifier
                             || t.kind == PreprocessorTokenType::Ellipsis
+                            || (t.kind == PreprocessorTokenType::ClosingParenthesis
+                                && argument_names.is_empty())
                     },
                     |this, e| {
                         this.pending_results
@@ -3626,10 +3642,11 @@ where
                 }
                 if name_or_ellipsis.kind == PreprocessorTokenType::Ellipsis {
                     is_variadic = true;
-                } else {
+                } else if name_or_ellipsis.kind == PreprocessorTokenType::Identifier {
                     argument_names.push(name_or_ellipsis.contents);
+                } else if name_or_ellipsis.kind == PreprocessorTokenType::ClosingParenthesis {
+                    break;
                 }
-
                 let comma_or_closing_parent = self.expect_token_no_expand(
                     |_, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
                     |this, e| {
@@ -3688,6 +3705,7 @@ where
             ));
         }
         if let Some(mut old_save_point) = old_save_point {
+            let mut error_has_been_generated = false;
             let mut new_save_point = save_point;
             loop {
                 self.previous_phase.restore(old_save_point);
@@ -3714,7 +3732,7 @@ where
                     }
                 };
                 new_save_point = self.previous_phase.save();
-                if old_next != new_next {
+                if old_next != new_next && !error_has_been_generated {
                     self.pending_results
                         .push_back(Err(PreprocessorError::InnerPreprocessorError(
                             InnerPreprocessorError {
@@ -3726,6 +3744,7 @@ where
                                 contents:       name.contents,
                             },
                         )));
+                    error_has_been_generated = true;
                 }
                 if !new_next.is_some_and(|t| t.kind != PreprocessorTokenType::Newline) {
                     break;
