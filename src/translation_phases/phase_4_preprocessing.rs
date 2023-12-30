@@ -1595,13 +1595,17 @@ where
                             | TokenizerFrame {
                                 frame_type:
                                     TokenizerFrameType::FunctionLikeMacroArgument {
-                                        paren_depth, ..
+                                        paren_depth,
+                                        argument,
                                     },
                                 ..
                             } => {
-                                if (token.kind == PreprocessorTokenType::Comma)
+                                let mut paren_depth = *paren_depth;
+                                let argument = argument.clone();
+                                if (token.kind == PreprocessorTokenType::Comma
+                                    && argument.name != self.insert_into_cache("__VA_ARGS__"))
                                     || (token.kind == PreprocessorTokenType::ClosingParenthesis
-                                        && *paren_depth == 1)
+                                        && paren_depth == 1)
                                 {
                                     drop(self.tokenizer_stack.pop());
                                     if let Some(last) = self.tokenizer_stack.last() {
@@ -1610,11 +1614,23 @@ where
                                     continue;
                                 }
                                 if token.kind == PreprocessorTokenType::OpeningParenthesis {
-                                    *paren_depth += 1;
+                                    paren_depth += 1;
                                 }
                                 if token.kind == PreprocessorTokenType::ClosingParenthesis {
-                                    *paren_depth -= 1;
+                                    paren_depth -= 1;
                                 }
+                                let TokenizerFrame {
+                                    frame_type:
+                                        TokenizerFrameType::FunctionLikeMacroArgument {
+                                            paren_depth: p,
+                                            ..
+                                        },
+                                    ..
+                                } = self.tokenizer_stack.last_mut().unwrap()
+                                else {
+                                    unreachable!();
+                                };
+                                *p = paren_depth;
                             },
                             | TokenizerFrame {
                                 frame_type: TokenizerFrameType::SourceFile,
@@ -1709,7 +1725,11 @@ where
                         }
                         let mut i = 0;
                         let mut arguments = HashMap::default();
+                        let mut paren_depth = 1;
                         'outer: loop {
+                            if is_variadic && i >= argument_names.len() {
+                                break;
+                            }
                             let start_save_point = self.previous_phase.save();
                             loop {
                                 match self.next_preprocessor_token() {
@@ -1717,15 +1737,18 @@ where
                                         if token.kind
                                             == PreprocessorTokenType::ClosingParenthesis =>
                                     {
-                                        drop(arguments.insert(
-                                            argument_names[i],
-                                            FunctionLikeMacroArgument {
-                                                name:             argument_names[i],
-                                                start_save_point: start_save_point.clone(),
-                                            },
-                                        ));
+                                        if paren_depth == 1 {
+                                            drop(arguments.insert(
+                                                argument_names[i],
+                                                FunctionLikeMacroArgument {
+                                                    name:             argument_names[i],
+                                                    start_save_point: start_save_point.clone(),
+                                                },
+                                            ));
 
-                                        break 'outer;
+                                            break 'outer;
+                                        }
+                                        paren_depth -= 1;
                                     },
                                     | Some(Ok(token))
                                         if token.kind == PreprocessorTokenType::Comma =>
@@ -1739,6 +1762,13 @@ where
                                         ));
                                         i += 1;
                                         continue 'outer;
+                                    },
+                                    | Some(Ok(token))
+                                        if token.kind
+                                            == PreprocessorTokenType::OpeningParenthesis =>
+                                    {
+                                        paren_depth += 1;
+                                        continue;
                                     },
                                     | Some(Ok(_)) => {
                                         continue;
@@ -1777,6 +1807,59 @@ where
                                     contents:       token.contents,
                                 },
                             )));
+                        }
+                        if is_variadic {
+                            drop(arguments.insert(
+                                self.insert_into_cache("__VA_ARGS__"),
+                                FunctionLikeMacroArgument {
+                                    name:             self.insert_into_cache("__VA_ARGS__"),
+                                    start_save_point: self.previous_phase.save(),
+                                },
+                            ));
+                            let mut paren_depth = 1;
+
+                            loop {
+                                match self.next_preprocessor_token() {
+                                    | Some(Ok(token))
+                                        if token.kind
+                                            == PreprocessorTokenType::ClosingParenthesis =>
+                                    {
+                                        if paren_depth == 1 {
+                                            break;
+                                        }
+                                        paren_depth -= 1;
+                                    },
+                                    | Some(Ok(token))
+                                        if token.kind
+                                            == PreprocessorTokenType::OpeningParenthesis =>
+                                    {
+                                        paren_depth += 1;
+                                        continue;
+                                    },
+                                    | Some(Ok(_)) => {
+                                        continue;
+                                    },
+                                    | Some(Err(e)) => {
+                                        self.pending_results.push_back(Err(e));
+                                        continue;
+                                    },
+                                    | None => {
+                                        return Some(Err(
+                                            PreprocessorError::InnerPreprocessorError(
+                                                InnerPreprocessorError {
+                                                    error_type:
+                                                        PreprocessorErrorType::UnexpectedEndOfInput(
+                                                            "parsing function-like macro \
+                                                             invocation",
+                                                        ),
+                                                    start_position: token.start_position,
+                                                    contents:       token.contents,
+                                                },
+                                            ),
+                                        ));
+                                    },
+                                }
+                            }
                         }
                         self.tokenizer_stack.last_mut().unwrap().save_point =
                             self.previous_phase.save();
