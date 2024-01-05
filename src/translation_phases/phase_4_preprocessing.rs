@@ -2608,11 +2608,11 @@ where
             }) = self.tokenizer_stack.last()
             {
                 let next_token = loop {
-                    match self.next_preprocessor_token() {
+                    match self.next_preprocessor_token_no_expand() {
                         | Some(Ok(token)) => break token,
                         | None => break 'outer,
                         | Some(Err(e)) => {
-                            self.pending_results.push_back(Err(e));
+                            self.pending_results.push_back(Err(PreprocessorError::PreviousPhaseError(e)));
                             continue;
                         },
                     }
