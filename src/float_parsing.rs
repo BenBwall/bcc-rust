@@ -21,7 +21,7 @@ mod ffi {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct LongDouble {
-    pub(crate) value: [u8; 16],
+    pub(crate) value: [u8; ffi::LONG_DOUBLE_BYTES as _],
 }
 
 impl Display for LongDouble {

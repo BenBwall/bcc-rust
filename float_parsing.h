@@ -5,7 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct long_double_t {
+enum
+{
+  LONG_DOUBLE_BYTES = sizeof(long double),
+};
+
+typedef struct long_double_t
+{
   uint8_t bytes[sizeof(long double)];
 } long_double_t;
 
