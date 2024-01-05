@@ -679,7 +679,11 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(..)
             | PreprocessorErrorType::VariadicMacroMustBeLastParameter(..)
             | PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(..)
-            | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(..) =>
+            | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(..)
+            | PreprocessorErrorType::ExpectedIdentifierInUndefDirective(..)
+            | PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(..)
+            | PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(..)
+            | PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(..) =>
                 ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
@@ -849,6 +853,10 @@ pub(crate) enum PreprocessorErrorType {
     VariadicMacroMustBeLastParameter(String),
     ExpectedCommaOrClosingParenthesisInMacroDefinition(PreprocessorTokenType),
     MacroRedefinedWithDifferentDefinition(String),
+    ExpectedIdentifierInUndefDirective(PreprocessorTokenType),
+    ExpectedNewlineAfterUndefDirective(PreprocessorTokenType),
+    HashOperatorMustBeFollowedByAMacroArgument(PreprocessorTokenType),
+    IdentifierNotMacroArgumentAfterHashOperator(String),
 }
 
 impl Display for PreprocessorErrorType {
@@ -1362,6 +1370,33 @@ impl Display for PreprocessorErrorType {
                      you must first undefine it first."
                 )
             },
+            | Self::ExpectedIdentifierInUndefDirective(tt) => {
+                write!(
+                    f,
+                    "Expected identifier in 'undef' directive! Found instead {tt:#?}"
+                )
+            },
+            | Self::ExpectedNewlineAfterUndefDirective(tt) => {
+                write!(
+                    f,
+                    "Expected newline after 'undef' directive! Found instead {tt:#?}"
+                )
+            },
+            | Self::HashOperatorMustBeFollowedByAMacroArgument(tt) => {
+                write!(
+                    f,
+                    "'#' operator, when used in a function-like macro body, must be followed by a \
+                     macro argument! Found instead {tt:#?}"
+                )
+            },
+            | Self::IdentifierNotMacroArgumentAfterHashOperator(name) => {
+                write!(
+                    f,
+                    "Identifier '{name}' not a macro argument after '#' operator! The '#' \
+                     operator, when used in a function-like macro body, must be followed by a \
+                     macro argument."
+                )
+            },
         }
     }
 }
@@ -1734,12 +1769,12 @@ where
                                     .unwrap_or(self.insert_into_cache("<undefined>"))
                             };
                         }
+                        let mut has_seen_token = false;
                         'outer: loop {
                             if is_variadic && i >= argument_names.len() {
                                 break;
                             }
                             let start_save_point = self.previous_phase.save();
-                            let mut has_seen_token = false;
                             loop {
                                 match self.next_preprocessor_token() {
                                     | Some(Ok(token))
@@ -2225,10 +2260,21 @@ where
                 }
             },
             | PreprocessorTokenType::Newline => return None,
-            | PreprocessorTokenType::Hash => match self.parse_directive(token, &contents) {
-                | Ok(()) => return None,
-                | Err(e) => Err(e),
-            },
+            | PreprocessorTokenType::Hash =>
+                if matches!(
+                    self.tokenizer_stack.last(),
+                    Some(TokenizerFrame {
+                        frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
+                        ..
+                    })
+                ) {
+                    self.parse_hash_operator(token, &contents)
+                } else {
+                    match self.parse_directive(token, &contents) {
+                        | Ok(()) => return None,
+                        | Err(e) => Err(e),
+                    }
+                },
             | PreprocessorTokenType::String => self.eval_escape_sequences(token).map(|contents| {
                 let cached_contents = self.insert_into_cache(&contents);
                 let string_like_token_type =
@@ -2483,6 +2529,117 @@ where
 
             | x => todo!("Not implemented: {x:#?}"),
         })
+    }
+
+    fn parse_hash_operator(
+        &mut self,
+        token: PreprocessorToken,
+        contents: &str,
+    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+        let save_point = self.previous_phase.save();
+        let macro_name = self.expect_token_no_expand(
+            |_, t| t.kind == PreprocessorTokenType::Identifier,
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, t| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(
+                                t.kind,
+                            ),
+                        start_position: t.start_position,
+                        contents:       t.contents,
+                    },
+                ))
+            },
+            "parsing '#' operator in function-like macro invocation.",
+        )?;
+        match self.tokenizer_stack.last().unwrap() {
+            | TokenizerFrame {
+                frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. },
+                ..
+            } =>
+                if !arguments.contains_key(&macro_name.contents) {
+                    self.previous_phase.restore(save_point);
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(
+                                    get_from_cache!(self, macro_name.contents).to_owned(),
+                                ),
+                            start_position: macro_name.start_position,
+                            contents:       macro_name.contents,
+                        },
+                    ));
+                },
+            | _ => unreachable!(),
+        }
+        self.previous_phase.restore(save_point.clone());
+        self.should_tokenize_whitespace = true;
+
+        let first_token = loop {
+            match self.next_preprocessor_token() {
+                | Some(Ok(token)) if token.kind == PreprocessorTokenType::Whitespace => continue,
+                | Some(Ok(token)) => break Some(token),
+                | None => break None,
+                | Some(Err(e)) => {
+                    self.pending_results.push_back(Err(e));
+                    continue;
+                },
+            }
+        };
+        if let (
+            Some(TokenizerFrame {
+                frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
+                ..
+            }),
+            Some(first_token),
+        ) = (self.tokenizer_stack.last(), first_token)
+        {
+            let mut synthetic_contents = String::new();
+            synthetic_contents.push_str(get_from_cache!(self, first_token.contents));
+            'outer: while let Some(TokenizerFrame {
+                frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
+                ..
+            }) = self.tokenizer_stack.last()
+            {
+                let next_token = loop {
+                    match self.next_preprocessor_token() {
+                        | Some(Ok(token)) if token.kind == PreprocessorTokenType::Whitespace =>
+                            continue,
+                        | Some(Ok(token)) => break token,
+                        | None => break 'outer,
+                        | Some(Err(e)) => {
+                            self.pending_results.push_back(Err(e));
+                            continue;
+                        },
+                    }
+                };
+                synthetic_contents.push_str(get_from_cache!(self, next_token.contents));
+            }
+            self.should_tokenize_whitespace = false;
+            Ok(Token {
+                kind:           TokenType::StringLike(StringLikeTokenType::String(
+                    self.insert_into_cache(&synthetic_contents),
+                )),
+                contents:       self.insert_into_cache(&synthetic_contents),
+                start_position: token.start_position,
+            })
+        } else {
+            self.previous_phase.restore(save_point);
+            self.should_tokenize_whitespace = false;
+            Ok(Token {
+                kind:           TokenType::StringLike(StringLikeTokenType::String(
+                    self.insert_into_cache(""),
+                )),
+                contents:       self.insert_into_cache(""),
+                start_position: token.start_position,
+            })
+        }
     }
 
     fn parse_directive(
@@ -3768,9 +3925,50 @@ where
 
     fn parse_undef_directive(
         &mut self,
-        directive: PreprocessorToken,
+        _directive: PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
-        todo!()
+        let name = self.expect_token_no_expand(
+            |_, t| t.kind == PreprocessorTokenType::Identifier,
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, token| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::ExpectedIdentifierInUndefDirective(
+                            token.kind,
+                        ),
+                        start_position: token.start_position,
+                        contents:       token.contents,
+                    },
+                ))
+            },
+            "parsing undef directive",
+        )?;
+        drop(self.macro_definitions.remove(&name.contents));
+        _ = self.expect_token_no_expand(
+            |_, t| t.kind == PreprocessorTokenType::Newline,
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, token| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(
+                            token.kind,
+                        ),
+                        start_position: token.start_position,
+                        contents:       token.contents,
+                    },
+                ))
+            },
+            "parsing undef directive",
+        )?;
+        Ok(())
     }
 
     fn parse_line_directive(
