@@ -2609,8 +2609,6 @@ where
             {
                 let next_token = loop {
                     match self.next_preprocessor_token() {
-                        | Some(Ok(token)) if token.kind == PreprocessorTokenType::Whitespace =>
-                            continue,
                         | Some(Ok(token)) => break token,
                         | None => break 'outer,
                         | Some(Err(e)) => {
