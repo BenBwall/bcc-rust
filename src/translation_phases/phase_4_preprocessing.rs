@@ -1703,6 +1703,31 @@ where
                 | Some(Err(e)) => return Some(Err(PreprocessorError::PreviousPhaseError(e))),
                 | Some(Ok(token)) => token,
             };
+            let save_point = self.previous_phase.save();
+            let mut pending_errors = Vec::new();
+            let hash_hash = loop {
+                match self.next_preprocessor_token_no_expand() {
+                    | Some(Err(e)) => {
+                        pending_errors.push(e);
+                        continue;
+                    },
+                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash =>
+                        break Some(token),
+                    | Some(Ok(_)) | None => {
+                        self.previous_phase.restore(save_point);
+                        break None;
+                    },
+                }
+            };
+            if let Some(h) = hash_hash {
+                // We only retain the errors if we are parsing a hash-hash operator. Otherwise we load a savepoint and backtrack.
+                self.pending_results.extend(
+                    pending_errors
+                        .into_iter()
+                        .map(|e| Err(PreprocessorError::PreviousPhaseError(e))),
+                );
+                todo!();
+            }
             if token.kind != PreprocessorTokenType::Identifier {
                 return Some(Ok(token));
             }
@@ -2612,7 +2637,8 @@ where
                         | Some(Ok(token)) => break token,
                         | None => break 'outer,
                         | Some(Err(e)) => {
-                            self.pending_results.push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                            self.pending_results
+                                .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
                             continue;
                         },
                     }
