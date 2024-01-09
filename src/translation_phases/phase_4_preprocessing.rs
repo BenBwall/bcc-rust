@@ -358,7 +358,7 @@ pub(crate) enum TokenizerFrameType<PrevSavePoint> {
     SourceFile,
     ObjectLikeMacroInvocation,
     FunctionLikeMacroInvocation {
-        arguments:   HashMap<StringCacheId, FunctionLikeMacroArgument<PrevSavePoint>>,
+        arguments:   Arc<HashMap<StringCacheId, FunctionLikeMacroArgument<PrevSavePoint>>>,
         is_variadic: bool,
     },
     FunctionLikeMacroArgument {
@@ -1508,6 +1508,13 @@ where
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
     Prev::SavePoint: FromInput,
 {
+    fn push_tokenizer_frame(&mut self, frame: TokenizerFrame<Prev::SavePoint>) {
+        self.tokenizer_stack.last_mut().unwrap().save_point = self.previous_phase.save();
+        let save_point = frame.save_point.clone();
+        self.previous_phase.restore(save_point);
+        self.tokenizer_stack.push(frame);
+    }
+
     fn expect_token_no_expand(
         &mut self,
         mut is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
@@ -1694,10 +1701,62 @@ where
         }
     }
 
+    fn current_macro(&self) -> Option<(StringCacheId, Position)> {
+        match self.tokenizer_stack.last() {
+            | Some(TokenizerFrame {
+                frame_type:
+                    TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                    | TokenizerFrameType::ObjectLikeMacroInvocation,
+                name,
+                save_point,
+                ..
+            }) => Some((*name, save_point.current_position())),
+            | _ => None,
+        }
+    }
+
+    fn current_is_macro(&self) -> bool {
+        self.current_macro().is_some()
+    }
+
+    fn current_function_like_macro(
+        &self,
+    ) -> Option<(
+        StringCacheId,
+        Prev::SavePoint,
+        Arc<HashMap<StringCacheId, FunctionLikeMacroArgument<Prev::SavePoint>>>,
+        bool,
+    )> {
+        match self.tokenizer_stack.last() {
+            | Some(TokenizerFrame {
+                frame_type:
+                    TokenizerFrameType::FunctionLikeMacroInvocation {
+                        arguments,
+                        is_variadic,
+                    },
+                name,
+                save_point,
+                ..
+            }) => Some((*name, save_point.clone(), arguments.clone(), *is_variadic)),
+            | _ => None,
+        }
+    }
+
+    fn current_is_function_like_macro(&self) -> bool {
+        match self.tokenizer_stack.last() {
+            | Some(TokenizerFrame {
+                frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
+                ..
+            }) => true,
+            | _ => false,
+        }
+    }
+
     fn next_preprocessor_token(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
         loop {
+            let start_macro = self.current_macro();
             let token = match self.next_preprocessor_token_no_expand() {
                 | None => return None,
                 | Some(Err(e)) => return Some(Err(PreprocessorError::PreviousPhaseError(e))),
@@ -1705,6 +1764,7 @@ where
             };
             let save_point = self.previous_phase.save();
             let mut pending_errors = Vec::new();
+            let before_hash_hash_macro = self.current_macro();
             let hash_hash = loop {
                 match self.next_preprocessor_token_no_expand() {
                     | Some(Err(e)) => {
@@ -1720,13 +1780,86 @@ where
                 }
             };
             if let Some(h) = hash_hash {
-                // We only retain the errors if we are parsing a hash-hash operator. Otherwise we load a savepoint and backtrack.
+                match self.tokenizer_stack.last() {
+                    | Some(TokenizerFrame {
+                        frame_type:
+                            TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                            | TokenizerFrameType::ObjectLikeMacroInvocation,
+                        ..
+                    }) => (),
+                    | _ => {
+                        return Some(Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::HashHashUsedOutsideOfMacro,
+                                start_position: h.start_position,
+                                contents:       h.contents,
+                            },
+                        )));
+                    },
+                }
+                if start_macro != before_hash_hash_macro {
+                    return Some(Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:     PreprocessorErrorType::MacroEndedBeforeHashHashOperator,
+                            start_position: h.start_position,
+                            contents:       h.contents,
+                        },
+                    )));
+                }
+                // We only retain the errors if we are parsing a hash-hash operator. Otherwise
+                // we load a savepoint and backtrack.
                 self.pending_results.extend(
                     pending_errors
                         .into_iter()
                         .map(|e| Err(PreprocessorError::PreviousPhaseError(e))),
                 );
-                todo!();
+                match self.tokenizer_stack.last() {
+                    | Some(TokenizerFrame {
+                        frame_type:
+                            TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                            | TokenizerFrameType::ObjectLikeMacroInvocation,
+                        ..
+                    }) => (),
+                    | _ => {
+                        return Some(Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
+                                start_position: h.start_position,
+                                contents:       h.contents,
+                            },
+                        )));
+                    },
+                }
+                let before_rhs_macro = self.current_macro();
+                let rhs = match self.expect_token_no_expand(
+                    |_, _| true,
+                    |this, e| {
+                        this.pending_results
+                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                        ControlFlow::Continue(())
+                    },
+                    |_, _| unreachable!(),
+                    "parsing hash-hash operator. Hash hash operator must be followed by a token \
+                     on the same line.",
+                ) {
+                    | Ok(token) => token,
+                    | Err(e) => return Some(Err(e)),
+                };
+                if before_rhs_macro != start_macro {
+                    return Some(Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::MacroEndedBeforeHashHashRightHandSide,
+                            start_position: rhs.start_position,
+                            contents:       rhs.contents,
+                        },
+                    )));
+                }
+                if let Err(e) = self.parse_hash_hash_operator(token, h, rhs) {
+                    return Some(Err(e));
+                }
+                continue;
             }
             if token.kind != PreprocessorTokenType::Identifier {
                 return Some(Ok(token));
@@ -1939,7 +2072,7 @@ where
                             self.previous_phase.save();
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
-                                arguments,
+                                arguments: Arc::new(arguments),
                                 is_variadic,
                             },
                             save_point: start_save_point.clone(),
@@ -2554,6 +2687,15 @@ where
 
             | x => todo!("Not implemented: {x:#?}"),
         })
+    }
+
+    fn parse_hash_hash_operator(
+        &mut self,
+        lhs: PreprocessorToken,
+        hash_hash: PreprocessorToken,
+        rhs: PreprocessorToken,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
+        todo!();
     }
 
     fn parse_hash_operator(
