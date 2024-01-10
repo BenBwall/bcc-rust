@@ -1867,15 +1867,12 @@ where
             if let Some(md) = self.macro_definitions.get(&token.contents).cloned() {
                 match md {
                     | MacroDefinition::ObjectLike { start_save_point } => {
-                        let save_point = self.previous_phase.save();
-                        self.tokenizer_stack.last_mut().unwrap().save_point = save_point;
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::ObjectLikeMacroInvocation,
-                            save_point: start_save_point.clone(),
+                            save_point: start_save_point,
                             name:       token.contents,
                         };
-                        self.tokenizer_stack.push(frame);
-                        self.previous_phase.restore(start_save_point);
+                        self.push_tokenizer_frame(frame);
                         continue;
                     },
                     | MacroDefinition::FunctionLike {
@@ -2068,18 +2065,15 @@ where
                                 }
                             }
                         }
-                        self.tokenizer_stack.last_mut().unwrap().save_point =
-                            self.previous_phase.save();
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                 arguments: Arc::new(arguments),
                                 is_variadic,
                             },
-                            save_point: start_save_point.clone(),
+                            save_point: start_save_point,
                             name:       token.contents,
                         };
-                        self.tokenizer_stack.push(frame);
-                        self.previous_phase.restore(start_save_point);
+                        self.push_tokenizer_frame(frame);
                         continue;
                     },
                     | MacroDefinition::BuiltIn => match get_from_cache!(self, token.contents) {
@@ -2167,11 +2161,7 @@ where
                                 save_point: arg.start_save_point.clone(),
                                 name:       token.contents,
                             };
-                            let start_save_point = arg.start_save_point.clone();
-                            self.tokenizer_stack.last_mut().unwrap().save_point =
-                                self.previous_phase.save();
-                            self.tokenizer_stack.push(frame);
-                            self.previous_phase.restore(start_save_point);
+                            self.push_tokenizer_frame(frame);
                             continue;
                         }
                     }
@@ -3810,15 +3800,13 @@ where
             })
         })?;
         let name = self.insert_into_cache(&header_path.to_string_lossy());
-        self.tokenizer_stack.last_mut().unwrap().save_point = self.previous_phase.save();
         let save_point = Prev::SavePoint::from_input(Arc::from(header_string), name);
         let frame = TokenizerFrame {
-            save_point: save_point.clone(),
+            save_point,
             name,
             frame_type: TokenizerFrameType::SourceFile,
         };
-        self.tokenizer_stack.push(frame);
-        self.previous_phase.restore(save_point);
+        self.push_tokenizer_frame(frame);
         Ok(())
     }
 
