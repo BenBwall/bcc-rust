@@ -354,6 +354,23 @@ pub(crate) struct PreprocessorExpression {
 const PREDEFINED_MACRO_NAMES: [&str; 4] = ["__LINE__", "__FILE__", "__DATE__", "__TIME__"];
 
 #[derive(Debug, PartialEq, Clone)]
+enum HashHashArgument<PrevSavePoint> {
+    Token(PreprocessorToken),
+    Argument(PrevSavePoint),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum HashHashOperatorState<PrevSavePoint> {
+    ExpandingLhs {
+        lhs: HashHashArgument<PrevSavePoint>,
+        rhs: HashHashArgument<PrevSavePoint>,
+    },
+    ExpandingRhs {
+        rhs: HashHashArgument<PrevSavePoint>,
+    },
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenizerFrameType<PrevSavePoint> {
     SourceFile,
     ObjectLikeMacroInvocation,
@@ -365,6 +382,7 @@ pub(crate) enum TokenizerFrameType<PrevSavePoint> {
         argument:    FunctionLikeMacroArgument<PrevSavePoint>,
         paren_depth: usize,
     },
+    HashHashOperator(HashHashOperatorState<PrevSavePoint>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
