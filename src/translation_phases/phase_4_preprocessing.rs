@@ -362,11 +362,11 @@ enum HashHashArgument<PrevSavePoint> {
 #[derive(Debug, PartialEq, Clone)]
 enum HashHashOperatorState<PrevSavePoint> {
     ExpandingLhs {
-        rhs: HashHashArgument<PrevSavePoint>,
+        rhs:         HashHashArgument<PrevSavePoint>,
         paren_depth: usize,
     },
     ExpandingRhs {
-        lhs: PreprocessorToken,
+        lhs:         PreprocessorToken,
         paren_depth: usize,
     },
     NothingToExpand {
@@ -1631,12 +1631,16 @@ where
         }
     }
 
-    fn merge_tokens(&self, lhs: Option<PreprocessorToken>, rhs: Option<PreprocessorToken>) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
+    fn merge_tokens(
+        &self,
+        lhs: Option<PreprocessorToken>,
+        rhs: Option<PreprocessorToken>,
+    ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
         match (lhs, rhs) {
-            (None, None) => None,
-            (Some(lhs), None) => Some(Ok(lhs)),
-            (None, Some(rhs)) => Some(Ok(rhs)),
-            (Some(lhs), Some(rhs)) => todo!(),
+            | (None, None) => None,
+            | (Some(lhs), None) => Some(Ok(lhs)),
+            | (None, Some(rhs)) => Some(Ok(rhs)),
+            | (Some(lhs), Some(rhs)) => todo!(),
         }
     }
 
@@ -1667,7 +1671,6 @@ where
             }
             return self.next_preprocessor_token_no_expand_no_hash_hash();
         }
-        
     }
 
     fn next_preprocessor_token_no_expand_no_hash_hash(
@@ -1733,7 +1736,83 @@ where
                                 }
                             },
                             | TokenizerFrame {
-                                frame_type: TokenizerFrameType::SourceFile | TokenizerFrameType::HashHashOperator(..),
+                                frame_type: TokenizerFrameType::HashHashOperator(state),
+                                save_point,
+                                name,
+                            } => match state {
+                                | HashHashOperatorState::ExpandingLhs {
+                                    rhs: _,
+                                    paren_depth,
+                                }
+                                | HashHashOperatorState::ExpandingRhs {
+                                    lhs: _,
+                                    paren_depth,
+                                } => {
+                                    let mut paren_depth = *paren_depth;
+                                    if let Some(paren_depth) = self
+                                        .update_macro_argument_paren_depth(
+                                            token,
+                                            *name,
+                                            paren_depth,
+                                        )
+                                    {
+                                        let TokenizerFrame {
+                                            frame_type:
+                                                TokenizerFrameType::HashHashOperator(
+                                                    HashHashOperatorState::ExpandingLhs {
+                                                        rhs: _,
+                                                        paren_depth: p,
+                                                    }
+                                                    | HashHashOperatorState::ExpandingRhs {
+                                                        lhs: _,
+                                                        paren_depth: p,
+                                                    },
+                                                ),
+                                            ..
+                                        } = self.tokenizer_stack.last_mut().unwrap()
+                                        else {
+                                            unreachable!();
+                                        };
+                                        *p = paren_depth;
+                                    } else {
+                                        match state {
+                                            | HashHashOperatorState::ExpandingLhs {
+                                                rhs,
+                                                paren_depth,
+                                            } => match rhs {
+                                                | HashHashArgument::Token(t) => {
+                                                    let ret = self
+                                                        .merge_tokens(Some(t.clone()), Some(token))
+                                                        .unwrap();
+                                                    self.pop_tokenizer_frame();
+                                                    break Some(ret);
+                                                },
+                                                | HashHashArgument::MacroArgument(save_point) => {
+                                                    *state = HashHashOperatorState::ExpandingRhs {
+                                                        lhs:         token,
+                                                        paren_depth: 1,
+                                                    };
+                                                    continue;
+                                                },
+                                            },
+                                            | HashHashOperatorState::ExpandingRhs {
+                                                lhs: _,
+                                                paren_depth: _,
+                                            } => {
+                                                self.pop_tokenizer_frame();
+                                                continue;
+                                            },
+                                            | HashHashOperatorState::NothingToExpand { .. } =>
+                                                unreachable!(),
+                                        }
+                                    }
+                                    break Some(Ok(token));
+                                },
+                                | HashHashOperatorState::NothingToExpand { .. } =>
+                                    unreachable!("Handled in next_preprocessor_token_no_expand"),
+                            },
+                            | TokenizerFrame {
+                                frame_type: TokenizerFrameType::SourceFile,
                                 ..
                             } => (),
                         }
