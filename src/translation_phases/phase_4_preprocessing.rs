@@ -366,12 +366,12 @@ enum HashHashOperatorState<PrevSavePoint> {
         paren_depth: usize,
     },
     ExpandingRhs {
-        lhs:         PreprocessorToken,
+        lhs:         Option<PreprocessorToken>,
         paren_depth: usize,
     },
     NothingToExpand {
-        lhs: PreprocessorToken,
-        rhs: PreprocessorToken,
+        lhs: Option<PreprocessorToken>,
+        rhs: Option<PreprocessorToken>,
     },
 }
 
@@ -1652,20 +1652,55 @@ where
                 frame_type: TokenizerFrameType::HashHashOperator(state),
                 save_point,
                 name,
-            }) = self.tokenizer_stack.last()
+            }) = self.tokenizer_stack.last_mut()
             {
                 match state {
                     | HashHashOperatorState::NothingToExpand { lhs, rhs } => {
                         let lhs = lhs.clone();
                         let rhs = rhs.clone();
                         self.pop_tokenizer_frame();
-                        match self.merge_tokens(Some(lhs), Some(rhs)) {
-                            | None => continue,
+                        match self.merge_tokens(lhs, rhs) {
+                            | None => {
+                                self.pop_tokenizer_frame();
+                                continue;
+                            },
                             | Some(v) => return Some(v),
                         }
                     },
                     | HashHashOperatorState::ExpandingLhs { rhs, paren_depth } => loop {
-                        match self.next_preprocessor_token_no_expand_no_hash_hash() {}
+                        let token = loop {
+                            match self.next_preprocessor_token_no_expand_no_hash_hash() {
+                                | Some(Err(e)) => {
+                                    self.pending_results
+                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                    continue;
+                                },
+                                | None => {
+                                    self.pending_results.push_back(Err(
+                                        PreprocessorError::InnerPreprocessorError(
+                                            InnerPreprocessorError {
+                                                error_type:
+                                                    PreprocessorErrorType::UnexpectedEndOfInput(
+                                                        "expanding function-like macro argument",
+                                                    ),
+                                                start_position: self
+                                                    .previous_phase
+                                                    .current_position(),
+                                                contents:       self.insert_into_cache("EOF"),
+                                            },
+                                        ),
+                                    ));
+                                    break None;
+                                },
+                                | Some(Ok(t)) => break Some(t),
+                            }
+                        };
+                        let is_end_of_current_state = match token {
+                            | None => true,
+                            | Some(t) => self
+                                .update_macro_argument_paren_depth(t, *name, *paren_depth)
+                                .is_none(),
+                        };
                     },
                 }
             }
@@ -1789,7 +1824,7 @@ where
                                                 },
                                                 | HashHashArgument::MacroArgument(save_point) => {
                                                     *state = HashHashOperatorState::ExpandingRhs {
-                                                        lhs:         token,
+                                                        lhs:         Some(token),
                                                         paren_depth: 1,
                                                     };
                                                     continue;
@@ -2877,19 +2912,25 @@ where
             | (HashHashArgument::MacroArgument(save_point), _) => (
                 lhs.contents,
                 save_point.clone(),
-                HashHashOperatorState::ExpandingLhs { rhs: rhs_state },
+                HashHashOperatorState::ExpandingLhs {
+                    rhs:         rhs_state,
+                    paren_depth: 1,
+                },
             ),
             | (HashHashArgument::Token(token), HashHashArgument::MacroArgument(save_point)) => (
                 rhs.contents,
                 save_point.clone(),
-                HashHashOperatorState::ExpandingRhs { lhs: token.clone() },
+                HashHashOperatorState::ExpandingRhs {
+                    lhs:         Some(token.clone()),
+                    paren_depth: 1,
+                },
             ),
             | (HashHashArgument::Token(t1), HashHashArgument::Token(t2)) => (
                 lhs.contents,
                 self.previous_phase.save(),
                 HashHashOperatorState::NothingToExpand {
-                    lhs: t1.clone(),
-                    rhs: t2.clone(),
+                    lhs: Some(t1.clone()),
+                    rhs: Some(t2.clone()),
                 },
             ),
         };
