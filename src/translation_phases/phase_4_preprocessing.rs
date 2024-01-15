@@ -356,7 +356,7 @@ const PREDEFINED_MACRO_NAMES: [&str; 4] = ["__LINE__", "__FILE__", "__DATE__", "
 #[derive(Debug, PartialEq, Clone)]
 enum HashHashArgument<PrevSavePoint> {
     Token(PreprocessorToken),
-    MacroArgument(PrevSavePoint),
+    MacroArgument(PrevSavePoint, StringCacheId),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -706,8 +706,9 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::ExpectedIdentifierInUndefDirective(..)
             | PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(..)
             | PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(..)
-            | PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(..) =>
-                ErrorSeverity::Error,
+            | PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(..)
+            | PreprocessorErrorType::MacroEndedBeforeHashHashOperator
+            | PreprocessorErrorType::MissingRightHandSideOfHashHashOperator => ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -880,6 +881,8 @@ pub(crate) enum PreprocessorErrorType {
     ExpectedNewlineAfterUndefDirective(PreprocessorTokenType),
     HashOperatorMustBeFollowedByAMacroArgument(PreprocessorTokenType),
     IdentifierNotMacroArgumentAfterHashOperator(String),
+    MacroEndedBeforeHashHashOperator,
+    MissingRightHandSideOfHashHashOperator,
 }
 
 impl Display for PreprocessorErrorType {
@@ -1420,6 +1423,20 @@ impl Display for PreprocessorErrorType {
                      macro argument."
                 )
             },
+            | Self::MacroEndedBeforeHashHashOperator => {
+                write!(
+                    f,
+                    "Macro ended before '##' operator! The '##' operator can only be used inside \
+                     a macro definition."
+                )
+            },
+            | Self::MissingRightHandSideOfHashHashOperator => {
+                write!(
+                    f,
+                    "Missing right hand side of '##' operator! The '##' operator must be followed \
+                     by a macro argument or a token inside of the macro body."
+                )
+            },
         }
     }
 }
@@ -1668,6 +1685,13 @@ where
                         }
                     },
                     | HashHashOperatorState::ExpandingLhs { rhs, paren_depth } => loop {
+                        let last_token = match self.tokenizer_stack.last() {
+                            | Some(TokenizerFrame {
+                                frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
+                                ..
+                            }) => self.last_preprocessor_token.clone(),
+                            | _ => None,
+                        };
                         let token = loop {
                             match self.next_preprocessor_token_no_expand_no_hash_hash() {
                                 | Some(Err(e)) => {
@@ -1700,6 +1724,72 @@ where
                             | Some(t) => self
                                 .update_macro_argument_paren_depth(t, *name, *paren_depth)
                                 .is_none(),
+                        };
+                        if is_end_of_current_state {
+                            match rhs {
+                                | HashHashArgument::Token(t) => {
+                                    let ret =
+                                        self.merge_tokens(last_token.clone(), Some(t.clone()));
+                                    self.pop_tokenizer_frame();
+                                    return ret;
+                                },
+                                | HashHashArgument::MacroArgument(rhs_save_point, rhs_name) => {
+                                    *save_point = rhs_save_point.clone();
+                                    *name = *rhs_name;
+                                    *state = HashHashOperatorState::ExpandingRhs {
+                                        paren_depth: 1,
+                                        lhs:         last_token,
+                                    };
+                                    continue;
+                                },
+                            }
+                        }
+                        match token {
+                            | None => return None,
+                            | Some(t) => return Some(Ok(t)),
+                        }
+                    },
+                    | HashHashOperatorState::ExpandingRhs { paren_depth, lhs } => {
+                        let token = loop {
+                            match self.next_preprocessor_token_no_expand_no_hash_hash() {
+                                | Some(Err(e)) => {
+                                    self.pending_results
+                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                    continue;
+                                },
+                                | None => {
+                                    self.pending_results.push_back(Err(
+                                        PreprocessorError::InnerPreprocessorError(
+                                            InnerPreprocessorError {
+                                                error_type:
+                                                    PreprocessorErrorType::UnexpectedEndOfInput(
+                                                        "expanding function-like macro argument",
+                                                    ),
+                                                start_position: self
+                                                    .previous_phase
+                                                    .current_position(),
+                                                contents:       self.insert_into_cache("EOF"),
+                                            },
+                                        ),
+                                    ));
+                                    break None;
+                                },
+                                | Some(Ok(t)) => break Some(t),
+                            }
+                        };
+                        if let Some(token) = token {
+                            if let Some(p) =
+                                self.update_macro_argument_paren_depth(token, *name, *paren_depth)
+                            {
+                                *paren_depth = p;
+                                return self.merge_tokens(lhs.take(), Some(token));
+                            }
+                            self.pop_tokenizer_frame();
+                            continue;
+                        }
+                        return match lhs.take() {
+                            | None => None,
+                            | Some(t) => Some(Ok(t)),
                         };
                     },
                 }
@@ -1771,83 +1861,9 @@ where
                                 }
                             },
                             | TokenizerFrame {
-                                frame_type: TokenizerFrameType::HashHashOperator(state),
-                                save_point,
-                                name,
-                            } => match state {
-                                | HashHashOperatorState::ExpandingLhs {
-                                    rhs: _,
-                                    paren_depth,
-                                }
-                                | HashHashOperatorState::ExpandingRhs {
-                                    lhs: _,
-                                    paren_depth,
-                                } => {
-                                    let mut paren_depth = *paren_depth;
-                                    if let Some(paren_depth) = self
-                                        .update_macro_argument_paren_depth(
-                                            token,
-                                            *name,
-                                            paren_depth,
-                                        )
-                                    {
-                                        let TokenizerFrame {
-                                            frame_type:
-                                                TokenizerFrameType::HashHashOperator(
-                                                    HashHashOperatorState::ExpandingLhs {
-                                                        rhs: _,
-                                                        paren_depth: p,
-                                                    }
-                                                    | HashHashOperatorState::ExpandingRhs {
-                                                        lhs: _,
-                                                        paren_depth: p,
-                                                    },
-                                                ),
-                                            ..
-                                        } = self.tokenizer_stack.last_mut().unwrap()
-                                        else {
-                                            unreachable!();
-                                        };
-                                        *p = paren_depth;
-                                    } else {
-                                        match state {
-                                            | HashHashOperatorState::ExpandingLhs {
-                                                rhs,
-                                                paren_depth,
-                                            } => match rhs {
-                                                | HashHashArgument::Token(t) => {
-                                                    let ret = self
-                                                        .merge_tokens(Some(t.clone()), Some(token))
-                                                        .unwrap();
-                                                    self.pop_tokenizer_frame();
-                                                    break Some(ret);
-                                                },
-                                                | HashHashArgument::MacroArgument(save_point) => {
-                                                    *state = HashHashOperatorState::ExpandingRhs {
-                                                        lhs:         Some(token),
-                                                        paren_depth: 1,
-                                                    };
-                                                    continue;
-                                                },
-                                            },
-                                            | HashHashOperatorState::ExpandingRhs {
-                                                lhs: _,
-                                                paren_depth: _,
-                                            } => {
-                                                self.pop_tokenizer_frame();
-                                                continue;
-                                            },
-                                            | HashHashOperatorState::NothingToExpand { .. } =>
-                                                unreachable!(),
-                                        }
-                                    }
-                                    break Some(Ok(token));
-                                },
-                                | HashHashOperatorState::NothingToExpand { .. } =>
-                                    unreachable!("Handled in next_preprocessor_token_no_expand"),
-                            },
-                            | TokenizerFrame {
-                                frame_type: TokenizerFrameType::SourceFile,
+                                frame_type:
+                                    TokenizerFrameType::HashHashOperator(..)
+                                    | TokenizerFrameType::SourceFile,
                                 ..
                             } => (),
                         }
@@ -2050,7 +2066,7 @@ where
                     return Some(Err(PreprocessorError::InnerPreprocessorError(
                         InnerPreprocessorError {
                             error_type:
-                                PreprocessorErrorType::MacroEndedBeforeHashHashRightHandSide,
+                                PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
                             start_position: rhs.start_position,
                             contents:       rhs.contents,
                         },
@@ -2894,7 +2910,8 @@ where
         token: PreprocessorToken,
     ) -> HashHashArgument<Prev::SavePoint> {
         if self.is_macro_argument(token.contents) {
-            HashHashArgument::MacroArgument(self.handle_macro_argument(token).unwrap().save_point)
+            let frame = self.handle_macro_argument(token).unwrap();
+            HashHashArgument::MacroArgument(frame.save_point, frame.name)
         } else {
             HashHashArgument::Token(token)
         }
@@ -2909,7 +2926,7 @@ where
         let lhs_state = self.handle_hash_hash_argument(lhs);
         let rhs_state = self.handle_hash_hash_argument(rhs);
         let (name, save_point, state) = match (&lhs_state, &rhs_state) {
-            | (HashHashArgument::MacroArgument(save_point), _) => (
+            | (HashHashArgument::MacroArgument(save_point, name), _) => (
                 lhs.contents,
                 save_point.clone(),
                 HashHashOperatorState::ExpandingLhs {
@@ -2917,13 +2934,10 @@ where
                     paren_depth: 1,
                 },
             ),
-            | (HashHashArgument::Token(token), HashHashArgument::MacroArgument(save_point)) => (
+            | (HashHashArgument::Token(token), HashHashArgument::MacroArgument(save_point, name)) => (
                 rhs.contents,
                 save_point.clone(),
-                HashHashOperatorState::ExpandingRhs {
-                    lhs:         Some(token.clone()),
-                    paren_depth: 1,
-                },
+                HashHashOperatorState::ExpandingRhs { paren_depth: 1, lhs: Some(token.clone()) },
             ),
             | (HashHashArgument::Token(t1), HashHashArgument::Token(t2)) => (
                 lhs.contents,
