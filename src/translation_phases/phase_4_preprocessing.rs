@@ -147,7 +147,6 @@ pub(crate) fn prefix_binding_power<PrevError>(
                         error_type,
                     ),
                 source_vectors: op.source_vectors.clone(),
-                contents:       op.contents,
             },
         ))
     };
@@ -183,7 +182,6 @@ pub(crate) fn infix_binding_power<PrevError>(
                         error_type,
                     ),
                 source_vectors: op.source_vectors.clone(),
-                contents:       op.contents,
             },
         ))
     };
@@ -264,7 +262,6 @@ fn postfix_binding_power<PrevError>(
                         error_type,
                     ),
                 source_vectors: op.source_vectors.clone(),
-                contents:       op.contents,
             },
         ))
     };
@@ -623,7 +620,6 @@ pub(crate) enum TokenType {
 pub(crate) struct InnerPreprocessorError {
     pub(crate) error_type:     PreprocessorErrorType,
     pub(crate) source_vectors: SourceVectors,
-    pub(crate) contents:       StringCacheId,
 }
 
 impl Display for InnerPreprocessorError {
@@ -705,7 +701,8 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(..)
             | PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(..)
             | PreprocessorErrorType::MacroEndedBeforeHashHashOperator
-            | PreprocessorErrorType::MissingRightHandSideOfHashHashOperator => ErrorSeverity::Error,
+            | PreprocessorErrorType::MissingRightHandSideOfHashHashOperator
+            | PreprocessorErrorType::TokenMergingError(..) => ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -880,6 +877,7 @@ pub(crate) enum PreprocessorErrorType {
     IdentifierNotMacroArgumentAfterHashOperator(String),
     MacroEndedBeforeHashHashOperator,
     MissingRightHandSideOfHashHashOperator,
+    TokenMergingError(String, String),
 }
 
 impl Display for PreprocessorErrorType {
@@ -1434,6 +1432,12 @@ impl Display for PreprocessorErrorType {
                      by a macro argument or a token inside of the macro body."
                 )
             },
+            | Self::TokenMergingError(lhs, rhs) => {
+                write!(
+                    f,
+                    "Error while merging tokens! Could not merge '{lhs}' and '{rhs}'"
+                )
+            },
         }
     }
 }
@@ -1556,15 +1560,15 @@ where
                     | ControlFlow::Break(e) => break Err(e),
                 },
                 | None => {
-                    let contents = self.insert_into_cache("EOF");
                     break Err(PreprocessorError::InnerPreprocessorError(
                         InnerPreprocessorError {
-                            error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
+                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                eof_message,
+                            ),
                             source_vectors: SourceVectors::from(SourceVector {
                                 position: self.previous_phase.current_position(),
                                 length:   0,
                             }),
-                            contents,
                         },
                     ));
                 },
@@ -1602,15 +1606,15 @@ where
                     | ControlFlow::Break(e) => break Err(e),
                 },
                 | None => {
-                    let contents = self.insert_into_cache("EOF");
                     break Err(PreprocessorError::InnerPreprocessorError(
                         InnerPreprocessorError {
-                            error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
+                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                eof_message,
+                            ),
                             source_vectors: SourceVectors::from(SourceVector {
                                 position: self.previous_phase.current_position(),
                                 length:   0,
                             }),
-                            contents,
                         },
                     ));
                 },
@@ -1636,6 +1640,27 @@ where
             source_vectors: new_source_vector.as_ref().into(),
         }
     }
+    #[allow(clippy::unnecessary_wraps)]
+    fn create_merge_error(
+        &mut self,
+        lhs: &PreprocessorToken,
+        rhs: &PreprocessorToken,
+    ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
+        let lhs_contents = get_from_cache!(self, lhs.contents).to_string();
+        let rhs_contents = get_from_cache!(self, rhs.contents).to_string();
+        let source_vectors = &lhs.source_vectors + &rhs.source_vectors;
+        self.pending_results
+            .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                InnerPreprocessorError {
+                    error_type: PreprocessorErrorType::TokenMergingError(
+                        lhs_contents,
+                        rhs_contents,
+                    ),
+                    source_vectors,
+                },
+            )));
+        Some(Ok(lhs.clone()))
+    }
 
     fn merge_tokens(
         &mut self,
@@ -1647,6 +1672,37 @@ where
             | (Some(lhs), None) => Some(Ok(lhs)),
             | (None, Some(rhs)) => Some(Ok(rhs)),
             | (Some(lhs), Some(rhs)) => match (lhs.kind, rhs.kind) {
+                | (
+                    PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined,
+                    PreprocessorTokenType::Identifier
+                    | PreprocessorTokenType::Defined
+                    | PreprocessorTokenType::Number,
+                ) => {
+                    let new =
+                        self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::Identifier);
+                    let kind = if new.contents == self.insert_into_cache("defined") {
+                        PreprocessorTokenType::Defined
+                    } else {
+                        PreprocessorTokenType::Identifier
+                    };
+                    Some(Ok(PreprocessorToken {
+                        kind,
+                        contents: new.contents,
+                        source_vectors: new.source_vectors,
+                    }))
+                },
+                | (PreprocessorTokenType::Identifier, PreprocessorTokenType::String) =>
+                    if get_from_cache!(self, lhs.contents) == "L"
+                        && !get_from_cache!(self, rhs.contents).starts_with('L')
+                    {
+                        Some(Ok(self.merge_token_contents(
+                            &lhs,
+                            &rhs,
+                            PreprocessorTokenType::String,
+                        )))
+                    } else {
+                        self.create_merge_error(&lhs, &rhs)
+                    },
                 | _ => todo!(),
             },
         }
@@ -1691,7 +1747,6 @@ where
                                     continue;
                                 },
                                 | None => {
-                                    let contents = self.insert_into_cache("EOF");
                                     let start_position = self.previous_phase.current_position();
                                     self.pending_results.push_back(Err(
                                         PreprocessorError::InnerPreprocessorError(
@@ -1704,7 +1759,6 @@ where
                                                     position: start_position,
                                                     length:   0,
                                                 }),
-                                                contents,
                                             },
                                         ),
                                     ));
@@ -1763,8 +1817,7 @@ where
                                     continue;
                                 },
                                 | None => {
-                                    let contents = self.insert_into_cache("EOF");
-                                    let start_position = self.previous_phase.current_position();
+                                    let position = self.previous_phase.current_position();
                                     self.pending_results.push_back(Err(
                                         PreprocessorError::InnerPreprocessorError(
                                             InnerPreprocessorError {
@@ -1773,10 +1826,9 @@ where
                                                         "expanding function-like macro argument",
                                                     ),
                                                 source_vectors: SourceVectors::from(SourceVector {
-                                                    position: start_position,
-                                                    length:   0,
+                                                    position,
+                                                    length: 0,
                                                 }),
-                                                contents,
                                             },
                                         ),
                                     ));
@@ -1786,11 +1838,9 @@ where
                             }
                         };
                         if let Some(token) = token {
-                            if let Some(p) = self.update_macro_argument_paren_depth(
-                                &token,
-                                name,
-                                paren_depth,
-                            ) {
+                            if let Some(p) =
+                                self.update_macro_argument_paren_depth(&token, name, paren_depth)
+                            {
                                 let Some(TokenizerFrame {
                                     frame_type:
                                         TokenizerFrameType::HashHashOperator(
@@ -1957,6 +2007,7 @@ where
             | _ => None,
         }
     }
+
     #[allow(dead_code)]
     fn current_is_macro(&self) -> bool {
         self.current_macro().is_some()
@@ -1971,12 +2022,12 @@ where
             | _ => false,
         }
     }
+
     #[allow(dead_code)]
     #[allow(clippy::type_complexity)]
     fn current_function_like_macro(
         &self,
-    ) ->
-    Option<(
+    ) -> Option<(
         StringCacheId,
         Prev::SavePoint,
         Arc<HashMap<StringCacheId, FunctionLikeMacroArgument<Prev::SavePoint>>>,
@@ -1996,6 +2047,7 @@ where
             | _ => None,
         }
     }
+
     #[allow(dead_code)]
     fn current_is_function_like_macro(&self) -> bool {
         match self.tokenizer_stack.last() {
@@ -2047,7 +2099,6 @@ where
                             InnerPreprocessorError {
                                 error_type:     PreprocessorErrorType::HashHashUsedOutsideOfMacro,
                                 source_vectors: h.source_vectors,
-                                contents:       h.contents,
                             },
                         )));
                     },
@@ -2057,7 +2108,6 @@ where
                         InnerPreprocessorError {
                             error_type:     PreprocessorErrorType::MacroEndedBeforeHashHashOperator,
                             source_vectors: h.source_vectors,
-                            contents:       h.contents,
                         },
                     )));
                 }
@@ -2081,7 +2131,6 @@ where
                                 error_type:
                                     PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
                                 source_vectors: h.source_vectors,
-                                contents:       h.contents,
                             },
                         )));
                     },
@@ -2107,7 +2156,6 @@ where
                             error_type:
                                 PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
                             source_vectors: rhs.source_vectors,
-                            contents:       rhs.contents,
                         },
                     )));
                 }
@@ -2149,7 +2197,6 @@ where
                                         InnerPreprocessorError {
                                             error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
                                             source_vectors: token.source_vectors.clone(),
-                                            contents:       token.contents,
                                         },
                                     ),
                                 ));
@@ -2244,7 +2291,6 @@ where
                                                              invocation",
                                                         ),
                                                     source_vectors: token.source_vectors,
-                                                    contents:       token.contents,
                                                 },
                                             ),
                                         ));
@@ -2261,7 +2307,6 @@ where
                                         found:      arguments.len(),
                                     },
                                     source_vectors: token.source_vectors.clone(),
-                                    contents:       token.contents,
                                 },
                             )));
                         }
@@ -2310,7 +2355,6 @@ where
                                                              invocation",
                                                         ),
                                                     source_vectors: token.source_vectors,
-                                                    contents:       token.contents,
                                                 },
                                             ),
                                         ));
@@ -2459,7 +2503,6 @@ where
                         InnerPreprocessorError {
                             error_type:     PreprocessorErrorType::UnterminatedEscapeSequence,
                             source_vectors: token.source_vectors,
-                            contents:       token.contents,
                         },
                     ));
                 };
@@ -2492,7 +2535,6 @@ where
                                     error_type:
                                         PreprocessorErrorType::HexEscapeSequenceTooLarge,
                                     source_vectors: token.source_vectors.clone(),
-                                    contents:       token.contents,
                                 },
                             )));
                             continue;
@@ -2502,7 +2544,6 @@ where
                                 InnerPreprocessorError {
                                     error_type:     PreprocessorErrorType::InvalidHexEscapeSequence,
                                     source_vectors: token.source_vectors.clone(),
-                                    contents:       token.contents,
                                 },
                             )));
                             continue;
@@ -2532,7 +2573,6 @@ where
                                     error_type:
                                         PreprocessorErrorType::OctalEscapeSequenceTooLarge,
                                     source_vectors: token.source_vectors.clone(),
-                                    contents:       token.contents,
                                 }),
                             ));
                             continue;
@@ -2543,7 +2583,6 @@ where
                                     error_type:
                                         PreprocessorErrorType::InvalidOctalEscapeSequence,
                                     source_vectors: token.source_vectors.clone(),
-                                    contents:       token.contents,
                                 }),
                             ));
                             continue;
@@ -2561,7 +2600,6 @@ where
                                             error_type:
                                                 PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
                                             source_vectors: token.source_vectors.clone(),
-                                            contents:       token.contents,
                                         },
                                     )),
                                 );
@@ -2576,7 +2614,6 @@ where
                                 InnerPreprocessorError {
                                     error_type:     PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence,
                                     source_vectors: token.source_vectors.clone(),
-                                    contents:       token.contents,
                                 },
                             )));
                             continue;
@@ -2594,7 +2631,6 @@ where
                                             error_type:
                                                 PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall,
                                             source_vectors: token.source_vectors.clone(),
-                                            contents:       token.contents,
                                         },
                                     )),
                                 );
@@ -2609,7 +2645,6 @@ where
                                 InnerPreprocessorError {
                                     error_type:     PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence,
                                     source_vectors: token.source_vectors.clone(),
-                                    contents:       token.contents,
                                 },
                             )));
                             continue;
@@ -2621,7 +2656,6 @@ where
                             InnerPreprocessorError {
                                 error_type:     PreprocessorErrorType::InvalidEscapeSequence,
                                 source_vectors: token.source_vectors.clone(),
-                                contents:       token.contents,
                             },
                         )));
                         continue;
@@ -2717,7 +2751,6 @@ where
                                 error_type:
                                     PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
                                 source_vectors: token.source_vectors.clone(),
-                                contents:       token.contents,
                             }),
                         ));
                     }
@@ -2942,7 +2975,6 @@ where
                     InnerPreprocessorError {
                         error_type:     PreprocessorErrorType::HashHashUsedOutsideOfMacro,
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 )));
             },
@@ -3026,7 +3058,6 @@ where
                                 t.kind,
                             ),
                         source_vectors: t.source_vectors,
-                        contents:       t.contents,
                     },
                 ))
             },
@@ -3046,7 +3077,6 @@ where
                                     get_from_cache!(self, macro_name.contents).to_owned(),
                                 ),
                             source_vectors: macro_name.source_vectors,
-                            contents:       macro_name.contents,
                         },
                     ));
                 },
@@ -3128,7 +3158,6 @@ where
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
                     source_vectors: token.source_vectors,
-                    contents:       token.contents,
                 },
             ));
         }
@@ -3154,7 +3183,6 @@ where
                     InnerPreprocessorError {
                         error_type:     PreprocessorErrorType::HashMustBeFollowedByIdentifier,
                         source_vectors: directive.source_vectors,
-                        contents:       directive.contents,
                     },
                 )),
         }
@@ -3175,7 +3203,6 @@ where
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::UnknownDirective,
                     source_vectors: directive.source_vectors,
-                    contents:       directive.contents,
                 },
             )),
         }
@@ -3273,7 +3300,6 @@ where
                     InnerPreprocessorError {
                         error_type:     no_condition_error_type,
                         source_vectors: directive.source_vectors.clone(),
-                        contents:       directive.contents,
                     },
                 )),
             | Err(e) => return Err(e),
@@ -3300,7 +3326,6 @@ where
                                         error_type:
                                             PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression,
                                         source_vectors: token.source_vectors,
-                                        contents:       token.contents,
                                     },
                                 ));
                         };
@@ -3348,12 +3373,10 @@ where
                                             error_type:
                                                 PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(token.kind),
                                             source_vectors: token.source_vectors,
-                                            contents:       token.contents,
                                         },
                                     ))
                                 },
                                 | None => {
-                                    let contents = self.insert_into_cache("EOF");
                                     return Err(PreprocessorError::InnerPreprocessorError(
                                         InnerPreprocessorError {
                                             error_type:
@@ -3364,7 +3387,6 @@ where
                                                     length: 0,
                                                 }
                                             ),
-                                            contents,
                                         },
                                     ));
                                 },
@@ -3389,12 +3411,10 @@ where
                                                     token.kind,
                                                 ),
                                             source_vectors: token.source_vectors,
-                                            contents:       token.contents,
                                         },
                                     ))
                                 },
                                 | None => {
-                                    let contents = self.insert_into_cache("EOF");
                                     return Err(PreprocessorError::InnerPreprocessorError(
                                         InnerPreprocessorError {
                                             error_type:
@@ -3405,7 +3425,6 @@ where
                                                     length: 0,
                                                 }
                                             ),
-                                            contents,
                                         },
                                     ));
                                 },
@@ -3424,12 +3443,10 @@ where
                                                         token.kind,
                                                     ),
                                                 source_vectors: token.source_vectors,
-                                                contents:       token.contents,
                                             },
                                         ))
                                     },
                                     | None => {
-                                        let contents = self.insert_into_cache("EOF");
                                         return Err(PreprocessorError::InnerPreprocessorError(
                                             InnerPreprocessorError {
                                                 error_type:
@@ -3438,7 +3455,6 @@ where
                                                     position,
                                                     length: 0,
                                                 }),
-                                                contents,
                                             },
                                         ));
                                     },
@@ -3460,7 +3476,6 @@ where
                                                 token.kind,
                                             ),
                                         source_vectors: token.source_vectors,
-                                        contents:       token.contents,
                                     },
                                 ));
                         };
@@ -3532,7 +3547,6 @@ where
                                     error_type:
                                         PreprocessorErrorType::NoExpressionAfterQuestionMarkInConditionalExpression,
                                     source_vectors: op.source_vectors,
-                                    contents:       op.contents,
                                 },
                             ));
                     };
@@ -3546,12 +3560,10 @@ where
                                     error_type:
                                         PreprocessorErrorType::NoColonAfterQuestionMarkInConditionalExpression(token.kind),
                                     source_vectors: token.source_vectors,
-                                    contents:       token.contents,
                                 },
                             ))
                         },
                         | None => {
-                            let contents = self.insert_into_cache("EOF");
                             let position = self.previous_phase.current_position();
                             return Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
@@ -3561,7 +3573,6 @@ where
                                         position,
                                         length: 0,
                                     }),
-                                    contents,
                                 },
                             ));
                         },
@@ -3577,7 +3588,6 @@ where
                                     error_type:
                                         PreprocessorErrorType::NoExpressionAfterColonInConditionalExpression,
                                     source_vectors: op.source_vectors,
-                                    contents:       op.contents,
                                 },
                             ));
                     };
@@ -3601,7 +3611,6 @@ where
                                             op.kind,
                                         ),
                                     source_vectors: op.source_vectors,
-                                    contents:       op.contents,
                                 },
                             ));
                     };
@@ -3633,7 +3642,6 @@ where
                             error_type:
                                 PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression,
                             source_vectors: token.source_vectors,
-                            contents:       token.contents,
                         },
                     )));
                 Ok(PreprocessorAtom {
@@ -3684,7 +3692,6 @@ where
                         token.kind,
                     ),
                     source_vectors: token.source_vectors,
-                    contents:       token.contents,
                 },
             )),
         }
@@ -3694,7 +3701,7 @@ where
         &mut self,
         position: SourcePosition,
         save_point: Prev::SavePoint,
-        contents: StringCacheId,
+        _contents: StringCacheId,
     ) -> PreprocessorError<Prev::Error> {
         self.previous_phase.restore(save_point);
         let source_vectors = SourceVectors::from(SourceVector {
@@ -3704,7 +3711,6 @@ where
         PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
             error_type: PreprocessorErrorType::UnterminatedParenthesesInPreprocessorExpression,
             source_vectors,
-            contents,
         })
     }
 
@@ -3734,7 +3740,6 @@ where
                                                     "parsing dead code. Expected #endif instead",
                                                 ),
                                             source_vectors: token.source_vectors,
-                                            contents:       token.contents,
                                         },
                                     )),
                             }
@@ -3747,14 +3752,12 @@ where
                                     InnerPreprocessorError {
                                         error_type: PreprocessorErrorType::ExpectedIdentifierInPreprocessorDirective(token.kind),
                                         source_vectors: token.source_vectors,
-                                        contents: token.contents,
                                     },
                                 )),
                                 | None => return Err(PreprocessorError::InnerPreprocessorError(
                                     InnerPreprocessorError {
                                         error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing dead code. Expected #endif instead."),
                                         source_vectors: token.source_vectors,
-                                        contents: token.contents,
                                     },
                                 ))
                             }
@@ -3813,7 +3816,6 @@ where
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
                     source_vectors: directive.source_vectors.clone(),
-                    contents:       directive.contents,
                 },
             ));
         }
@@ -3830,7 +3832,6 @@ where
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
                     source_vectors: directive.source_vectors.clone(),
-                    contents:       directive.contents,
                 },
             ));
         }
@@ -3848,7 +3849,6 @@ where
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
                     source_vectors: directive.source_vectors.clone(),
-                    contents:       directive.contents,
                 },
             ));
         }
@@ -3874,7 +3874,6 @@ where
                             token.kind,
                         ),
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -3905,7 +3904,6 @@ where
                             token.kind,
                         ),
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -3949,7 +3947,6 @@ where
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::HeaderNotFound,
                     source_vectors: include_token.source_vectors.clone(),
-                    contents:       include_token.contents,
                 },
             ));
         }
@@ -3968,7 +3965,6 @@ where
             PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
                 error_type:     PreprocessorErrorType::CurrentWorkingDirectoryInaccessible,
                 source_vectors: include_token.source_vectors.clone(),
-                contents:       include_token.contents,
             })
         })?;
         if let Some(header) = Self::search_for_header_in(path, &[cwd]) {
@@ -3979,7 +3975,6 @@ where
             InnerPreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderNotFound,
                 source_vectors: include_token.source_vectors.clone(),
-                contents:       include_token.contents,
             },
         ))
     }
@@ -4005,7 +4000,6 @@ where
                                 token.kind,
                             ),
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -4047,14 +4041,12 @@ where
                             contents.push_str(get_from_cache!(self, token.contents));
                         },
                         | None => {
-                            let contents = self.insert_into_cache("EOF");
                             return Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
-                                    error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                                         "parsing include directive",
                                     ),
                                     source_vectors: directive.source_vectors.clone(),
-                                    contents,
                                 },
                             ));
                         },
@@ -4074,7 +4066,6 @@ where
             PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderFileInaccessible,
                 source_vectors: directive.source_vectors.clone(),
-                contents:       directive.contents,
             })
         })?;
         let name = self.insert_into_cache(&header_path.to_string_lossy());
@@ -4106,7 +4097,6 @@ where
                             token.kind,
                         ),
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -4130,7 +4120,6 @@ where
                                     get_from_cache!(self, name.contents).to_owned(),
                                 ),
                                 source_vectors: name.source_vectors.clone(),
-                                contents:       name.contents,
                             },
                         ),
                     ));
@@ -4155,14 +4144,12 @@ where
                     break None;
                 },
                 | None => {
-                    let contents = self.insert_into_cache("EOF");
                     return Err(PreprocessorError::InnerPreprocessorError(
                         InnerPreprocessorError {
-                            error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                                 "parsing macro definition",
                             ),
                             source_vectors: name.source_vectors,
-                            contents,
                         },
                     ));
                 },
@@ -4183,7 +4170,6 @@ where
                                 get_from_cache!(self, name.contents).to_owned(),
                             ),
                         source_vectors: name.source_vectors.clone(),
-                        contents:       name.contents,
                     },
                 )));
             }
@@ -4210,7 +4196,6 @@ where
                                         token.kind,
                                     ),
                                 source_vectors: token.source_vectors,
-                                contents:       token.contents,
                             },
                         ))
                     },
@@ -4225,7 +4210,6 @@ where
                                         get_from_cache!(self, name.contents).to_owned(),
                                     ),
                                 source_vectors: name.source_vectors.clone(),
-                                contents:       name.contents,
                             },
                         )));
                 }
@@ -4248,7 +4232,6 @@ where
                             InnerPreprocessorError {
                                 error_type:     PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(token.kind),
                                 source_vectors: token.source_vectors,
-                                contents:       token.contents,
                             },
                         ))
                     },
@@ -4282,7 +4265,6 @@ where
                                 get_from_cache!(self, name.contents).to_owned(),
                             ),
                         source_vectors: name.source_vectors.clone(),
-                        contents:       name.contents,
                     },
                 )));
             }
@@ -4330,7 +4312,6 @@ where
                                         get_from_cache!(self, name.contents).to_owned(),
                                     ),
                                 source_vectors: name.source_vectors.clone(),
-                                contents:       name.contents,
                             },
                         )));
                     error_has_been_generated = true;
@@ -4373,7 +4354,6 @@ where
                             token.kind,
                         ),
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -4394,7 +4374,6 @@ where
                             token.kind,
                         ),
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -4449,7 +4428,6 @@ where
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::IntegerLiteralOverflow,
                     source_vectors: token.source_vectors,
-                    contents:       token.contents,
                 },
             ));
         };
@@ -4491,7 +4469,6 @@ where
                 InnerPreprocessorError {
                     error_type:     invalid_integer_literal_error,
                     source_vectors: token.source_vectors,
-                    contents:       token.contents,
                 },
             ));
         }
@@ -4514,7 +4491,6 @@ where
                             to:   UnsignedIntegerLiteralType::UnsignedLongLong,
                         },
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -4541,7 +4517,6 @@ where
                             to:   UnsignedIntegerLiteralType::UnsignedLong,
                         },
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -4563,7 +4538,6 @@ where
                             to:   UnsignedIntegerLiteralType::UnsignedLong,
                         },
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -4586,7 +4560,6 @@ where
                             to:   UnsignedIntegerLiteralType::UnsignedLong,
                         },
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -4603,7 +4576,6 @@ where
                             to:   SignedIntegerLiteralType::Long,
                         },
                         source_vectors: token.source_vectors,
-                        contents:       token.contents,
                     },
                 ))
             },
@@ -4699,14 +4671,12 @@ where
                 InnerPreprocessorError {
                     error_type:     invalid_float_literal_error,
                     source_vectors: token.source_vectors,
-                    contents:       token.contents,
                 },
             )),
             | Err(ParseFloatError::Overflow(kind)) => Err(
                 PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::FloatLiteralOverflow(kind),
                     source_vectors: token.source_vectors,
-                    contents:       token.contents,
                 }),
             ),
         }
@@ -4772,7 +4742,6 @@ where
                                     position: self.current_position(),
                                     length:   0,
                                 }),
-                                contents:       self.insert_into_cache("EOF"),
                             },
                         )));
                     }
