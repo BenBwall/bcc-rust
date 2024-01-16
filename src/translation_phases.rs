@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     convert::Infallible,
     fmt::{
         Debug,
@@ -6,6 +7,9 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
+    hash::Hash,
+    ops::Deref,
+    sync::Arc,
 };
 
 use owo_colors::OwoColorize;
@@ -47,19 +51,141 @@ impl Display for ErrorSeverity {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
-pub(crate) struct Position {
+pub(crate) struct SourcePosition {
     pub(crate) index:       usize,
     pub(crate) line:        usize,
     pub(crate) column:      usize,
     pub(crate) source_file: StringCacheId,
 }
 
-pub(crate) trait SavePoint: Clone + Debug {
-    fn current_position(&self) -> Position;
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+pub(crate) struct SourceVector {
+    pub(crate) position: SourcePosition,
+    pub(crate) length:   usize,
 }
 
-impl SavePoint for Position {
-    fn current_position(&self) -> Position {
+pub(crate) struct SourceVectors {
+    inner: SourceVectorsInner,
+}
+
+impl PartialEq for SourceVectors {
+    fn eq(&self, other: &Self) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl Eq for SourceVectors {}
+
+impl Clone for SourceVectors {
+    fn clone(&self) -> Self {
+        Self {
+            inner: match &self.inner {
+                | SourceVectorsInner::Empty => SourceVectorsInner::Empty,
+                | SourceVectorsInner::Inline(sv) => SourceVectorsInner::Inline(*sv),
+                | SourceVectorsInner::Multiple(svs) => SourceVectorsInner::Multiple(svs.clone()),
+            },
+        }
+    }
+}
+
+impl Hash for SourceVectors {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.deref().hash(state)
+    }
+}
+
+enum SourceVectorsInner {
+    Empty,
+    Inline(SourceVector),
+    Multiple(Arc<[SourceVector]>),
+}
+
+impl Debug for SourceVectors {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        self.deref().fmt(f)
+    }
+}
+
+impl Deref for SourceVectors {
+    type Target = [SourceVector];
+
+    fn deref(&self) -> &Self::Target {
+        match &self.inner {
+            | SourceVectorsInner::Inline(sv) => std::slice::from_ref(sv),
+            | SourceVectorsInner::Multiple(svs) => svs,
+            | SourceVectorsInner::Empty => &[],
+        }
+    }
+}
+
+impl AsRef<[SourceVector]> for SourceVectors {
+    fn as_ref(&self) -> &[SourceVector] {
+        self
+    }
+}
+
+impl Borrow<[SourceVector]> for SourceVectors {
+    fn borrow(&self) -> &[SourceVector] {
+        self
+    }
+}
+
+impl Default for SourceVectors {
+    fn default() -> Self {
+        Self {
+            inner: SourceVectorsInner::Empty,
+        }
+    }
+}
+
+impl SourceVectors {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn lengths(&self) -> usize {
+        self.iter().map(|sv| sv.length).sum()
+    }
+}
+
+impl From<Arc<[SourceVector]>> for SourceVectors {
+    fn from(v: Arc<[SourceVector]>) -> Self {
+        Self {
+            inner: match v.len() {
+                | 0 => SourceVectorsInner::Empty,
+                | 1 => SourceVectorsInner::Inline(v[0]),
+                | _ => SourceVectorsInner::Multiple(v),
+            },
+        }
+    }
+}
+
+impl From<SourceVector> for SourceVectors {
+    fn from(v: SourceVector) -> Self {
+        Self {
+            inner: SourceVectorsInner::Inline(v),
+        }
+    }
+}
+
+impl<'a> From<&'a [SourceVector]> for SourceVectors {
+    fn from(v: &'a [SourceVector]) -> Self {
+        Self {
+            inner: match v.len() {
+                | 0 => SourceVectorsInner::Empty,
+                | 1 => SourceVectorsInner::Inline(v[0]),
+                | _ => SourceVectorsInner::Multiple(v.into()),
+            },
+        }
+    }
+}
+
+pub(crate) trait SavePoint: Clone + Debug {
+    fn current_position(&self) -> SourcePosition;
+}
+
+impl SavePoint for SourcePosition {
+    fn current_position(&self) -> SourcePosition {
         *self
     }
 }
@@ -81,17 +207,17 @@ impl GetSeverity for Infallible {
 }
 
 pub(crate) trait GetPosition {
-    fn position(&self) -> Position;
+    fn position(&self) -> SourcePosition;
 }
 
-impl GetPosition for Position {
-    fn position(&self) -> Position {
+impl GetPosition for SourcePosition {
+    fn position(&self) -> SourcePosition {
         *self
     }
 }
 
 impl GetPosition for Infallible {
-    fn position(&self) -> Position {
+    fn position(&self) -> SourcePosition {
         match *self {}
     }
 }
@@ -104,5 +230,5 @@ pub(crate) trait TranslationPhase:
     type Error: std::error::Error + GetSeverity + GetPosition + PartialEq;
     fn save(&self) -> Self::SavePoint;
     fn restore(&mut self, save_point: Self::SavePoint);
-    fn current_position(&self) -> Position;
+    fn current_position(&self) -> SourcePosition;
 }

@@ -4,7 +4,7 @@ use super::{
     ErrorSeverity,
     GetPosition,
     GetSeverity,
-    Position,
+    SourcePosition,
     TranslationPhase,
 };
 
@@ -32,7 +32,7 @@ impl<PrevError> GetPosition for MapCharacterSetsError<PrevError>
 where
     PrevError: GetPosition,
 {
-    fn position(&self) -> Position {
+    fn position(&self) -> SourcePosition {
         self.inner.position()
     }
 }
@@ -46,7 +46,7 @@ impl<Inner> super::SavePoint for SavePoint<Inner>
 where
     Inner: super::SavePoint,
 {
-    fn current_position(&self) -> Position {
+    fn current_position(&self) -> SourcePosition {
         self.inner.current_position()
     }
 }
@@ -129,7 +129,7 @@ where
         self.previous_phase.restore(save_point.inner);
     }
 
-    fn current_position(&self) -> Position {
+    fn current_position(&self) -> SourcePosition {
         self.previous_phase.current_position()
     }
 }
