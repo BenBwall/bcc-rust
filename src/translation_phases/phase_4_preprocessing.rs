@@ -596,6 +596,7 @@ pub(crate) enum OperatorTokenType {
     AmpersandEquals,
     CaretEquals,
     PipeEquals,
+    Ellipsis,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -1796,7 +1797,7 @@ where
     fn next_preprocessor_token_no_expand(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
-        loop {
+        let ret = 'outer: loop {
             if let Some(TokenizerFrame {
                 frame_type: TokenizerFrameType::HashHashOperator(state),
                 save_point: _,
@@ -1813,7 +1814,7 @@ where
                                 self.pop_tokenizer_frame();
                                 continue;
                             },
-                            | Some(v) => return Some(v),
+                            | Some(v) => break Some(v),
                         }
                     },
                     | HashHashOperatorState::ExpandingLhs { rhs, paren_depth } => loop {
@@ -1864,7 +1865,7 @@ where
                                     let ret =
                                         self.merge_tokens(last_token.clone(), Some(t.clone()));
                                     self.pop_tokenizer_frame();
-                                    return ret;
+                                    break 'outer ret;
                                 },
                                 | HashHashArgument::MacroArgument(rhs_save_point, rhs_name) => {
                                     let Some(TokenizerFrame {
@@ -1886,8 +1887,8 @@ where
                             }
                         }
                         match token {
-                            | None => return None,
-                            | Some(t) => return Some(Ok(t)),
+                            | None => break 'outer None,
+                            | Some(t) => break 'outer Some(Ok(t)),
                         }
                     },
                     | HashHashOperatorState::ExpandingRhs {
@@ -1941,7 +1942,7 @@ where
                                 };
                                 *paren_depth = p;
                                 let lhs = lhs.take();
-                                return self.merge_tokens(lhs, Some(token));
+                                break 'outer self.merge_tokens(lhs, Some(token));
                             }
                             self.pop_tokenizer_frame();
                             continue;
@@ -1959,21 +1960,29 @@ where
                         else {
                             unreachable!();
                         };
-                        return match lhs.take() {
+                        break 'outer match lhs.take() {
                             | None => None,
                             | Some(t) => Some(Ok(t)),
                         };
                     },
                 }
             }
-            return self.next_preprocessor_token_no_expand_no_hash_hash();
+            break self.next_preprocessor_token_no_expand_no_hash_hash();
+        };
+        match ret? {
+            | Err(e) => Some(Err(e)),
+            | Ok(t) => {
+                self.last_preprocessor_token = self.current_preprocessor_token.clone();
+                self.current_preprocessor_token = Some(t.clone());
+                Some(Ok(t))
+            },
         }
     }
 
     fn next_preprocessor_token_no_expand_no_hash_hash(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
-        let ret = loop {
+        loop {
             self.last_preprocessor_token = self.current_preprocessor_token.clone();
             if self.tokenizer_stack.last().is_some() {
                 match self.previous_phase.next() {
@@ -2048,13 +2057,6 @@ where
                 }
             }
             break None;
-        }?;
-        match ret {
-            | Err(e) => Some(Err(e)),
-            | Ok(t) => {
-                self.current_preprocessor_token = Some(t.clone());
-                Some(Ok(t))
-            },
         }
     }
 
@@ -2808,7 +2810,7 @@ where
                 ) {
                     self.parse_hash_operator(token, &contents)
                 } else {
-                    match self.parse_directive(token, &contents) {
+                    match self.parse_directive(&token, &contents) {
                         | Ok(()) => return None,
                         | Err(e) => Err(e),
                     }
@@ -3055,6 +3057,10 @@ where
                 token,
                 OperatorTokenType::ExclamationMark,
             )),
+            | PreprocessorTokenType::Ellipsis => Ok(Self::build_operator_token(
+                token,
+                OperatorTokenType::Ellipsis,
+            )),
             | PreprocessorTokenType::HashHash => {
                 return Some(Err(PreprocessorError::InnerPreprocessorError(
                     InnerPreprocessorError {
@@ -3064,7 +3070,7 @@ where
                 )));
             },
 
-            | x => todo!("Not implemented: {x:#?}"),
+            | x => todo!("{x:#?}"),
         })
     }
 
@@ -3232,19 +3238,23 @@ where
 
     fn parse_directive(
         &mut self,
-        token: PreprocessorToken,
+        token: &PreprocessorToken,
         _contents: &str,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
+        println!("Parsing directive {:?}", token.contents);
         if !matches!(
             self.last_preprocessor_token.as_ref().map(|p| p.kind),
             None | Some(PreprocessorTokenType::Newline)
         ) {
-            return Err(PreprocessorError::InnerPreprocessorError(
+            eprintln!("Last token: {:?}", self.last_preprocessor_token);
+            eprintln!("Current token: {:?}", self.current_preprocessor_token);
+            eprintln!("String cache: {}", self.previous_phase.as_ref());
+            self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
-                    source_vectors: token.source_vectors,
+                    source_vectors: token.source_vectors.clone(),
                 },
-            ));
+            )));
         }
         let directive = loop {
             match self.next_preprocessor_token_no_expand() {
@@ -4187,6 +4197,7 @@ where
             },
             "parsing define directive",
         )?;
+        println!("Defining macro: {:#?}", name.contents);
         let old_definition = self.macro_definitions.get(&name.contents).cloned();
         let save_point = self.previous_phase.save();
         let old_save_point = match old_definition {
