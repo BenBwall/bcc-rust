@@ -1,6 +1,7 @@
 {
   "cSpell.words": [
     "abcabcbb",
+    "arrayvec",
     "bigdecimal",
     "canonicalize",
     "chrono",
@@ -24,6 +25,7 @@
     "scopeguard",
     "sltt",
     "smallstr",
+    "smallvec",
     "strtod",
     "strtof",
     "strtold",

@@ -4,7 +4,7 @@ use std::{
 };
 
 use super::{
-    Position,
+    SourcePosition,
     TranslationPhase,
 };
 use crate::util::string_cache::Id as StringCacheId;
@@ -12,19 +12,19 @@ use crate::util::string_cache::Id as StringCacheId;
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct NewlineTracking {
     source: Arc<str>,
-    position: Position,
+    position: SourcePosition,
     is_middle_of_windows_newline: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct SavePoint {
     pub(crate) source: Arc<str>,
-    pub(crate) position: Position,
+    pub(crate) position: SourcePosition,
     pub(crate) is_middle_of_windows_newline: bool,
 }
 
 impl super::SavePoint for SavePoint {
-    fn current_position(&self) -> Position {
+    fn current_position(&self) -> SourcePosition {
         self.position
     }
 }
@@ -34,7 +34,7 @@ impl NewlineTracking {
         Self {
             is_middle_of_windows_newline: false,
             source,
-            position: Position {
+            position: SourcePosition {
                 index: 0,
                 line: 1,
                 column: 1,
@@ -43,14 +43,14 @@ impl NewlineTracking {
         }
     }
 
-    pub(crate) fn positions(self) -> impl Iterator<Item = Position> {
+    pub(crate) fn positions(self) -> impl Iterator<Item = SourcePosition> {
         struct Positions {
             super_: NewlineTracking,
         }
         impl Iterator for Positions {
-            type Item = Position;
+            type Item = SourcePosition;
 
-            fn next(&mut self) -> Option<Position> {
+            fn next(&mut self) -> Option<SourcePosition> {
                 let ret = self.super_.position;
                 let _ = self.super_.next()?;
                 Some(ret)
@@ -128,7 +128,7 @@ impl TranslationPhase for NewlineTracking {
         self.is_middle_of_windows_newline = save_point.is_middle_of_windows_newline;
     }
 
-    fn current_position(&self) -> Position {
+    fn current_position(&self) -> SourcePosition {
         self.position
     }
 }
@@ -140,7 +140,7 @@ mod tests {
     use rstest::rstest;
 
     use crate::{
-        translation_phases::Position,
+        translation_phases::SourcePosition,
         util::string_cache::{
             Id,
             StringCache,
@@ -157,8 +157,8 @@ mod tests {
 
     const ID0: Id = Id::from_usize(0);
 
-    fn position(index: usize, line: usize, column: usize) -> Position {
-        Position {
+    fn position(index: usize, line: usize, column: usize) -> SourcePosition {
+        SourcePosition {
             index,
             line,
             column,
@@ -191,7 +191,7 @@ mod tests {
         position(1, 1, 2),
         position(2, 2, 1),
     ])]
-    fn test_current_position(#[case] input: &str, #[case] expected: Vec<Position>) {
+    fn test_current_position(#[case] input: &str, #[case] expected: Vec<SourcePosition>) {
         let mut string_cache = StringCache::new();
         let phase = super::NewlineTracking::new(input.into(), string_cache.intern("<input>"));
         let actual = phase.positions().collect::<Vec<_>>();

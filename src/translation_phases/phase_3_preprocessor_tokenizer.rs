@@ -10,9 +10,10 @@ use super::{
     ErrorSeverity,
     GetPosition,
     GetSeverity,
-    Position,
     SavePoint as ISavePoint,
-    TranslationPhase,
+    SourcePosition,
+    SourceVector,
+    TranslationPhase, SourceVectors,
 };
 use crate::util::string_cache::{
     Id as StringCacheId,
@@ -108,7 +109,7 @@ impl<PrevSavePoint> super::SavePoint for SavePoint<PrevSavePoint>
 where
     PrevSavePoint: super::SavePoint,
 {
-    fn current_position(&self) -> Position {
+    fn current_position(&self) -> SourcePosition {
         self.inner.current_position()
     }
 }
@@ -148,7 +149,7 @@ impl Display for PreprocessorTokenizerErrorType {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct InnerPreprocessorTokenizerError {
-    start_position: Position,
+    start_position: SourcePosition,
     length:         usize,
     error_type:     PreprocessorTokenizerErrorType,
     contents:       StringCacheId,
@@ -180,7 +181,7 @@ impl<PrevError> GetPosition for PreprocessorTokenizerError<PrevError>
 where
     PrevError: GetPosition,
 {
-    fn position(&self) -> Position {
+    fn position(&self) -> SourcePosition {
         match self {
             | Self::ErrorFromPrev(e) => e.position(),
             | Self::TokenizerError(e) => e.start_position,
@@ -289,7 +290,7 @@ where
         self.current_token_start = save_point.current_token_start;
     }
 
-    fn current_position(&self) -> Position {
+    fn current_position(&self) -> SourcePosition {
         self.previous_phase.current_position()
     }
 }
@@ -354,10 +355,12 @@ where
         let start_position = self.current_token_start.current_position();
 
         Ok(PreprocessorToken {
-            start_position,
-            length: self.current_position().index - start_position.index,
-            kind: token_type,
-            contents: self.string_cache.intern(contents.as_str()),
+            source_vectors: SourceVector {
+                position: start_position,
+                length:   self.current_position().index - start_position.index,
+            }.into(),
+            kind:          token_type,
+            contents:      self.string_cache.intern(contents.as_str()),
         })
     }
 
@@ -1153,12 +1156,11 @@ pub(crate) enum PreprocessorTokenType {
     HashHash,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PreprocessorToken {
-    pub(crate) kind:           PreprocessorTokenType,
-    pub(crate) start_position: Position,
-    pub(crate) contents:       StringCacheId,
-    pub(crate) length:         usize,
+    pub(crate) kind:          PreprocessorTokenType,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) contents:      StringCacheId,
 }
 
 #[cfg(test)]
@@ -1167,7 +1169,6 @@ mod tests {
 
     use pretty_assertions::assert_eq;
     use rstest::rstest;
-
     use super::*;
     use crate::{
         translation_phases::{
@@ -1190,7 +1191,7 @@ mod tests {
 
     #[rstest]
     #[case("", vec![
-        Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
             index:       0,
             line:        1,
             column:      1,
@@ -1198,19 +1199,21 @@ mod tests {
         })))),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Newline,
-            start_position: Position {
-                index: 0,
-                line: 1,
-                column: 1,
-                source_file: StringCacheId::from_usize(0),
-            },
-            length: 0,
+            source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
+                    index: 0,
+                    line: 1,
+                    column: 1,
+                    source_file: StringCacheId::from_usize(0),
+                },
+                length: 0,
+            }),
             contents: StringCacheId::from_usize(1),
 
         })
     ])]
     #[case("1", vec![
-        Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
             index:       1,
             line:        1,
             column:      2,
@@ -1218,63 +1221,73 @@ mod tests {
         })))),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Number,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 0,
                 line: 1,
                 column: 1,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 1,
+        }),
             contents: StringCacheId::from_usize(1),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Newline,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 1,
                 line: 1,
                 column: 2,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 0,
+        }),
             contents: StringCacheId::from_usize(2),
         }),
     ])]
     #[case("int x = @1;\n", vec![
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Identifier,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 0,
                 line: 1,
                 column: 1,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 3,
+        }),
             contents: StringCacheId::from_usize(1),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Identifier,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 4,
                 line: 1,
                 column: 5,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 1,
+        }),
             contents: StringCacheId::from_usize(2),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Equals,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 6,
                 line: 1,
                 column: 7,
                 source_file: StringCacheId::from_usize(0),
             },
-            length: 1,
+        
+            length: 1,}),
             contents: StringCacheId::from_usize(3),
         }),
         Err(PreprocessorTokenizerError::TokenizerError(InnerPreprocessorTokenizerError {
-            start_position: Position {
+            start_position: SourcePosition {
                 index: 8,
                 line: 1,
                 column: 9,
@@ -1286,35 +1299,41 @@ mod tests {
         })),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Number,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 9,
                 line: 1,
                 column: 10,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 1,
+        }),
             contents: StringCacheId::from_usize(5),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::SemiColon,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 10,
                 line: 1,
                 column: 11,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 1,
+        }),
             contents: StringCacheId::from_usize(6),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Newline,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 11,
                 line: 1,
                 column: 12,
                 source_file: StringCacheId::from_usize(0),
             },
-            length: 1,
+        
+            length: 1,}),
             contents: StringCacheId::from_usize(7),
         }),
     ])]
@@ -1322,159 +1341,187 @@ mod tests {
         vec![
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Hash,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 0,
                     line: 1,
                     column: 1,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(1),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Identifier,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 1,
                     line: 1,
                     column: 2,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 6,
+            }),
                 contents: StringCacheId::from_usize(2),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Identifier,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 8,
                     line: 1,
                     column: 9,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 3,
+            }),
                 contents: StringCacheId::from_usize(3),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::OpeningParenthesis,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 11,
                     line: 1,
                     column: 12,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(4),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Identifier,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 12,
                     line: 1,
                     column: 13,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(5),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Comma,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 13,
                     line: 1,
                     column: 14,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(6),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Identifier,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 15,
                     line: 1,
                     column: 16,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(7),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::ClosingParenthesis,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 16,
                     line: 1,
                     column: 17,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(8),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Identifier,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 18,
                     line: 1,
                     column: 19,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(5),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::GreaterThan,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 20,
                     line: 1,
                     column: 21,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(9),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Identifier,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 22,
                     line: 1,
                     column: 23,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(7),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::QuestionMark,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 29,
                     line: 2,
                     column: 5,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(10),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Identifier,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 31,
                     line: 2,
                     column: 7,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(5),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Colon,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 38,
                     line: 3,
                     column: 5,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(11),
             }),
-            Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+            Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
                 index:       41,
                 line:        3,
                 column:      8,
@@ -1482,24 +1529,28 @@ mod tests {
             })))),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Identifier,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 40,
                     line: 3,
                     column: 7,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 1,
+            }),
                 contents: StringCacheId::from_usize(7),
             }),
             Ok(PreprocessorToken {
                 kind: PreprocessorTokenType::Newline,
-                start_position: Position {
+                source_vectors: SourceVectors::from(SourceVector {
+                position: SourcePosition {
                     index: 41,
                     line: 3,
                     column: 8,
                     source_file: StringCacheId::from_usize(0),
                 },
                 length: 0,
+            }),
                 contents: StringCacheId::from_usize(12),
             }),
         ]
@@ -1507,106 +1558,124 @@ mod tests {
     #[case("const char *str = \"Hello, World!\\n\";\n", vec![
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Identifier,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 0,
                 line: 1,
                 column: 1,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 5,
+        }),
             contents: StringCacheId::from_usize(1),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Identifier,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 6,
                 line: 1,
                 column: 7,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 4,
+        }),
             contents: StringCacheId::from_usize(2),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Asterisk,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 11,
                 line: 1,
                 column: 12,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 1,
+        }),
             contents: StringCacheId::from_usize(3),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Identifier,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 12,
                 line: 1,
                 column: 13,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 3,
+        }),
             contents: StringCacheId::from_usize(4),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Equals,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 16,
                 line: 1,
                 column: 17,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 1,
+        }),
             contents: StringCacheId::from_usize(5),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::String,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 18,
                 line: 1,
                 column: 19,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 17,
+        }),
             contents: StringCacheId::from_usize(6),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::SemiColon,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 35,
                 line: 1,
                 column: 36,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 1,
+        }),
             contents: StringCacheId::from_usize(7),
         }),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Newline,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 36,
                 line: 1,
                 column: 37,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 1,
+        }),
             contents: StringCacheId::from_usize(8),
         }),
     ])]
     #[case("\"\\\"\"", vec![
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::String,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 0,
                 line: 1,
                 column: 1,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 4,
+        }),
             contents: StringCacheId::from_usize(1),
         }),
-        Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+        Err(PreprocessorTokenizerError::ErrorFromPrev(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
             index:       4,
             line:        1,
             column:      5,
@@ -1614,13 +1683,15 @@ mod tests {
         })))),
         Ok(PreprocessorToken {
             kind: PreprocessorTokenType::Newline,
-            start_position: Position {
+            source_vectors: SourceVectors::from(SourceVector {
+            position: SourcePosition {
                 index: 4,
                 line: 1,
                 column: 5,
                 source_file: StringCacheId::from_usize(0),
             },
             length: 0,
+        }),
             contents: StringCacheId::from_usize(2),
         }),
     ])]

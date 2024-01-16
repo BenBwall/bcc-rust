@@ -4,7 +4,7 @@ use super::{
     ErrorSeverity,
     GetPosition,
     GetSeverity,
-    Position,
+    SourcePosition,
     TranslationPhase,
 };
 use crate::bail;
@@ -18,7 +18,7 @@ pub(crate) struct RemoveEscapedNewlines<Prev> {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Error)]
 #[error("missing final newline")]
-pub(crate) struct MissingNewlineError(pub(crate) Position);
+pub(crate) struct MissingNewlineError(pub(crate) SourcePosition);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Error)]
 pub(crate) enum RemoveEscapedNewlinesError<PrevError> {
@@ -44,7 +44,7 @@ impl<PrevError> GetPosition for RemoveEscapedNewlinesError<PrevError>
 where
     PrevError: GetPosition,
 {
-    fn position(&self) -> Position {
+    fn position(&self) -> SourcePosition {
         match self {
             | Self::Inner(e) => e.position(),
             | Self::MissingFinalNewLine(e) => e.0,
@@ -70,7 +70,7 @@ impl<Inner> super::SavePoint for SavePoint<Inner>
 where
     Inner: super::SavePoint,
 {
-    fn current_position(&self) -> Position {
+    fn current_position(&self) -> SourcePosition {
         self.inner.current_position()
     }
 }
@@ -150,7 +150,7 @@ where
         self.state = save_point.state;
     }
 
-    fn current_position(&self) -> Position {
+    fn current_position(&self) -> SourcePosition {
         self.inner.previous_phase.current_position()
     }
 }
@@ -209,27 +209,27 @@ mod tests {
     };
 
     #[rstest]
-    #[case("", vec![Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+    #[case("", vec![Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       0,
         line:        1,
         column:      1,
         source_file: StringCacheId::from_usize(0),
     }))), Ok('\n')])]
-    #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+    #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       1,
         line:        1,
         column:      2,
         source_file: StringCacheId::from_usize(0),
     }))), Ok('\n')])]
     #[case("a\n", vec![Ok('a'), Ok('\n')])]
-    #[case("a\\\n", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+    #[case("a\\\n", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       3,
         line:        2,
         column:      1,
         source_file: StringCacheId::from_usize(0),
     }))), Ok('\n')])]
     #[case("abc\n", vec![Ok('a'), Ok('b'), Ok('c'), Ok('\n')])]
-    #[case("abcabcbb", vec![Ok('a'), Ok('b'), Ok('c'), Ok('a'), Ok('b'), Ok('c'), Ok('b'), Ok('b'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+    #[case("abcabcbb", vec![Ok('a'), Ok('b'), Ok('c'), Ok('a'), Ok('b'), Ok('c'), Ok('b'), Ok('b'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       8,
         line:        1,
         column:      9,
@@ -254,19 +254,19 @@ mod tests {
         assert_eq!(actual, expected);
     }
     #[rstest]
-    #[case("", vec![Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+    #[case("", vec![Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       0,
         line:        1,
         column:      1,
         source_file: StringCacheId::from_usize(0),
     }))), Ok('\n')])]
-    #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+    #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       1,
         line:        1,
         column:      2,
         source_file: StringCacheId::from_usize(0),
     }))), Ok('\n')])]
-    #[case("??=", vec![Ok('#'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(Position {
+    #[case("??=", vec![Ok('#'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       3,
         line:        1,
         column:      4,
