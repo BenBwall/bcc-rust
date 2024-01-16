@@ -1640,6 +1640,7 @@ where
             source_vectors: new_source_vector.as_ref().into(),
         }
     }
+
     #[allow(clippy::unnecessary_wraps)]
     fn create_merge_error(
         &mut self,
@@ -1691,7 +1692,10 @@ where
                         source_vectors: new.source_vectors,
                     }))
                 },
-                | (PreprocessorTokenType::Identifier, PreprocessorTokenType::String) =>
+                | (
+                    PreprocessorTokenType::Identifier,
+                    PreprocessorTokenType::String | PreprocessorTokenType::Character,
+                ) =>
                     if get_from_cache!(self, lhs.contents) == "L"
                         && !get_from_cache!(self, rhs.contents).starts_with('L')
                     {
@@ -1703,7 +1707,88 @@ where
                     } else {
                         self.create_merge_error(&lhs, &rhs)
                     },
-                | _ => todo!(),
+                | (PreprocessorTokenType::Plus, PreprocessorTokenType::Plus) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PlusPlus)
+                )),
+                | (PreprocessorTokenType::Minus, PreprocessorTokenType::Minus) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::MinusMinus)
+                )),
+                | (PreprocessorTokenType::Plus, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PlusEquals)
+                )),
+                | (PreprocessorTokenType::Minus, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::MinusEquals)
+                )),
+                | (PreprocessorTokenType::Asterisk, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::AsteriskEquals),
+                )),
+                | (PreprocessorTokenType::ForwardSlash, PreprocessorTokenType::Equals) =>
+                    Some(Ok(self.merge_token_contents(
+                        &lhs,
+                        &rhs,
+                        PreprocessorTokenType::ForwardSlashEquals,
+                    ))),
+                | (PreprocessorTokenType::Percent, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PercentEquals)
+                )),
+                | (PreprocessorTokenType::LessThan, PreprocessorTokenType::LessThan) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::LessThanLessThan),
+                )),
+                | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::GreaterThan) =>
+                    Some(Ok(self.merge_token_contents(
+                        &lhs,
+                        &rhs,
+                        PreprocessorTokenType::GreaterThanGreaterThan,
+                    ))),
+                | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::LessThanEquals),
+                )),
+                | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::GreaterThanEquals),
+                )),
+                | (PreprocessorTokenType::LessThanLessThan, PreprocessorTokenType::Equals) =>
+                    Some(Ok(self.merge_token_contents(
+                        &lhs,
+                        &rhs,
+                        PreprocessorTokenType::LessThanLessThanEquals,
+                    ))),
+                | (
+                    PreprocessorTokenType::GreaterThanGreaterThan,
+                    PreprocessorTokenType::Equals,
+                ) => Some(Ok(self.merge_token_contents(
+                    &lhs,
+                    &rhs,
+                    PreprocessorTokenType::GreaterThanGreaterThanEquals,
+                ))),
+                | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::AmpersandEquals),
+                )),
+                | (PreprocessorTokenType::Caret, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::CaretEquals)
+                )),
+                | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PipeEquals)
+                )),
+                | (PreprocessorTokenType::ExclamationMark, PreprocessorTokenType::Equals) =>
+                    Some(Ok(self.merge_token_contents(
+                        &lhs,
+                        &rhs,
+                        PreprocessorTokenType::ExclamationMarkEquals,
+                    ))),
+                | (PreprocessorTokenType::Equals, PreprocessorTokenType::Equals) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::EqualsEquals)
+                )),
+                | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Pipe) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PipePipe)
+                )),
+                | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Ampersand) =>
+                    Some(Ok(self.merge_token_contents(
+                        &lhs,
+                        &rhs,
+                        PreprocessorTokenType::AmpersandAmpersand,
+                    ))),
+
+                | _ => self.create_merge_error(&lhs, &rhs),
             },
         }
     }
