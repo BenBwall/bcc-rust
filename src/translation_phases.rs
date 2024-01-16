@@ -8,11 +8,12 @@ use std::{
         Result as FmtResult,
     },
     hash::Hash,
-    ops::Deref,
+    ops::{Deref, Add},
     sync::Arc,
 };
 
 use owo_colors::OwoColorize;
+use smallvec::SmallVec;
 
 use crate::util::string_cache::Id as StringCacheId;
 
@@ -33,6 +34,7 @@ macro_rules! bail {
     };
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum ErrorSeverity {
     Warning,
@@ -70,7 +72,7 @@ pub(crate) struct SourceVectors {
 
 impl PartialEq for SourceVectors {
     fn eq(&self, other: &Self) -> bool {
-        self.deref() == other.deref()
+        **self == **other
     }
 }
 
@@ -90,9 +92,39 @@ impl Clone for SourceVectors {
 
 impl Hash for SourceVectors {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.deref().hash(state)
+        self.deref().hash(state);
     }
 }
+
+fn add(lhs: &[SourceVector], rhs: &[SourceVector]) -> SourceVectors {
+    let mut v = SmallVec::<[SourceVector; 1024]>::new();
+    v.reserve(lhs.len() + rhs.len());
+    v.extend_from_slice(lhs);
+    v.extend_from_slice(rhs);
+    v.as_ref().into()
+}
+
+impl Add<&SourceVectors> for &[SourceVector] {
+    type Output = SourceVectors;
+    fn add(self, rhs: &SourceVectors) -> Self::Output {
+        add(self, rhs)
+    }
+}
+
+impl Add<&[SourceVector]> for &SourceVectors {
+    type Output = SourceVectors;
+    fn add(self, rhs: &[SourceVector]) -> Self::Output {
+        add(self, rhs)
+    }
+}
+
+impl Add<&SourceVectors> for &SourceVectors {
+    type Output = SourceVectors;
+    fn add(self, rhs: &SourceVectors) -> Self::Output {
+        add(self, rhs)
+    }
+}
+
 
 enum SourceVectorsInner {
     Empty,
@@ -139,6 +171,7 @@ impl Default for SourceVectors {
 }
 
 impl SourceVectors {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self::default()
     }
