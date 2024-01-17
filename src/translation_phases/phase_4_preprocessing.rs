@@ -1969,21 +1969,13 @@ where
             }
             break self.next_preprocessor_token_no_expand_no_hash_hash();
         };
-        match ret? {
-            | Err(e) => Some(Err(e)),
-            | Ok(t) => {
-                self.last_preprocessor_token = self.current_preprocessor_token.clone();
-                self.current_preprocessor_token = Some(t.clone());
-                Some(Ok(t))
-            },
-        }
+        ret
     }
 
     fn next_preprocessor_token_no_expand_no_hash_hash(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
-        loop {
-            self.last_preprocessor_token = self.current_preprocessor_token.clone();
+        let ret = loop {
             if self.tokenizer_stack.last().is_some() {
                 match self.previous_phase.next() {
                     | Some(Err(e)) => {
@@ -2057,7 +2049,8 @@ where
                 }
             }
             break None;
-        }
+        };
+        ret
     }
 
     fn update_macro_argument_paren_depth(
@@ -2149,11 +2142,11 @@ where
     fn next_preprocessor_token(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
-        loop {
+        let ret = 'base: loop {
             let start_macro = self.current_macro();
             let token = match self.next_preprocessor_token_no_expand() {
-                | None => return None,
-                | Some(Err(e)) => return Some(Err(PreprocessorError::PreviousPhaseError(e))),
+                | None => break 'base None,
+                | Some(Err(e)) => break 'base Some(Err(PreprocessorError::PreviousPhaseError(e))),
                 | Some(Ok(token)) => token,
             };
             let save_point = self.previous_phase.save();
@@ -2182,7 +2175,7 @@ where
                         ..
                     }) => (),
                     | _ => {
-                        return Some(Err(PreprocessorError::InnerPreprocessorError(
+                        break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
                             InnerPreprocessorError {
                                 error_type:     PreprocessorErrorType::HashHashUsedOutsideOfMacro,
                                 source_vectors: h.source_vectors,
@@ -2191,7 +2184,7 @@ where
                     },
                 }
                 if start_macro != before_hash_hash_macro {
-                    return Some(Err(PreprocessorError::InnerPreprocessorError(
+                    break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
                         InnerPreprocessorError {
                             error_type:     PreprocessorErrorType::MacroEndedBeforeHashHashOperator,
                             source_vectors: h.source_vectors,
@@ -2213,7 +2206,7 @@ where
                         ..
                     }) => (),
                     | _ => {
-                        return Some(Err(PreprocessorError::InnerPreprocessorError(
+                        break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
                             InnerPreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
@@ -2235,10 +2228,10 @@ where
                      on the same line.",
                 ) {
                     | Ok(token) => token,
-                    | Err(e) => return Some(Err(e)),
+                    | Err(e) => break 'base Some(Err(e)),
                 };
                 if before_rhs_macro != start_macro {
-                    return Some(Err(PreprocessorError::InnerPreprocessorError(
+                    break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
                         InnerPreprocessorError {
                             error_type:
                                 PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
@@ -2250,7 +2243,7 @@ where
                 continue;
             }
             if token.kind != PreprocessorTokenType::Identifier {
-                return Some(Ok(token));
+                break 'base Some(Ok(token));
             }
             if let Some(md) = self.macro_definitions.get(&token.contents).cloned() {
                 match md {
@@ -2288,7 +2281,7 @@ where
                                     ),
                                 ));
                                     self.restore(save_point);
-                                    return Some(Ok(token));
+                                    break 'base Some(Ok(token));
                                 },
                                 | Some(Err(e)) => {
                                     self.pending_results
@@ -2296,7 +2289,7 @@ where
                                     continue;
                                 },
                                 | None => {
-                                    return None;
+                                    break 'base None;
                                 },
                             }
                         }
@@ -2369,7 +2362,7 @@ where
                                         continue;
                                     },
                                     | None => {
-                                        return Some(Err(
+                                        break 'base Some(Err(
                                             PreprocessorError::InnerPreprocessorError(
                                                 InnerPreprocessorError {
                                                     error_type:
@@ -2433,7 +2426,7 @@ where
                                         continue;
                                     },
                                     | None => {
-                                        return Some(Err(
+                                        break 'base Some(Err(
                                             PreprocessorError::InnerPreprocessorError(
                                                 InnerPreprocessorError {
                                                     error_type:
@@ -2465,7 +2458,7 @@ where
                             let file_name = self.insert_into_cache("__builtin__macros");
                             let source_file = token.source_vectors[0].position.source_file;
                             let length = get_from_cache!(self, source_file).len();
-                            return Some(Ok(PreprocessorToken {
+                            break 'base Some(Ok(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       token.source_vectors[0].position.source_file,
                                 source_vectors: SourceVectors::from(SourceVector {
@@ -2482,7 +2475,7 @@ where
                         | "__LINE__" => {
                             let string = token.source_vectors[0].position.line.to_string();
                             let file_name = self.insert_into_cache("__builtin__macros");
-                            return Some(Ok(PreprocessorToken {
+                            break 'base Some(Ok(PreprocessorToken {
                                 kind:           PreprocessorTokenType::Number,
                                 contents:       self.insert_into_cache(&string),
                                 source_vectors: SourceVectors::from(SourceVector {
@@ -2500,7 +2493,7 @@ where
                             let now = Local::now();
                             let string = now.format("%H:%M:%S").to_string();
                             let file_name = self.insert_into_cache("__builtin__macros");
-                            return Some(Ok(PreprocessorToken {
+                            break 'base Some(Ok(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       self.insert_into_cache(&string),
                                 source_vectors: SourceVectors::from(SourceVector {
@@ -2518,7 +2511,7 @@ where
                             let now = Local::now();
                             let string = now.format("%b %e %Y").to_string();
                             let file_name = self.insert_into_cache("__builtin__macros");
-                            return Some(Ok(PreprocessorToken {
+                            break 'base Some(Ok(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       self.insert_into_cache(&string),
                                 source_vectors: SourceVectors::from(SourceVector {
@@ -2542,8 +2535,24 @@ where
                     self.push_tokenizer_frame(frame);
                     continue;
                 }
-                return Some(Ok(token));
+                break 'base Some(Ok(token));
             }
+        };
+        match ret? {
+            | Err(e) => Some(Err(e)),
+            | Ok(t) => {
+                self.last_preprocessor_token = self.current_preprocessor_token.clone();
+                self.current_preprocessor_token = Some(t.clone());
+                eprintln!(
+                    "Last token in next_preprocessor_token: {:?}",
+                    self.last_preprocessor_token
+                );
+                eprintln!(
+                    "Current token in next_preprocessor_token: {:?}",
+                    self.current_preprocessor_token
+                );
+                Some(Ok(t))
+            },
         }
     }
 
@@ -3241,20 +3250,21 @@ where
         token: &PreprocessorToken,
         _contents: &str,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
-        println!("Parsing directive {:?}", token.contents);
         if !matches!(
             self.last_preprocessor_token.as_ref().map(|p| p.kind),
             None | Some(PreprocessorTokenType::Newline)
         ) {
             eprintln!("Last token: {:?}", self.last_preprocessor_token);
             eprintln!("Current token: {:?}", self.current_preprocessor_token);
+            eprintln!("Token: {token:?}");
             eprintln!("String cache: {}", self.previous_phase.as_ref());
-            self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
-                    source_vectors: token.source_vectors.clone(),
-                },
-            )));
+            self.pending_results
+                .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
+                        source_vectors: token.source_vectors.clone(),
+                    },
+                )));
         }
         let directive = loop {
             match self.next_preprocessor_token_no_expand() {
