@@ -46,6 +46,12 @@ pub(crate) struct Id {
     id: usize,
 }
 
+impl Display for Id {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+
 impl From<usize> for Id {
     fn from(id: usize) -> Self {
         Self { id }
