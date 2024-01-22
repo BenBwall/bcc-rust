@@ -1518,7 +1518,7 @@ where
     Prev::SavePoint: FromInput,
 {
     fn push_tokenizer_frame(&mut self, frame: TokenizerFrame<Prev::SavePoint>) {
-        //eprintln!("Called push_tokenizer_frame with frame: {frame:#?}");
+        // eprintln!("Called push_tokenizer_frame with frame: {frame:#?}");
         self.tokenizer_stack.last_mut().unwrap().save_point = self.previous_phase.save();
         let save_point = frame.save_point.clone();
         self.previous_phase.restore(save_point);
@@ -1527,7 +1527,7 @@ where
 
     fn pop_tokenizer_frame(&mut self) {
         let f = self.tokenizer_stack.pop();
-        //eprintln!("Called pop_tokenizer_frame with frame: {f:#?}");
+        // eprintln!("Called pop_tokenizer_frame with frame: {f:#?}");
         drop(f);
         if let Some(last) = self.tokenizer_stack.last() {
             self.previous_phase.restore(last.save_point.clone());
@@ -2030,8 +2030,10 @@ where
                                     else {
                                         unreachable!();
                                     };
+                                    eprintln!("Updating macro argument paren depth to: {paren_depth}");
                                     *p = paren_depth;
                                 } else {
+                                    eprintln!("Popping macro argument frame");
                                     self.pop_tokenizer_frame();
                                     continue;
                                 }
@@ -2062,19 +2064,27 @@ where
         argument_name: StringCacheId,
         paren_depth: usize,
     ) -> Option<usize> {
-        if (token.kind == PreprocessorTokenType::Comma
-            && argument_name != self.insert_into_cache("__VA_ARGS__"))
-            || (token.kind == PreprocessorTokenType::ClosingParenthesis && paren_depth == 1)
-        {
-            return None;
-        }
-        if token.kind == PreprocessorTokenType::OpeningParenthesis {
-            return Some(paren_depth + 1);
-        }
-        if token.kind == PreprocessorTokenType::ClosingParenthesis {
-            return Some(paren_depth - 1);
-        }
-        Some(paren_depth)
+        eprintln!(
+            "Called update_macro_argument_paren_depth with paren_depth: {paren_depth}, token: \
+             {token:#?}, argument_name: {argument_name}"
+        );
+        let ret = (|| {
+            if (token.kind == PreprocessorTokenType::Comma
+                && argument_name != self.insert_into_cache("__VA_ARGS__"))
+                || (token.kind == PreprocessorTokenType::ClosingParenthesis && paren_depth == 1)
+            {
+                return None;
+            }
+            if token.kind == PreprocessorTokenType::OpeningParenthesis {
+                return Some(paren_depth + 1);
+            }
+            if token.kind == PreprocessorTokenType::ClosingParenthesis {
+                return Some(paren_depth - 1);
+            }
+            Some(paren_depth)
+        })();
+        eprintln!("update_macro_argument_paren_depth returned: {ret:#?}");
+        ret
     }
 
     fn current_macro(&self) -> Option<(StringCacheId, SourcePosition)> {
@@ -2145,7 +2155,7 @@ where
     fn next_preprocessor_token(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
-        //eprintln!("Tokenizer frames: {:#?}", self.tokenizer_stack);
+        // eprintln!("Tokenizer frames: {:#?}", self.tokenizer_stack);
         let ret = 'base: loop {
             let start_macro = self.current_macro();
             let token = match self.next_preprocessor_token_no_expand() {
@@ -2247,7 +2257,7 @@ where
                 continue;
             }
             self.previous_phase.restore(save_point);
-            
+
             if token.kind != PreprocessorTokenType::Identifier {
                 break 'base Some(Ok(token));
             }
@@ -2327,7 +2337,7 @@ where
                                                 drop(arguments.insert(
                                                     at!(),
                                                     FunctionLikeMacroArgument {
-                                                        name:             at!(),
+                                                        name: at!(),
                                                         start_save_point,
                                                     },
                                                 ));
@@ -2343,7 +2353,7 @@ where
                                         drop(arguments.insert(
                                             at!(),
                                             FunctionLikeMacroArgument {
-                                                name:             at!(),
+                                                name: at!(),
                                                 start_save_point,
                                             },
                                         ));
@@ -2549,14 +2559,14 @@ where
             | Ok(t) => {
                 self.last_preprocessor_token = self.current_preprocessor_token.clone();
                 self.current_preprocessor_token = Some(t.clone());
-                /*eprintln!(
-                    "Last token in next_preprocessor_token: {:?}",
-                    self.last_preprocessor_token
-                );
-                eprintln!(
-                    "Current token in next_preprocessor_token: {:?}",
-                    self.current_preprocessor_token
-                );*/
+                // eprintln!(
+                // "Last token in next_preprocessor_token: {:?}",
+                // self.last_preprocessor_token
+                // );
+                // eprintln!(
+                // "Current token in next_preprocessor_token: {:?}",
+                // self.current_preprocessor_token
+                // );
                 Some(Ok(t))
             },
         }
@@ -3259,11 +3269,11 @@ where
         if !matches!(
             self.last_preprocessor_token.as_ref().map(|p| p.kind),
             None | Some(PreprocessorTokenType::Newline)
-        ) {/* 
-            eprintln!("Last token: {:?}", self.last_preprocessor_token);
-            eprintln!("Current token: {:?}", self.current_preprocessor_token);
-            eprintln!("Token: {token:?}");
-            eprintln!("String cache: {}", self.previous_phase.as_ref());*/
+        ) {
+            // eprintln!("Last token: {:?}", self.last_preprocessor_token);
+            // eprintln!("Current token: {:?}", self.current_preprocessor_token);
+            // eprintln!("Token: {token:?}");
+            // eprintln!("String cache: {}", self.previous_phase.as_ref());
             self.pending_results
                 .push_back(Err(PreprocessorError::InnerPreprocessorError(
                     InnerPreprocessorError {
