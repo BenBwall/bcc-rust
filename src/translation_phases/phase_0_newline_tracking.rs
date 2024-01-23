@@ -43,7 +43,8 @@ impl NewlineTracking {
         }
     }
 
-    pub(crate) fn positions(self) -> impl Iterator<Item = SourcePosition> {
+    #[cfg(test)]
+    fn positions(self) -> impl Iterator<Item = SourcePosition> {
         struct Positions {
             super_: NewlineTracking,
         }
@@ -96,9 +97,11 @@ impl Iterator for NewlineTracking {
             self.is_middle_of_windows_newline = false;
             return Some(Ok('\n'));
         }
-        self.is_middle_of_windows_newline = false;
         self.position.index += c.len_utf8();
-        self.position.column += c.len_utf8();
+        if !self.is_middle_of_windows_newline {
+            self.position.column += c.len_utf8();
+        }
+        self.is_middle_of_windows_newline = false;
         Some(Ok(c))
     }
 
