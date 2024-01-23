@@ -1518,7 +1518,7 @@ where
     Prev::SavePoint: FromInput,
 {
     fn push_tokenizer_frame(&mut self, frame: TokenizerFrame<Prev::SavePoint>) {
-        // eprintln!("Called push_tokenizer_frame with frame: {frame:#?}");
+        eprintln!("Called push_tokenizer_frame with frame: {frame:#?}");
         self.tokenizer_stack.last_mut().unwrap().save_point = self.previous_phase.save();
         let save_point = frame.save_point.clone();
         self.previous_phase.restore(save_point);
@@ -1527,7 +1527,7 @@ where
 
     fn pop_tokenizer_frame(&mut self) {
         let f = self.tokenizer_stack.pop();
-        // eprintln!("Called pop_tokenizer_frame with frame: {f:#?}");
+        eprintln!("Called pop_tokenizer_frame with frame: {f:#?}");
         drop(f);
         if let Some(last) = self.tokenizer_stack.last() {
             self.previous_phase.restore(last.save_point.clone());
@@ -1800,6 +1800,10 @@ where
     fn next_preprocessor_token_no_expand(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
+        eprintln!(
+            "Position at start of next_preprocessor_token_no_expand: {:#?}",
+            self.previous_phase.current_position()
+        );
         let ret = 'outer: loop {
             if let Some(TokenizerFrame {
                 frame_type: TokenizerFrameType::HashHashOperator(state),
@@ -1972,6 +1976,11 @@ where
             }
             break self.next_preprocessor_token_no_expand_no_hash_hash();
         };
+        eprintln!(
+            "Position at end of next_preprocessor_token_no_expand: {:#?}",
+            self.previous_phase.current_position()
+        );
+        eprintln!("Generated token: {ret:#?}");
         ret
     }
 
@@ -2030,7 +2039,9 @@ where
                                     else {
                                         unreachable!();
                                     };
-                                    eprintln!("Updating macro argument paren depth to: {paren_depth}");
+                                    eprintln!(
+                                        "Updating macro argument paren depth to: {paren_depth}"
+                                    );
                                     *p = paren_depth;
                                 } else {
                                     eprintln!("Popping macro argument frame");
@@ -2325,6 +2336,7 @@ where
                             if is_variadic && i >= argument_names.len() {
                                 break;
                             }
+                            eprintln!("Position in outer loop: {:#?}", self.current_position());
                             let start_save_point = self.previous_phase.save();
                             loop {
                                 match self.next_preprocessor_token() {
@@ -4364,6 +4376,8 @@ where
                 }
             }
             let save_point = self.previous_phase.save();
+            eprintln!("Argument names: {argument_names:#?}");
+            eprintln!("save_point: {save_point:#?}");
             drop(self.macro_definitions.insert(
                 name.contents,
                 MacroDefinition::FunctionLike {
