@@ -31,21 +31,20 @@ use crate::{
         ParseFloatError,
     },
     util::{
-        read_to_string_lossy,
-        string_cache::{
+        input::Input, read_to_string_lossy, string_cache::{
             Id as StringCacheId,
             StringCache,
-        },
+        }
     },
     HashMap,
 };
 
 pub(crate) trait FromInput: ISavePoint {
-    fn from_input(input: Arc<str>, source_file: StringCacheId) -> Self;
+    fn from_input(input: Input, source_file: StringCacheId) -> Self;
 }
 
 impl FromInput for Pptsp {
-    fn from_input(input: Arc<str>, source_file: StringCacheId) -> Self {
+    fn from_input(input: Input, source_file: StringCacheId) -> Self {
         let inner = RemoveEscapedNewlinesSavePoint {
             inner:            MapCharacterSetsSavePoint {
                 inner: NewlineTrackingSavePoint {
@@ -1470,7 +1469,7 @@ type Ppte =
     PreprocessorTokenizerError<RemoveEscapedNewlinesError<MapCharacterSetsError<Infallible>>>;
 impl Preprocessor<Ppt, Ppte, Pptsp> {
     pub(crate) fn new(
-        source_string: Arc<str>,
+        source_string: Input,
         source_file: StringCacheId,
         mut string_cache: StringCache,
         quote_include_directories: Arc<Vec<PathBuf>>,
@@ -1518,7 +1517,6 @@ where
     Prev::SavePoint: FromInput,
 {
     fn push_tokenizer_frame(&mut self, frame: TokenizerFrame<Prev::SavePoint>) {
-        eprintln!("Called push_tokenizer_frame with frame: {frame:#?}");
         self.tokenizer_stack.last_mut().unwrap().save_point = self.previous_phase.save();
         let save_point = frame.save_point.clone();
         self.previous_phase.restore(save_point);
@@ -1527,7 +1525,6 @@ where
 
     fn pop_tokenizer_frame(&mut self) {
         let f = self.tokenizer_stack.pop();
-        eprintln!("Called pop_tokenizer_frame with frame: {f:#?}");
         drop(f);
         if let Some(last) = self.tokenizer_stack.last() {
             self.previous_phase.restore(last.save_point.clone());
@@ -1800,10 +1797,7 @@ where
     fn next_preprocessor_token_no_expand(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
-        eprintln!(
-            "Position at start of next_preprocessor_token_no_expand: {:#?}",
-            self.previous_phase.current_position()
-        );
+        let last = self.current_preprocessor_token.clone();
         let ret = 'outer: loop {
             if let Some(TokenizerFrame {
                 frame_type: TokenizerFrameType::HashHashOperator(state),
@@ -1976,17 +1970,20 @@ where
             }
             break self.next_preprocessor_token_no_expand_no_hash_hash();
         };
-        eprintln!(
-            "Position at end of next_preprocessor_token_no_expand: {:#?}",
-            self.previous_phase.current_position()
-        );
-        eprintln!("Generated token: {ret:#?}");
-        ret
+        match ret? {
+            | Err(e) => Some(Err(e)),
+            | Ok(t) => {
+                self.last_preprocessor_token = last;
+                self.current_preprocessor_token = Some(t.clone());
+                Some(Ok(t))
+            },
+        }
     }
 
     fn next_preprocessor_token_no_expand_no_hash_hash(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
+        let last = self.current_preprocessor_token.clone();
         let ret = loop {
             if self.tokenizer_stack.last().is_some() {
                 match self.previous_phase.next() {
@@ -2039,12 +2036,8 @@ where
                                     else {
                                         unreachable!();
                                     };
-                                    eprintln!(
-                                        "Updating macro argument paren depth to: {paren_depth}"
-                                    );
                                     *p = paren_depth;
                                 } else {
-                                    eprintln!("Popping macro argument frame");
                                     self.pop_tokenizer_frame();
                                     continue;
                                 }
@@ -2066,7 +2059,14 @@ where
             }
             break None;
         };
-        ret
+        match ret? {
+            | Err(e) => Some(Err(e)),
+            | Ok(t) => {
+                self.last_preprocessor_token = last;
+                self.current_preprocessor_token = Some(t.clone());
+                Some(Ok(t))
+            },
+        }
     }
 
     fn update_macro_argument_paren_depth(
@@ -2075,27 +2075,19 @@ where
         argument_name: StringCacheId,
         paren_depth: usize,
     ) -> Option<usize> {
-        eprintln!(
-            "Called update_macro_argument_paren_depth with paren_depth: {paren_depth}, token: \
-             {token:#?}, argument_name: {argument_name}"
-        );
-        let ret = (|| {
-            if (token.kind == PreprocessorTokenType::Comma
-                && argument_name != self.insert_into_cache("__VA_ARGS__"))
-                || (token.kind == PreprocessorTokenType::ClosingParenthesis && paren_depth == 1)
-            {
-                return None;
-            }
-            if token.kind == PreprocessorTokenType::OpeningParenthesis {
-                return Some(paren_depth + 1);
-            }
-            if token.kind == PreprocessorTokenType::ClosingParenthesis {
-                return Some(paren_depth - 1);
-            }
-            Some(paren_depth)
-        })();
-        eprintln!("update_macro_argument_paren_depth returned: {ret:#?}");
-        ret
+        if (token.kind == PreprocessorTokenType::Comma
+            && argument_name != self.insert_into_cache("__VA_ARGS__"))
+            || (token.kind == PreprocessorTokenType::ClosingParenthesis && paren_depth == 1)
+        {
+            return None;
+        }
+        if token.kind == PreprocessorTokenType::OpeningParenthesis {
+            return Some(paren_depth + 1);
+        }
+        if token.kind == PreprocessorTokenType::ClosingParenthesis {
+            return Some(paren_depth - 1);
+        }
+        Some(paren_depth)
     }
 
     fn current_macro(&self) -> Option<(StringCacheId, SourcePosition)> {
@@ -2166,7 +2158,7 @@ where
     fn next_preprocessor_token(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
-        // eprintln!("Tokenizer frames: {:#?}", self.tokenizer_stack);
+        let last = self.current_preprocessor_token.clone();
         let ret = 'base: loop {
             let start_macro = self.current_macro();
             let token = match self.next_preprocessor_token_no_expand() {
@@ -2174,7 +2166,7 @@ where
                 | Some(Err(e)) => break 'base Some(Err(PreprocessorError::PreviousPhaseError(e))),
                 | Some(Ok(token)) => token,
             };
-            let save_point = self.previous_phase.save();
+            let save_point = self.save();
             let mut pending_errors = Vec::new();
             let before_hash_hash_macro = self.current_macro();
             let hash_hash = loop {
@@ -2186,7 +2178,7 @@ where
                     | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash =>
                         break Some(token),
                     | Some(Ok(_)) | None => {
-                        self.previous_phase.restore(save_point.clone());
+                        self.restore(save_point.clone());
                         break None;
                     },
                 }
@@ -2267,7 +2259,7 @@ where
                 self.parse_hash_hash_operator(&token, &h, &rhs);
                 continue;
             }
-            self.previous_phase.restore(save_point);
+            self.restore(save_point);
 
             if token.kind != PreprocessorTokenType::Identifier {
                 break 'base Some(Ok(token));
@@ -2336,7 +2328,6 @@ where
                             if is_variadic && i >= argument_names.len() {
                                 break;
                             }
-                            eprintln!("Position in outer loop: {:#?}", self.current_position());
                             let start_save_point = self.previous_phase.save();
                             loop {
                                 match self.next_preprocessor_token() {
@@ -2569,16 +2560,8 @@ where
         match ret? {
             | Err(e) => Some(Err(e)),
             | Ok(t) => {
-                self.last_preprocessor_token = self.current_preprocessor_token.clone();
+                self.last_preprocessor_token = last;
                 self.current_preprocessor_token = Some(t.clone());
-                // eprintln!(
-                // "Last token in next_preprocessor_token: {:?}",
-                // self.last_preprocessor_token
-                // );
-                // eprintln!(
-                // "Current token in next_preprocessor_token: {:?}",
-                // self.current_preprocessor_token
-                // );
                 Some(Ok(t))
             },
         }
@@ -3282,10 +3265,6 @@ where
             self.last_preprocessor_token.as_ref().map(|p| p.kind),
             None | Some(PreprocessorTokenType::Newline)
         ) {
-            // eprintln!("Last token: {:?}", self.last_preprocessor_token);
-            // eprintln!("Current token: {:?}", self.current_preprocessor_token);
-            // eprintln!("Token: {token:?}");
-            // eprintln!("String cache: {}", self.previous_phase.as_ref());
             self.pending_results
                 .push_back(Err(PreprocessorError::InnerPreprocessorError(
                     InnerPreprocessorError {
@@ -4202,7 +4181,7 @@ where
             })
         })?;
         let name = self.insert_into_cache(&header_path.to_string_lossy());
-        let save_point = Prev::SavePoint::from_input(Arc::from(header_string), name);
+        let save_point = Prev::SavePoint::from_input(Input::from(header_string), name);
         let frame = TokenizerFrame {
             save_point,
             name,
@@ -4235,7 +4214,6 @@ where
             },
             "parsing define directive",
         )?;
-        println!("Defining macro: {:#?}", name.contents);
         let old_definition = self.macro_definitions.get(&name.contents).cloned();
         let save_point = self.previous_phase.save();
         let old_save_point = match old_definition {
@@ -4376,8 +4354,6 @@ where
                 }
             }
             let save_point = self.previous_phase.save();
-            eprintln!("Argument names: {argument_names:#?}");
-            eprintln!("save_point: {save_point:#?}");
             drop(self.macro_definitions.insert(
                 name.contents,
                 MacroDefinition::FunctionLike {

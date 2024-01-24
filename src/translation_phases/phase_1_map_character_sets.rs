@@ -162,7 +162,7 @@ mod tests {
 
         let mut string_cache = StringCache::new();
         let actual = MapCharacterSets::new(NewlineTracking::new(
-            input.into(),
+            input.to_owned().into(),
             string_cache.intern("<input>"),
         ));
         assert_eq!(

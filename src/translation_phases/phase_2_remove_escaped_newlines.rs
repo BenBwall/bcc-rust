@@ -247,7 +247,7 @@ mod tests {
     ) {
         let mut string_cache = StringCache::new();
         let actual = RemoveEscapedNewlines::new(NewlineTracking::new(
-            input.into(),
+            input.to_owned().into(),
             string_cache.intern("<input>"),
         ))
         .collect::<Vec<_>>();
@@ -281,7 +281,7 @@ mod tests {
     ) {
         let mut string_cache = StringCache::new();
         let actual = RemoveEscapedNewlines::new(MapCharacterSets::new(NewlineTracking::new(
-            input.into(),
+            input.to_owned().into(),
             string_cache.intern("<input>"),
         )))
         .collect::<Vec<_>>();

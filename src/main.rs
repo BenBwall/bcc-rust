@@ -14,6 +14,7 @@ use clap::{
 use owo_colors::OwoColorize;
 use rustc_hash::FxHasher;
 use thiserror::Error;
+use util::input::Input;
 
 use crate::{
     translation_phases::{
@@ -41,7 +42,7 @@ pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefau
 #[command(author, version, about, long_about)]
 struct Cli {
     #[command(flatten)]
-    input:          Input,
+    input:          CliInput,
     /// Add directory to include search path.
     #[clap(short = 'q', long = "iquote")]
     quote_include:  Vec<PathBuf>,
@@ -52,18 +53,18 @@ struct Cli {
 
 #[derive(Args)]
 #[group(required = true, multiple = false)]
-struct Input {
+struct CliInput {
     /// Input string to be preprocessed.
     #[clap(short, long, conflicts_with = "input_file")]
-    input:      Option<Arc<str>>,
+    input:      Option<String>,
     /// Input file to be preprocessed.
     #[clap(conflicts_with = "input")]
     input_file: Option<String>,
 }
 
 enum ParsedInput {
-    String(Arc<str>),
-    File(Arc<str>),
+    String(Input),
+    File(Input),
 }
 #[derive(Debug, Error)]
 enum MainError {
@@ -87,7 +88,7 @@ fn main() -> Result<(), MainError> {
     let mut string_cache = StringCache::new();
     println!("{}", "Printing all generated tokens:".bright_green());
     let parsed_input = if args.input.input.is_some() {
-        ParsedInput::String(args.input.input.unwrap())
+        ParsedInput::String(args.input.input.unwrap().into())
     } else {
         ParsedInput::File(read_to_string_lossy(args.input.input_file.as_ref().unwrap())?.into())
     };
