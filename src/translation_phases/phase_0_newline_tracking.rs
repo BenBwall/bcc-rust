@@ -144,17 +144,18 @@ mod tests {
 
     use crate::{
         translation_phases::SourcePosition,
-        util::string_cache::{
+        util::{input::Input, string_cache::{
             Id,
             StringCache,
-        },
+        }},
     };
     proptest! {
         #[test]
         fn test_noop_translation_phase(input in String::arbitrary()) {
             let mut string_cache = StringCache::new();
-            let phase = super::NewlineTracking::new(input.into(), string_cache.intern("<input>"));
-            prop_assert!(phase.map(|r| r.unwrap_or_else(|e| match e{})).collect::<String>() == input, "phase.collect() != input");
+            let input = Input::new(input);
+            let phase = super::NewlineTracking::new(input.clone(), string_cache.intern("<input>"));
+            prop_assert!(phase.map(|r| r.unwrap_or_else(|e| match e{})).collect::<String>() == input.as_str(), "phase.collect() != input");
         }
     }
 
