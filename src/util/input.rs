@@ -1,8 +1,17 @@
-use std::{fmt::{Debug, Display, Formatter, Result as FmtResult}, ops::Deref, sync::Arc};
+use std::{
+    fmt::{
+        Debug,
+        Display,
+        Formatter,
+        Result as FmtResult,
+    },
+    ops::Deref,
+    sync::Arc,
+};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Input {
-    arc: Arc<Box<str>>,
+    arc:  Arc<Box<str>>,
     ref_: &'static str,
 }
 
@@ -22,13 +31,19 @@ impl Input {
     pub(crate) fn new(s: String) -> Self {
         Self::from_boxed_str(s.into_boxed_str())
     }
+
     pub(crate) fn from_boxed_str(s: Box<str>) -> Self {
         let mut ret = Self {
-            arc: Arc::new(s),
+            arc:  Arc::new(s),
             ref_: "",
         };
-        ret.ref_ = unsafe { &*std::ptr::addr_of!(ret.arc)};
+        ret.ref_ = unsafe { &*std::ptr::addr_of!(ret.arc) };
         ret
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn as_str(&self) -> &str {
+        self.ref_
     }
 }
 
