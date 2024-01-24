@@ -31,10 +31,12 @@ use crate::{
         ParseFloatError,
     },
     util::{
-        input::Input, read_to_string_lossy, string_cache::{
+        input::Input,
+        read_to_string_lossy,
+        string_cache::{
             Id as StringCacheId,
             StringCache,
-        }
+        },
     },
     HashMap,
 };
@@ -359,8 +361,9 @@ pub(crate) enum HashHashOperatorState<PrevSavePoint> {
         paren_depth: usize,
     },
     ExpandingRhs {
-        lhs:         Option<PreprocessorToken>,
-        paren_depth: usize,
+        lhs:            Option<PreprocessorToken>,
+        paren_depth:    usize,
+        has_seen_token: bool,
     },
     NothingToExpand {
         lhs: Option<PreprocessorToken>,
@@ -1517,6 +1520,11 @@ where
     Prev::SavePoint: FromInput,
 {
     fn push_tokenizer_frame(&mut self, frame: TokenizerFrame<Prev::SavePoint>) {
+        // eprintln!("pushing frame: {frame:#?}");
+        // eprintln!(
+        // "Called push_tokenizer_frame with length: {} and frame: {frame:?}",
+        // self.tokenizer_stack.len()
+        // );
         self.tokenizer_stack.last_mut().unwrap().save_point = self.previous_phase.save();
         let save_point = frame.save_point.clone();
         self.previous_phase.restore(save_point);
@@ -1669,6 +1677,11 @@ where
         lhs: Option<PreprocessorToken>,
         rhs: Option<PreprocessorToken>,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
+        /* eprintln!(
+            "Called merge tokens with lhs: {:#?} and rhs: {:#?}",
+            lhs.as_ref().map(|t| t.kind),
+            rhs.as_ref().map(|t| t.kind)
+        ); */
         match (lhs, rhs) {
             | (None, None) => None,
             | (Some(lhs), None) => Some(Ok(lhs)),
@@ -1680,6 +1693,9 @@ where
                     | PreprocessorTokenType::Defined
                     | PreprocessorTokenType::Number,
                 ) => {
+                    if get_from_cache!(self, rhs.contents).contains('.') {
+                        return self.create_merge_error(&lhs, &rhs);
+                    }
                     let new =
                         self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::Identifier);
                     let kind = if new.contents == self.insert_into_cache("defined") {
@@ -1708,6 +1724,13 @@ where
                     } else {
                         self.create_merge_error(&lhs, &rhs)
                     },
+                | (
+                    PreprocessorTokenType::Period | PreprocessorTokenType::Number,
+                    PreprocessorTokenType::Number,
+                )
+                | (PreprocessorTokenType::Number, PreprocessorTokenType::Period) => Some(Ok(
+                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::Number)
+                )),
                 | (PreprocessorTokenType::Plus, PreprocessorTokenType::Plus) => Some(Ok(
                     self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PlusPlus)
                 )),
@@ -1805,6 +1828,8 @@ where
                 name,
             }) = self.tokenizer_stack.last()
             {
+                // eprintln!("LOOP!!");
+                // eprintln!("State: {state:#?}");
                 let name = *name;
                 let state = state.clone();
                 match state {
@@ -1818,15 +1843,9 @@ where
                             | Some(v) => break Some(v),
                         }
                     },
-                    | HashHashOperatorState::ExpandingLhs { rhs, paren_depth } => loop {
-                        let last_token = match self.tokenizer_stack.last() {
-                            | Some(TokenizerFrame {
-                                frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
-                                ..
-                            }) => self.last_preprocessor_token.clone(),
-                            | _ => None,
-                        };
-                        let token = loop {
+                    | HashHashOperatorState::ExpandingLhs { rhs, paren_depth } => {
+                        // eprintln!("Expanding lhs");
+                        let mut token = loop {
                             match self.next_preprocessor_token_no_expand_no_hash_hash() {
                                 | Some(Err(e)) => {
                                     self.pending_results
@@ -1854,17 +1873,61 @@ where
                                 | Some(Ok(t)) => break Some(t),
                             }
                         };
-                        let is_end_of_current_state = match token.clone() {
-                            | None => true,
-                            | Some(t) => self
-                                .update_macro_argument_paren_depth(&t, name, paren_depth)
-                                .is_none(),
+                        let next_save_point = self.previous_phase.save();
+                        let next = loop {
+                            match self.next_preprocessor_token_no_expand_no_hash_hash() {
+                                | Some(Err(e)) => {
+                                    self.pending_results
+                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                    continue;
+                                },
+                                | None => {
+                                    let start_position = self.previous_phase.current_position();
+                                    self.pending_results.push_back(Err(
+                                        PreprocessorError::InnerPreprocessorError(
+                                            InnerPreprocessorError {
+                                                error_type:
+                                                    PreprocessorErrorType::UnexpectedEndOfInput(
+                                                        "expanding function-like macro argument",
+                                                    ),
+                                                source_vectors: SourceVectors::from(SourceVector {
+                                                    position: start_position,
+                                                    length:   0,
+                                                }),
+                                            },
+                                        ),
+                                    ));
+                                    break None;
+                                },
+                                | Some(Ok(t)) => break Some(t),
+                            }
                         };
+                        // eprintln!("Last token: {last:#?}");
+                        // eprintln!(
+                        // "Token kind in expanding lhs: {:#?}",
+                        // token.as_ref().map(|t| t.kind)
+                        // );
+                        let is_end_of_current_state = match (token.as_ref(), next.as_ref()) {
+                            | (None, _) | (_, None) => true,
+                            | (Some(t1), Some(t2)) => {
+                                if self
+                                    .update_macro_argument_paren_depth(t1, name, paren_depth)
+                                    .is_none()
+                                {
+                                    token = None;
+                                    true
+                                } else {
+                                    self.update_macro_argument_paren_depth(t2, name, paren_depth)
+                                        .is_none()
+                                }
+                            },
+                        };
+                        self.previous_phase.restore(next_save_point);
                         if is_end_of_current_state {
+                            // eprintln!("Final token: {last:#?}");
                             match rhs.clone() {
                                 | HashHashArgument::Token(t) => {
-                                    let ret =
-                                        self.merge_tokens(last_token.clone(), Some(t.clone()));
+                                    let ret = self.merge_tokens(token, Some(t.clone()));
                                     self.pop_tokenizer_frame();
                                     break 'outer ret;
                                 },
@@ -1877,13 +1940,16 @@ where
                                     else {
                                         unreachable!();
                                     };
+                                    // eprintln!("Rhs save point: {rhs_save_point:#?}");
                                     *save_point = rhs_save_point.clone();
                                     *name = rhs_name;
                                     *state = HashHashOperatorState::ExpandingRhs {
-                                        paren_depth: 1,
-                                        lhs:         last_token,
+                                        paren_depth:    1,
+                                        lhs:            token,
+                                        has_seen_token: false,
                                     };
-                                    continue;
+                                    self.previous_phase.restore(rhs_save_point);
+                                    continue 'outer;
                                 },
                             }
                         }
@@ -1894,8 +1960,10 @@ where
                     },
                     | HashHashOperatorState::ExpandingRhs {
                         paren_depth,
-                        lhs: _,
+                        lhs,
+                        has_seen_token,
                     } => {
+                        // eprintln!("Expanding rhs");
                         let token = loop {
                             match self.next_preprocessor_token_no_expand_no_hash_hash() {
                                 | Some(Err(e)) => {
@@ -1924,6 +1992,11 @@ where
                                 | Some(Ok(t)) => break Some(t),
                             }
                         };
+                        // eprintln!(
+                        // "Token kind in expanding rhs: {:#?}",
+                        // token.as_ref().map(|t| t.kind)
+                        // );
+                        // eprintln!("Token in expanding rhs: {token:#?}");
                         if let Some(token) = token {
                             if let Some(p) =
                                 self.update_macro_argument_paren_depth(&token, name, paren_depth)
@@ -1934,6 +2007,7 @@ where
                                             HashHashOperatorState::ExpandingRhs {
                                                 paren_depth,
                                                 lhs,
+                                                has_seen_token,
                                             },
                                         ),
                                     ..
@@ -1942,11 +2016,22 @@ where
                                     unreachable!();
                                 };
                                 *paren_depth = p;
+                                *has_seen_token = true;
                                 let lhs = lhs.take();
+                                // eprintln!(
+                                // "Lhs kind in expanding rhs: {:#?}",
+                                // lhs.as_ref().map(|t| t.kind)
+                                // );
                                 break 'outer self.merge_tokens(lhs, Some(token));
                             }
                             self.pop_tokenizer_frame();
-                            continue;
+                            if !has_seen_token {
+                                break 'outer match lhs {
+                                    | None => None,
+                                    | Some(t) => Some(Ok(t)),
+                                };
+                            }
+                            continue 'outer;
                         }
                         let Some(TokenizerFrame {
                             frame_type:
@@ -1954,6 +2039,7 @@ where
                                     HashHashOperatorState::ExpandingRhs {
                                         paren_depth: _,
                                         lhs,
+                                        has_seen_token: _,
                                     },
                                 ),
                             ..
@@ -1961,7 +2047,9 @@ where
                         else {
                             unreachable!();
                         };
-                        break 'outer match lhs.take() {
+                        let lhs = lhs.take();
+                        self.pop_tokenizer_frame();
+                        break 'outer match lhs {
                             | None => None,
                             | Some(t) => Some(Ok(t)),
                         };
@@ -1970,6 +2058,10 @@ where
             }
             break self.next_preprocessor_token_no_expand_no_hash_hash();
         };
+        // eprintln!(
+        // "Ret in next_preprocessor_token_no_expand: {:#?}",
+        // ret.as_ref().map(|r| r.as_ref().map(|t| t.kind))
+        // );
         match ret? {
             | Err(e) => Some(Err(e)),
             | Ok(t) => {
@@ -2059,6 +2151,11 @@ where
             }
             break None;
         };
+        // eprintln!(
+        // "Ret in next_preprocessor_token_no_expand_no_hash_hash: {:#?}",
+        // ret.as_ref().map(|r| r.as_ref().map(|t| t.kind))
+        // );
+        // eprintln!("Ret in next_preprocessor_token_no_expand_no_hash_hash: {ret:#?}");
         match ret? {
             | Err(e) => Some(Err(e)),
             | Ok(t) => {
@@ -2257,7 +2354,7 @@ where
                     )));
                 }
                 self.parse_hash_hash_operator(&token, &h, &rhs);
-                continue;
+                continue 'base;
             }
             self.restore(save_point);
 
@@ -2557,6 +2654,11 @@ where
                 break 'base Some(Ok(token));
             }
         };
+        // eprintln!(
+        // "Ret in next_preprocessor_token: {:#?}",
+        // ret.as_ref().map(|r| r.as_ref().map(|t| t.kind))
+        // );
+        // eprintln!("Next preprocessor token returning: {ret:#?}");
         match ret? {
             | Err(e) => Some(Err(e)),
             | Ok(t) => {
@@ -3100,6 +3202,7 @@ where
     ) -> HashHashArgument<Prev::SavePoint> {
         if self.is_macro_argument(token.contents) {
             let frame = self.handle_macro_argument(&token).unwrap();
+            // eprintln!("Hash hash argument save point: {:#?}", frame.save_point);
             HashHashArgument::MacroArgument(frame.save_point, frame.name)
         } else {
             HashHashArgument::Token(token)
@@ -3112,6 +3215,10 @@ where
         _hash_hash: &PreprocessorToken,
         rhs: &PreprocessorToken,
     ) {
+        // eprintln!(
+        // "Called parse_hash_hash_operator with lhs: {:?}, rhs: {:?}",
+        // lhs.kind, rhs.kind
+        // );
         let lhs_state = self.handle_hash_hash_argument(lhs.clone());
         let rhs_state = self.handle_hash_hash_argument(rhs.clone());
         let (name, save_point, state) = match (&lhs_state, &rhs_state) {
@@ -3127,8 +3234,9 @@ where
                 rhs.contents,
                 save_point.clone(),
                 HashHashOperatorState::ExpandingRhs {
-                    paren_depth: 1,
-                    lhs:         Some(token.clone()),
+                    paren_depth:    1,
+                    lhs:            Some(token.clone()),
+                    has_seen_token: false,
                 },
             ),
             | (HashHashArgument::Token(t1), HashHashArgument::Token(t2)) => (

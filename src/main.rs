@@ -86,7 +86,7 @@ fn parse_include_env_var(env_var: &str, vec: &mut Vec<PathBuf>) {
 fn main() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
     let mut string_cache = StringCache::new();
-    println!("{}", "Printing all generated tokens:".bright_green());
+    eprintln!("{}", "Printing all generated tokens:".bright_green());
     let parsed_input = if args.input.input.is_some() {
         ParsedInput::String(args.input.input.unwrap().into())
     } else {
@@ -111,7 +111,7 @@ fn main() -> Result<(), MainError> {
     );
     while let Some(res) = preprocessor.next() {
         match res {
-            | Ok(t) => println!(
+            | Ok(t) => eprintln!(
                 "{}",
                 match t.kind {
                     | TokenType::Identifier => format!(
@@ -161,11 +161,11 @@ fn main() -> Result<(), MainError> {
             },
         }
     }
-    println!(
+    eprintln!(
         "{}",
         "Finished printing all generated tokens.".bright_green()
     );
-    println!(
+    eprintln!(
         "{}{}",
         "String cache contents: ".bright_yellow(),
         preprocessor.previous_phase.as_ref().bright_yellow()
