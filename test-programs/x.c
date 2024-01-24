@@ -1,7 +1,8 @@
-#define FOO(X, Y) X + Y 7 8 9
+#define FOO(X, Y) X + Y
 
 #define BAR 69
 
 FOO(2, 3)
+FOO(,)
 
 BAR
