@@ -1,24 +1,24 @@
-use std::{
-    convert::Infallible,
-    sync::Arc,
-};
+use std::convert::Infallible;
 
 use super::{
     SourcePosition,
     TranslationPhase,
 };
-use crate::util::string_cache::Id as StringCacheId;
+use crate::util::{
+    input::Input,
+    string_cache::Id as StringCacheId,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct NewlineTracking {
-    source: Arc<str>,
+    source: Input,
     position: SourcePosition,
     is_middle_of_windows_newline: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct SavePoint {
-    pub(crate) source: Arc<str>,
+    pub(crate) source: Input,
     pub(crate) position: SourcePosition,
     pub(crate) is_middle_of_windows_newline: bool,
 }
@@ -30,7 +30,7 @@ impl super::SavePoint for SavePoint {
 }
 
 impl NewlineTracking {
-    pub(crate) fn new(source: Arc<str>, source_file: StringCacheId) -> Self {
+    pub(crate) fn new(source: Input, source_file: StringCacheId) -> Self {
         Self {
             is_middle_of_windows_newline: false,
             source,
@@ -153,7 +153,7 @@ mod tests {
         #[test]
         fn test_noop_translation_phase(input in String::arbitrary()) {
             let mut string_cache = StringCache::new();
-            let phase = super::NewlineTracking::new(input.as_str().into(), string_cache.intern("<input>"));
+            let phase = super::NewlineTracking::new(input.into(), string_cache.intern("<input>"));
             prop_assert!(phase.map(|r| r.unwrap_or_else(|e| match e{})).collect::<String>() == input, "phase.collect() != input");
         }
     }
@@ -196,7 +196,8 @@ mod tests {
     ])]
     fn test_current_position(#[case] input: &str, #[case] expected: Vec<SourcePosition>) {
         let mut string_cache = StringCache::new();
-        let phase = super::NewlineTracking::new(input.into(), string_cache.intern("<input>"));
+        let phase =
+            super::NewlineTracking::new(input.to_owned().into(), string_cache.intern("<input>"));
         let actual = phase.positions().collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }

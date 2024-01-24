@@ -779,7 +779,6 @@ where
                 },
                 | Some(Ok(v)) => v,
             };
-
             let save_point2 = self.save();
 
             if matches!(current, 'e' | 'E' | 'p' | 'P') {
@@ -800,6 +799,7 @@ where
             self.restore(save_point2);
 
             if current.is_alphanumeric() || current == '.' {
+                save_point = self.save();
                 continue;
             }
             self.restore(save_point);
@@ -1709,7 +1709,7 @@ mod tests {
         let mut string_cache = StringCache::new();
         let mut tokenizer = PreprocessorTokenizer::new(
             RemoveEscapedNewlines::new(MapCharacterSets::new(NewlineTracking::new(
-                input.into(),
+                input.to_owned().into(),
                 string_cache.intern("<input>"),
             ))),
             string_cache,
