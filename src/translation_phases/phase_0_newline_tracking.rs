@@ -144,10 +144,13 @@ mod tests {
 
     use crate::{
         translation_phases::SourcePosition,
-        util::{input::Input, string_cache::{
-            Id,
-            StringCache,
-        }},
+        util::{
+            input::Input,
+            string_cache::{
+                Id,
+                StringCache,
+            },
+        },
     };
     proptest! {
         #[test]

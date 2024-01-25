@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     fmt::{
         Debug,
         Display,
@@ -6,12 +7,13 @@ use std::{
         Result as FmtResult,
     },
     ops::Deref,
-    sync::Arc, ptr::NonNull, borrow::Borrow,
+    ptr::NonNull,
+    sync::Arc,
 };
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Input {
-    arc:  Arc<Box<str>>,
+    arc: Arc<Box<str>>,
     ptr: NonNull<str>,
 }
 
@@ -34,7 +36,7 @@ impl Input {
 
     pub(crate) fn from_boxed_str(s: Box<str>) -> Self {
         let mut ret = Self {
-            arc:  Arc::new(s),
+            arc: Arc::new(s),
             ptr: NonNull::from(""),
         };
         ret.ptr = NonNull::from(&**ret.arc);

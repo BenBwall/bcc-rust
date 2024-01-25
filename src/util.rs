@@ -3,8 +3,8 @@ use std::{
     path::Path,
 };
 
-pub(crate) mod string_cache;
 pub(crate) mod input;
+pub(crate) mod string_cache;
 pub(crate) trait Captures<U> {}
 
 impl<T: ?Sized, U> Captures<U> for T {}
