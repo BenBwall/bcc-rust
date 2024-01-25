@@ -2291,11 +2291,15 @@ where
                     break Some(Ok(token));
                 }
                 let start_macro = self.current_macro();
-                let token = match self.next_preprocessor_token_no_expand() {
-                    | None => break 'base None,
-                    | Some(Err(e)) =>
-                        break 'base Some(Err(PreprocessorError::PreviousPhaseError(e))),
-                    | Some(Ok(token)) => token,
+                let token = if let Some(t) = self.next_preprocessor_token.take() {
+                    t
+                } else {
+                    match self.next_preprocessor_token_no_expand() {
+                        | None => break 'base None,
+                        | Some(Err(e)) =>
+                            break 'base Some(Err(PreprocessorError::PreviousPhaseError(e))),
+                        | Some(Ok(token)) => token,
+                    }
                 };
                 let mut pending_errors = Vec::new();
                 let before_hash_hash_macro = self.current_macro();
