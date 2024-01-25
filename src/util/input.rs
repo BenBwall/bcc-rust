@@ -6,24 +6,24 @@ use std::{
         Result as FmtResult,
     },
     ops::Deref,
-    sync::Arc,
+    sync::Arc, ptr::NonNull, borrow::Borrow,
 };
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Input {
     arc:  Arc<Box<str>>,
-    ref_: &'static str,
+    ptr: NonNull<str>,
 }
 
 impl Debug for Input {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "{:?}", self.ref_)
+        write!(f, "{:?}", self.as_str())
     }
 }
 
 impl Display for Input {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "{}", self.ref_)
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -35,15 +35,15 @@ impl Input {
     pub(crate) fn from_boxed_str(s: Box<str>) -> Self {
         let mut ret = Self {
             arc:  Arc::new(s),
-            ref_: "",
+            ptr: NonNull::from(""),
         };
-        ret.ref_ = unsafe { &*std::ptr::addr_of!(ret.arc) };
+        ret.ptr = NonNull::from(&**ret.arc);
         ret
     }
 
     #[allow(dead_code)]
     pub(crate) fn as_str(&self) -> &str {
-        self.ref_
+        unsafe { self.ptr.as_ref() }
     }
 }
 
@@ -51,13 +51,19 @@ impl Deref for Input {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        self.ref_
+        self.as_str()
     }
 }
 
 impl AsRef<str> for Input {
     fn as_ref(&self) -> &str {
-        self.ref_
+        self.as_str()
+    }
+}
+
+impl Borrow<str> for Input {
+    fn borrow(&self) -> &str {
+        self.as_str()
     }
 }
 
