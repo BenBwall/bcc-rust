@@ -8,7 +8,10 @@ use std::{
         Result as FmtResult,
     },
     hash::Hash,
-    ops::{Deref, Add},
+    ops::{
+        Add,
+        Deref,
+    },
     sync::Arc,
 };
 
@@ -106,6 +109,7 @@ fn add(lhs: &[SourceVector], rhs: &[SourceVector]) -> SourceVectors {
 
 impl Add<&SourceVectors> for &[SourceVector] {
     type Output = SourceVectors;
+
     fn add(self, rhs: &SourceVectors) -> Self::Output {
         add(self, rhs)
     }
@@ -113,6 +117,7 @@ impl Add<&SourceVectors> for &[SourceVector] {
 
 impl Add<&[SourceVector]> for &SourceVectors {
     type Output = SourceVectors;
+
     fn add(self, rhs: &[SourceVector]) -> Self::Output {
         add(self, rhs)
     }
@@ -120,11 +125,11 @@ impl Add<&[SourceVector]> for &SourceVectors {
 
 impl Add<&SourceVectors> for &SourceVectors {
     type Output = SourceVectors;
+
     fn add(self, rhs: &SourceVectors) -> Self::Output {
         add(self, rhs)
     }
 }
-
 
 enum SourceVectorsInner {
     Empty,

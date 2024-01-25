@@ -13,7 +13,8 @@ use super::{
     SavePoint as ISavePoint,
     SourcePosition,
     SourceVector,
-    TranslationPhase, SourceVectors,
+    SourceVectors,
+    TranslationPhase,
 };
 use crate::util::string_cache::{
     Id as StringCacheId,
@@ -358,9 +359,10 @@ where
             source_vectors: SourceVector {
                 position: start_position,
                 length:   self.current_position().index - start_position.index,
-            }.into(),
-            kind:          token_type,
-            contents:      self.string_cache.intern(contents.as_str()),
+            }
+            .into(),
+            kind:           token_type,
+            contents:       self.string_cache.intern(contents.as_str()),
         })
     }
 
@@ -1158,9 +1160,9 @@ pub(crate) enum PreprocessorTokenType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PreprocessorToken {
-    pub(crate) kind:          PreprocessorTokenType,
+    pub(crate) kind:           PreprocessorTokenType,
     pub(crate) source_vectors: SourceVectors,
-    pub(crate) contents:      StringCacheId,
+    pub(crate) contents:       StringCacheId,
 }
 
 #[cfg(test)]
@@ -1169,6 +1171,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
     use rstest::rstest;
+
     use super::*;
     use crate::{
         translation_phases::{
@@ -1282,7 +1285,7 @@ mod tests {
                 column: 7,
                 source_file: StringCacheId::from_usize(0),
             },
-        
+
             length: 1,}),
             contents: StringCacheId::from_usize(3),
         }),
@@ -1332,7 +1335,7 @@ mod tests {
                 column: 12,
                 source_file: StringCacheId::from_usize(0),
             },
-        
+
             length: 1,}),
             contents: StringCacheId::from_usize(7),
         }),
