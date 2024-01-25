@@ -415,7 +415,6 @@ pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
     state: State,
     last_preprocessor_token: Option<PreprocessorToken>,
     current_preprocessor_token: Option<PreprocessorToken>,
-    next_preprocessor_token: Option<PreprocessorToken>,
     if_directive_balance: isize,
     should_tokenize_whitespace: bool,
     quote_include_directories: Arc<Vec<PathBuf>>,
@@ -430,7 +429,6 @@ pub(crate) struct SavePoint<PrevSavePoint, PrevError> {
     pub(crate) state: State,
     pub(crate) last_preprocessor_token: Option<PreprocessorToken>,
     pub(crate) current_preprocessor_token: Option<PreprocessorToken>,
-    pub(crate) next_preprocessor_token: Option<PreprocessorToken>,
     pub(crate) macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
     pub(crate) if_directive_balance: isize,
     pub(crate) should_tokenize_whitespace: bool,
@@ -1502,7 +1500,6 @@ impl Preprocessor<Ppt, Ppte, Pptsp> {
             state: State::Default,
             last_preprocessor_token: None,
             current_preprocessor_token: None,
-            next_preprocessor_token: None,
             if_directive_balance: 0,
             should_tokenize_whitespace: false,
             quote_include_directories,
@@ -1824,46 +1821,40 @@ where
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
         let last = self.current_preprocessor_token.clone();
-        let ret = if let Some(token) = self.next_preprocessor_token.take() {
-            Some(Ok(token))
-        } else {
-            'outer: loop {
-                if let Some(TokenizerFrame {
-                    frame_type: TokenizerFrameType::HashHashOperator(state),
-                    save_point: _,
-                    name,
-                }) = self.tokenizer_stack.last()
-                {
-                    // eprintln!("LOOP!!");
-                    // eprintln!("State: {state:#?}");
-                    let name = *name;
-                    let state = state.clone();
-                    match state {
-                        | HashHashOperatorState::NothingToExpand { lhs, rhs } => {
-                            self.pop_tokenizer_frame();
-                            match self.merge_tokens(lhs, rhs) {
-                                | None => {
-                                    self.pop_tokenizer_frame();
+        let ret = 'outer: loop {
+            if let Some(TokenizerFrame {
+                frame_type: TokenizerFrameType::HashHashOperator(state),
+                save_point: _,
+                name,
+            }) = self.tokenizer_stack.last()
+            {
+                // eprintln!("LOOP!!");
+                // eprintln!("State: {state:#?}");
+                let name = *name;
+                let state = state.clone();
+                match state {
+                    | HashHashOperatorState::NothingToExpand { lhs, rhs } => {
+                        self.pop_tokenizer_frame();
+                        match self.merge_tokens(lhs, rhs) {
+                            | None => {
+                                self.pop_tokenizer_frame();
+                                continue;
+                            },
+                            | Some(v) => break Some(v),
+                        }
+                    },
+                    | HashHashOperatorState::ExpandingLhs { rhs, paren_depth } => {
+                        // eprintln!("Expanding lhs");
+                        let mut token = loop {
+                            match self.next_preprocessor_token_no_expand_no_hash_hash() {
+                                | Some(Err(e)) => {
+                                    self.pending_results
+                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
                                     continue;
                                 },
-                                | Some(v) => break Some(v),
-                            }
-                        },
-                        | HashHashOperatorState::ExpandingLhs { rhs, paren_depth } => {
-                            // eprintln!("Expanding lhs");
-                            let mut token =
-                                loop {
-                                    match self.next_preprocessor_token_no_expand_no_hash_hash() {
-                                        | Some(Err(e)) => {
-                                            self.pending_results.push_back(Err(
-                                                PreprocessorError::PreviousPhaseError(e),
-                                            ));
-                                            continue;
-                                        },
-                                        | None => {
-                                            let start_position =
-                                                self.previous_phase.current_position();
-                                            self.pending_results.push_back(Err(
+                                | None => {
+                                    let start_position = self.previous_phase.current_position();
+                                    self.pending_results.push_back(Err(
                                         PreprocessorError::InnerPreprocessorError(
                                             InnerPreprocessorError {
                                                 error_type:
@@ -1877,121 +1868,112 @@ where
                                             },
                                         ),
                                     ));
-                                            break None;
-                                        },
-                                        | Some(Ok(t)) => break Some(t),
-                                    }
-                                };
-                            let next_save_point = self.previous_phase.save();
-                            let next =
-                                loop {
-                                    match self.next_preprocessor_token_no_expand_no_hash_hash() {
-                                        | Some(Err(e)) => {
-                                            self.pending_results.push_back(Err(
-                                                PreprocessorError::PreviousPhaseError(e),
-                                            ));
-                                            continue;
-                                        },
-                                        | None => {
-                                            let start_position =
-                                                self.previous_phase.current_position();
-                                            self.pending_results.push_back(Err(
-                                        PreprocessorError::InnerPreprocessorError(
-                                            InnerPreprocessorError {
-                                                error_type:
-                                                    PreprocessorErrorType::UnexpectedEndOfInput(
-                                                        "expanding function-like macro argument",
-                                                    ),
-                                                source_vectors: SourceVectors::from(SourceVector {
-                                                    position: start_position,
-                                                    length:   0,
-                                                }),
-                                            },
-                                        ),
-                                    ));
-                                            break None;
-                                        },
-                                        | Some(Ok(t)) => break Some(t),
-                                    }
-                                };
-                            // eprintln!("Last token: {last:#?}");
-                            // eprintln!(
-                            // "Token kind in expanding lhs: {:#?}",
-                            // token.as_ref().map(|t| t.kind)
-                            // );
-                            let is_end_of_current_state = match (token.as_ref(), next.as_ref()) {
-                                | (None, _) | (_, None) => true,
-                                | (Some(t1), Some(t2)) => {
-                                    if self
-                                        .update_macro_argument_paren_depth(t1, name, paren_depth)
-                                        .is_none()
-                                    {
-                                        token = None;
-                                        true
-                                    } else {
-                                        self.update_macro_argument_paren_depth(
-                                            t2,
-                                            name,
-                                            paren_depth,
-                                        )
-                                        .is_none()
-                                    }
+                                    break None;
                                 },
-                            };
-                            self.previous_phase.restore(next_save_point);
-                            if is_end_of_current_state {
-                                // eprintln!("Final token: {last:#?}");
-                                match rhs.clone() {
-                                    | HashHashArgument::Token(t) => {
-                                        let ret = self.merge_tokens(token, Some(t.clone()));
-                                        self.pop_tokenizer_frame();
-                                        break 'outer ret;
-                                    },
-                                    | HashHashArgument::MacroArgument(rhs_save_point, rhs_name) => {
-                                        let Some(TokenizerFrame {
-                                            frame_type: TokenizerFrameType::HashHashOperator(state),
-                                            save_point,
-                                            name,
-                                        }) = self.tokenizer_stack.last_mut()
-                                        else {
-                                            unreachable!();
-                                        };
-                                        // eprintln!("Rhs save point: {rhs_save_point:#?}");
-                                        *save_point = rhs_save_point.clone();
-                                        *name = rhs_name;
-                                        *state = HashHashOperatorState::ExpandingRhs {
-                                            paren_depth:    1,
-                                            lhs:            token,
-                                            has_seen_token: false,
-                                        };
-                                        self.previous_phase.restore(rhs_save_point);
-                                        continue 'outer;
-                                    },
+                                | Some(Ok(t)) => break Some(t),
+                            }
+                        };
+                        let next_save_point = self.previous_phase.save();
+                        let next = loop {
+                            match self.next_preprocessor_token_no_expand_no_hash_hash() {
+                                | Some(Err(e)) => {
+                                    self.pending_results
+                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                    continue;
+                                },
+                                | None => {
+                                    let start_position = self.previous_phase.current_position();
+                                    self.pending_results.push_back(Err(
+                                        PreprocessorError::InnerPreprocessorError(
+                                            InnerPreprocessorError {
+                                                error_type:
+                                                    PreprocessorErrorType::UnexpectedEndOfInput(
+                                                        "expanding function-like macro argument",
+                                                    ),
+                                                source_vectors: SourceVectors::from(SourceVector {
+                                                    position: start_position,
+                                                    length:   0,
+                                                }),
+                                            },
+                                        ),
+                                    ));
+                                    break None;
+                                },
+                                | Some(Ok(t)) => break Some(t),
+                            }
+                        };
+                        // eprintln!("Last token: {last:#?}");
+                        // eprintln!(
+                        // "Token kind in expanding lhs: {:#?}",
+                        // token.as_ref().map(|t| t.kind)
+                        // );
+                        let is_end_of_current_state = match (token.as_ref(), next.as_ref()) {
+                            | (None, _) | (_, None) => true,
+                            | (Some(t1), Some(t2)) => {
+                                if self
+                                    .update_macro_argument_paren_depth(t1, name, paren_depth)
+                                    .is_none()
+                                {
+                                    token = None;
+                                    true
+                                } else {
+                                    self.update_macro_argument_paren_depth(t2, name, paren_depth)
+                                        .is_none()
                                 }
+                            },
+                        };
+                        self.previous_phase.restore(next_save_point);
+                        if is_end_of_current_state {
+                            // eprintln!("Final token: {last:#?}");
+                            match rhs.clone() {
+                                | HashHashArgument::Token(t) => {
+                                    let ret = self.merge_tokens(token, Some(t.clone()));
+                                    self.pop_tokenizer_frame();
+                                    break 'outer ret;
+                                },
+                                | HashHashArgument::MacroArgument(rhs_save_point, rhs_name) => {
+                                    let Some(TokenizerFrame {
+                                        frame_type: TokenizerFrameType::HashHashOperator(state),
+                                        save_point,
+                                        name,
+                                    }) = self.tokenizer_stack.last_mut()
+                                    else {
+                                        unreachable!();
+                                    };
+                                    // eprintln!("Rhs save point: {rhs_save_point:#?}");
+                                    *save_point = rhs_save_point.clone();
+                                    *name = rhs_name;
+                                    *state = HashHashOperatorState::ExpandingRhs {
+                                        paren_depth:    1,
+                                        lhs:            token,
+                                        has_seen_token: false,
+                                    };
+                                    self.previous_phase.restore(rhs_save_point);
+                                    continue 'outer;
+                                },
                             }
-                            match token {
-                                | None => break 'outer None,
-                                | Some(t) => break 'outer Some(Ok(t)),
-                            }
-                        },
-                        | HashHashOperatorState::ExpandingRhs {
-                            paren_depth,
-                            lhs,
-                            has_seen_token,
-                        } => {
-                            // eprintln!("Expanding rhs");
-                            let token =
-                                loop {
-                                    match self.next_preprocessor_token_no_expand_no_hash_hash() {
-                                        | Some(Err(e)) => {
-                                            self.pending_results.push_back(Err(
-                                                PreprocessorError::PreviousPhaseError(e),
-                                            ));
-                                            continue;
-                                        },
-                                        | None => {
-                                            let position = self.previous_phase.current_position();
-                                            self.pending_results.push_back(Err(
+                        }
+                        match token {
+                            | None => break 'outer None,
+                            | Some(t) => break 'outer Some(Ok(t)),
+                        }
+                    },
+                    | HashHashOperatorState::ExpandingRhs {
+                        paren_depth,
+                        lhs,
+                        has_seen_token,
+                    } => {
+                        // eprintln!("Expanding rhs");
+                        let token = loop {
+                            match self.next_preprocessor_token_no_expand_no_hash_hash() {
+                                | Some(Err(e)) => {
+                                    self.pending_results
+                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                    continue;
+                                },
+                                | None => {
+                                    let position = self.previous_phase.current_position();
+                                    self.pending_results.push_back(Err(
                                         PreprocessorError::InnerPreprocessorError(
                                             InnerPreprocessorError {
                                                 error_type:
@@ -2005,79 +1987,76 @@ where
                                             },
                                         ),
                                     ));
-                                            break None;
-                                        },
-                                        | Some(Ok(t)) => break Some(t),
-                                    }
-                                };
-                            // eprintln!(
-                            // "Token kind in expanding rhs: {:#?}",
-                            // token.as_ref().map(|t| t.kind)
-                            // );
-                            // eprintln!("Token in expanding rhs: {token:#?}");
-                            if let Some(token) = token {
-                                if let Some(p) = self.update_macro_argument_paren_depth(
-                                    &token,
-                                    name,
-                                    paren_depth,
-                                ) {
-                                    let Some(TokenizerFrame {
-                                        frame_type:
-                                            TokenizerFrameType::HashHashOperator(
-                                                HashHashOperatorState::ExpandingRhs {
-                                                    paren_depth,
-                                                    lhs,
-                                                    has_seen_token,
-                                                },
-                                            ),
-                                        ..
-                                    }) = self.tokenizer_stack.last_mut()
-                                    else {
-                                        unreachable!();
-                                    };
-                                    *paren_depth = p;
-                                    *has_seen_token = true;
-                                    let lhs = lhs.take();
-                                    // eprintln!(
-                                    // "Lhs kind in expanding rhs: {:#?}",
-                                    // lhs.as_ref().map(|t| t.kind)
-                                    // );
-                                    break 'outer self.merge_tokens(lhs, Some(token));
-                                }
-                                self.pop_tokenizer_frame();
-                                if !has_seen_token {
-                                    break 'outer match lhs {
-                                        | None => None,
-                                        | Some(t) => Some(Ok(t)),
-                                    };
-                                }
-                                continue 'outer;
+                                    break None;
+                                },
+                                | Some(Ok(t)) => break Some(t),
                             }
-                            let Some(TokenizerFrame {
-                                frame_type:
-                                    TokenizerFrameType::HashHashOperator(
-                                        HashHashOperatorState::ExpandingRhs {
-                                            paren_depth: _,
-                                            lhs,
-                                            has_seen_token: _,
-                                        },
-                                    ),
-                                ..
-                            }) = self.tokenizer_stack.last_mut()
-                            else {
-                                unreachable!();
-                            };
-                            let lhs = lhs.take();
+                        };
+                        // eprintln!(
+                        // "Token kind in expanding rhs: {:#?}",
+                        // token.as_ref().map(|t| t.kind)
+                        // );
+                        // eprintln!("Token in expanding rhs: {token:#?}");
+                        if let Some(token) = token {
+                            if let Some(p) =
+                                self.update_macro_argument_paren_depth(&token, name, paren_depth)
+                            {
+                                let Some(TokenizerFrame {
+                                    frame_type:
+                                        TokenizerFrameType::HashHashOperator(
+                                            HashHashOperatorState::ExpandingRhs {
+                                                paren_depth,
+                                                lhs,
+                                                has_seen_token,
+                                            },
+                                        ),
+                                    ..
+                                }) = self.tokenizer_stack.last_mut()
+                                else {
+                                    unreachable!();
+                                };
+                                *paren_depth = p;
+                                *has_seen_token = true;
+                                let lhs = lhs.take();
+                                // eprintln!(
+                                // "Lhs kind in expanding rhs: {:#?}",
+                                // lhs.as_ref().map(|t| t.kind)
+                                // );
+                                break 'outer self.merge_tokens(lhs, Some(token));
+                            }
                             self.pop_tokenizer_frame();
-                            break 'outer match lhs {
-                                | None => None,
-                                | Some(t) => Some(Ok(t)),
-                            };
-                        },
-                    }
+                            if !has_seen_token {
+                                break 'outer match lhs {
+                                    | None => None,
+                                    | Some(t) => Some(Ok(t)),
+                                };
+                            }
+                            continue 'outer;
+                        }
+                        let Some(TokenizerFrame {
+                            frame_type:
+                                TokenizerFrameType::HashHashOperator(
+                                    HashHashOperatorState::ExpandingRhs {
+                                        paren_depth: _,
+                                        lhs,
+                                        has_seen_token: _,
+                                    },
+                                ),
+                            ..
+                        }) = self.tokenizer_stack.last_mut()
+                        else {
+                            unreachable!();
+                        };
+                        let lhs = lhs.take();
+                        self.pop_tokenizer_frame();
+                        break 'outer match lhs {
+                            | None => None,
+                            | Some(t) => Some(Ok(t)),
+                        };
+                    },
                 }
-                break self.next_preprocessor_token_no_expand_no_hash_hash();
             }
+            break self.next_preprocessor_token_no_expand_no_hash_hash();
         };
         // eprintln!(
         // "Ret in next_preprocessor_token_no_expand: {:#?}",
@@ -2097,86 +2076,80 @@ where
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
         let last = self.current_preprocessor_token.clone();
-        let ret = if let Some(token) = self.next_preprocessor_token.take() {
-            Some(Ok(token))
-        } else {
-            loop {
-                if self.tokenizer_stack.last().is_some() {
-                    match self.previous_phase.next() {
-                        | Some(Err(e)) => {
-                            break Some(Err(e));
-                        },
-                        | Some(Ok(token))
-                            if token.kind == PreprocessorTokenType::Whitespace
-                                && (!self.should_tokenize_whitespace
-                                    || self.last_preprocessor_token.as_ref().map(|t| t.kind)
-                                        == Some(PreprocessorTokenType::Whitespace)) =>
-                        {
-                            continue;
-                        },
-                        | Some(Ok(token)) => {
-                            match self.tokenizer_stack.last_mut().unwrap() {
-                                | TokenizerFrame {
-                                    frame_type:
-                                        TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                                        | TokenizerFrameType::ObjectLikeMacroInvocation,
-                                    ..
-                                } =>
-                                    if token.kind == PreprocessorTokenType::Newline {
-                                        self.pop_tokenizer_frame();
-                                        continue;
-                                    },
-                                | TokenizerFrame {
-                                    frame_type:
-                                        TokenizerFrameType::FunctionLikeMacroArgument {
-                                            paren_depth,
-                                            argument,
-                                        },
-                                    ..
-                                } => {
-                                    let paren_depth = *paren_depth;
-                                    let argument = argument.clone();
-                                    if let Some(paren_depth) = self
-                                        .update_macro_argument_paren_depth(
-                                            &token,
-                                            argument.name,
-                                            paren_depth,
-                                        )
-                                    {
-                                        let TokenizerFrame {
-                                            frame_type:
-                                                TokenizerFrameType::FunctionLikeMacroArgument {
-                                                    paren_depth: p,
-                                                    ..
-                                                },
-                                            ..
-                                        } = self.tokenizer_stack.last_mut().unwrap()
-                                        else {
-                                            unreachable!();
-                                        };
-                                        *p = paren_depth;
-                                    } else {
-                                        self.pop_tokenizer_frame();
-                                        continue;
-                                    }
+        let ret = loop {
+            if self.tokenizer_stack.last().is_some() {
+                match self.previous_phase.next() {
+                    | Some(Err(e)) => {
+                        break Some(Err(e));
+                    },
+                    | Some(Ok(token))
+                        if token.kind == PreprocessorTokenType::Whitespace
+                            && (!self.should_tokenize_whitespace
+                                || self.last_preprocessor_token.as_ref().map(|t| t.kind)
+                                    == Some(PreprocessorTokenType::Whitespace)) =>
+                    {
+                        continue;
+                    },
+                    | Some(Ok(token)) => {
+                        match self.tokenizer_stack.last_mut().unwrap() {
+                            | TokenizerFrame {
+                                frame_type:
+                                    TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                                    | TokenizerFrameType::ObjectLikeMacroInvocation,
+                                ..
+                            } =>
+                                if token.kind == PreprocessorTokenType::Newline {
+                                    self.pop_tokenizer_frame();
+                                    continue;
                                 },
-                                | TokenizerFrame {
-                                    frame_type:
-                                        TokenizerFrameType::HashHashOperator(..)
-                                        | TokenizerFrameType::SourceFile,
-                                    ..
-                                } => (),
-                            }
-                            break Some(Ok(token));
-                        },
-                        | None => {
-                            self.pop_tokenizer_frame();
-                            continue;
-                        },
-                    }
+                            | TokenizerFrame {
+                                frame_type:
+                                    TokenizerFrameType::FunctionLikeMacroArgument {
+                                        paren_depth,
+                                        argument,
+                                    },
+                                ..
+                            } => {
+                                let paren_depth = *paren_depth;
+                                let argument = argument.clone();
+                                if let Some(paren_depth) = self.update_macro_argument_paren_depth(
+                                    &token,
+                                    argument.name,
+                                    paren_depth,
+                                ) {
+                                    let TokenizerFrame {
+                                        frame_type:
+                                            TokenizerFrameType::FunctionLikeMacroArgument {
+                                                paren_depth: p,
+                                                ..
+                                            },
+                                        ..
+                                    } = self.tokenizer_stack.last_mut().unwrap()
+                                    else {
+                                        unreachable!();
+                                    };
+                                    *p = paren_depth;
+                                } else {
+                                    self.pop_tokenizer_frame();
+                                    continue;
+                                }
+                            },
+                            | TokenizerFrame {
+                                frame_type:
+                                    TokenizerFrameType::HashHashOperator(..)
+                                    | TokenizerFrameType::SourceFile,
+                                ..
+                            } => (),
+                        }
+                        break Some(Ok(token));
+                    },
+                    | None => {
+                        self.pop_tokenizer_frame();
+                        continue;
+                    },
                 }
-                break None;
             }
+            break None;
         };
         // eprintln!(
         // "Ret in next_preprocessor_token_no_expand_no_hash_hash: {:#?}",
@@ -2283,154 +2256,139 @@ where
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
         let last = self.current_preprocessor_token.clone();
-        let ret = if let Some(token) = self.next_preprocessor_token.take() {
-            Some(Ok(token))
-        } else {
-            'base: loop {
-                if let Some(token) = self.next_preprocessor_token.take() {
-                    break Some(Ok(token));
+        let ret = 'base: loop {
+            let start_macro = self.current_macro();
+            let token = match self.next_preprocessor_token_no_expand() {
+                | None => break 'base None,
+                | Some(Err(e)) => break 'base Some(Err(PreprocessorError::PreviousPhaseError(e))),
+                | Some(Ok(token)) => token,
+            };
+            let save_point = self.save();
+            let mut pending_errors = Vec::new();
+            let before_hash_hash_macro = self.current_macro();
+            let hash_hash = loop {
+                match self.next_preprocessor_token_no_expand() {
+                    | Some(Err(e)) => {
+                        pending_errors.push(e);
+                        continue;
+                    },
+                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash =>
+                        break Some(token),
+                    | Some(Ok(_)) | None => {
+                        self.restore(save_point.clone());
+                        break None;
+                    },
                 }
-                let start_macro = self.current_macro();
-                let token = if let Some(t) = self.next_preprocessor_token.take() {
-                    t
-                } else {
-                    match self.next_preprocessor_token_no_expand() {
-                        | None => break 'base None,
-                        | Some(Err(e)) =>
-                            break 'base Some(Err(PreprocessorError::PreviousPhaseError(e))),
-                        | Some(Ok(token)) => token,
-                    }
-                };
-                let mut pending_errors = Vec::new();
-                let before_hash_hash_macro = self.current_macro();
-                let hash_hash = loop {
-                    match self.next_preprocessor_token_no_expand() {
-                        | Some(Err(e)) => {
-                            pending_errors.push(e);
-                            continue;
-                        },
-                        | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash =>
-                            break Some(token),
-                        | None => {
-                            self.next_preprocessor_token = None;
-                            break None;
-                        },
-                        | Some(Ok(t)) => {
-                            self.next_preprocessor_token = Some(t);
-                            break None;
-                        },
-                    }
-                };
-                if let Some(h) = hash_hash {
-                    match self.tokenizer_stack.last() {
-                        | Some(TokenizerFrame {
-                            frame_type:
-                                TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                                | TokenizerFrameType::ObjectLikeMacroInvocation,
-                            ..
-                        }) => (),
-                        | _ => {
-                            break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::HashHashUsedOutsideOfMacro,
-                                    source_vectors: h.source_vectors,
-                                },
-                            )));
-                        },
-                    }
-                    if start_macro != before_hash_hash_macro {
+            };
+            if let Some(h) = hash_hash {
+                match self.tokenizer_stack.last() {
+                    | Some(TokenizerFrame {
+                        frame_type:
+                            TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                            | TokenizerFrameType::ObjectLikeMacroInvocation,
+                        ..
+                    }) => (),
+                    | _ => {
                         break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
                             InnerPreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::MacroEndedBeforeHashHashOperator,
+                                error_type:     PreprocessorErrorType::HashHashUsedOutsideOfMacro,
                                 source_vectors: h.source_vectors,
                             },
                         )));
-                    }
-                    // We only retain the errors if we are parsing a hash-hash operator. Otherwise
-                    // we load a savepoint and backtrack.
-                    self.pending_results.extend(
-                        pending_errors
-                            .into_iter()
-                            .map(|e| Err(PreprocessorError::PreviousPhaseError(e))),
-                    );
-                    match self.tokenizer_stack.last() {
-                        | Some(TokenizerFrame {
-                            frame_type:
-                                TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                                | TokenizerFrameType::ObjectLikeMacroInvocation,
-                            ..
-                        }) => (),
-                        | _ => {
-                            break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
+                    },
+                }
+                if start_macro != before_hash_hash_macro {
+                    break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:     PreprocessorErrorType::MacroEndedBeforeHashHashOperator,
+                            source_vectors: h.source_vectors,
+                        },
+                    )));
+                }
+                // We only retain the errors if we are parsing a hash-hash operator. Otherwise
+                // we load a savepoint and backtrack.
+                self.pending_results.extend(
+                    pending_errors
+                        .into_iter()
+                        .map(|e| Err(PreprocessorError::PreviousPhaseError(e))),
+                );
+                match self.tokenizer_stack.last() {
+                    | Some(TokenizerFrame {
+                        frame_type:
+                            TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                            | TokenizerFrameType::ObjectLikeMacroInvocation,
+                        ..
+                    }) => (),
+                    | _ => {
+                        break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
                             InnerPreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
                                 source_vectors: h.source_vectors,
                             },
                         )));
-                        },
-                    }
-                    let before_rhs_macro = self.current_macro();
-                    let rhs = match self.expect_token_no_expand(
-                        |_, _| true,
-                        |this, e| {
-                            this.pending_results
-                                .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                            ControlFlow::Continue(())
-                        },
-                        |_, _| unreachable!(),
-                        "parsing hash-hash operator. Hash hash operator must be followed by a \
-                         token on the same line.",
-                    ) {
-                        | Ok(token) => token,
-                        | Err(e) => break 'base Some(Err(e)),
-                    };
-                    if before_rhs_macro != start_macro {
-                        break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
-                                source_vectors: rhs.source_vectors,
-                            },
-                        )));
-                    }
-                    self.parse_hash_hash_operator(&token, &h, &rhs);
-                    continue 'base;
+                    },
                 }
-                if token.kind != PreprocessorTokenType::Identifier {
-                    break 'base Some(Ok(token));
-                }
-                if let Some(md) = self.macro_definitions.get(&token.contents).cloned() {
-                    match md {
-                        | MacroDefinition::ObjectLike { start_save_point } => {
-                            let frame = TokenizerFrame {
-                                frame_type: TokenizerFrameType::ObjectLikeMacroInvocation,
-                                save_point: start_save_point,
-                                name:       token.contents,
-                            };
-                            self.push_tokenizer_frame(frame);
-                            continue;
+                let before_rhs_macro = self.current_macro();
+                let rhs = match self.expect_token_no_expand(
+                    |_, _| true,
+                    |this, e| {
+                        this.pending_results
+                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                        ControlFlow::Continue(())
+                    },
+                    |_, _| unreachable!(),
+                    "parsing hash-hash operator. Hash hash operator must be followed by a token \
+                     on the same line.",
+                ) {
+                    | Ok(token) => token,
+                    | Err(e) => break 'base Some(Err(e)),
+                };
+                if before_rhs_macro != start_macro {
+                    break 'base Some(Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
+                            source_vectors: rhs.source_vectors,
                         },
-                        | MacroDefinition::FunctionLike {
-                            argument_names,
-                            start_save_point,
-                            is_variadic,
-                        } => {
-                            let save_point = self.save();
+                    )));
+                }
+                self.parse_hash_hash_operator(&token, &h, &rhs);
+                continue 'base;
+            }
+            self.restore(save_point);
 
-                            loop {
-                                match self.next_preprocessor_token_no_expand() {
-                                    | Some(Ok(token))
-                                        if token.kind == PreprocessorTokenType::Whitespace =>
-                                        continue,
-                                    | Some(Ok(token))
-                                        if token.kind
-                                            == PreprocessorTokenType::OpeningParenthesis =>
-                                        break,
-                                    | Some(Ok(token)) => {
-                                        self.pending_results.push_back(Err(
+            if token.kind != PreprocessorTokenType::Identifier {
+                break 'base Some(Ok(token));
+            }
+            if let Some(md) = self.macro_definitions.get(&token.contents).cloned() {
+                match md {
+                    | MacroDefinition::ObjectLike { start_save_point } => {
+                        let frame = TokenizerFrame {
+                            frame_type: TokenizerFrameType::ObjectLikeMacroInvocation,
+                            save_point: start_save_point,
+                            name:       token.contents,
+                        };
+                        self.push_tokenizer_frame(frame);
+                        continue;
+                    },
+                    | MacroDefinition::FunctionLike {
+                        argument_names,
+                        start_save_point,
+                        is_variadic,
+                    } => {
+                        let save_point = self.save();
+
+                        loop {
+                            match self.next_preprocessor_token_no_expand() {
+                                | Some(Ok(token))
+                                    if token.kind == PreprocessorTokenType::Whitespace =>
+                                    continue,
+                                | Some(Ok(token))
+                                    if token.kind == PreprocessorTokenType::OpeningParenthesis =>
+                                    break,
+                                | Some(Ok(token)) => {
+                                    self.pending_results.push_back(Err(
                                     PreprocessorError::InnerPreprocessorError(
                                         InnerPreprocessorError {
                                             error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
@@ -2438,90 +2396,89 @@ where
                                         },
                                     ),
                                 ));
-                                        self.restore(save_point);
-                                        break 'base Some(Ok(token));
+                                    self.restore(save_point);
+                                    break 'base Some(Ok(token));
+                                },
+                                | Some(Err(e)) => {
+                                    self.pending_results
+                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                    continue;
+                                },
+                                | None => {
+                                    break 'base None;
+                                },
+                            }
+                        }
+                        let mut i = 0;
+                        let mut arguments = HashMap::default();
+                        let mut paren_depth = 1;
+                        macro_rules! at {
+                            () => {
+                                argument_names
+                                    .get(i)
+                                    .copied()
+                                    .unwrap_or(self.insert_into_cache("<undefined>"))
+                            };
+                        }
+                        let mut has_seen_token = false;
+                        'outer: loop {
+                            if is_variadic && i >= argument_names.len() {
+                                break;
+                            }
+                            let start_save_point = self.previous_phase.save();
+                            loop {
+                                match self.next_preprocessor_token() {
+                                    | Some(Ok(token))
+                                        if token.kind
+                                            == PreprocessorTokenType::ClosingParenthesis =>
+                                    {
+                                        if paren_depth == 1 {
+                                            if has_seen_token {
+                                                drop(arguments.insert(
+                                                    at!(),
+                                                    FunctionLikeMacroArgument {
+                                                        name: at!(),
+                                                        start_save_point,
+                                                    },
+                                                ));
+                                            }
+                                            break 'outer;
+                                        }
+                                        has_seen_token = true;
+                                        paren_depth -= 1;
+                                    },
+                                    | Some(Ok(token))
+                                        if token.kind == PreprocessorTokenType::Comma =>
+                                    {
+                                        drop(arguments.insert(
+                                            at!(),
+                                            FunctionLikeMacroArgument {
+                                                name: at!(),
+                                                start_save_point,
+                                            },
+                                        ));
+                                        i += 1;
+                                        has_seen_token = true;
+                                        continue 'outer;
+                                    },
+                                    | Some(Ok(token))
+                                        if token.kind
+                                            == PreprocessorTokenType::OpeningParenthesis =>
+                                    {
+                                        paren_depth += 1;
+                                        has_seen_token = true;
+                                        continue;
+                                    },
+                                    | Some(Ok(_)) => {
+                                        has_seen_token = true;
+                                        continue;
                                     },
                                     | Some(Err(e)) => {
-                                        self.pending_results.push_back(Err(
-                                            PreprocessorError::PreviousPhaseError(e),
-                                        ));
+                                        self.pending_results.push_back(Err(e));
                                         continue;
                                     },
                                     | None => {
-                                        break 'base None;
-                                    },
-                                }
-                            }
-                            let mut i = 0;
-                            let mut arguments = HashMap::default();
-                            let mut paren_depth = 1;
-                            macro_rules! at {
-                                () => {
-                                    argument_names
-                                        .get(i)
-                                        .copied()
-                                        .unwrap_or(self.insert_into_cache("<undefined>"))
-                                };
-                            }
-                            let mut has_seen_token = false;
-                            'outer: loop {
-                                if is_variadic && i >= argument_names.len() {
-                                    break;
-                                }
-                                let start_save_point = self.previous_phase.save();
-                                loop {
-                                    match self.next_preprocessor_token() {
-                                        | Some(Ok(token))
-                                            if token.kind
-                                                == PreprocessorTokenType::ClosingParenthesis =>
-                                        {
-                                            if paren_depth == 1 {
-                                                if has_seen_token {
-                                                    drop(arguments.insert(
-                                                        at!(),
-                                                        FunctionLikeMacroArgument {
-                                                            name: at!(),
-                                                            start_save_point,
-                                                        },
-                                                    ));
-                                                }
-                                                break 'outer;
-                                            }
-                                            has_seen_token = true;
-                                            paren_depth -= 1;
-                                        },
-                                        | Some(Ok(token))
-                                            if token.kind == PreprocessorTokenType::Comma =>
-                                        {
-                                            drop(arguments.insert(
-                                                at!(),
-                                                FunctionLikeMacroArgument {
-                                                    name: at!(),
-                                                    start_save_point,
-                                                },
-                                            ));
-                                            i += 1;
-                                            has_seen_token = true;
-                                            continue 'outer;
-                                        },
-                                        | Some(Ok(token))
-                                            if token.kind
-                                                == PreprocessorTokenType::OpeningParenthesis =>
-                                        {
-                                            paren_depth += 1;
-                                            has_seen_token = true;
-                                            continue;
-                                        },
-                                        | Some(Ok(_)) => {
-                                            has_seen_token = true;
-                                            continue;
-                                        },
-                                        | Some(Err(e)) => {
-                                            self.pending_results.push_back(Err(e));
-                                            continue;
-                                        },
-                                        | None => {
-                                            break 'base Some(Err(
+                                        break 'base Some(Err(
                                             PreprocessorError::InnerPreprocessorError(
                                                 InnerPreprocessorError {
                                                     error_type:
@@ -2533,13 +2490,13 @@ where
                                                 },
                                             ),
                                         ));
-                                        },
-                                    }
+                                    },
                                 }
                             }
+                        }
 
-                            if arguments.len() != argument_names.len() && !is_variadic {
-                                self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                        if arguments.len() != argument_names.len() && !is_variadic {
+                            self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
                                     error_type:     PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
                                         expected:   argument_names.len(),
@@ -2548,44 +2505,44 @@ where
                                     source_vectors: token.source_vectors.clone(),
                                 },
                             )));
-                            }
-                            if is_variadic {
-                                drop(arguments.insert(
-                                    self.insert_into_cache("__VA_ARGS__"),
-                                    FunctionLikeMacroArgument {
-                                        name:             self.insert_into_cache("__VA_ARGS__"),
-                                        start_save_point: self.previous_phase.save(),
-                                    },
-                                ));
-                                let mut paren_depth = 1;
+                        }
+                        if is_variadic {
+                            drop(arguments.insert(
+                                self.insert_into_cache("__VA_ARGS__"),
+                                FunctionLikeMacroArgument {
+                                    name:             self.insert_into_cache("__VA_ARGS__"),
+                                    start_save_point: self.previous_phase.save(),
+                                },
+                            ));
+                            let mut paren_depth = 1;
 
-                                loop {
-                                    match self.next_preprocessor_token() {
-                                        | Some(Ok(token))
-                                            if token.kind
-                                                == PreprocessorTokenType::ClosingParenthesis =>
-                                        {
-                                            if paren_depth == 1 {
-                                                break;
-                                            }
-                                            paren_depth -= 1;
-                                        },
-                                        | Some(Ok(token))
-                                            if token.kind
-                                                == PreprocessorTokenType::OpeningParenthesis =>
-                                        {
-                                            paren_depth += 1;
-                                            continue;
-                                        },
-                                        | Some(Ok(_)) => {
-                                            continue;
-                                        },
-                                        | Some(Err(e)) => {
-                                            self.pending_results.push_back(Err(e));
-                                            continue;
-                                        },
-                                        | None => {
-                                            break 'base Some(Err(
+                            loop {
+                                match self.next_preprocessor_token() {
+                                    | Some(Ok(token))
+                                        if token.kind
+                                            == PreprocessorTokenType::ClosingParenthesis =>
+                                    {
+                                        if paren_depth == 1 {
+                                            break;
+                                        }
+                                        paren_depth -= 1;
+                                    },
+                                    | Some(Ok(token))
+                                        if token.kind
+                                            == PreprocessorTokenType::OpeningParenthesis =>
+                                    {
+                                        paren_depth += 1;
+                                        continue;
+                                    },
+                                    | Some(Ok(_)) => {
+                                        continue;
+                                    },
+                                    | Some(Err(e)) => {
+                                        self.pending_results.push_back(Err(e));
+                                        continue;
+                                    },
+                                    | None => {
+                                        break 'base Some(Err(
                                             PreprocessorError::InnerPreprocessorError(
                                                 InnerPreprocessorError {
                                                     error_type:
@@ -2597,106 +2554,104 @@ where
                                                 },
                                             ),
                                         ));
-                                        },
-                                    }
+                                    },
                                 }
                             }
-                            let frame = TokenizerFrame {
-                                frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
-                                    arguments: Arc::new(arguments),
-                                    is_variadic,
-                                },
-                                save_point: start_save_point,
-                                name:       token.contents,
-                            };
-                            self.push_tokenizer_frame(frame);
-                            continue;
-                        },
-                        | MacroDefinition::BuiltIn => match get_from_cache!(self, token.contents) {
-                            | "__FILE__" => {
-                                let file_name = self.insert_into_cache("__builtin__macros");
-                                let source_file = token.source_vectors[0].position.source_file;
-                                let length = get_from_cache!(self, source_file).len();
-                                break 'base Some(Ok(PreprocessorToken {
-                                    kind:           PreprocessorTokenType::String,
-                                    contents:       token.source_vectors[0].position.source_file,
-                                    source_vectors: SourceVectors::from(SourceVector {
-                                        position: SourcePosition {
-                                            index:       0,
-                                            line:        1,
-                                            column:      1,
-                                            source_file: file_name,
-                                        },
-                                        length,
-                                    }),
-                                }));
+                        }
+                        let frame = TokenizerFrame {
+                            frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
+                                arguments: Arc::new(arguments),
+                                is_variadic,
                             },
-                            | "__LINE__" => {
-                                let string = token.source_vectors[0].position.line.to_string();
-                                let file_name = self.insert_into_cache("__builtin__macros");
-                                break 'base Some(Ok(PreprocessorToken {
-                                    kind:           PreprocessorTokenType::Number,
-                                    contents:       self.insert_into_cache(&string),
-                                    source_vectors: SourceVectors::from(SourceVector {
-                                        position: SourcePosition {
-                                            index:       0,
-                                            line:        1,
-                                            column:      1,
-                                            source_file: file_name,
-                                        },
-                                        length:   string.len(),
-                                    }),
-                                }));
-                            },
-                            | "__TIME__" => {
-                                let now = Local::now();
-                                let string = now.format("%H:%M:%S").to_string();
-                                let file_name = self.insert_into_cache("__builtin__macros");
-                                break 'base Some(Ok(PreprocessorToken {
-                                    kind:           PreprocessorTokenType::String,
-                                    contents:       self.insert_into_cache(&string),
-                                    source_vectors: SourceVectors::from(SourceVector {
-                                        position: SourcePosition {
-                                            index:       0,
-                                            line:        1,
-                                            column:      1,
-                                            source_file: file_name,
-                                        },
-                                        length:   string.len(),
-                                    }),
-                                }));
-                            },
-                            | "__DATE__" => {
-                                let now = Local::now();
-                                let string = now.format("%b %e %Y").to_string();
-                                let file_name = self.insert_into_cache("__builtin__macros");
-                                break 'base Some(Ok(PreprocessorToken {
-                                    kind:           PreprocessorTokenType::String,
-                                    contents:       self.insert_into_cache(&string),
-                                    source_vectors: SourceVectors::from(SourceVector {
-                                        position: SourcePosition {
-                                            index:       0,
-                                            line:        1,
-                                            column:      1,
-                                            source_file: file_name,
-                                        },
-                                        length:   string.len(),
-                                    }),
-                                }));
-                            },
-                            | s => unreachable!(
-                                "Compiler bug: Predefined macro {s:#?} not in \
-                                 PREDEFINED_MACRO_NAMES"
-                            ),
-                        },
-                    }
-                } else {
-                    if let Some(frame) = self.handle_macro_argument(&token) {
+                            save_point: start_save_point,
+                            name:       token.contents,
+                        };
                         self.push_tokenizer_frame(frame);
                         continue;
-                    }
-                    break 'base Some(Ok(token));
+                    },
+                    | MacroDefinition::BuiltIn => match get_from_cache!(self, token.contents) {
+                        | "__FILE__" => {
+                            let file_name = self.insert_into_cache("__builtin__macros");
+                            let source_file = token.source_vectors[0].position.source_file;
+                            let length = get_from_cache!(self, source_file).len();
+                            break 'base Some(Ok(PreprocessorToken {
+                                kind:           PreprocessorTokenType::String,
+                                contents:       token.source_vectors[0].position.source_file,
+                                source_vectors: SourceVectors::from(SourceVector {
+                                    position: SourcePosition {
+                                        index:       0,
+                                        line:        1,
+                                        column:      1,
+                                        source_file: file_name,
+                                    },
+                                    length,
+                                }),
+                            }));
+                        },
+                        | "__LINE__" => {
+                            let string = token.source_vectors[0].position.line.to_string();
+                            let file_name = self.insert_into_cache("__builtin__macros");
+                            break 'base Some(Ok(PreprocessorToken {
+                                kind:           PreprocessorTokenType::Number,
+                                contents:       self.insert_into_cache(&string),
+                                source_vectors: SourceVectors::from(SourceVector {
+                                    position: SourcePosition {
+                                        index:       0,
+                                        line:        1,
+                                        column:      1,
+                                        source_file: file_name,
+                                    },
+                                    length:   string.len(),
+                                }),
+                            }));
+                        },
+                        | "__TIME__" => {
+                            let now = Local::now();
+                            let string = now.format("%H:%M:%S").to_string();
+                            let file_name = self.insert_into_cache("__builtin__macros");
+                            break 'base Some(Ok(PreprocessorToken {
+                                kind:           PreprocessorTokenType::String,
+                                contents:       self.insert_into_cache(&string),
+                                source_vectors: SourceVectors::from(SourceVector {
+                                    position: SourcePosition {
+                                        index:       0,
+                                        line:        1,
+                                        column:      1,
+                                        source_file: file_name,
+                                    },
+                                    length:   string.len(),
+                                }),
+                            }));
+                        },
+                        | "__DATE__" => {
+                            let now = Local::now();
+                            let string = now.format("%b %e %Y").to_string();
+                            let file_name = self.insert_into_cache("__builtin__macros");
+                            break 'base Some(Ok(PreprocessorToken {
+                                kind:           PreprocessorTokenType::String,
+                                contents:       self.insert_into_cache(&string),
+                                source_vectors: SourceVectors::from(SourceVector {
+                                    position: SourcePosition {
+                                        index:       0,
+                                        line:        1,
+                                        column:      1,
+                                        source_file: file_name,
+                                    },
+                                    length:   string.len(),
+                                }),
+                            }));
+                        },
+                        | s => unreachable!(
+                            "Compiler bug: Predefined macro {s:#?} not in PREDEFINED_MACRO_NAMES"
+                        ),
+                    },
                 }
+            } else {
+                if let Some(frame) = self.handle_macro_argument(&token) {
+                    self.push_tokenizer_frame(frame);
+                    continue;
+                }
+                break 'base Some(Ok(token));
             }
         };
         // eprintln!(
@@ -5048,7 +5003,6 @@ where
             state: self.state,
             last_preprocessor_token: self.last_preprocessor_token.clone(),
             current_preprocessor_token: self.current_preprocessor_token.clone(),
-            next_preprocessor_token: self.next_preprocessor_token.clone(),
             macro_definitions: self.macro_definitions.clone(),
             if_directive_balance: self.if_directive_balance,
             should_tokenize_whitespace: self.should_tokenize_whitespace,
@@ -5064,7 +5018,6 @@ where
         self.state = save_point.state;
         self.last_preprocessor_token = save_point.last_preprocessor_token;
         self.current_preprocessor_token = save_point.current_preprocessor_token;
-        self.next_preprocessor_token = save_point.next_preprocessor_token;
         self.macro_definitions = save_point.macro_definitions;
         self.if_directive_balance = save_point.if_directive_balance;
         self.should_tokenize_whitespace = save_point.should_tokenize_whitespace;
