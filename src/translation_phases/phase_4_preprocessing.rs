@@ -357,13 +357,11 @@ pub(crate) enum HashHashArgument<PrevSavePoint> {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum HashHashOperatorState<PrevSavePoint> {
     ExpandingLhs {
-        lhs_save_point: PrevSavePoint,
         rhs:         HashHashArgument<PrevSavePoint>,
         paren_depth: usize,
     },
     ExpandingRhs {
         lhs:            Option<PreprocessorToken>,
-        rhs_save_point: PrevSavePoint,
         paren_depth:    usize,
         has_seen_token: bool,
     },
@@ -375,18 +373,10 @@ pub(crate) enum HashHashOperatorState<PrevSavePoint> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenizerFrameType<PrevSavePoint> {
-    SourceFile {
-        save_point: PrevSavePoint,
-    },
-    ObjectLikeMacroInvocation {
-        save_point: PrevSavePoint,
-        tokens:     Arc<[Result<Token, PreprocessorError<PrevSavePoint>>]>,
-        index:      usize,
-    },
+    SourceFile,
+    ObjectLikeMacroInvocation,
     FunctionLikeMacroInvocation {
         arguments:   Arc<HashMap<StringCacheId, FunctionLikeMacroArgument<PrevSavePoint>>>,
-        tokens:      Arc<[Result<TokenOrHashHash<PrevSavePoint>, PreprocessorError<PrevSavePoint>>]>,
-        index:       usize,
         is_variadic: bool,
     },
     FunctionLikeMacroArgument {
@@ -397,20 +387,13 @@ pub(crate) enum TokenizerFrameType<PrevSavePoint> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum TokenOrHashHash<PrevSavePoint> {
-    Token(PreprocessorToken),
-    HashHash(HashHashOperatorState<PrevSavePoint>),
-
-}
-
-#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum MacroDefinition<PrevSavePoint> {
     ObjectLike {
-        tokens: Arc<[Result<Token, PreprocessorError<PrevSavePoint>>]>,
+        start_save_point: PrevSavePoint,
     },
     FunctionLike {
         argument_names:   Arc<[StringCacheId]>,
-        tokens:          Arc<[Result<TokenOrHashHash<PrevSavePoint>, PreprocessorError<PrevSavePoint>>]>,
+        start_save_point: PrevSavePoint,
         is_variadic:      bool,
     },
     BuiltIn,
@@ -419,6 +402,7 @@ pub(crate) enum MacroDefinition<PrevSavePoint> {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TokenizerFrame<PrevSavePoint> {
     frame_type: TokenizerFrameType<PrevSavePoint>,
+    save_point: PrevSavePoint,
     name:       StringCacheId,
 }
 
@@ -1506,7 +1490,8 @@ impl Preprocessor<Ppt, Ppte, Pptsp> {
         let phase3 = PreprocessorTokenizer::new(phase2, string_cache);
         Self {
             tokenizer_stack: vec![TokenizerFrame {
-                frame_type: TokenizerFrameType::SourceFile {save_point: phase3.save(),},
+                frame_type: TokenizerFrameType::SourceFile,
+                save_point: phase3.save(),
                 name:       source_file,
             }],
             previous_phase: phase3,
@@ -1692,11 +1677,11 @@ where
         lhs: Option<PreprocessorToken>,
         rhs: Option<PreprocessorToken>,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
-        /* eprintln!(
-            "Called merge tokens with lhs: {:#?} and rhs: {:#?}",
-            lhs.as_ref().map(|t| t.kind),
-            rhs.as_ref().map(|t| t.kind)
-        ); */
+        // eprintln!(
+        // "Called merge tokens with lhs: {:#?} and rhs: {:#?}",
+        // lhs.as_ref().map(|t| t.kind),
+        // rhs.as_ref().map(|t| t.kind)
+        // );
         match (lhs, rhs) {
             | (None, None) => None,
             | (Some(lhs), None) => Some(Ok(lhs)),
