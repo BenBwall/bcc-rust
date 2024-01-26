@@ -2441,7 +2441,7 @@ where
                         }
                         let mut i = 0;
                         let mut arguments = HashMap::default();
-                        let mut paren_depth = 1;
+                        let mut paren_depth = 1isize;
                         macro_rules! at {
                             () => {
                                 argument_names
@@ -2544,7 +2544,7 @@ where
                                     start_save_point: self.previous_phase.save(),
                                 },
                             ));
-                            let mut paren_depth = 1;
+                            let mut paren_depth = 1isize;
 
                             loop {
                                 match self.next_preprocessor_token() {
