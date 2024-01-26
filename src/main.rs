@@ -37,7 +37,7 @@ pub(crate) mod translation_phases;
 pub(crate) mod util;
 
 pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
-
+pub(crate) type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<FxHasher>>;
 #[derive(Parser)]
 #[command(author, version, about, long_about)]
 struct Cli {
