@@ -39,6 +39,7 @@ use crate::{
         },
     },
     HashMap,
+    HashSet,
 };
 
 pub(crate) trait FromInput: ISavePoint {
@@ -377,6 +378,7 @@ pub(crate) enum TokenizerFrameType<PrevSavePoint> {
     ObjectLikeMacroInvocation,
     FunctionLikeMacroInvocation {
         arguments:   Arc<HashMap<StringCacheId, FunctionLikeMacroArgument<PrevSavePoint>>>,
+        hash_hash_positions: Arc<HashSet<SourcePosition>>,
         is_variadic: bool,
     },
     FunctionLikeMacroArgument {
@@ -392,9 +394,10 @@ pub(crate) enum MacroDefinition<PrevSavePoint> {
         start_save_point: PrevSavePoint,
     },
     FunctionLike {
-        argument_names:   Arc<[StringCacheId]>,
-        start_save_point: PrevSavePoint,
-        is_variadic:      bool,
+        argument_names:      Arc<[StringCacheId]>,
+        start_save_point:    PrevSavePoint,
+        is_variadic:         bool,
+        hash_hash_positions: Arc<HashSet<SourcePosition>>,
     },
     BuiltIn,
 }
@@ -2224,6 +2227,7 @@ where
         StringCacheId,
         Prev::SavePoint,
         Arc<HashMap<StringCacheId, FunctionLikeMacroArgument<Prev::SavePoint>>>,
+        Arc<HashSet<SourcePosition>>,
         bool,
     )> {
         match self.tokenizer_stack.last() {
@@ -2232,11 +2236,12 @@ where
                     TokenizerFrameType::FunctionLikeMacroInvocation {
                         arguments,
                         is_variadic,
+                        hash_hash_positions,
                     },
                 name,
                 save_point,
                 ..
-            }) => Some((*name, save_point.clone(), arguments.clone(), *is_variadic)),
+            }) => Some((*name, save_point.clone(), arguments.clone(), hash_hash_positions.clone(), *is_variadic)),
             | _ => None,
         }
     }
@@ -2263,22 +2268,47 @@ where
                 | Some(Err(e)) => break 'base Some(Err(PreprocessorError::PreviousPhaseError(e))),
                 | Some(Ok(token)) => token,
             };
-            let save_point = self.save();
             let mut pending_errors = Vec::new();
             let before_hash_hash_macro = self.current_macro();
-            let hash_hash = loop {
-                match self.next_preprocessor_token_no_expand() {
-                    | Some(Err(e)) => {
-                        pending_errors.push(e);
-                        continue;
-                    },
-                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash =>
-                        break Some(token),
-                    | Some(Ok(_)) | None => {
-                        self.restore(save_point.clone());
-                        break None;
-                    },
+            let hash_hash = if let Some(TokenizerFrame {
+                frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { hash_hash_positions, .. },
+                ..
+            }) = self.tokenizer_stack.last()
+            {
+                let mut save_point = self.previous_phase.save();
+                while let Some(res) = self.previous_phase.next() {
+                    match res {
+                        | Ok(token) => {
+                            if token.kind == PreprocessorTokenType::Whitespace {
+                                save_point = self.previous_phase.save();
+                                continue;
+                            }
+                            self.previous_phase.restore(save_point);
+                            break;
+                        },
+                        | Err(_) => {
+                            continue;
+                        },
+                    }
                 }
+                if hash_hash_positions.contains(&self.current_position()) {
+                    match self.next_preprocessor_token_no_expand() {
+                        | Some(Err(e)) => {
+                            pending_errors.push(e);
+                            continue;
+                        },
+                        | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash =>
+                            Some(token),
+                        | Some(Ok(_)) | None => {
+                            unreachable!();
+                        },
+                    }
+                } else {
+                    None
+                }
+            
+            } else {
+                None
             };
             if let Some(h) = hash_hash {
                 match self.tokenizer_stack.last() {
@@ -2356,7 +2386,6 @@ where
                 self.parse_hash_hash_operator(&token, &h, &rhs);
                 continue 'base;
             }
-            self.restore(save_point);
 
             if token.kind != PreprocessorTokenType::Identifier {
                 break 'base Some(Ok(token));
@@ -2376,6 +2405,7 @@ where
                         argument_names,
                         start_save_point,
                         is_variadic,
+                        hash_hash_positions,
                     } => {
                         let save_point = self.save();
 
@@ -2562,6 +2592,7 @@ where
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                 arguments: Arc::new(arguments),
                                 is_variadic,
+                                hash_hash_positions: hash_hash_positions.clone(),
                             },
                             save_point: start_save_point,
                             name:       token.contents,
@@ -2677,6 +2708,7 @@ where
             if let TokenizerFrameType::FunctionLikeMacroInvocation {
                 ref arguments,
                 is_variadic: _,
+                hash_hash_positions: _,
             } = tokenizer_frame.frame_type
             {
                 if let Some(arg) = arguments.get(&token.contents) {
@@ -4468,6 +4500,7 @@ where
                     start_save_point: save_point,
                     argument_names: argument_names.into(),
                     is_variadic,
+                    hash_hash_positions: Arc::new(HashSet::default()),
                 },
             ));
         } else {
@@ -4495,6 +4528,7 @@ where
                 },
             ));
         }
+        let mut hash_hash_positions = HashSet::default();
         if let Some(mut old_save_point) = old_save_point {
             let mut error_has_been_generated = false;
             let mut new_save_point = save_point;
@@ -4522,6 +4556,11 @@ where
                         | None => break None,
                     }
                 };
+                if let Some(t) = new_next.as_ref() {
+                    if t.kind == PreprocessorTokenType::HashHash {
+                        _ = hash_hash_positions.insert(t.source_vectors[0].position);
+                    }
+                }
                 new_save_point = self.previous_phase.save();
                 if old_next != new_next && !error_has_been_generated {
                     self.pending_results
@@ -4547,11 +4586,21 @@ where
                         // Don't generate errors while validating macro definitions.
                         continue;
                     },
+                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash => {
+                        _ = hash_hash_positions.insert(token.source_vectors[0].position);
+                    },
                     | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline => break,
                     | None => break,
                     | Some(Ok(_)) => continue,
                 }
             }
+        }
+        if let Some(MacroDefinition::FunctionLike {
+            hash_hash_positions: ref mut hhp,
+            ..
+        }) = self.macro_definitions.get_mut(&name.contents)
+        {
+            *Arc::get_mut(hhp).unwrap() = hash_hash_positions;
         }
         Ok(())
     }
