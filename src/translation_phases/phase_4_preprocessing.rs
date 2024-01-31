@@ -366,7 +366,7 @@ pub(crate) enum TokenizerFrameType<PrevSavePoint> {
     HashHashOperator {
         lhs: Option<PreprocessorToken>,
     },
-}q
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum MacroDefinition<PrevSavePoint> {
@@ -1816,7 +1816,7 @@ where
             };
             'loop_: loop {
                 let start_macro = self.current_macro();
-            
+
                 let before_hash_hash_macro = self.current_macro();
                 let hash_hash = if let Some(TokenizerFrame {
                     frame_type:
@@ -1919,8 +1919,9 @@ where
                             let mut token = loop {
                                 match self.next_preprocessor_token_no_expand_no_hash_hash() {
                                     | Some(Err(e)) => {
-                                        self.pending_results
-                                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                        self.pending_results.push_back(Err(
+                                            PreprocessorError::PreviousPhaseError(e),
+                                        ));
                                         continue;
                                     },
                                     | None => {
@@ -1930,12 +1931,15 @@ where
                                                 InnerPreprocessorError {
                                                     error_type:
                                                         PreprocessorErrorType::UnexpectedEndOfInput(
-                                                            "expanding function-like macro argument",
+                                                            "expanding function-like macro \
+                                                             argument",
                                                         ),
-                                                    source_vectors: SourceVectors::from(SourceVector {
-                                                        position: start_position,
-                                                        length:   0,
-                                                    }),
+                                                    source_vectors: SourceVectors::from(
+                                                        SourceVector {
+                                                            position: start_position,
+                                                            length:   0,
+                                                        },
+                                                    ),
                                                 },
                                             ),
                                         ));
@@ -1948,8 +1952,9 @@ where
                             let next = loop {
                                 match self.next_preprocessor_token_no_expand_no_hash_hash() {
                                     | Some(Err(e)) => {
-                                        self.pending_results
-                                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                        self.pending_results.push_back(Err(
+                                            PreprocessorError::PreviousPhaseError(e),
+                                        ));
                                         continue;
                                     },
                                     | None => {
@@ -1959,12 +1964,15 @@ where
                                                 InnerPreprocessorError {
                                                     error_type:
                                                         PreprocessorErrorType::UnexpectedEndOfInput(
-                                                            "expanding function-like macro argument",
+                                                            "expanding function-like macro \
+                                                             argument",
                                                         ),
-                                                    source_vectors: SourceVectors::from(SourceVector {
-                                                        position: start_position,
-                                                        length:   0,
-                                                    }),
+                                                    source_vectors: SourceVectors::from(
+                                                        SourceVector {
+                                                            position: start_position,
+                                                            length:   0,
+                                                        },
+                                                    ),
                                                 },
                                             ),
                                         ));
@@ -1988,8 +1996,12 @@ where
                                         token = None;
                                         true
                                     } else {
-                                        self.update_macro_argument_paren_depth(t2, name, paren_depth)
-                                            .is_none()
+                                        self.update_macro_argument_paren_depth(
+                                            t2,
+                                            name,
+                                            paren_depth,
+                                        )
+                                        .is_none()
                                     }
                                 },
                             };
@@ -2038,8 +2050,9 @@ where
                             token = loop {
                                 match self.next_preprocessor_token_no_expand_no_hash_hash() {
                                     | Some(Err(e)) => {
-                                        self.pending_results
-                                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                        self.pending_results.push_back(Err(
+                                            PreprocessorError::PreviousPhaseError(e),
+                                        ));
                                         continue;
                                     },
                                     | None => {
@@ -2049,12 +2062,15 @@ where
                                                 InnerPreprocessorError {
                                                     error_type:
                                                         PreprocessorErrorType::UnexpectedEndOfInput(
-                                                            "expanding function-like macro argument",
+                                                            "expanding function-like macro \
+                                                             argument",
                                                         ),
-                                                    source_vectors: SourceVectors::from(SourceVector {
-                                                        position,
-                                                        length: 0,
-                                                    }),
+                                                    source_vectors: SourceVectors::from(
+                                                        SourceVector {
+                                                            position,
+                                                            length: 0,
+                                                        },
+                                                    ),
                                                 },
                                             ),
                                         ));
@@ -2069,9 +2085,11 @@ where
                             // );
                             // eprintln!("Token in expanding rhs: {token:#?}");
                             if let Some(token) = token {
-                                if let Some(p) =
-                                    self.update_macro_argument_paren_depth(&token, name, paren_depth)
-                                {
+                                if let Some(p) = self.update_macro_argument_paren_depth(
+                                    &token,
+                                    name,
+                                    paren_depth,
+                                ) {
                                     let Some(TokenizerFrame {
                                         frame_type:
                                             TokenizerFrameType::HashHashOperator(
@@ -3294,7 +3312,12 @@ where
 
         let first_token = loop {
             match self.next_preprocessor_token() {
-                | Some(Ok(token)) if matches!(token.kind, PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline) => continue,
+                | Some(Ok(token))
+                    if matches!(
+                        token.kind,
+                        PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
+                    ) =>
+                    continue,
                 | Some(Ok(token)) => break Some(token),
                 | None => break None,
                 | Some(Err(e)) => {
@@ -3330,7 +3353,10 @@ where
                         },
                     }
                 };
-                let contents = if matches!(next_token.kind, PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline) {
+                let contents = if matches!(
+                    next_token.kind,
+                    PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
+                ) {
                     if last_was_whitespace {
                         continue;
                     }
@@ -4526,7 +4552,8 @@ where
                 };
                 if let Some(t) = new_next.as_ref() {
                     if t.kind == PreprocessorTokenType::HashHash {
-                        // Hash-hash tokens cannot be created as a result of token pasting, so they will always have only one source vector.
+                        // Hash-hash tokens cannot be created as a result of token pasting, so they
+                        // will always have only one source vector.
                         _ = hash_hash_positions.insert(t.source_vectors[0].position);
                         if last.is_none() {
                             self.pending_results
@@ -4537,7 +4564,7 @@ where
                                         source_vectors: t.source_vectors.clone(),
                                     },
                                 )));
-                        }    
+                        }
                     }
                 }
                 new_save_point = self.previous_phase.save();
@@ -4554,16 +4581,21 @@ where
                         )));
                     error_has_been_generated = true;
                 }
-                if !new_next.as_ref().is_some_and(|t| t.kind != PreprocessorTokenType::Newline) {
-                    if last.as_ref().is_some_and(|t| t.kind == PreprocessorTokenType::HashHash) {
-                        self.pending_results
-                            .push_back(Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
-                                    source_vectors: last.unwrap().source_vectors.clone(),
-                                },
-                            )));
+                if !new_next
+                    .as_ref()
+                    .is_some_and(|t| t.kind != PreprocessorTokenType::Newline)
+                {
+                    if last
+                        .as_ref()
+                        .is_some_and(|t| t.kind == PreprocessorTokenType::HashHash)
+                    {
+                        self.pending_results.push_back(Err(
+                            PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
+                                source_vectors: last.unwrap().source_vectors.clone(),
+                            }),
+                        ));
                     }
                     break;
                 }
