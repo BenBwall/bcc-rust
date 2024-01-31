@@ -366,7 +366,7 @@ pub(crate) enum TokenizerFrameType<PrevSavePoint> {
     HashHashOperator {
         lhs: Option<PreprocessorToken>,
     },
-}
+}q
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum MacroDefinition<PrevSavePoint> {
@@ -3294,7 +3294,7 @@ where
 
         let first_token = loop {
             match self.next_preprocessor_token() {
-                | Some(Ok(token)) if token.kind == PreprocessorTokenType::Whitespace => continue,
+                | Some(Ok(token)) if matches!(token.kind, PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline) => continue,
                 | Some(Ok(token)) => break Some(token),
                 | None => break None,
                 | Some(Err(e)) => {
@@ -3303,6 +3303,7 @@ where
                 },
             }
         };
+        let mut last_was_whitespace = false;
         if let (
             Some(TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
@@ -3329,7 +3330,17 @@ where
                         },
                     }
                 };
-                synthetic_contents.push_str(get_from_cache!(self, next_token.contents));
+                let contents = if matches!(next_token.kind, PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline) {
+                    if last_was_whitespace {
+                        continue;
+                    }
+                    last_was_whitespace = true;
+                    " "
+                } else {
+                    last_was_whitespace = false;
+                    get_from_cache!(self, next_token.contents)
+                };
+                synthetic_contents.push_str(contents);
             }
             self.should_tokenize_whitespace = false;
             Ok(Token {
