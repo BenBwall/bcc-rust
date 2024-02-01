@@ -1095,6 +1095,9 @@ pub(crate) enum PreprocessorTokenType {
     String,
     Character,
 
+    // Expanded from hash operator
+    GeneratedString,
+
     // Include tokens.
     AngleBracketString,
     IncludeString,
