@@ -6,3 +6,7 @@ PASTE(=, =)
 PASTE(+, =)
 PASTE(3,)
 PASTE(,4)
+
+#define X 1 ## 2
+
+X
