@@ -353,7 +353,9 @@ const PREDEFINED_MACRO_NAMES: [&str; 4] = ["__LINE__", "__FILE__", "__DATE__", "
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenizerFrameType<PrevSavePoint> {
     SourceFile,
-    ObjectLikeMacroInvocation,
+    ObjectLikeMacroInvocation {
+        hash_hash_positions: Arc<HashSet<SourcePosition>>,
+    },
     FunctionLikeMacroInvocation {
         arguments:           Arc<HashMap<StringCacheId, FunctionLikeMacroArgument<PrevSavePoint>>>,
         hash_hash_positions: Arc<HashSet<SourcePosition>>,
@@ -363,15 +365,13 @@ pub(crate) enum TokenizerFrameType<PrevSavePoint> {
         argument:    FunctionLikeMacroArgument<PrevSavePoint>,
         paren_depth: usize,
     },
-    HashHashOperator {
-        lhs: Option<PreprocessorToken>,
-    },
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum MacroDefinition<PrevSavePoint> {
     ObjectLike {
-        start_save_point: PrevSavePoint,
+        start_save_point:    PrevSavePoint,
+        hash_hash_positions: Arc<HashSet<SourcePosition>>,
     },
     FunctionLike {
         argument_names:      Arc<[StringCacheId]>,
@@ -390,9 +390,15 @@ pub(crate) struct TokenizerFrame<PrevSavePoint> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub(crate) struct HashHash {
+    lhs: Option<PreprocessorToken>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
     pub(crate) previous_phase: Prev,
     tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
+    hash_hash_stack: Vec<HashHash>,
     macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
     pending_results: VecDeque<Result<Token, PreprocessorError<PrevError>>>,
     state: State,
@@ -408,6 +414,7 @@ pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
 pub(crate) struct SavePoint<PrevSavePoint, PrevError> {
     pub(crate) inner: PrevSavePoint,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
+    pub(crate) hash_hash_stack: Vec<HashHash>,
     pub(crate) pending_results: VecDeque<Result<Token, PreprocessorError<PrevError>>>,
     pub(crate) state: State,
     pub(crate) last_preprocessor_token: Option<PreprocessorToken>,
@@ -686,8 +693,8 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(..)
             | PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(..)
             | PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(..)
-            | PreprocessorErrorType::MacroEndedBeforeHashHashOperator
             | PreprocessorErrorType::MissingRightHandSideOfHashHashOperator
+            | PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator
             | PreprocessorErrorType::TokenMergingError(..) => ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
@@ -861,8 +868,8 @@ pub(crate) enum PreprocessorErrorType {
     ExpectedNewlineAfterUndefDirective(PreprocessorTokenType),
     HashOperatorMustBeFollowedByAMacroArgument(PreprocessorTokenType),
     IdentifierNotMacroArgumentAfterHashOperator(String),
-    MacroEndedBeforeHashHashOperator,
     MissingRightHandSideOfHashHashOperator,
+    MissingLeftHandSideOfHashHashOperator,
     TokenMergingError(String, String),
 }
 
@@ -1404,17 +1411,17 @@ impl Display for PreprocessorErrorType {
                      macro argument."
                 )
             },
-            | Self::MacroEndedBeforeHashHashOperator => {
-                write!(
-                    f,
-                    "Macro ended before '##' operator! The '##' operator can only be used inside \
-                     a macro definition."
-                )
-            },
             | Self::MissingRightHandSideOfHashHashOperator => {
                 write!(
                     f,
                     "Missing right hand side of '##' operator! The '##' operator must be followed \
+                     by a macro argument or a token inside of the macro body."
+                )
+            },
+            | Self::MissingLeftHandSideOfHashHashOperator => {
+                write!(
+                    f,
+                    "Missing left hand side of '##' operator! The '##' operator must be preceded \
                      by a macro argument or a token inside of the macro body."
                 )
             },
@@ -1477,6 +1484,7 @@ impl Preprocessor<Ppt, Ppte, Pptsp> {
                 save_point: phase3.save(),
                 name:       source_file,
             }],
+            hash_hash_stack: Vec::new(),
             previous_phase: phase3,
             macro_definitions,
             pending_results: VecDeque::new(),
@@ -1638,7 +1646,7 @@ where
         &mut self,
         lhs: &PreprocessorToken,
         rhs: &PreprocessorToken,
-    ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
+    ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
         let lhs_contents = get_from_cache!(self, lhs.contents).to_string();
         let rhs_contents = get_from_cache!(self, rhs.contents).to_string();
         let source_vectors = &lhs.source_vectors + &rhs.source_vectors;
@@ -1659,7 +1667,7 @@ where
         &mut self,
         lhs: Option<PreprocessorToken>,
         rhs: Option<PreprocessorToken>,
-    ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
+    ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
         // eprintln!(
         // "Called merge tokens with lhs: {:#?} and rhs: {:#?}",
         // lhs.as_ref().map(|t| t.kind),
@@ -1804,13 +1812,13 @@ where
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
         let last = self.current_preprocessor_token.clone();
-        let ret = loop {
+        let ret = 'base: loop {
             if unlikely(self.tokenizer_stack.is_empty()) {
-                break None;
+                break 'base None;
             }
             match self.previous_phase.next() {
                 | Some(Err(e)) => {
-                    break Some(Err(e));
+                    break 'base Some(Err(e));
                 },
                 | Some(Ok(token))
                     if token.kind == PreprocessorTokenType::Whitespace
@@ -1818,19 +1826,19 @@ where
                             || self.last_preprocessor_token.as_ref().map(|t| t.kind)
                                 == Some(PreprocessorTokenType::Whitespace)) =>
                 {
-                    continue;
+                    continue 'base;
                 },
                 | Some(Ok(token)) => {
                     match self.tokenizer_stack.last_mut().unwrap() {
                         | TokenizerFrame {
                             frame_type:
                                 TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                                | TokenizerFrameType::ObjectLikeMacroInvocation,
+                                | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
                             ..
                         } =>
                             if token.kind == PreprocessorTokenType::Newline {
                                 self.pop_tokenizer_frame();
-                                continue;
+                                continue 'base;
                             },
                         | TokenizerFrame {
                             frame_type:
@@ -1863,13 +1871,9 @@ where
                                 // TODO:  Handle when the lhs of a hash hash operator is a macro
                                 // argument.
                                 self.pop_tokenizer_frame();
-                                continue;
-                            }
+                                continue 'base;
+                            };
                         },
-                        | TokenizerFrame {
-                            frame_type: TokenizerFrameType::HashHashOperator { .. },
-                            ..
-                        } => todo!(),
                         | TokenizerFrame {
                             frame_type: TokenizerFrameType::SourceFile,
                             ..
@@ -1924,7 +1928,7 @@ where
             | Some(TokenizerFrame {
                 frame_type:
                     TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                    | TokenizerFrameType::ObjectLikeMacroInvocation,
+                    | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
                 name,
                 save_point,
                 ..
@@ -2003,16 +2007,16 @@ where
 
         match token.kind {
             | PreprocessorTokenType::Hash => {
-                if !matches!(
+                if matches!(
                     self.tokenizer_stack.last(),
                     Some(TokenizerFrame {
                         frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
                         ..
                     })
                 ) {
-                    Some(Ok(token))
-                } else {
                     Some(self.parse_hash_operator(token))
+                } else {
+                    Some(Ok(token))
                 }
             },
             | _ => Some(Ok(token)),
@@ -2027,12 +2031,14 @@ where
             | Some(Err(e)) => return Some(Err(e)),
             | Some(Ok(token)) => token,
         };
-        let start_macro = self.current_macro();
         let hash_hash = if let Some(TokenizerFrame {
             frame_type:
                 TokenizerFrameType::FunctionLikeMacroInvocation {
                     hash_hash_positions,
                     ..
+                }
+                | TokenizerFrameType::ObjectLikeMacroInvocation {
+                    hash_hash_positions,
                 },
             ..
         }) = self.tokenizer_stack.last()
@@ -2079,7 +2085,7 @@ where
                 | Some(TokenizerFrame {
                     frame_type:
                         TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                        | TokenizerFrameType::ObjectLikeMacroInvocation,
+                        | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
                     ..
                 }) => (),
                 | _ => {
@@ -2103,7 +2109,9 @@ where
                         },
                     ))),
             };
-            self.parse_hash_hash_operator(&token, &h, &rhs);
+            if let Some(r) = self.parse_hash_hash_operator(&token, &h, &rhs) {
+                return Some(r);
+            };
         }
         Some(Ok(token))
     }
@@ -2111,23 +2119,76 @@ where
     fn next_preprocessor_token(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
+        // eprintln!("Tokenizer stack: {:#?}", self.tokenizer_stack);
+        // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
         let last = self.current_preprocessor_token.clone();
         let ret = 'base: loop {
-            let mut token = match self.handle_hash_hash_operator() {
+            let token = match self.handle_hash_hash_operator() {
                 | None => break 'base None,
                 | Some(Err(e)) => break 'base Some(Err(e)),
                 | Some(Ok(token)) => token,
             };
 
+            if !self.hash_hash_stack.is_empty() {
+                'merge: {
+                    let Some(TokenizerFrame {
+                        frame_type:
+                            TokenizerFrameType::FunctionLikeMacroArgument {
+                                argument,
+                                paren_depth,
+                            },
+                        ..
+                    }) = self.tokenizer_stack.last()
+                    else {
+                        break 'merge;
+                    };
+                    let paren_depth = *paren_depth;
+                    let argument = argument.clone();
+                    if let Some(HashHash { lhs: Some(lhs) }) = self.hash_hash_stack.last() {
+                        let result = self.merge_tokens(Some(lhs.clone()), Some(token.clone()));
+                        drop(self.hash_hash_stack.pop());
+                        self.pop_tokenizer_frame();
+                        break 'base result;
+                    }
+                    let save_point = self.previous_phase.save();
+
+                    let next_is_end = loop {
+                        match self.previous_phase.next() {
+                            | Some(Ok(token)) =>
+                                break self
+                                    .update_macro_argument_paren_depth(
+                                        &token,
+                                        argument.name,
+                                        paren_depth,
+                                    )
+                                    .is_none(),
+                            | Some(Err(_)) => continue,
+                            | None => break true,
+                        }
+                    };
+                    self.previous_phase.restore(save_point);
+                    if next_is_end {
+                        if let Some(HashHash { lhs: lhs @ None }) = self.hash_hash_stack.last_mut()
+                        {
+                            *lhs = Some(token.clone());
+                        }
+                    }
+                }
+            }
             if token.kind != PreprocessorTokenType::Identifier {
                 break 'base Some(Ok(token));
             }
 
             if let Some(md) = self.macro_definitions.get(&token.contents).cloned() {
                 match md {
-                    | MacroDefinition::ObjectLike { start_save_point } => {
+                    | MacroDefinition::ObjectLike {
+                        start_save_point,
+                        hash_hash_positions,
+                    } => {
                         let frame = TokenizerFrame {
-                            frame_type: TokenizerFrameType::ObjectLikeMacroInvocation,
+                            frame_type: TokenizerFrameType::ObjectLikeMacroInvocation {
+                                hash_hash_positions,
+                            },
                             save_point: start_save_point,
                             name:       token.contents,
                         };
@@ -2971,8 +3032,28 @@ where
         lhs: &PreprocessorToken,
         _hash_hash: &PreprocessorToken,
         rhs: &PreprocessorToken,
-    ) {
-        todo!();
+    ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
+        eprintln!("lhs: {lhs:#?}");
+        eprintln!("rhs: {rhs:#?}");
+        self.hash_hash_stack.push(HashHash { lhs: None });
+        let rhs_is_macro_argument = if let Some(frame) = self.handle_macro_argument(rhs) {
+            self.push_tokenizer_frame(frame);
+            true
+        } else {
+            drop(self.hash_hash_stack.pop());
+            false
+        };
+        if let Some(frame) = self.handle_macro_argument(lhs) {
+            self.push_tokenizer_frame(frame);
+        } else if rhs_is_macro_argument {
+            self.hash_hash_stack.last_mut().unwrap().lhs = Some(lhs.clone());
+        } else {
+            return Some(
+                self.merge_tokens(Some(lhs.clone()), Some(rhs.clone()))
+                    .unwrap(),
+            );
+        }
+        None
     }
 
     fn parse_hash_operator(
@@ -4057,8 +4138,9 @@ where
                 | MacroDefinition::FunctionLike {
                     start_save_point, ..
                 }
-                | MacroDefinition::ObjectLike { start_save_point } =>
-                    Some(start_save_point.clone()),
+                | MacroDefinition::ObjectLike {
+                    start_save_point, ..
+                } => Some(start_save_point.clone()),
                 | MacroDefinition::BuiltIn => {
                     self.pending_results.push_back(Err(
                         PreprocessorError::<Prev::Error>::InnerPreprocessorError(
@@ -4219,7 +4301,8 @@ where
             drop(self.macro_definitions.insert(
                 name.contents,
                 MacroDefinition::ObjectLike {
-                    start_save_point: save_point.clone(),
+                    start_save_point:    save_point.clone(),
+                    hash_hash_positions: Arc::new(HashSet::default()),
                 },
             ));
         }
@@ -4319,10 +4402,16 @@ where
                 }
             }
         }
-        if let Some(MacroDefinition::FunctionLike {
-            hash_hash_positions: ref mut hhp,
-            ..
-        }) = self.macro_definitions.get_mut(&name.contents)
+        if let Some(
+            MacroDefinition::FunctionLike {
+                hash_hash_positions: ref mut hhp,
+                ..
+            }
+            | MacroDefinition::ObjectLike {
+                hash_hash_positions: ref mut hhp,
+                ..
+            },
+        ) = self.macro_definitions.get_mut(&name.contents)
         {
             *Arc::get_mut(hhp).unwrap() = hash_hash_positions;
         }
@@ -4772,6 +4861,7 @@ where
         SavePoint {
             inner: self.previous_phase.save(),
             tokenizer_stack: self.tokenizer_stack.clone(),
+            hash_hash_stack: self.hash_hash_stack.clone(),
             pending_results: self.pending_results.clone(),
             state: self.state,
             last_preprocessor_token: self.last_preprocessor_token.clone(),
@@ -4787,6 +4877,7 @@ where
     fn restore(&mut self, save_point: Self::SavePoint) {
         self.previous_phase.restore(save_point.inner);
         self.tokenizer_stack = save_point.tokenizer_stack;
+        self.hash_hash_stack = save_point.hash_hash_stack;
         self.pending_results = save_point.pending_results;
         self.state = save_point.state;
         self.last_preprocessor_token = save_point.last_preprocessor_token;
