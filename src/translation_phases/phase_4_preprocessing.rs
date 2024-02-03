@@ -1435,7 +1435,7 @@ impl Display for PreprocessorErrorType {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct FunctionLikeMacroArgument<PrevSavePoint> {
     name:             StringCacheId,
     start_save_point: PrevSavePoint,
@@ -1508,7 +1508,7 @@ where
         + AsRef<StringCache>
         + IsTokenizingIncludeString,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
-    Prev::SavePoint: FromInput,
+    Prev::SavePoint: FromInput + PartialEq + Eq + Clone + Debug,
 {
     fn push_tokenizer_frame(&mut self, frame: TokenizerFrame<Prev::SavePoint>) {
         // eprintln!("pushing frame: {frame:#?}");
@@ -1702,15 +1702,25 @@ where
                 },
                 | (
                     PreprocessorTokenType::Identifier,
-                    PreprocessorTokenType::String | PreprocessorTokenType::Character,
+                    PreprocessorTokenType::String
+                    | PreprocessorTokenType::Character
+                    | PreprocessorTokenType::GeneratedString,
                 ) =>
                     if get_from_cache!(self, lhs.contents) == "L"
                         && !get_from_cache!(self, rhs.contents).starts_with('L')
                     {
+                        let mut lhs = lhs.clone();
+                        if rhs.kind == PreprocessorTokenType::GeneratedString {
+                            lhs.contents = self.insert_into_cache("");
+                        }
                         Some(Ok(self.merge_token_contents(
                             &lhs,
                             &rhs,
-                            PreprocessorTokenType::String,
+                            match rhs.kind {
+                                | PreprocessorTokenType::GeneratedString =>
+                                    PreprocessorTokenType::WideGeneratedString,
+                                | _ => rhs.kind,
+                            },
                         )))
                     } else {
                         self.create_merge_error(&lhs, &rhs)
@@ -1868,8 +1878,6 @@ where
                                 };
                                 *p = paren_depth;
                             } else {
-                                // TODO:  Handle when the lhs of a hash hash operator is a macro
-                                // argument.
                                 self.pop_tokenizer_frame();
                                 continue 'base;
                             };
@@ -1908,6 +1916,7 @@ where
         argument_name: StringCacheId,
         paren_depth: usize,
     ) -> Option<usize> {
+        eprintln!("Updating macro argument paren depth: {:#?}", token.kind);
         if (token.kind == PreprocessorTokenType::Comma
             && argument_name != self.insert_into_cache("__VA_ARGS__"))
             || (token.kind == PreprocessorTokenType::ClosingParenthesis && paren_depth == 1)
@@ -2026,94 +2035,97 @@ where
     fn handle_hash_hash_operator(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
-        let token = match self.handle_hash_operator() {
-            | None => return None,
-            | Some(Err(e)) => return Some(Err(e)),
-            | Some(Ok(token)) => token,
-        };
-        let hash_hash = if let Some(TokenizerFrame {
-            frame_type:
-                TokenizerFrameType::FunctionLikeMacroInvocation {
-                    hash_hash_positions,
-                    ..
-                }
-                | TokenizerFrameType::ObjectLikeMacroInvocation {
-                    hash_hash_positions,
-                },
-            ..
-        }) = self.tokenizer_stack.last()
-        {
-            let mut save_point = self.previous_phase.save();
-            while let Some(res) = self.previous_phase.next() {
-                match res {
-                    | Ok(token) => {
-                        if token.kind == PreprocessorTokenType::Whitespace {
-                            save_point = self.previous_phase.save();
-                            continue;
-                        }
-                        self.previous_phase.restore(save_point);
-                        break;
+        loop {
+            let token = match self.handle_hash_operator() {
+                | None => return None,
+                | Some(Err(e)) => return Some(Err(e)),
+                | Some(Ok(token)) => token,
+            };
+            let hash_hash = if let Some(TokenizerFrame {
+                frame_type:
+                    TokenizerFrameType::FunctionLikeMacroInvocation {
+                        hash_hash_positions,
+                        ..
+                    }
+                    | TokenizerFrameType::ObjectLikeMacroInvocation {
+                        hash_hash_positions,
                     },
-                    | Err(_) => {
-                        continue;
-                    },
-                }
-            }
-            if hash_hash_positions.contains(&self.current_position()) {
-                loop {
-                    match self.previous_phase.next() {
-                        | Some(Err(e)) => {
-                            self.pending_results
-                                .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                            continue;
+                ..
+            }) = self.tokenizer_stack.last()
+            {
+                let mut save_point = self.previous_phase.save();
+                while let Some(res) = self.previous_phase.next() {
+                    match res {
+                        | Ok(token) => {
+                            if token.kind == PreprocessorTokenType::Whitespace {
+                                save_point = self.previous_phase.save();
+                                continue;
+                            }
+                            self.previous_phase.restore(save_point);
+                            break;
                         },
-                        | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash =>
-                            break Some(token),
-                        | Some(Ok(_)) | None => {
-                            unreachable!();
+                        | Err(_) => {
+                            continue;
                         },
                     }
                 }
+                if hash_hash_positions.contains(&self.current_position()) {
+                    loop {
+                        match self.previous_phase.next() {
+                            | Some(Err(e)) => {
+                                self.pending_results
+                                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                continue;
+                            },
+                            | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash =>
+                                break Some(token),
+                            | Some(Ok(_)) | None => {
+                                unreachable!();
+                            },
+                        }
+                    }
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
-        if let Some(h) = hash_hash {
-            match self.tokenizer_stack.last() {
-                | Some(TokenizerFrame {
-                    frame_type:
-                        TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                        | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
-                    ..
-                }) => (),
-                | _ => {
-                    return Some(Ok(token));
-                },
-            }
-            let rhs = match self.handle_hash_hash_operator() {
-                | Some(Err(e)) => return Some(Err(e)),
-                | Some(Ok(token)) => token,
-                | None =>
-                    return Some(Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                "parsing hash-hash operator. Hash hash operator must be followed \
-                                 by a token on the same line.",
-                            ),
-                            source_vectors: SourceVectors::from(SourceVector {
-                                position: self.previous_phase.current_position(),
-                                length:   0,
-                            }),
-                        },
-                    ))),
             };
-            if let Some(r) = self.parse_hash_hash_operator(&token, &h, &rhs) {
-                return Some(r);
-            };
+            if let Some(h) = hash_hash {
+                match self.tokenizer_stack.last() {
+                    | Some(TokenizerFrame {
+                        frame_type:
+                            TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                            | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                        ..
+                    }) => (),
+                    | _ => {
+                        return Some(Ok(token));
+                    },
+                }
+                let rhs = match self.handle_hash_hash_operator() {
+                    | Some(Err(e)) => return Some(Err(e)),
+                    | Some(Ok(token)) => token,
+                    | None =>
+                        return Some(Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                    "parsing hash-hash operator. Hash hash operator must be \
+                                     followed by a token on the same line.",
+                                ),
+                                source_vectors: SourceVectors::from(SourceVector {
+                                    position: self.previous_phase.current_position(),
+                                    length:   0,
+                                }),
+                            },
+                        ))),
+                };
+                if let Some(r) = self.parse_hash_hash_operator(&token, &h, &rhs) {
+                    return Some(r);
+                };
+            } else {
+                return Some(Ok(token));
+            }
         }
-        Some(Ok(token))
     }
 
     fn next_preprocessor_token(
@@ -2145,9 +2157,9 @@ where
                     let paren_depth = *paren_depth;
                     let argument = argument.clone();
                     if let Some(HashHash { lhs: Some(lhs) }) = self.hash_hash_stack.last() {
+                        eprintln!("Lhs in hash hash stack: {lhs:#?}");
                         let result = self.merge_tokens(Some(lhs.clone()), Some(token.clone()));
                         drop(self.hash_hash_stack.pop());
-                        self.pop_tokenizer_frame();
                         break 'base result;
                     }
                     let save_point = self.previous_phase.save();
@@ -2173,6 +2185,7 @@ where
                             *lhs = Some(token.clone());
                         }
                     }
+                    continue 'base;
                 }
             }
             if token.kind != PreprocessorTokenType::Identifier {
@@ -2244,7 +2257,6 @@ where
                                     .unwrap_or(self.insert_into_cache("<undefined>"))
                             };
                         }
-                        let mut has_seen_token = false;
                         'outer: loop {
                             if is_variadic && i >= argument_names.len() {
                                 break;
@@ -2257,18 +2269,15 @@ where
                                             == PreprocessorTokenType::ClosingParenthesis =>
                                     {
                                         if paren_depth == 1 {
-                                            if has_seen_token {
-                                                drop(arguments.insert(
-                                                    at!(),
-                                                    FunctionLikeMacroArgument {
-                                                        name: at!(),
-                                                        start_save_point,
-                                                    },
-                                                ));
-                                            }
+                                            drop(arguments.insert(
+                                                at!(),
+                                                FunctionLikeMacroArgument {
+                                                    name: at!(),
+                                                    start_save_point,
+                                                },
+                                            ));
                                             break 'outer;
                                         }
-                                        has_seen_token = true;
                                         paren_depth -= 1;
                                     },
                                     | Some(Ok(token))
@@ -2282,7 +2291,6 @@ where
                                             },
                                         ));
                                         i += 1;
-                                        has_seen_token = true;
                                         continue 'outer;
                                     },
                                     | Some(Ok(token))
@@ -2290,11 +2298,9 @@ where
                                             == PreprocessorTokenType::OpeningParenthesis =>
                                     {
                                         paren_depth += 1;
-                                        has_seen_token = true;
                                         continue;
                                     },
                                     | Some(Ok(_)) => {
-                                        has_seen_token = true;
                                         continue;
                                     },
                                     | Some(Err(e)) => {
@@ -2494,30 +2500,43 @@ where
         }
     }
 
+    fn get_arguments(
+        &self,
+    ) -> Option<Arc<HashMap<StringCacheId, FunctionLikeMacroArgument<Prev::SavePoint>>>> {
+        for frame in self.tokenizer_stack.iter().rev() {
+            return match frame {
+                | TokenizerFrame {
+                    frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
+                    ..
+                } => continue,
+                | TokenizerFrame {
+                    frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. },
+                    ..
+                } => Some(arguments.clone()),
+                | _ => break,
+            };
+        }
+        None
+    }
+
     fn handle_macro_argument(
         &mut self,
         token: &PreprocessorToken,
     ) -> Option<TokenizerFrame<Prev::SavePoint>> {
-        if let Some(tokenizer_frame) = self.tokenizer_stack.last() {
-            if let TokenizerFrameType::FunctionLikeMacroInvocation {
-                ref arguments,
-                is_variadic: _,
-                hash_hash_positions: _,
-            } = tokenizer_frame.frame_type
-            {
-                if let Some(arg) = arguments.get(&token.contents) {
-                    let frame = TokenizerFrame {
-                        frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
-                            argument:    arg.clone(),
-                            paren_depth: 1,
-                        },
-                        save_point: arg.start_save_point.clone(),
-                        name:       token.contents,
-                    };
-                    return Some(frame);
-                }
+        if let Some(arguments) = self.get_arguments() {
+            if let Some(arg) = arguments.get(&token.contents) {
+                let frame = TokenizerFrame {
+                    frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
+                        argument:    arg.clone(),
+                        paren_depth: 1,
+                    },
+                    save_point: arg.start_save_point.clone(),
+                    name:       token.contents,
+                };
+                return Some(frame);
             }
         }
+
         None
     }
 
@@ -2765,6 +2784,13 @@ where
                 },
             | PreprocessorTokenType::GeneratedString => Ok(Token {
                 kind:           TokenType::StringLike(StringLikeTokenType::String(token.contents)),
+                contents:       token.contents,
+                source_vectors: token.source_vectors,
+            }),
+            | PreprocessorTokenType::WideGeneratedString => Ok(Token {
+                kind:           TokenType::StringLike(StringLikeTokenType::WideString(
+                    token.contents,
+                )),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             }),
@@ -3033,10 +3059,11 @@ where
         _hash_hash: &PreprocessorToken,
         rhs: &PreprocessorToken,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
-        eprintln!("lhs: {lhs:#?}");
-        eprintln!("rhs: {rhs:#?}");
+        // eprintln!("lhs: {lhs:#?}");
+        // eprintln!("rhs: {rhs:#?}");
         self.hash_hash_stack.push(HashHash { lhs: None });
         let rhs_is_macro_argument = if let Some(frame) = self.handle_macro_argument(rhs) {
+            eprintln!("rhs is macro argument");
             self.push_tokenizer_frame(frame);
             true
         } else {
@@ -3044,6 +3071,7 @@ where
             false
         };
         if let Some(frame) = self.handle_macro_argument(lhs) {
+            eprintln!("lhs is macro argument");
             self.push_tokenizer_frame(frame);
         } else if rhs_is_macro_argument {
             self.hash_hash_stack.last_mut().unwrap().lhs = Some(lhs.clone());
@@ -3081,12 +3109,12 @@ where
             },
             "parsing '#' operator in function-like macro invocation.",
         )?;
-        match self.tokenizer_stack.last().unwrap() {
+        let (token_start_save, argument_id) = match self.tokenizer_stack.last().unwrap() {
             | TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. },
                 ..
-            } =>
-                if !arguments.contains_key(&argument_name.contents) {
+            } => match arguments.get(&argument_name.contents) {
+                | None => {
                     self.previous_phase.restore(save_point);
                     return Err(PreprocessorError::InnerPreprocessorError(
                         InnerPreprocessorError {
@@ -3098,72 +3126,48 @@ where
                         },
                     ));
                 },
+                | Some(v) => (v.start_save_point.clone(), v.name),
+            },
             | _ => unreachable!(),
-        }
-        self.previous_phase.restore(save_point.clone());
+        };
+        let save_point = self.previous_phase.save();
+        self.previous_phase.restore(token_start_save);
         self.should_tokenize_whitespace = true;
 
-        let first_token = loop {
-            match self.next_preprocessor_token() {
-                | Some(Ok(token))
-                    if matches!(
-                        token.kind,
-                        PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
-                    ) =>
-                    continue,
-                | Some(Ok(token)) => break Some(token),
-                | None => break None,
-                | Some(Err(e)) => {
-                    self.pending_results.push_back(Err(e));
-                    continue;
-                },
-            }
-        };
-        let mut last_was_whitespace = false;
         let mut synthetic_contents = String::new();
-        if let (
-            Some(TokenizerFrame {
-                frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
-                ..
-            }),
-            Some(first_token),
-        ) = (self.tokenizer_stack.last(), first_token)
-        {
-            synthetic_contents.push_str(get_from_cache!(self, first_token.contents));
-            'outer: while let Some(TokenizerFrame {
-                frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
-                ..
-            }) = self.tokenizer_stack.last()
-            {
-                let next_token = loop {
-                    match self.next_preprocessor_token_no_expand() {
-                        | Some(Ok(token)) => break token,
-                        | None => break 'outer,
-                        | Some(Err(e)) => {
-                            self.pending_results
-                                .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                            continue;
-                        },
-                    }
-                };
-                let contents = if matches!(
-                    next_token.kind,
-                    PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
-                ) {
-                    if last_was_whitespace {
+        let mut paren_depth = 1;
+        loop {
+            let token = loop {
+                match self.previous_phase.next() {
+                    | None => {
+                        self.previous_phase.restore(save_point);
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                    "parsing '#' operator in function-like macro invocation",
+                                ),
+                                source_vectors: argument_name.source_vectors,
+                            },
+                        ));
+                    },
+                    | Some(Err(e)) => {
+                        self.pending_results
+                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
                         continue;
-                    }
-                    last_was_whitespace = true;
-                    " "
-                } else {
-                    last_was_whitespace = false;
-                    get_from_cache!(self, next_token.contents)
-                };
-                synthetic_contents.push_str(contents);
+                    },
+                    | Some(Ok(t)) => break t,
+                }
+            };
+            match self.update_macro_argument_paren_depth(&token, argument_id, paren_depth) {
+                | Some(depth) => paren_depth = depth,
+                | None => break,
             }
-        } else {
-            self.previous_phase.restore(save_point);
+            synthetic_contents.push_str(match token.kind {
+                | PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline => " ",
+                | _ => get_from_cache!(self, token.contents),
+            });
         }
+        self.previous_phase.restore(save_point);
         self.should_tokenize_whitespace = false;
         Ok(PreprocessorToken {
             kind:           PreprocessorTokenType::GeneratedString,
@@ -4798,7 +4802,7 @@ where
         + AsRef<StringCache>
         + IsTokenizingIncludeString,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
-    Prev::SavePoint: FromInput,
+    Prev::SavePoint: FromInput + PartialEq + Eq + Clone + Debug,
 {
     type Item = Result<Token, PreprocessorError<Prev::Error>>;
 
@@ -4851,7 +4855,7 @@ where
         + AsRef<StringCache>
         + IsTokenizingIncludeString,
     PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
-    Prev::SavePoint: FromInput,
+    Prev::SavePoint: FromInput + PartialEq + Eq + Clone + Debug,
 {
     type Error = PreprocessorError<Prev::Error>;
     type SavePoint = SavePoint<Prev::SavePoint, Prev::Error>;
