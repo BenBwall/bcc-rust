@@ -1676,8 +1676,7 @@ where
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
         // eprintln!(
         // "Called merge tokens with lhs: {:#?} and rhs: {:#?}",
-        // lhs.as_ref().map(|t| t.kind),
-        // rhs.as_ref().map(|t| t.kind)
+        // lhs.kind, rhs.kind
         // );
         match (
             lhs.kind == PreprocessorTokenType::Placeholder,
@@ -2155,20 +2154,6 @@ where
             if !self.hash_hash_stack.is_empty() {
                 'merge: loop {
                     // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
-                    let Some(TokenizerFrame {
-                        frame_type:
-                            TokenizerFrameType::FunctionLikeMacroArgument {
-                                argument,
-                                paren_depth,
-                                has_generated_token: _,
-                            },
-                        ..
-                    }) = self.tokenizer_stack.last()
-                    else {
-                        break 'merge;
-                    };
-                    let paren_depth = *paren_depth;
-                    let argument = argument.clone();
                     let result = match self.hash_hash_stack.last() {
                         | None | Some(HashHash::Empty) => None,
                         | Some(HashHash::Lhs(lhs)) => {
@@ -2187,24 +2172,40 @@ where
                         | Some(Err(e)) => break 'base Some(Err(e)),
                         | Some(Ok(token)) => Some(token),
                     };
-                    let save_point = self.previous_phase.save();
 
-                    let next_is_end = loop {
-                        match self.previous_phase.next() {
-                            | Some(Ok(token)) =>
-                                break self
-                                    .update_macro_argument_paren_depth(
-                                        &token,
-                                        argument.name,
-                                        paren_depth,
-                                    )
-                                    .is_none(),
-                            | Some(Err(_)) => continue,
-                            | None => break true,
-                        }
+                    let next_is_end = if let Some(TokenizerFrame {
+                        frame_type:
+                            TokenizerFrameType::FunctionLikeMacroArgument {
+                                argument,
+                                paren_depth,
+                                has_generated_token: _,
+                            },
+                        ..
+                    }) = self.tokenizer_stack.last()
+                    {
+                        let paren_depth = *paren_depth;
+                        let argument = argument.clone();
+                        let save_point = self.previous_phase.save();
+                        let next_is_end = loop {
+                            match self.previous_phase.next() {
+                                | Some(Ok(token)) =>
+                                    break self
+                                        .update_macro_argument_paren_depth(
+                                            &token,
+                                            argument.name,
+                                            paren_depth,
+                                        )
+                                        .is_none(),
+                                | Some(Err(_)) => continue,
+                                | None => break true,
+                            }
+                        };
+                        self.previous_phase.restore(save_point);
+                        next_is_end
+                    } else {
+                        false
                     };
-                    self.previous_phase.restore(save_point);
-                    if next_is_end {
+                    if next_is_end || token.kind == PreprocessorTokenType::Placeholder {
                         if let Some(x @ HashHash::Empty) = self.hash_hash_stack.last_mut() {
                             *x = HashHash::Lhs(if let Some(new) = new.clone() {
                                 new
