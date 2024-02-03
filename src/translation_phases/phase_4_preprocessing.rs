@@ -3116,10 +3116,7 @@ where
             *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs.clone());
         } else {
             drop(self.hash_hash_stack.pop());
-            return Some(
-                self.merge_tokens(Some(lhs.clone()), Some(rhs.clone()))
-                    .unwrap(),
-            );
+            return self.merge_tokens(lhs.clone(), rhs.clone());
             // drop(self.hash_hash_stack.pop());
         }
         None
