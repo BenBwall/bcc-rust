@@ -170,5 +170,15 @@ fn main() -> Result<(), MainError> {
         "String cache contents: ".bright_yellow(),
         preprocessor.previous_phase.as_ref().bright_yellow()
     );
+    eprintln!(
+        "{}{:?}",
+        "Hash Hash stack: ".bright_red(),
+        preprocessor.hash_hash_stack.bright_red()
+    );
+    eprintln!(
+        "{}{:?}",
+        "Tokenizer stack: ".bright_blue(),
+        preprocessor.tokenizer_stack.bright_blue()
+    );
     Ok(())
 }
