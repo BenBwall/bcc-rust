@@ -3175,6 +3175,7 @@ where
 
         let mut synthetic_contents = String::new();
         let mut paren_depth = 1;
+        let mut last_was_whitespace = false;
         loop {
             let token = loop {
                 match self.previous_phase.next() {
@@ -3197,6 +3198,17 @@ where
                     | Some(Ok(t)) => break t,
                 }
             };
+            if matches!(
+                token.kind,
+                PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
+            ) {
+                if last_was_whitespace {
+                    continue;
+                }
+                last_was_whitespace = true;
+            } else {
+                last_was_whitespace = false;
+            }
             match self.update_macro_argument_paren_depth(&token, argument_id, paren_depth) {
                 | Some(depth) => paren_depth = depth,
                 | None => break,
