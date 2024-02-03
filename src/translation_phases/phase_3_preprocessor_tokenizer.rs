@@ -1099,6 +1099,9 @@ pub(crate) enum PreprocessorTokenType {
     GeneratedString,
     WideGeneratedString,
 
+    // Generated when a macro argument generated no tokens
+    Placeholder,
+
     // Include tokens.
     AngleBracketString,
     IncludeString,

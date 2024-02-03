@@ -362,8 +362,9 @@ pub(crate) enum TokenizerFrameType<PrevSavePoint> {
         is_variadic:         bool,
     },
     FunctionLikeMacroArgument {
-        argument:    FunctionLikeMacroArgument<PrevSavePoint>,
-        paren_depth: usize,
+        argument:            FunctionLikeMacroArgument<PrevSavePoint>,
+        paren_depth:         usize,
+        has_generated_token: bool,
     },
 }
 
@@ -390,15 +391,17 @@ pub(crate) struct TokenizerFrame<PrevSavePoint> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct HashHash {
-    lhs: Option<PreprocessorToken>,
+pub(crate) enum HashHash {
+    Lhs(PreprocessorToken),
+    Rhs(PreprocessorToken),
+    Empty,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
     pub(crate) previous_phase: Prev,
-    tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
-    hash_hash_stack: Vec<HashHash>,
+    pub(crate) tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
+    pub(crate) hash_hash_stack: Vec<HashHash>,
     macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
     pending_results: VecDeque<Result<Token, PreprocessorError<PrevError>>>,
     state: State,
@@ -406,6 +409,7 @@ pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
     current_preprocessor_token: Option<PreprocessorToken>,
     if_directive_balance: isize,
     should_tokenize_whitespace: bool,
+    generate_placeholders: bool,
     quote_include_directories: Arc<Vec<PathBuf>>,
     system_include_directories: Arc<Vec<PathBuf>>,
 }
@@ -422,6 +426,7 @@ pub(crate) struct SavePoint<PrevSavePoint, PrevError> {
     pub(crate) macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
     pub(crate) if_directive_balance: isize,
     pub(crate) should_tokenize_whitespace: bool,
+    pub(crate) generate_placeholders: bool,
     pub(crate) quote_include_directories: Arc<Vec<PathBuf>>,
     pub(crate) system_include_directories: Arc<Vec<PathBuf>>,
 }
@@ -1493,6 +1498,7 @@ impl Preprocessor<Ppt, Ppte, Pptsp> {
             current_preprocessor_token: None,
             if_directive_balance: 0,
             should_tokenize_whitespace: false,
+            generate_placeholders: false,
             quote_include_directories,
             system_include_directories,
         }
@@ -1665,156 +1671,149 @@ where
 
     fn merge_tokens(
         &mut self,
-        lhs: Option<PreprocessorToken>,
-        rhs: Option<PreprocessorToken>,
+        lhs: PreprocessorToken,
+        rhs: PreprocessorToken,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
         // eprintln!(
         // "Called merge tokens with lhs: {:#?} and rhs: {:#?}",
         // lhs.as_ref().map(|t| t.kind),
         // rhs.as_ref().map(|t| t.kind)
         // );
-        match (lhs, rhs) {
-            | (None, None) => None,
-            | (Some(lhs), None) => Some(Ok(lhs)),
-            | (None, Some(rhs)) => Some(Ok(rhs)),
-            | (Some(lhs), Some(rhs)) => match (lhs.kind, rhs.kind) {
-                | (
-                    PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined,
+        match (
+            lhs.kind == PreprocessorTokenType::Placeholder,
+            rhs.kind == PreprocessorTokenType::Placeholder,
+        ) {
+            | (true, true) => return None,
+            | (false, true) => return Some(Ok(lhs)),
+            | (true, false) => return Some(Ok(rhs)),
+            | (false, false) => (),
+        }
+
+        match (lhs.kind, rhs.kind) {
+            | (
+                PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined,
+                PreprocessorTokenType::Identifier
+                | PreprocessorTokenType::Defined
+                | PreprocessorTokenType::Number,
+            ) => {
+                if get_from_cache!(self, rhs.contents).contains('.') {
+                    return self.create_merge_error(&lhs, &rhs);
+                }
+                let new = self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::Identifier);
+                let kind = if new.contents == self.insert_into_cache("defined") {
+                    PreprocessorTokenType::Defined
+                } else {
                     PreprocessorTokenType::Identifier
-                    | PreprocessorTokenType::Defined
-                    | PreprocessorTokenType::Number,
-                ) => {
-                    if get_from_cache!(self, rhs.contents).contains('.') {
-                        return self.create_merge_error(&lhs, &rhs);
+                };
+                Some(Ok(PreprocessorToken {
+                    kind,
+                    contents: new.contents,
+                    source_vectors: new.source_vectors,
+                }))
+            },
+            | (
+                PreprocessorTokenType::Identifier,
+                PreprocessorTokenType::String
+                | PreprocessorTokenType::Character
+                | PreprocessorTokenType::GeneratedString,
+            ) =>
+                if get_from_cache!(self, lhs.contents) == "L"
+                    && !get_from_cache!(self, rhs.contents).starts_with('L')
+                {
+                    let mut lhs = lhs.clone();
+                    if rhs.kind == PreprocessorTokenType::GeneratedString {
+                        lhs.contents = self.insert_into_cache("");
                     }
-                    let new =
-                        self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::Identifier);
-                    let kind = if new.contents == self.insert_into_cache("defined") {
-                        PreprocessorTokenType::Defined
-                    } else {
-                        PreprocessorTokenType::Identifier
-                    };
-                    Some(Ok(PreprocessorToken {
-                        kind,
-                        contents: new.contents,
-                        source_vectors: new.source_vectors,
-                    }))
+                    Some(Ok(self.merge_token_contents(
+                        &lhs,
+                        &rhs,
+                        match rhs.kind {
+                            | PreprocessorTokenType::GeneratedString =>
+                                PreprocessorTokenType::WideGeneratedString,
+                            | _ => rhs.kind,
+                        },
+                    )))
+                } else {
+                    self.create_merge_error(&lhs, &rhs)
                 },
-                | (
-                    PreprocessorTokenType::Identifier,
-                    PreprocessorTokenType::String
-                    | PreprocessorTokenType::Character
-                    | PreprocessorTokenType::GeneratedString,
-                ) =>
-                    if get_from_cache!(self, lhs.contents) == "L"
-                        && !get_from_cache!(self, rhs.contents).starts_with('L')
-                    {
-                        let mut lhs = lhs.clone();
-                        if rhs.kind == PreprocessorTokenType::GeneratedString {
-                            lhs.contents = self.insert_into_cache("");
-                        }
-                        Some(Ok(self.merge_token_contents(
-                            &lhs,
-                            &rhs,
-                            match rhs.kind {
-                                | PreprocessorTokenType::GeneratedString =>
-                                    PreprocessorTokenType::WideGeneratedString,
-                                | _ => rhs.kind,
-                            },
-                        )))
-                    } else {
-                        self.create_merge_error(&lhs, &rhs)
-                    },
-                | (
-                    PreprocessorTokenType::Period | PreprocessorTokenType::Number,
-                    PreprocessorTokenType::Number,
-                )
-                | (PreprocessorTokenType::Number, PreprocessorTokenType::Period) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::Number)
-                )),
-                | (PreprocessorTokenType::Plus, PreprocessorTokenType::Plus) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PlusPlus)
-                )),
-                | (PreprocessorTokenType::Minus, PreprocessorTokenType::Minus) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::MinusMinus)
-                )),
-                | (PreprocessorTokenType::Plus, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PlusEquals)
-                )),
-                | (PreprocessorTokenType::Minus, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::MinusEquals)
-                )),
-                | (PreprocessorTokenType::Asterisk, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::AsteriskEquals),
-                )),
-                | (PreprocessorTokenType::ForwardSlash, PreprocessorTokenType::Equals) =>
-                    Some(Ok(self.merge_token_contents(
-                        &lhs,
-                        &rhs,
-                        PreprocessorTokenType::ForwardSlashEquals,
-                    ))),
-                | (PreprocessorTokenType::Percent, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PercentEquals)
-                )),
-                | (PreprocessorTokenType::LessThan, PreprocessorTokenType::LessThan) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::LessThanLessThan),
-                )),
-                | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::GreaterThan) =>
-                    Some(Ok(self.merge_token_contents(
-                        &lhs,
-                        &rhs,
-                        PreprocessorTokenType::GreaterThanGreaterThan,
-                    ))),
-                | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::LessThanEquals),
-                )),
-                | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::GreaterThanEquals),
-                )),
-                | (PreprocessorTokenType::LessThanLessThan, PreprocessorTokenType::Equals) =>
-                    Some(Ok(self.merge_token_contents(
-                        &lhs,
-                        &rhs,
-                        PreprocessorTokenType::LessThanLessThanEquals,
-                    ))),
-                | (
+            | (
+                PreprocessorTokenType::Period | PreprocessorTokenType::Number,
+                PreprocessorTokenType::Number,
+            )
+            | (PreprocessorTokenType::Number, PreprocessorTokenType::Period) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::Number)
+            )),
+            | (PreprocessorTokenType::Plus, PreprocessorTokenType::Plus) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PlusPlus)
+            )),
+            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Minus) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::MinusMinus)
+            )),
+            | (PreprocessorTokenType::Plus, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PlusEquals)
+            )),
+            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::MinusEquals)
+            )),
+            | (PreprocessorTokenType::Asterisk, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::AsteriskEquals)
+            )),
+            | (PreprocessorTokenType::ForwardSlash, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::ForwardSlashEquals),
+            )),
+            | (PreprocessorTokenType::Percent, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PercentEquals)
+            )),
+            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::LessThan) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::LessThanLessThan)
+            )),
+            | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::GreaterThan) =>
+                Some(Ok(self.merge_token_contents(
+                    &lhs,
+                    &rhs,
                     PreprocessorTokenType::GreaterThanGreaterThan,
-                    PreprocessorTokenType::Equals,
-                ) => Some(Ok(self.merge_token_contents(
+                ))),
+            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::LessThanEquals)
+            )),
+            | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::GreaterThanEquals)
+            )),
+            | (PreprocessorTokenType::LessThanLessThan, PreprocessorTokenType::Equals) =>
+                Some(Ok(self.merge_token_contents(
+                    &lhs,
+                    &rhs,
+                    PreprocessorTokenType::LessThanLessThanEquals,
+                ))),
+            | (PreprocessorTokenType::GreaterThanGreaterThan, PreprocessorTokenType::Equals) =>
+                Some(Ok(self.merge_token_contents(
                     &lhs,
                     &rhs,
                     PreprocessorTokenType::GreaterThanGreaterThanEquals,
                 ))),
-                | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::AmpersandEquals),
-                )),
-                | (PreprocessorTokenType::Caret, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::CaretEquals)
-                )),
-                | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PipeEquals)
-                )),
-                | (PreprocessorTokenType::ExclamationMark, PreprocessorTokenType::Equals) =>
-                    Some(Ok(self.merge_token_contents(
-                        &lhs,
-                        &rhs,
-                        PreprocessorTokenType::ExclamationMarkEquals,
-                    ))),
-                | (PreprocessorTokenType::Equals, PreprocessorTokenType::Equals) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::EqualsEquals)
-                )),
-                | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Pipe) => Some(Ok(
-                    self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PipePipe)
-                )),
-                | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Ampersand) =>
-                    Some(Ok(self.merge_token_contents(
-                        &lhs,
-                        &rhs,
-                        PreprocessorTokenType::AmpersandAmpersand,
-                    ))),
+            | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::AmpersandEquals)
+            )),
+            | (PreprocessorTokenType::Caret, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::CaretEquals)
+            )),
+            | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PipeEquals)
+            )),
+            | (PreprocessorTokenType::ExclamationMark, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::ExclamationMarkEquals),
+            )),
+            | (PreprocessorTokenType::Equals, PreprocessorTokenType::Equals) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::EqualsEquals)
+            )),
+            | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Pipe) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::PipePipe)
+            )),
+            | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Ampersand) => Some(Ok(
+                self.merge_token_contents(&lhs, &rhs, PreprocessorTokenType::AmpersandAmpersand),
+            )),
 
-                | _ => self.create_merge_error(&lhs, &rhs),
-            },
+            | _ => self.create_merge_error(&lhs, &rhs),
         }
     }
 
@@ -1855,11 +1854,13 @@ where
                                 TokenizerFrameType::FunctionLikeMacroArgument {
                                     paren_depth,
                                     argument,
+                                    has_generated_token,
                                 },
                             ..
                         } => {
                             let paren_depth = *paren_depth;
                             let argument = argument.clone();
+                            let has_generated_token = *has_generated_token;
                             if let Some(paren_depth) = self.update_macro_argument_paren_depth(
                                 &token,
                                 argument.name,
@@ -1869,6 +1870,7 @@ where
                                     frame_type:
                                         TokenizerFrameType::FunctionLikeMacroArgument {
                                             paren_depth: p,
+                                            has_generated_token,
                                             ..
                                         },
                                     ..
@@ -1877,8 +1879,16 @@ where
                                     unreachable!();
                                 };
                                 *p = paren_depth;
+                                *has_generated_token = true;
                             } else {
                                 self.pop_tokenizer_frame();
+                                if self.generate_placeholders && !has_generated_token {
+                                    break 'base Some(Ok(PreprocessorToken {
+                                        kind:           PreprocessorTokenType::Placeholder,
+                                        contents:       self.insert_into_cache(""),
+                                        source_vectors: SourceVectors::new(),
+                                    }));
+                                }
                                 continue 'base;
                             };
                         },
@@ -1916,7 +1926,7 @@ where
         argument_name: StringCacheId,
         paren_depth: usize,
     ) -> Option<usize> {
-        eprintln!("Updating macro argument paren depth: {:#?}", token.kind);
+        // eprintln!("Updating macro argument paren depth: {:#?}", token.kind);
         if (token.kind == PreprocessorTokenType::Comma
             && argument_name != self.insert_into_cache("__VA_ARGS__"))
             || (token.kind == PreprocessorTokenType::ClosingParenthesis && paren_depth == 1)
@@ -2135,19 +2145,22 @@ where
         // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
         let last = self.current_preprocessor_token.clone();
         let ret = 'base: loop {
-            let token = match self.handle_hash_hash_operator() {
+            self.generate_placeholders = true;
+            let mut token = match self.handle_hash_hash_operator() {
                 | None => break 'base None,
                 | Some(Err(e)) => break 'base Some(Err(e)),
                 | Some(Ok(token)) => token,
             };
-
+            self.generate_placeholders = false;
             if !self.hash_hash_stack.is_empty() {
-                'merge: {
+                'merge: loop {
+                    // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
                     let Some(TokenizerFrame {
                         frame_type:
                             TokenizerFrameType::FunctionLikeMacroArgument {
                                 argument,
                                 paren_depth,
+                                has_generated_token: _,
                             },
                         ..
                     }) = self.tokenizer_stack.last()
@@ -2156,12 +2169,24 @@ where
                     };
                     let paren_depth = *paren_depth;
                     let argument = argument.clone();
-                    if let Some(HashHash { lhs: Some(lhs) }) = self.hash_hash_stack.last() {
-                        eprintln!("Lhs in hash hash stack: {lhs:#?}");
-                        let result = self.merge_tokens(Some(lhs.clone()), Some(token.clone()));
-                        drop(self.hash_hash_stack.pop());
-                        break 'base result;
-                    }
+                    let result = match self.hash_hash_stack.last() {
+                        | None | Some(HashHash::Empty) => None,
+                        | Some(HashHash::Lhs(lhs)) => {
+                            let lhs = lhs.clone();
+                            drop(self.hash_hash_stack.pop());
+                            self.merge_tokens(lhs.clone(), token.clone())
+                        },
+                        | Some(HashHash::Rhs(rhs)) => {
+                            let rhs = rhs.clone();
+                            drop(self.hash_hash_stack.pop());
+                            self.merge_tokens(token.clone(), rhs.clone())
+                        },
+                    };
+                    let new = match result {
+                        | None => None,
+                        | Some(Err(e)) => break 'base Some(Err(e)),
+                        | Some(Ok(token)) => Some(token),
+                    };
                     let save_point = self.previous_phase.save();
 
                     let next_is_end = loop {
@@ -2180,13 +2205,24 @@ where
                     };
                     self.previous_phase.restore(save_point);
                     if next_is_end {
-                        if let Some(HashHash { lhs: lhs @ None }) = self.hash_hash_stack.last_mut()
-                        {
-                            *lhs = Some(token.clone());
+                        if let Some(x @ HashHash::Empty) = self.hash_hash_stack.last_mut() {
+                            *x = HashHash::Lhs(if let Some(new) = new.clone() {
+                                new
+                            } else {
+                                token.clone()
+                            });
+                            continue 'base;
                         }
                     }
-                    continue 'base;
+                    if let Some(new) = new {
+                        token = new;
+                    } else {
+                        break 'merge;
+                    }
                 }
+            }
+            if token.kind == PreprocessorTokenType::Placeholder {
+                continue 'base;
             }
             if token.kind != PreprocessorTokenType::Identifier {
                 break 'base Some(Ok(token));
@@ -2490,6 +2526,7 @@ where
         // ret.as_ref().map(|r| r.as_ref().map(|t| t.kind))
         // );
         // eprintln!("Next preprocessor token returning: {ret:#?}");
+        self.generate_placeholders = false;
         match ret? {
             | Err(e) => Some(Err(e)),
             | Ok(t) => {
@@ -2527,8 +2564,9 @@ where
             if let Some(arg) = arguments.get(&token.contents) {
                 let frame = TokenizerFrame {
                     frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
-                        argument:    arg.clone(),
-                        paren_depth: 1,
+                        argument:            arg.clone(),
+                        paren_depth:         1,
+                        has_generated_token: false,
                     },
                     save_point: arg.start_save_point.clone(),
                     name:       token.contents,
@@ -3059,27 +3097,30 @@ where
         _hash_hash: &PreprocessorToken,
         rhs: &PreprocessorToken,
     ) -> Option<Result<PreprocessorToken, PreprocessorError<Prev::Error>>> {
+        // eprintln!("Parsing hash hash operator");
         // eprintln!("lhs: {lhs:#?}");
         // eprintln!("rhs: {rhs:#?}");
-        self.hash_hash_stack.push(HashHash { lhs: None });
+        self.hash_hash_stack.push(HashHash::Empty);
         let rhs_is_macro_argument = if let Some(frame) = self.handle_macro_argument(rhs) {
-            eprintln!("rhs is macro argument");
+            // eprintln!("rhs is macro argument");
             self.push_tokenizer_frame(frame);
             true
         } else {
-            drop(self.hash_hash_stack.pop());
+            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Rhs(rhs.clone());
             false
         };
         if let Some(frame) = self.handle_macro_argument(lhs) {
-            eprintln!("lhs is macro argument");
+            // eprintln!("lhs is macro argument");
             self.push_tokenizer_frame(frame);
         } else if rhs_is_macro_argument {
-            self.hash_hash_stack.last_mut().unwrap().lhs = Some(lhs.clone());
+            *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs.clone());
         } else {
+            drop(self.hash_hash_stack.pop());
             return Some(
                 self.merge_tokens(Some(lhs.clone()), Some(rhs.clone()))
                     .unwrap(),
             );
+            // drop(self.hash_hash_stack.pop());
         }
         None
     }
@@ -4873,6 +4914,7 @@ where
             macro_definitions: self.macro_definitions.clone(),
             if_directive_balance: self.if_directive_balance,
             should_tokenize_whitespace: self.should_tokenize_whitespace,
+            generate_placeholders: self.generate_placeholders,
             quote_include_directories: self.quote_include_directories.clone(),
             system_include_directories: self.system_include_directories.clone(),
         }
@@ -4889,6 +4931,7 @@ where
         self.macro_definitions = save_point.macro_definitions;
         self.if_directive_balance = save_point.if_directive_balance;
         self.should_tokenize_whitespace = save_point.should_tokenize_whitespace;
+        self.generate_placeholders = save_point.generate_placeholders;
         self.quote_include_directories = save_point.quote_include_directories;
         self.system_include_directories = save_point.system_include_directories;
     }
