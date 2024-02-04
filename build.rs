@@ -16,6 +16,8 @@ fn main() {
         .compile("lexer");
     bindgen::Builder::default()
         .header("float_parsing.h")
+        .allowlist_file("float_parsing.h")
+        .allowlist_item("ERANGE")
         .generate()
         .expect("Unable to generate bindings")
         .write_to_file(format!("{out_dir}/bindings.rs"))
