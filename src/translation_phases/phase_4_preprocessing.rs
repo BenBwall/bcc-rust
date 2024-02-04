@@ -1678,17 +1678,11 @@ where
         // "Called merge tokens with lhs: {:#?} and rhs: {:#?}",
         // lhs.kind, rhs.kind
         // );
-        match (
-            lhs.kind == PreprocessorTokenType::Placeholder,
-            rhs.kind == PreprocessorTokenType::Placeholder,
-        ) {
-            | (true, true) => return None,
-            | (false, true) => return Some(Ok(lhs)),
-            | (true, false) => return Some(Ok(rhs)),
-            | (false, false) => (),
-        }
 
         match (lhs.kind, rhs.kind) {
+            | (PreprocessorTokenType::Placeholder, PreprocessorTokenType::Placeholder) => None,
+            | (PreprocessorTokenType::Placeholder, _) => Some(Ok(rhs)),
+            | (_, PreprocessorTokenType::Placeholder) => Some(Ok(lhs)),
             | (
                 PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined,
                 PreprocessorTokenType::Identifier
