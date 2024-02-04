@@ -134,6 +134,10 @@ impl TranslationPhase for NewlineTracking {
     fn current_position(&self) -> SourcePosition {
         self.position
     }
+
+    fn set_line_number(&mut self, line: usize) {
+        self.position.line = line;
+    }
 }
 
 #[cfg(test)]

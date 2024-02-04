@@ -132,6 +132,10 @@ where
     fn current_position(&self) -> SourcePosition {
         self.previous_phase.current_position()
     }
+
+    fn set_line_number(&mut self, line: usize) {
+        self.previous_phase.set_line_number(line);
+    }
 }
 
 impl<Prev> MapCharacterSets<Prev> {

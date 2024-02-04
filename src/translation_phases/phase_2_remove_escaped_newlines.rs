@@ -153,6 +153,10 @@ where
     fn current_position(&self) -> SourcePosition {
         self.inner.previous_phase.current_position()
     }
+
+    fn set_line_number(&mut self, line: usize) {
+        self.inner.previous_phase.set_line_number(line);
+    }
 }
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct Inner<Prev> {

@@ -700,7 +700,12 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(..)
             | PreprocessorErrorType::MissingRightHandSideOfHashHashOperator
             | PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator
-            | PreprocessorErrorType::TokenMergingError(..) => ErrorSeverity::Error,
+            | PreprocessorErrorType::TokenMergingError(..)
+            | PreprocessorErrorType::MissingNumberInLineDirective(..)
+            | PreprocessorErrorType::MissingNewlineAfterLineDirective(..)
+            | PreprocessorErrorType::FloatingPointNumberInLineDirective(..)
+            | PreprocessorErrorType::NegativeNumberInLineDirective(..)
+            | PreprocessorErrorType::UnsupportedLineDirectiveValue(..) => ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -708,7 +713,9 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::ForcedSignedPromotion { .. }
             | PreprocessorErrorType::HashMustBeFirstCharacterOnLine
             | PreprocessorErrorType::UnknownDirective
-            | PreprocessorErrorType::HashMustBeFollowedByIdentifier => ErrorSeverity::Warning,
+            | PreprocessorErrorType::HashMustBeFollowedByIdentifier
+            | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
+            | PreprocessorErrorType::LineDirectiveNumberTooLarge(..) => ErrorSeverity::Warning,
         }
     }
 }
@@ -876,6 +883,13 @@ pub(crate) enum PreprocessorErrorType {
     MissingRightHandSideOfHashHashOperator,
     MissingLeftHandSideOfHashHashOperator,
     TokenMergingError(String, String),
+    MissingNumberInLineDirective(PreprocessorTokenType),
+    MissingNewlineAfterLineDirective(PreprocessorTokenType),
+    FloatingPointNumberInLineDirective(FloatTokenType),
+    LineDirectiveIsNotASimpleDigitSequence,
+    UnsupportedLineDirectiveValue(i128),
+    NegativeNumberInLineDirective(i128),
+    LineDirectiveNumberTooLarge(i128),
 }
 
 impl Display for PreprocessorErrorType {
@@ -1436,6 +1450,63 @@ impl Display for PreprocessorErrorType {
                     "Error while merging tokens! Could not merge '{lhs}' and '{rhs}'"
                 )
             },
+            | Self::MissingNumberInLineDirective(tt) => {
+                write!(
+                    f,
+                    "Missing number in 'line' directive! Found instead {tt:#?}"
+                )
+            },
+            | Self::MissingNewlineAfterLineDirective(tt) => {
+                write!(
+                    f,
+                    "Expected newline after 'line' directive! Found instead {tt:#?}"
+                )
+            },
+            | Self::FloatingPointNumberInLineDirective(float_token_type) => {
+                write!(
+                    f,
+                    "Expected an integer in 'line' directive! Found instead {} {}",
+                    match float_token_type {
+                        | FloatTokenType::Float(_) => "floating point number",
+                        | FloatTokenType::Double(_) => "double precision floating point number",
+                        | FloatTokenType::LongDouble(_) =>
+                            "long double precision floating point number",
+                    },
+                    match float_token_type {
+                        | FloatTokenType::Float(f) => f.to_string(),
+                        | FloatTokenType::Double(f) => f.to_string(),
+                        | FloatTokenType::LongDouble(f) => f.to_string(),
+                    }
+                )
+            },
+            | Self::LineDirectiveIsNotASimpleDigitSequence => {
+                write!(
+                    f,
+                    "The 'line' directive must be followed by a simple digit sequence according \
+                     to the C standard!"
+                )
+            },
+            | Self::UnsupportedLineDirectiveValue(i) => {
+                write!(
+                    f,
+                    "Unsupported value in 'line' directive! BCC only supports line numbers up to \
+                     SIZE_MAX. Value was '{i}'"
+                )
+            },
+            | Self::NegativeNumberInLineDirective(i) => {
+                write!(
+                    f,
+                    "Negative number in 'line' directive! The 'line' directive must be followed \
+                     by a positive integer! Value was '{i}'"
+                )
+            },
+            | Self::LineDirectiveNumberTooLarge(i) => {
+                write!(
+                    f,
+                    "Number in 'line' directive was larger than INT_MAX! The C standard only \
+                     supports line numbers up to INT_MAX. Value was '{i}'"
+                )
+            },
         }
     }
 }
@@ -1952,16 +2023,6 @@ where
     #[allow(dead_code)]
     fn current_is_macro(&self) -> bool {
         self.current_macro().is_some()
-    }
-
-    fn is_macro_argument(&self, name: StringCacheId) -> bool {
-        match self.tokenizer_stack.last() {
-            | Some(TokenizerFrame {
-                frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. },
-                ..
-            }) => arguments.contains_key(&name),
-            | _ => false,
-        }
     }
 
     #[allow(dead_code)]
@@ -2772,6 +2833,31 @@ where
         Self::build_token(token, TokenType::Operator(kind))
     }
 
+    fn parse_number(
+        &mut self,
+        token: PreprocessorToken,
+        contents: &mut TokenString,
+    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+        let is_hex = contents.starts_with("0x") || contents.starts_with("0X");
+        let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
+        let is_octal = contents.starts_with('0') && !is_hex && !is_binary;
+        if is_hex {
+            if contents.contains(|c| c == '.' || c == 'p' || c == 'P') {
+                self.parse_hexadecimal_float(token, contents)
+            } else {
+                self.parse_hexadecimal_integer(token, contents)
+            }
+        } else if is_binary {
+            self.parse_binary_integer(token, contents)
+        } else if contents.contains(|c| c == '.' || c == 'e' || c == 'E') {
+            self.parse_decimal_float(token, contents)
+        } else if is_octal {
+            self.parse_octal_integer(token, contents)
+        } else {
+            self.parse_decimal_integer(token, contents)
+        }
+    }
+
     fn map_preprocessor_token(
         &mut self,
         token: PreprocessorToken,
@@ -2779,26 +2865,7 @@ where
         let mut contents = get_from_cache!(self, token.contents).to_token_string();
 
         Some(match token.kind {
-            | PreprocessorTokenType::Number => {
-                let is_hex = contents.starts_with("0x") || contents.starts_with("0X");
-                let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
-                let is_octal = contents.starts_with('0') && !is_hex && !is_binary;
-                if is_hex {
-                    if contents.contains(|c| c == '.' || c == 'p' || c == 'P') {
-                        self.parse_hexadecimal_float(token, &mut contents)
-                    } else {
-                        self.parse_hexadecimal_integer(token, &contents)
-                    }
-                } else if is_binary {
-                    self.parse_binary_integer(token, &contents)
-                } else if contents.contains(|c| c == '.' || c == 'e' || c == 'E') {
-                    self.parse_decimal_float(token, &mut contents)
-                } else if is_octal {
-                    self.parse_octal_integer(token, &contents)
-                } else {
-                    self.parse_decimal_integer(token, &contents)
-                }
-            },
+            | PreprocessorTokenType::Number => self.parse_number(token, &mut contents),
             | PreprocessorTokenType::Newline => return None,
             | PreprocessorTokenType::Hash =>
                 if matches!(
@@ -4517,7 +4584,110 @@ where
         &mut self,
         _directive: &PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
-        todo!()
+        let token = self.expect_token_no_expand(
+            |_this, t| t.kind == PreprocessorTokenType::Number,
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, t| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::MissingNumberInLineDirective(t.kind),
+                        source_vectors: t.source_vectors,
+                    },
+                ))
+            },
+            "parsing line directive",
+        )?;
+        let mut contents = TokenString::from(get_from_cache!(self, token.contents));
+        let line_number = self.parse_number(token.clone(), &mut contents)?;
+        for b in contents.bytes() {
+            if !b.is_ascii_digit() {
+                self.pending_results
+                    .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence,
+                            source_vectors: token.source_vectors.clone(),
+                        },
+                    )));
+                break;
+            }
+        }
+        if let Token {
+            kind: TokenType::Float(f),
+            ..
+        } = line_number
+        {
+            return Err(PreprocessorError::InnerPreprocessorError(
+                InnerPreprocessorError {
+                    error_type:     PreprocessorErrorType::FloatingPointNumberInLineDirective(f),
+                    source_vectors: line_number.source_vectors,
+                },
+            ));
+        }
+        let Token {
+            kind: TokenType::Integer(line_number),
+            ..
+        } = line_number
+        else {
+            unreachable!();
+        };
+        let value: i128 = match line_number {
+            | IntegerTokenType::UnsignedLong(i) | IntegerTokenType::UnsignedLongLong(i) => i.into(),
+            | IntegerTokenType::Long(i) | IntegerTokenType::LongLong(i) => i.into(),
+            | IntegerTokenType::UnsignedInt(i) => i.into(),
+            | IntegerTokenType::Int(i) => i.into(),
+        };
+        if value > usize::MAX as i128 {
+            return Err(PreprocessorError::InnerPreprocessorError(
+                InnerPreprocessorError {
+                    error_type:     PreprocessorErrorType::UnsupportedLineDirectiveValue(value),
+                    source_vectors: token.source_vectors,
+                },
+            ));
+        }
+        if value < 0 {
+            self.pending_results
+                .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::NegativeNumberInLineDirective(value),
+                        source_vectors: token.source_vectors.clone(),
+                    },
+                )));
+        }
+        if value > i128::from(i32::MAX) {
+            self.pending_results
+                .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(value),
+                        source_vectors: token.source_vectors,
+                    },
+                )));
+        }
+        self.set_line_number(value as usize);
+        drop(self.expect_token_no_expand(
+            |_, t| t.kind == PreprocessorTokenType::Newline,
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, t| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::MissingNewlineAfterLineDirective(
+                            t.kind,
+                        ),
+                        source_vectors: t.source_vectors,
+                    },
+                ))
+            },
+            "parsing line directive",
+        )?);
+        Ok(())
     }
 
     fn parse_error_directive(
@@ -4942,5 +5112,9 @@ where
 
     fn current_position(&self) -> SourcePosition {
         self.previous_phase.current_position()
+    }
+
+    fn set_line_number(&mut self, line: usize) {
+        self.previous_phase.set_line_number(line);
     }
 }
