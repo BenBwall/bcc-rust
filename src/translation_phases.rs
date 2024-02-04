@@ -269,4 +269,5 @@ pub(crate) trait TranslationPhase:
     fn save(&self) -> Self::SavePoint;
     fn restore(&mut self, save_point: Self::SavePoint);
     fn current_position(&self) -> SourcePosition;
+    fn set_line_number(&mut self, line: usize);
 }
