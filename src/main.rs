@@ -4,11 +4,17 @@ use std::{
     env::var,
     hash::BuildHasherDefault,
     path::PathBuf,
+    process::ExitCode,
     sync::Arc,
 };
 
 use clap::{
+    error::{
+        ErrorFormatter,
+        RichFormatter,
+    },
     Args,
+    ColorChoice,
     Parser,
 };
 use owo_colors::OwoColorize;
@@ -39,7 +45,7 @@ pub(crate) mod util;
 pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub(crate) type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<FxHasher>>;
 #[derive(Parser)]
-#[command(author, version, about, long_about)]
+#[command(author, version, about, long_about, color = ColorChoice::Always)]
 struct Cli {
     #[command(flatten)]
     input:          CliInput,
@@ -68,9 +74,9 @@ enum ParsedInput {
 }
 #[derive(Debug, Error)]
 enum MainError {
-    #[error("Failed to open input file: {0}")]
+    #[error("{}{}", "Failed to open input file: ".bright_red(), 0.bright_red())]
     OpenInputFileError(#[from] std::io::Error),
-    #[error("Failed to parse command line arguments: {0}")]
+    #[error("{}{}", "Failed to parse command line arguments ".bright_red(), RichFormatter::format_error(.0).ansi())]
     ParseArgumentsError(#[from] clap::Error),
 }
 
@@ -83,7 +89,16 @@ fn parse_include_env_var(env_var: &str, vec: &mut Vec<PathBuf>) {
     );
 }
 
-fn main() -> Result<(), MainError> {
+fn main() -> ExitCode {
+    if let Err(e) = run() {
+        eprintln!("{e}");
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
     let mut string_cache = StringCache::new();
     eprintln!("{}", "Printing all generated tokens:".bright_green());
