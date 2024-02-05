@@ -31,8 +31,8 @@ use crate::{
         ParseFloatError,
     },
     util::{
-        input::Input,
         read_to_string_lossy,
+        shared::{SharedString, SharedVec},
         string_cache::{
             Id as StringCacheId,
             StringCache,
@@ -44,11 +44,11 @@ use crate::{
 };
 
 pub(crate) trait FromInput: ISavePoint {
-    fn from_input(input: Input, source_file: StringCacheId) -> Self;
+    fn from_input(input: SharedString, source_file: StringCacheId) -> Self;
 }
 
 impl FromInput for Pptsp {
-    fn from_input(input: Input, source_file: StringCacheId) -> Self {
+    fn from_input(input: SharedString, source_file: StringCacheId) -> Self {
         let inner = RemoveEscapedNewlinesSavePoint {
             inner:            MapCharacterSetsSavePoint {
                 inner: NewlineTrackingSavePoint {
@@ -412,8 +412,8 @@ pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
     if_directive_balance: isize,
     should_tokenize_whitespace: bool,
     generate_placeholders: bool,
-    quote_include_directories: Arc<Vec<PathBuf>>,
-    system_include_directories: Arc<Vec<PathBuf>>,
+    quote_include_directories: SharedVec<PathBuf>,
+    system_include_directories: SharedVec<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -430,8 +430,19 @@ pub(crate) struct SavePoint<PrevSavePoint, PrevError> {
     pub(crate) if_directive_balance: isize,
     pub(crate) should_tokenize_whitespace: bool,
     pub(crate) generate_placeholders: bool,
-    pub(crate) quote_include_directories: Arc<Vec<PathBuf>>,
-    pub(crate) system_include_directories: Arc<Vec<PathBuf>>,
+    pub(crate) quote_include_directories: SharedVec<PathBuf>,
+    pub(crate) system_include_directories: SharedVec<PathBuf>,
+}
+
+enum PreprocessorExpressionParserState {
+    Unary,
+    Binary,
+}
+
+struct PreprocessorExpressionParser {
+    operator_stack: Vec<PreprocessorToken>,
+    operand_stack:  Vec<i128>,
+    state:          PreprocessorExpressionParserState,
 }
 
 impl<PrevSavePoint, PrevError> super::SavePoint for SavePoint<PrevSavePoint, PrevError>
@@ -674,7 +685,6 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
             | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..)
             | PreprocessorErrorType::ExpectedIdentifierInDefineDirective(..)
-            | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
             | PreprocessorErrorType::HeaderNotFound
             | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible
@@ -716,6 +726,7 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument
             | PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch
             | PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(..) => ErrorSeverity::Error,
+            | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -1639,11 +1650,11 @@ type Ppte =
     PreprocessorTokenizerError<RemoveEscapedNewlinesError<MapCharacterSetsError<Infallible>>>;
 impl Preprocessor<Ppt, Ppte, Pptsp> {
     pub(crate) fn new(
-        source_string: Input,
+        source_string: SharedString,
         source_file: StringCacheId,
         mut string_cache: StringCache,
-        quote_include_directories: Arc<Vec<PathBuf>>,
-        system_include_directories: Arc<Vec<PathBuf>>,
+        quote_include_directories: SharedVec<PathBuf>,
+        system_include_directories: SharedVec<PathBuf>,
     ) -> Self {
         let phase0 = NewlineTracking::new(source_string, source_file);
         let phase1 = MapCharacterSets::new(phase0);
@@ -2782,7 +2793,7 @@ where
         }
     }
 
-    fn prepare_pragma_operator_string(&self, string: StringCacheId) -> Input {
+    fn prepare_pragma_operator_string(&self, string: StringCacheId) -> SharedString {
         let string = get_from_cache!(self, string);
         let mut ret = String::new();
         // Skip the leading quote.
@@ -2814,7 +2825,7 @@ where
             _ = ret.pop();
         }
         ret.push('\n');
-        Input::from(ret)
+        SharedString::from(ret)
     }
 
     fn get_arguments(
@@ -4469,7 +4480,7 @@ where
             })
         })?;
         let name = self.insert_into_cache(&header_path.to_string_lossy());
-        let save_point = Prev::SavePoint::from_input(Input::from(header_string), name);
+        let save_point = Prev::SavePoint::from_input(SharedString::from(header_string), name);
         let frame = TokenizerFrame {
             save_point,
             name,
