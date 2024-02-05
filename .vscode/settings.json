@@ -26,6 +26,7 @@
     "sltt",
     "smallstr",
     "smallvec",
+    "STDC",
     "strtod",
     "strtof",
     "strtold",
