@@ -3524,6 +3524,10 @@ where
             self.last_preprocessor_token.as_ref().map(|p| p.kind),
             None | Some(PreprocessorTokenType::Newline)
         ) {
+            eprintln!(
+                "Last preprocessor token: {:#?}",
+                self.last_preprocessor_token
+            );
             self.pending_results
                 .push_back(Err(PreprocessorError::InnerPreprocessorError(
                     InnerPreprocessorError {
@@ -4171,6 +4175,7 @@ where
             directive,
             PreprocessorErrorType::NoConditionInIfDirective,
         )?;
+        eprintln!("Parsed preprocessor expression: {expression:#?}");
         let result = self.eval_preprocessor_expression(&expression);
         if !result {
             self.skip_over_dead_code()?;
@@ -4358,13 +4363,13 @@ where
                 let s = header.to_string_lossy();
                 let id = self.insert_into_cache(&s);
                 if self.once_set.contains(&id) {
-                    Ok(Some(header))
-                } else {
                     eprintln!(
                         "Not including header {s} because it should only be included once and \
                          already been included"
                     );
                     Ok(None)
+                } else {
+                    Ok(Some(header))
                 }
             },
             | Err(e) => Err(e),
@@ -4471,6 +4476,8 @@ where
             frame_type: TokenizerFrameType::SourceFile,
         };
         self.push_tokenizer_frame(frame);
+        self.last_preprocessor_token = None;
+        self.current_preprocessor_token = None;
         Ok(())
     }
 
