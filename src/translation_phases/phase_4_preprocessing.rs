@@ -728,7 +728,8 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::LineDirectiveNumberTooLarge(..)
             | PreprocessorErrorType::UnknownPragmaDirective
             | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
-            | PreprocessorErrorType::ExtraTokensAfterPragmaOperator => ErrorSeverity::Warning,
+            | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
+            | PreprocessorErrorType::PragmaOnceInNonHeader => ErrorSeverity::Warning,
         }
     }
 }
@@ -913,6 +914,7 @@ pub(crate) enum PreprocessorErrorType {
     STDCPragmaDirectiveWithoutArgument,
     STDCPragmaDirectiveWithoutOnOffSwitch,
     MissingOnOffSwitchInSTDCPragma(String),
+    PragmaOnceInNonHeader,
 }
 
 impl Display for PreprocessorErrorType {
@@ -1599,6 +1601,13 @@ impl Display for PreprocessorErrorType {
                      Found instead '{arg}'"
                 )
             },
+            | Self::PragmaOnceInNonHeader => {
+                write!(
+                    f,
+                    "Pragma 'once' directive used in non-header file! The 'once' directive can \
+                     only be used in header files."
+                )
+            },
         }
     }
 }
@@ -2116,6 +2125,16 @@ where
     #[allow(dead_code)]
     fn current_is_macro(&self) -> bool {
         self.current_macro().is_some()
+    }
+
+    fn current_is_header(&self) -> bool {
+        for frame in self.tokenizer_stack.iter().skip(1).rev() {
+            match frame.frame_type {
+                | TokenizerFrameType::SourceFile => return true,
+                | _ => (),
+            }
+        }
+        false
     }
 
     #[allow(dead_code)]
@@ -4961,6 +4980,17 @@ where
                 | PreprocessorTokenType::Identifier =>
                     match get_from_cache!(self, token.contents) {
                         | "once" => {
+                            if !self.current_is_header() {
+                                self.pending_results.push_back(Err(
+                                    PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::PragmaOnceInNonHeader,
+                                            source_vectors: token.source_vectors.clone(),
+                                        },
+                                    ),
+                                ));
+                            }
                             _ = self.once_set.insert(self.current_position().source_file);
                             loop {
                                 match self.previous_phase.next() {
