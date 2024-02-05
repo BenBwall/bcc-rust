@@ -2887,13 +2887,17 @@ where
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             }),
-            | PreprocessorTokenType::WideGeneratedString => Ok(Token {
+            | PreprocessorTokenType::WideGeneratedString => {
+                // Discard the L prefix.
+                let contents = &get_from_cache!(self, token.contents)[1..].to_token_string();
+                let contents = self.insert_into_cache(contents);
+                Ok(Token {
                 kind:           TokenType::StringLike(StringLikeTokenType::WideString(
-                    token.contents,
+                    contents,
                 )),
-                contents:       token.contents,
+                contents,
                 source_vectors: token.source_vectors,
-            }),
+            })},
             | PreprocessorTokenType::String =>
                 self.eval_escape_sequences(token.clone()).map(|contents| {
                     let cached_contents = self.insert_into_cache(&contents);
