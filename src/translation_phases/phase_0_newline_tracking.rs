@@ -5,20 +5,20 @@ use super::{
     TranslationPhase,
 };
 use crate::util::{
-    input::Input,
+    shared::SharedString,
     string_cache::Id as StringCacheId,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct NewlineTracking {
-    source: Input,
+    source: SharedString,
     position: SourcePosition,
     is_middle_of_windows_newline: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct SavePoint {
-    pub(crate) source: Input,
+    pub(crate) source: SharedString,
     pub(crate) position: SourcePosition,
     pub(crate) is_middle_of_windows_newline: bool,
 }
@@ -30,7 +30,7 @@ impl super::SavePoint for SavePoint {
 }
 
 impl NewlineTracking {
-    pub(crate) fn new(source: Input, source_file: StringCacheId) -> Self {
+    pub(crate) fn new(source: SharedString, source_file: StringCacheId) -> Self {
         Self {
             is_middle_of_windows_newline: false,
             source,
@@ -149,7 +149,7 @@ mod tests {
     use crate::{
         translation_phases::SourcePosition,
         util::{
-            input::Input,
+            shared::SharedString,
             string_cache::{
                 Id,
                 StringCache,
@@ -160,7 +160,7 @@ mod tests {
         #[test]
         fn test_noop_translation_phase(input in String::arbitrary()) {
             let mut string_cache = StringCache::new();
-            let input = Input::new(input);
+            let input = SharedString::from_string(input);
             let phase = super::NewlineTracking::new(input.clone(), string_cache.intern("<input>"));
             prop_assert!(phase.map(|r| r.unwrap_or_else(|e| match e{})).collect::<String>() == input.as_str(), "phase.collect() != input");
         }

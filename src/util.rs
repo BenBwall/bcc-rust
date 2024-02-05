@@ -3,7 +3,7 @@ use std::{
     path::Path,
 };
 
-pub(crate) mod input;
+pub(crate) mod shared;
 pub(crate) mod string_cache;
 pub(crate) trait Captures<U> {}
 

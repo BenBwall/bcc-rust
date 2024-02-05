@@ -5,7 +5,6 @@ use std::{
     hash::BuildHasherDefault,
     path::PathBuf,
     process::ExitCode,
-    sync::Arc,
 };
 
 use clap::{
@@ -20,7 +19,7 @@ use clap::{
 use owo_colors::OwoColorize;
 use rustc_hash::FxHasher;
 use thiserror::Error;
-use util::input::Input;
+use util::shared::SharedString;
 
 use crate::{
     translation_phases::{
@@ -69,8 +68,8 @@ struct CliInput {
 }
 
 enum ParsedInput {
-    String(Input),
-    File(Input),
+    String(SharedString),
+    File(SharedString),
 }
 #[derive(Debug, Error)]
 enum MainError {
@@ -121,8 +120,8 @@ fn run() -> Result<(), MainError> {
         input_string,
         source_filename,
         string_cache,
-        Arc::new(args.quote_include),
-        Arc::new(args.system_include),
+        args.quote_include.into(),
+        args.system_include.into(),
     );
     while let Some(res) = preprocessor.next() {
         match res {
