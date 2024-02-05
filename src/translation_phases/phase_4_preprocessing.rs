@@ -348,7 +348,8 @@ pub(crate) struct PreprocessorExpression {
     sub_expressions: Vec<PreprocessorSubExpression>,
 }
 
-const PREDEFINED_MACRO_NAMES: [&str; 4] = ["__LINE__", "__FILE__", "__DATE__", "__TIME__"];
+const PREDEFINED_MACRO_NAMES: [&str; 5] =
+    ["__LINE__", "__FILE__", "__DATE__", "__TIME__", "_Pragma"];
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenizerFrameType<PrevSavePoint> {
@@ -402,6 +403,7 @@ pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
     pub(crate) previous_phase: Prev,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
     pub(crate) hash_hash_stack: Vec<HashHash>,
+    once_set: HashSet<StringCacheId>,
     macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
     pending_results: VecDeque<Result<Token, PreprocessorError<PrevError>>>,
     state: State,
@@ -419,6 +421,7 @@ pub(crate) struct SavePoint<PrevSavePoint, PrevError> {
     pub(crate) inner: PrevSavePoint,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
     pub(crate) hash_hash_stack: Vec<HashHash>,
+    pub(crate) once_set: HashSet<StringCacheId>,
     pub(crate) pending_results: VecDeque<Result<Token, PreprocessorError<PrevError>>>,
     pub(crate) state: State,
     pub(crate) last_preprocessor_token: Option<PreprocessorToken>,
@@ -705,7 +708,14 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::MissingNewlineAfterLineDirective(..)
             | PreprocessorErrorType::FloatingPointNumberInLineDirective(..)
             | PreprocessorErrorType::NegativeNumberInLineDirective(..)
-            | PreprocessorErrorType::UnsupportedLineDirectiveValue(..) => ErrorSeverity::Error,
+            | PreprocessorErrorType::UnsupportedLineDirectiveValue(..)
+            | PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(..)
+            | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(..)
+            | PreprocessorErrorType::MissingStringLiteralInPragmaOperator(..)
+            | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
+            | PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument
+            | PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch
+            | PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(..) => ErrorSeverity::Error,
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -715,7 +725,10 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::UnknownDirective
             | PreprocessorErrorType::HashMustBeFollowedByIdentifier
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
-            | PreprocessorErrorType::LineDirectiveNumberTooLarge(..) => ErrorSeverity::Warning,
+            | PreprocessorErrorType::LineDirectiveNumberTooLarge(..)
+            | PreprocessorErrorType::UnknownPragmaDirective
+            | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
+            | PreprocessorErrorType::ExtraTokensAfterPragmaOperator => ErrorSeverity::Warning,
         }
     }
 }
@@ -890,6 +903,16 @@ pub(crate) enum PreprocessorErrorType {
     UnsupportedLineDirectiveValue(i128),
     NegativeNumberInLineDirective(i128),
     LineDirectiveNumberTooLarge(i128),
+    MissingOpeningParenthesisInPragmaOperator(PreprocessorTokenType),
+    MissingClosingParenthesisInPragmaOperator(PreprocessorTokenType),
+    MissingStringLiteralInPragmaOperator(PreprocessorTokenType),
+    UnknownPragmaDirective,
+    UnknownPragmaSTDCArgument(String),
+    ExtraTokensAfterPragmaOnce(PreprocessorTokenType),
+    ExtraTokensAfterPragmaOperator,
+    STDCPragmaDirectiveWithoutArgument,
+    STDCPragmaDirectiveWithoutOnOffSwitch,
+    MissingOnOffSwitchInSTDCPragma(String),
 }
 
 impl Display for PreprocessorErrorType {
@@ -1507,6 +1530,75 @@ impl Display for PreprocessorErrorType {
                      supports line numbers up to INT_MAX. Value was '{i}'"
                 )
             },
+            | Self::MissingOpeningParenthesisInPragmaOperator(tt) => {
+                write!(
+                    f,
+                    "Missing opening parenthesis in 'pragma' operator! Found instead {tt:#?}"
+                )
+            },
+            | Self::MissingClosingParenthesisInPragmaOperator(tt) => {
+                write!(
+                    f,
+                    "Missing closing parenthesis in 'pragma' operator! Found instead {tt:#?}"
+                )
+            },
+            | Self::MissingStringLiteralInPragmaOperator(tt) => {
+                write!(
+                    f,
+                    "Missing string literal in 'pragma' operator! Found instead {tt:#?}"
+                )
+            },
+            | Self::UnknownPragmaDirective => {
+                write!(
+                    f,
+                    "Unknown 'pragma' directive! BCC only supports the 'once' and 'STDC' \
+                     directives."
+                )
+            },
+            | Self::UnknownPragmaSTDCArgument(arg) => {
+                write!(
+                    f,
+                    "Unknown argument to 'STDC' 'pragma' directive! BCC only supports the \
+                     'FP_CONTRACT', 'FENV_ACCESS' and 'CX_LIMITED_RANGE' arguments. Found instead \
+                     '{arg}'"
+                )
+            },
+            | Self::ExtraTokensAfterPragmaOnce(tt) => {
+                write!(
+                    f,
+                    "Extra tokens after 'once' 'pragma' directive! A once directive should \
+                     consist of only the identifier 'once' and nothing else. Found {tt:#?}"
+                )
+            },
+            | Self::ExtraTokensAfterPragmaOperator => {
+                write!(
+                    f,
+                    "Extra tokens after 'pragma' operator! Not all tokens were consumed within \
+                     the 'pragma' operator."
+                )
+            },
+            | Self::STDCPragmaDirectiveWithoutArgument => {
+                write!(
+                    f,
+                    "STDC 'pragma' directive without argument! The 'STDC' directive must be \
+                     followed by an argument."
+                )
+            },
+            | Self::STDCPragmaDirectiveWithoutOnOffSwitch => {
+                write!(
+                    f,
+                    "STDC 'pragma' directive without on-off switch! Pragma directive ended before \
+                     the on-off switch was found."
+                )
+            },
+            | Self::MissingOnOffSwitchInSTDCPragma(arg) => {
+                write!(
+                    f,
+                    "Missing on-off switch in STDC 'pragma' directive! 'FP_CONTRACT', \
+                     'FENV_ACCESS' and 'CX_LIMITED_RANGE' must be followed by an on-off switch. \
+                     Found instead '{arg}'"
+                )
+            },
         }
     }
 }
@@ -1561,6 +1653,7 @@ impl Preprocessor<Ppt, Ppte, Pptsp> {
                 name:       source_file,
             }],
             hash_hash_stack: Vec::new(),
+            once_set: HashSet::default(),
             previous_phase: phase3,
             macro_definitions,
             pending_results: VecDeque::new(),
@@ -2564,6 +2657,83 @@ where
                                 }),
                             }));
                         },
+                        | "_Pragma" => {
+                            if let Err(e) = self.expect_token(
+                                |_, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
+                                |_, e|
+                                    ControlFlow::Break(e)
+                                ,
+                                |_, token|
+                                    ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:     PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(token.kind),
+                                            source_vectors: token.source_vectors,
+                                        },
+                                    )),
+                                "parsing pragma operator",
+                            ) {
+                                break 'base Some(Err(e));
+                            }
+
+                            let string_token = match self.expect_token(
+                                |_, t| t.kind == PreprocessorTokenType::String,
+                                |_, e|
+                                    ControlFlow::Break(e)
+                                ,
+                                |_, token|
+                                    ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:     PreprocessorErrorType::MissingStringLiteralInPragmaOperator(token.kind),
+                                            source_vectors: token.source_vectors,
+                                        },
+                                    )),
+                                "parsing pragma operator",
+                            ) {
+                                | Ok(token) => token,
+                                | Err(e) => break 'base Some(Err(e)),
+                            };
+
+                            let input = self.prepare_pragma_operator_string(string_token.contents);
+
+                            let save = self.previous_phase.save();
+                            let pragma_string = self.insert_into_cache("<pragma string>");
+                            self.previous_phase
+                                .restore(Prev::SavePoint::from_input(input, pragma_string));
+                            if let Err(e) = self.parse_pragma_directive(&string_token) {
+                                self.previous_phase.restore(save);
+                                break 'base Some(Err(e));
+                            };
+                            if self.previous_phase.next().is_some() {
+                                self.pending_results
+                                    .push_back(Err(PreprocessorError::InnerPreprocessorError(
+                                    InnerPreprocessorError {
+                                        error_type:
+                                            PreprocessorErrorType::ExtraTokensAfterPragmaOperator,
+                                        source_vectors: string_token.source_vectors,
+                                    },
+                                )));
+                            }
+                            self.previous_phase.restore(save);
+
+                            if let Err(e) = self.expect_token(
+                                |_, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
+                                |_, e|
+                                    ControlFlow::Break(e)
+                                ,
+                                |_, token|
+                                    ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:     PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(token.kind),
+                                            source_vectors: token.source_vectors,
+                                        },
+                                    )),
+                                "parsing pragma operator",
+                            ) {
+                                break 'base Some(Err(e));
+                            }
+
+                            continue 'base;
+                        },
                         | s => unreachable!(
                             "Compiler bug: Predefined macro {s:#?} not in PREDEFINED_MACRO_NAMES"
                         ),
@@ -2591,6 +2761,41 @@ where
                 Some(Ok(t))
             },
         }
+    }
+
+    fn prepare_pragma_operator_string(&self, string: StringCacheId) -> Input {
+        let string = get_from_cache!(self, string);
+        let mut ret = String::new();
+        // Skip the leading quote.
+        let mut index = 1;
+        if string.char_at(0) == Some('L') {
+            index += 1;
+        }
+        while let Some(c) = string.char_at(index) {
+            match c {
+                | '\\' => match string.char_at(index + 1) {
+                    | Some('"') => {
+                        ret.push('"');
+                        index += 2;
+                    },
+                    | Some('\\') => {
+                        ret.push('\\');
+                        index += 2;
+                    },
+                    | _ => (),
+                },
+                | _ => {
+                    ret.push(c);
+                    index += c.len_utf8();
+                },
+            }
+        }
+        // Pop the trailing quote.
+        if ret.char_at(ret.len() - 1) == Some('"') {
+            _ = ret.pop();
+        }
+        ret.push('\n');
+        Input::from(ret)
     }
 
     fn get_arguments(
@@ -2892,12 +3097,11 @@ where
                 let contents = &get_from_cache!(self, token.contents)[1..].to_token_string();
                 let contents = self.insert_into_cache(contents);
                 Ok(Token {
-                kind:           TokenType::StringLike(StringLikeTokenType::WideString(
+                    kind: TokenType::StringLike(StringLikeTokenType::WideString(contents)),
                     contents,
-                )),
-                contents,
-                source_vectors: token.source_vectors,
-            })},
+                    source_vectors: token.source_vectors,
+                })
+            },
             | PreprocessorTokenType::String =>
                 self.eval_escape_sequences(token.clone()).map(|contents| {
                     let cached_contents = self.insert_into_cache(&contents);
@@ -4081,50 +4285,71 @@ where
         include_token: &PreprocessorToken,
         path: &Path,
         is_system_header: bool,
-    ) -> Result<PathBuf, <Self as TranslationPhase>::Error> {
-        println!(
+    ) -> Result<Option<PathBuf>, <Self as TranslationPhase>::Error> {
+        eprintln!(
             "Including {}header from path: {:#?}",
             if is_system_header { "system " } else { "" },
             path
         );
-        if path.is_absolute() {
-            if path.exists() {
-                return Ok(path.to_owned());
+        let ret = 'ret: {
+            if path.is_absolute() {
+                if path.exists() {
+                    break 'ret Ok(path.to_owned());
+                }
+                break 'ret Err(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::HeaderNotFound,
+                        source_vectors: include_token.source_vectors.clone(),
+                    },
+                ));
             }
-            return Err(PreprocessorError::InnerPreprocessorError(
+
+            if is_system_header {
+                if let Some(header) =
+                    Self::search_for_header_in(path, &self.system_include_directories)
+                {
+                    break 'ret Ok(header);
+                }
+            }
+            if let Some(header) = Self::search_for_header_in(path, &self.quote_include_directories)
+            {
+                break 'ret Ok(header);
+            }
+
+            let cwd = std::env::current_dir().map_err(|_| {
+                PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                    error_type:     PreprocessorErrorType::CurrentWorkingDirectoryInaccessible,
+                    source_vectors: include_token.source_vectors.clone(),
+                })
+            })?;
+            if let Some(header) = Self::search_for_header_in(path, &[cwd]) {
+                break 'ret Ok(header);
+            }
+
+            Err(PreprocessorError::InnerPreprocessorError(
                 InnerPreprocessorError {
                     error_type:     PreprocessorErrorType::HeaderNotFound,
                     source_vectors: include_token.source_vectors.clone(),
                 },
-            ));
-        }
-
-        if is_system_header {
-            if let Some(header) = Self::search_for_header_in(path, &self.system_include_directories)
-            {
-                return Ok(header);
-            }
-        }
-        if let Some(header) = Self::search_for_header_in(path, &self.quote_include_directories) {
-            return Ok(header);
-        }
-
-        let cwd = std::env::current_dir().map_err(|_| {
-            PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
-                error_type:     PreprocessorErrorType::CurrentWorkingDirectoryInaccessible,
-                source_vectors: include_token.source_vectors.clone(),
-            })
-        })?;
-        if let Some(header) = Self::search_for_header_in(path, &[cwd]) {
-            return Ok(header);
-        }
-
-        Err(PreprocessorError::InnerPreprocessorError(
-            InnerPreprocessorError {
-                error_type:     PreprocessorErrorType::HeaderNotFound,
-                source_vectors: include_token.source_vectors.clone(),
+            ))
+        };
+        eprintln!("Returning {ret:?}");
+        match ret {
+            | Ok(header) => {
+                let s = header.to_string_lossy();
+                let id = self.insert_into_cache(&s);
+                if self.once_set.contains(&id) {
+                    Ok(Some(header))
+                } else {
+                    eprintln!(
+                        "Not including header {s} because it should only be included once and \
+                         already been included"
+                    );
+                    Ok(None)
+                }
             },
-        ))
+            | Err(e) => Err(e),
+        }
     }
 
     fn parse_include_directive(
@@ -4210,6 +4435,9 @@ where
                 self.find_header_from_path(&synthetic_token, path, true)
             },
         }?;
+        let Some(header_path) = header_path else {
+            return Ok(());
+        };
         let header_string = read_to_string_lossy(&header_path).map_err(|_| {
             PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderFileInaccessible,
@@ -4705,7 +4933,163 @@ where
         &mut self,
         _directive: &PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
-        todo!()
+        'base: loop {
+            let token = match self.previous_phase.next() {
+                | Some(Err(e)) => {
+                    self.pending_results
+                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                    continue;
+                },
+                | Some(Ok(token)) => token,
+                | None => {
+                    break 'base Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                "parsing pragma directive",
+                            ),
+                            source_vectors: SourceVectors::from(SourceVector {
+                                position: self.previous_phase.current_position(),
+                                length:   0,
+                            }),
+                        },
+                    ));
+                },
+            };
+            match token.kind {
+                | PreprocessorTokenType::Whitespace => continue 'base,
+                | PreprocessorTokenType::Newline => break 'base Ok(()),
+                | PreprocessorTokenType::Identifier =>
+                    match get_from_cache!(self, token.contents) {
+                        | "once" => {
+                            _ = self.once_set.insert(self.current_position().source_file);
+                            loop {
+                                match self.previous_phase.next() {
+                                | Some(Err(e)) => {
+                                    self.pending_results
+                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                    continue;
+                                },
+                                | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline =>
+                                    break 'base Ok(()),
+                                | Some(Ok(t)) => break 'base Err(PreprocessorError::InnerPreprocessorError(
+                                    InnerPreprocessorError {
+                                        error_type:     PreprocessorErrorType::ExtraTokensAfterPragmaOnce(t.kind),
+                                        source_vectors: token.source_vectors,
+                                    },
+                                )),
+                                | None => {
+                                    break 'base Err(PreprocessorError::InnerPreprocessorError(
+                                        InnerPreprocessorError {
+                                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                                "parsing pragma directive",
+                                            ),
+                                            source_vectors: SourceVectors::from(SourceVector {
+                                                position: self.previous_phase.current_position(),
+                                                length:   0,
+                                            }),
+                                        },
+                                    ));
+                                },
+                            }
+                            }
+                        },
+                        | "STDC" => {
+                            loop {
+                                match self.previous_phase.next() {
+                                    | Some(Err(e)) => {
+                                        self.pending_results
+                                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                        continue;
+                                    },
+                                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline =>
+                                        break 'base Err(PreprocessorError::InnerPreprocessorError(
+                                            InnerPreprocessorError {
+                                                error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument,
+                                                source_vectors: token.source_vectors,
+                                            },
+                                        )),
+                                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Whitespace => continue,
+                                    | Some(Ok(token)) => {
+                                        let s = get_from_cache!(self, token.contents);
+                                        if token.kind != PreprocessorTokenType::Identifier || !matches!(s, "FP_CONTRACT" | "FENV_ACCESS" | "CX_LIMITED_RANGE") {
+                                            break 'base Err(PreprocessorError::InnerPreprocessorError(
+                                                InnerPreprocessorError {
+                                                    error_type:     PreprocessorErrorType::UnknownPragmaSTDCArgument(s.to_owned()),
+                                                    source_vectors: token.source_vectors,
+                                                },
+                                            ));
+                                        }
+                                        break;
+                                    }
+                                    | None => {
+                                        break 'base Err(PreprocessorError::InnerPreprocessorError(
+                                            InnerPreprocessorError {
+                                                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                                    "parsing pragma directive",
+                                                ),
+                                                source_vectors: SourceVectors::from(SourceVector {
+                                                    position: self.previous_phase.current_position(),
+                                                    length:   0,
+                                                }),
+                                            },
+                                        ));
+                                    },
+                                }
+                            }
+                            loop {
+                                match self.previous_phase.next() {
+                                    | Some(Err(e)) => {
+                                        self.pending_results
+                                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                                        continue;
+                                    },
+                                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline =>
+                                        break 'base Err(PreprocessorError::InnerPreprocessorError(
+                                            InnerPreprocessorError {
+                                                error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch,
+                                                source_vectors: token.source_vectors,
+                                            },
+                                        )),
+                                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Whitespace => continue,
+                                    | Some(Ok(token)) => {
+                                        let s = get_from_cache!(self, token.contents);
+                                        if token.kind != PreprocessorTokenType::Identifier || !matches!(s, "ON" | "OFF" | "DEFAULT") {
+                                            break 'base Err(PreprocessorError::InnerPreprocessorError(
+                                                InnerPreprocessorError {
+                                                    error_type:     PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(s.to_owned()),
+                                                    source_vectors: token.source_vectors,
+                                                },
+                                            ));
+                                        }
+                                        break;
+                                    }
+                                    | None => {
+                                        break 'base Err(PreprocessorError::InnerPreprocessorError(
+                                            InnerPreprocessorError {
+                                                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                                    "parsing pragma directive",
+                                                ),
+                                                source_vectors: SourceVectors::from(SourceVector {
+                                                    position: self.previous_phase.current_position(),
+                                                    length:   0,
+                                                }),
+                                            },
+                                        ));
+                                    },
+                                }
+                            }
+                        },
+                        | _ => break 'base Ok(()),
+                    },
+                | _ =>
+                    break 'base Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:     PreprocessorErrorType::UnknownPragmaDirective,
+                            source_vectors: token.source_vectors,
+                        },
+                    )),
+            }
+        }
     }
 
     #[allow(clippy::inline_always)]
@@ -5085,6 +5469,7 @@ where
             inner: self.previous_phase.save(),
             tokenizer_stack: self.tokenizer_stack.clone(),
             hash_hash_stack: self.hash_hash_stack.clone(),
+            once_set: self.once_set.clone(),
             pending_results: self.pending_results.clone(),
             state: self.state,
             last_preprocessor_token: self.last_preprocessor_token.clone(),
@@ -5102,6 +5487,7 @@ where
         self.previous_phase.restore(save_point.inner);
         self.tokenizer_stack = save_point.tokenizer_stack;
         self.hash_hash_stack = save_point.hash_hash_stack;
+        self.once_set = save_point.once_set;
         self.pending_results = save_point.pending_results;
         self.state = save_point.state;
         self.last_preprocessor_token = save_point.last_preprocessor_token;
