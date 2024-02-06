@@ -7,10 +7,7 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
-    mem::{
-        replace,
-        take,
-    },
+    mem::replace,
     ops::ControlFlow,
     path::{
         Path,
@@ -20,7 +17,6 @@ use std::{
 };
 
 use chrono::Local;
-use scopeguard::guard;
 use smallstr::SmallString;
 use smallvec::SmallVec;
 use thiserror::Error;
@@ -3091,10 +3087,13 @@ where
     ) -> Result<String, <Self as TranslationPhase>::Error> {
         let mut ret = String::new();
         let mut index = 0;
-        let mut pending_results = guard(take(&mut self.pending_results), |pending_results| {
-            self.pending_results = pending_results;
-        });
         let string = get_from_cache!(self, token.contents);
+        if let Some('L') = string.char_at(0) {
+            index += 1;
+        }
+        if let Some('"' | '\'') = string.char_at(index) {
+            index += 1;
+        }
         while let Some(c) = string.char_at(index) {
             if c == '\\' {
                 let Some(c) = string.char_at(index + 1) else {
@@ -3129,7 +3128,7 @@ where
                             Some(code_point)
                         })();
                         let Some(code_point) = code_point else {
-                            pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                            self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::HexEscapeSequenceTooLarge,
@@ -3139,7 +3138,7 @@ where
                             continue;
                         };
                         let Ok(c) = char::try_from(code_point) else {
-                            pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                            self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
                                     error_type:     PreprocessorErrorType::InvalidHexEscapeSequence,
                                     source_vectors: token.source_vectors.clone(),
@@ -3167,7 +3166,7 @@ where
                         })();
 
                         let Some(code_point) = code_point else {
-                            pending_results.push_back(Err(
+                            self.pending_results.push_back(Err(
                                 PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::OctalEscapeSequenceTooLarge,
@@ -3177,7 +3176,7 @@ where
                             continue;
                         };
                         let Ok(c) = char::try_from(u32::from(code_point)) else {
-                            pending_results.push_back(Err(
+                            self.pending_results.push_back(Err(
                                 PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::InvalidOctalEscapeSequence,
@@ -3193,7 +3192,7 @@ where
                         for _ in 0..4 {
                             let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16))
                             else {
-                                pending_results.push_back(
+                                self.pending_results.push_back(
                                     Err(PreprocessorError::InnerPreprocessorError(
                                         InnerPreprocessorError {
                                             error_type:
@@ -3209,7 +3208,7 @@ where
                             code_point += d;
                         }
                         let Ok(c) = char::try_from(code_point) else {
-                            pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                            self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
                                     error_type:     PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence,
                                     source_vectors: token.source_vectors.clone(),
@@ -3224,7 +3223,7 @@ where
                         for _ in 0..8 {
                             let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16))
                             else {
-                                pending_results.push_back(
+                                self.pending_results.push_back(
                                     Err(PreprocessorError::InnerPreprocessorError(
                                         InnerPreprocessorError {
                                             error_type:
@@ -3240,7 +3239,7 @@ where
                             code_point += d;
                         }
                         let Ok(c) = char::try_from(code_point) else {
-                            pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                            self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
                                 InnerPreprocessorError {
                                     error_type:     PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence,
                                     source_vectors: token.source_vectors.clone(),
@@ -3251,7 +3250,7 @@ where
                         c
                     }
                     | _ => {
-                        pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
+                        self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
                             InnerPreprocessorError {
                                 error_type:     PreprocessorErrorType::InvalidEscapeSequence,
                                 source_vectors: token.source_vectors.clone(),
@@ -3264,6 +3263,9 @@ where
                 ret.push(c);
                 index += c.len_utf8();
             }
+        }
+        if ret.ends_with('"') || ret.ends_with('\'') {
+            _ = ret.pop();
         }
         Ok(ret)
     }
