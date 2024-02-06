@@ -7,6 +7,10 @@ license-file = "LICENSE"
 readme = "README.md"
 repository = "https://www.github.com/bwallker/bcc-rust"
 
+[profile.release]
+lto = "fat"
+target-cpu = "native"
+debug = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -65,6 +69,7 @@ thiserror = "1.0.51"
 utf16string = "0.2.0"
 
 [dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
 pretty_assertions = "1.4.0"
 proptest = "1.4.0"
 rstest = "0.18.2"
@@ -72,3 +77,7 @@ rstest = "0.18.2"
 [build-dependencies]
 bindgen = "0.69.1"
 cc = "1.0.83"
+
+[[bench]]
+name = "bench"
+harness = false

@@ -201,5 +201,15 @@ impl<T> From<Vec<T>> for Shared<[T]> {
     }
 }
 
+impl<T> Default for Shared<T>
+where
+    Box<T>: Default,
+    T: ?Sized,
+{
+    fn default() -> Self {
+        Self::from_boxed(Box::default())
+    }
+}
+
 pub(crate) type SharedString = Shared<str>;
 pub(crate) type SharedVec<T> = Shared<[T]>;
