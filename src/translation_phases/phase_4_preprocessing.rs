@@ -5606,6 +5606,7 @@ where
         &mut self,
         _directive: &PreprocessorToken,
     ) -> PreprocessorError<Prev::Error> {
+        self.should_tokenize_whitespace = true;
         let mut contents = String::new();
         loop {
             match self.previous_phase.next() {
@@ -5631,6 +5632,7 @@ where
                 },
             }
         }
+        self.should_tokenize_whitespace = false;
         PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
             error_type:     PreprocessorErrorType::ErrorDirective(contents),
             source_vectors: SourceVectors::from(SourceVector {
