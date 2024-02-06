@@ -2105,10 +2105,7 @@ where
                 if get_from_cache!(self, lhs.contents) == "L"
                     && !get_from_cache!(self, rhs.contents).starts_with('L')
                 {
-                    let mut lhs = lhs.clone();
-                    if rhs.kind == PreprocessorTokenType::GeneratedString {
-                        lhs.contents = self.insert_into_cache("");
-                    }
+                    let lhs = lhs.clone();
                     Some(Ok(self.merge_token_contents(
                         &lhs,
                         &rhs,
