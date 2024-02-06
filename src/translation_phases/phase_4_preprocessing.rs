@@ -703,6 +703,7 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression
             | PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(_)
             | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
+            | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
@@ -898,6 +899,7 @@ pub(crate) enum PreprocessorErrorType {
     STDCPragmaDirectiveWithoutOnOffSwitch,
     MissingOnOffSwitchInSTDCPragma(String),
     PragmaOnceInNonHeader,
+    ErrorDirective(String),
 }
 
 impl Display for PreprocessorErrorType {
@@ -1821,6 +1823,9 @@ impl Display for PreprocessorErrorType {
                     "Pragma 'once' directive used in non-header file! The 'once' directive can \
                      only be used in header files."
                 )
+            },
+            | Self::ErrorDirective(s) => {
+                write!(f, "Error directive: {s}")
             },
         }
     }
@@ -3795,7 +3800,7 @@ where
             | "define" => self.parse_define_directive(&directive),
             | "undef" => self.parse_undef_directive(&directive),
             | "line" => self.parse_line_directive(&directive),
-            | "error" => self.parse_error_directive(&directive),
+            | "error" => Err(self.parse_error_directive(&directive)),
             | "pragma" => self.parse_pragma_directive(&directive),
             | _ => Err(PreprocessorError::InnerPreprocessorError(
                 InnerPreprocessorError {
@@ -5600,8 +5605,39 @@ where
     fn parse_error_directive(
         &mut self,
         _directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
-        todo!()
+    ) -> PreprocessorError<Prev::Error> {
+        let mut contents = String::new();
+        loop {
+            match self.previous_phase.next() {
+                | Some(Err(e)) => {
+                    self.pending_results
+                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                    continue;
+                },
+                | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline => break,
+                | Some(Ok(token)) => {
+                    contents.push_str(get_from_cache!(self, token.contents));
+                },
+                | None => {
+                    return PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                            "parsing error directive",
+                        ),
+                        source_vectors: SourceVectors::from(SourceVector {
+                            position: self.previous_phase.current_position(),
+                            length:   0,
+                        }),
+                    });
+                },
+            }
+        }
+        PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+            error_type:     PreprocessorErrorType::ErrorDirective(contents),
+            source_vectors: SourceVectors::from(SourceVector {
+                position: self.previous_phase.current_position(),
+                length:   0,
+            }),
+        })
     }
 
     fn parse_pragma_directive(
