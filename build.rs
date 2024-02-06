@@ -13,7 +13,7 @@ fn main() {
         .opt_level(3)
         .debug(true)
         .out_dir(&out_dir)
-        .compile("lexer");
+        .compile("float_parsing");
     bindgen::Builder::default()
         .header("float_parsing.h")
         .allowlist_file("float_parsing.h")

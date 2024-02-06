@@ -7,7 +7,10 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
-    mem::take,
+    mem::{
+        replace,
+        take,
+    },
     ops::ControlFlow,
     path::{
         Path,
@@ -32,7 +35,10 @@ use crate::{
     },
     util::{
         read_to_string_lossy,
-        shared::{SharedString, SharedVec},
+        shared::{
+            SharedString,
+            SharedVec,
+        },
         string_cache::{
             Id as StringCacheId,
             StringCache,
@@ -138,216 +144,6 @@ use super::{
 
 pub(crate) type TokenString = SmallString<[u8; 1024]>;
 
-// Lowest value has highest precedence.
-pub(crate) fn prefix_binding_power<PrevError>(
-    op: &PreprocessorToken,
-) -> Result<Option<((), u32)>, PreprocessorError<PrevError>> {
-    let construct_error = |error_type| {
-        Err(PreprocessorError::InnerPreprocessorError(
-            InnerPreprocessorError {
-                error_type:
-                    PreprocessorErrorType::PrefixOperatorNotAllowedInPreprocessorExpression(
-                        error_type,
-                    ),
-                source_vectors: op.source_vectors.clone(),
-            },
-        ))
-    };
-    match op.kind {
-        | PreprocessorTokenType::Defined => Ok(Some(((), 0))),
-        | PreprocessorTokenType::Minus
-        | PreprocessorTokenType::Plus
-        | PreprocessorTokenType::ExclamationMark
-        | PreprocessorTokenType::Tilde => Ok(Some(((), 2))),
-        | PreprocessorTokenType::PlusPlus => construct_error(ForbiddenPrefixOperator::PreIncrement),
-        | PreprocessorTokenType::MinusMinus =>
-            construct_error(ForbiddenPrefixOperator::PreDecrement),
-        | PreprocessorTokenType::Asterisk => construct_error(ForbiddenPrefixOperator::Dereference),
-        | PreprocessorTokenType::Ampersand => construct_error(ForbiddenPrefixOperator::AddressOf),
-        | PreprocessorTokenType::Hash =>
-            if op.source_vectors[0].length == 1 {
-                construct_error(ForbiddenPrefixOperator::Hash)
-            } else {
-                construct_error(ForbiddenPrefixOperator::DigraphHash)
-            },
-        | _ => Ok(None),
-    }
-}
-
-pub(crate) fn infix_binding_power<PrevError>(
-    op: &PreprocessorToken,
-) -> Result<Option<(u32, u32)>, PreprocessorError<PrevError>> {
-    let construct_error = |error_type| {
-        Err(PreprocessorError::InnerPreprocessorError(
-            InnerPreprocessorError {
-                error_type:
-                    PreprocessorErrorType::InfixOperatorNotAllowedInPreprocessorExpression(
-                        error_type,
-                    ),
-                source_vectors: op.source_vectors.clone(),
-            },
-        ))
-    };
-    match op.kind {
-        | PreprocessorTokenType::HashHash =>
-            if op.source_vectors.lengths() == 2 {
-                construct_error(ForbiddenInfixOperator::HashHash)
-            } else {
-                construct_error(ForbiddenInfixOperator::DigraphHashHash)
-            },
-        | PreprocessorTokenType::Period => construct_error(ForbiddenInfixOperator::MemberAccess),
-        | PreprocessorTokenType::Arrow =>
-            construct_error(ForbiddenInfixOperator::MemberAccessByPointer),
-        | PreprocessorTokenType::Comma => construct_error(ForbiddenInfixOperator::Comma),
-        | PreprocessorTokenType::Equals => construct_error(ForbiddenInfixOperator::Assignment),
-        | PreprocessorTokenType::PlusEquals =>
-            construct_error(ForbiddenInfixOperator::AdditionAssignment),
-        | PreprocessorTokenType::MinusEquals =>
-            construct_error(ForbiddenInfixOperator::SubtractionAssignment),
-        | PreprocessorTokenType::AsteriskEquals =>
-            construct_error(ForbiddenInfixOperator::MultiplicationAssignment),
-        | PreprocessorTokenType::ForwardSlashEquals =>
-            construct_error(ForbiddenInfixOperator::DivisionAssignment),
-        | PreprocessorTokenType::PercentEquals =>
-            construct_error(ForbiddenInfixOperator::RemainderAssignment),
-        | PreprocessorTokenType::LessThanLessThanEquals =>
-            construct_error(ForbiddenInfixOperator::LeftShiftAssignment),
-        | PreprocessorTokenType::GreaterThanGreaterThanEquals =>
-            construct_error(ForbiddenInfixOperator::RightShiftAssignment),
-        | PreprocessorTokenType::AmpersandEquals =>
-            construct_error(ForbiddenInfixOperator::BitwiseAndAssignment),
-        | PreprocessorTokenType::CaretEquals =>
-            construct_error(ForbiddenInfixOperator::BitwiseXorAssignment),
-        | PreprocessorTokenType::PipeEquals =>
-            construct_error(ForbiddenInfixOperator::BitwiseOrAssignment),
-
-        | PreprocessorTokenType::Asterisk
-        | PreprocessorTokenType::ForwardSlash
-        | PreprocessorTokenType::Percent => Ok(Some((4, 3))),
-
-        | PreprocessorTokenType::Plus | PreprocessorTokenType::Minus => Ok(Some((6, 5))),
-
-        | PreprocessorTokenType::LessThanLessThan
-        | PreprocessorTokenType::GreaterThanGreaterThan => Ok(Some((8, 7))),
-
-        | PreprocessorTokenType::LessThan
-        | PreprocessorTokenType::LessThanEquals
-        | PreprocessorTokenType::GreaterThan
-        | PreprocessorTokenType::GreaterThanEquals => Ok(Some((10, 9))),
-
-        | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals =>
-            Ok(Some((11, 12))),
-
-        | PreprocessorTokenType::Ampersand => Ok(Some((14, 13))),
-
-        | PreprocessorTokenType::Caret => Ok(Some((16, 15))),
-
-        | PreprocessorTokenType::Pipe => Ok(Some((18, 17))),
-
-        | PreprocessorTokenType::AmpersandAmpersand => Ok(Some((20, 19))),
-
-        | PreprocessorTokenType::PipePipe => Ok(Some((22, 21))),
-
-        | PreprocessorTokenType::QuestionMark => Ok(Some((23, 24))),
-
-        | _ => Ok(None),
-    }
-}
-
-fn postfix_binding_power<PrevError>(
-    op: &PreprocessorToken,
-) -> Result<Option<(u32, ())>, PreprocessorError<PrevError>> {
-    let construct_error = |error_type| {
-        Err(PreprocessorError::InnerPreprocessorError(
-            InnerPreprocessorError {
-                error_type:
-                    PreprocessorErrorType::PostfixOperatorNotAllowedInPreprocessorExpression(
-                        error_type,
-                    ),
-                source_vectors: op.source_vectors.clone(),
-            },
-        ))
-    };
-    match op.kind {
-        | PreprocessorTokenType::OpeningParenthesis =>
-            construct_error(ForbiddenPostfixOperator::OpeningParenthesis),
-        | PreprocessorTokenType::PlusPlus =>
-            construct_error(ForbiddenPostfixOperator::PostIncrement),
-        | PreprocessorTokenType::MinusMinus =>
-            construct_error(ForbiddenPostfixOperator::PostDecrement),
-        | PreprocessorTokenType::OpeningSquareBracket =>
-            if op.source_vectors.lengths() == 1 {
-                construct_error(ForbiddenPostfixOperator::ArraySubscript)
-            } else {
-                construct_error(ForbiddenPostfixOperator::DigraphArraySubscript)
-            },
-        | PreprocessorTokenType::ClosingSquareBracket =>
-            if op.source_vectors.lengths() == 1 {
-                construct_error(ForbiddenPostfixOperator::ClosingArraySubscript)
-            } else {
-                construct_error(ForbiddenPostfixOperator::DigraphClosingArraySubscript)
-            },
-        | PreprocessorTokenType::OpeningCurlyBrace =>
-            if op.source_vectors.lengths() == 1 {
-                construct_error(ForbiddenPostfixOperator::CurlyBrace)
-            } else {
-                construct_error(ForbiddenPostfixOperator::DigraphCurlyBrace)
-            },
-        | PreprocessorTokenType::ClosingCurlyBrace =>
-            if op.source_vectors.lengths() == 1 {
-                construct_error(ForbiddenPostfixOperator::ClosingCurlyBrace)
-            } else {
-                construct_error(ForbiddenPostfixOperator::DigraphClosingCurlyBrace)
-            },
-        | _ => Ok(None),
-    }
-}
-
-#[allow(variant_size_differences)]
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum PreprocessorAtomKind {
-    Number(i128),
-    Character(char),
-    Identifier(StringCacheId),
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct PreprocessorAtom {
-    kind: PreprocessorAtomKind,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum PreprocessorSubExpressionKind {
-    Atom(PreprocessorAtom),
-    BinaryOperator {
-        operator: PreprocessorTokenType,
-        left:     usize,
-        right:    usize,
-    },
-    Defined {
-        name: StringCacheId,
-    },
-    UnaryOperator {
-        operator: PreprocessorTokenType,
-        operand:  usize,
-    },
-    TernaryOperator {
-        condition: usize,
-        if_true:   usize,
-        if_false:  usize,
-    },
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct PreprocessorSubExpression {
-    kind: PreprocessorSubExpressionKind,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct PreprocessorExpression {
-    sub_expressions: Vec<PreprocessorSubExpression>,
-}
-
 const PREDEFINED_MACRO_NAMES: [&str; 5] =
     ["__LINE__", "__FILE__", "__DATE__", "__TIME__", "_Pragma"];
 
@@ -414,6 +210,7 @@ pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
     generate_placeholders: bool,
     quote_include_directories: SharedVec<PathBuf>,
     system_include_directories: SharedVec<PathBuf>,
+    expression_parser: PreprocessorExpressionParser,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -432,17 +229,139 @@ pub(crate) struct SavePoint<PrevSavePoint, PrevError> {
     pub(crate) generate_placeholders: bool,
     pub(crate) quote_include_directories: SharedVec<PathBuf>,
     pub(crate) system_include_directories: SharedVec<PathBuf>,
+    pub(crate) expression_parser: PreprocessorExpressionParser,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum PreprocessorExpressionParserState {
     Unary,
     Binary,
 }
 
-struct PreprocessorExpressionParser {
-    operator_stack: Vec<PreprocessorToken>,
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum PreprocessorExpressionOperator {
+    // Unary
+    UnaryPlus,
+    UnaryMinus,
+    BitwiseNot,
+    LogicalNot,
+
+    // Binary
+    BinaryPlus,
+    BinaryMinus,
+    Multiply,
+    Divide,
+    Modulo,
+    LessThan,
+    LessThanEquals,
+    GreaterThan,
+    GreaterThanEquals,
+    Equals,
+    NotEquals,
+    LeftShift,
+    RightShift,
+    BitwiseAnd,
+    BitwiseXor,
+    BitwiseOr,
+    LogicalAnd,
+    LogicalOr,
+    Ternary,
+    Else,
+
+    // Grouping
+    OpeningParenthesis,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum PreprocessorExpressionAssociativity {
+    Left,
+    Right,
+}
+
+impl PreprocessorExpressionOperator {
+    fn precedence(self) -> u32 {
+        match self {
+            // Based on https://en.cppreference.com/w/c/language/operator_precedence.
+            | Self::UnaryPlus | Self::UnaryMinus | Self::BitwiseNot | Self::LogicalNot => 2,
+            | Self::Multiply | Self::Divide | Self::Modulo => 3,
+            | Self::BinaryPlus | Self::BinaryMinus => 4,
+            | Self::LeftShift | Self::RightShift => 5,
+            | Self::LessThan
+            | Self::LessThanEquals
+            | Self::GreaterThan
+            | Self::GreaterThanEquals => 6,
+            | Self::Equals | Self::NotEquals => 7,
+            | Self::BitwiseAnd => 8,
+            | Self::BitwiseXor => 9,
+            | Self::BitwiseOr => 10,
+            | Self::LogicalAnd => 11,
+            | Self::LogicalOr => 12,
+            | Self::Ternary | Self::Else => 13,
+            // OpeningParenthesis is not a normal operator. We only pop it off the stack when we
+            // encounter a closing parenthesis.
+            | Self::OpeningParenthesis => u32::MAX,
+        }
+    }
+
+    fn associativity(self) -> PreprocessorExpressionAssociativity {
+        match self {
+            | Self::Ternary
+            | Self::Else
+            | Self::UnaryPlus
+            | Self::UnaryMinus
+            | Self::BitwiseNot
+            | Self::LogicalNot => PreprocessorExpressionAssociativity::Right,
+            | Self::BinaryMinus
+            | Self::BinaryPlus
+            | Self::Multiply
+            | Self::Divide
+            | Self::Modulo
+            | Self::LeftShift
+            | Self::RightShift
+            | Self::LessThan
+            | Self::LessThanEquals
+            | Self::GreaterThan
+            | Self::GreaterThanEquals
+            | Self::Equals
+            | Self::NotEquals
+            | Self::BitwiseAnd
+            | Self::BitwiseOr
+            | Self::BitwiseXor
+            | Self::LogicalAnd
+            | Self::LogicalOr
+            | Self::OpeningParenthesis => PreprocessorExpressionAssociativity::Left,
+        }
+    }
+
+    fn has_precedence_over(self, other: Self) -> bool {
+        match self.associativity() {
+            | PreprocessorExpressionAssociativity::Left => self.precedence() <= other.precedence(),
+            | PreprocessorExpressionAssociativity::Right => self.precedence() < other.precedence(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct PreprocessorExpressionParser {
+    operator_stack: Vec<PreprocessorExpressionOperator>,
     operand_stack:  Vec<i128>,
     state:          PreprocessorExpressionParserState,
+}
+
+impl PreprocessorExpressionParser {
+    fn new() -> Self {
+        Self {
+            operator_stack: Vec::new(),
+            operand_stack:  Vec::new(),
+            state:          PreprocessorExpressionParserState::Unary,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.operator_stack.clear();
+        self.operand_stack.clear();
+        self.state = PreprocessorExpressionParserState::Unary;
+    }
 }
 
 impl<PrevSavePoint, PrevError> super::SavePoint for SavePoint<PrevSavePoint, PrevError>
@@ -500,6 +419,18 @@ pub(crate) enum IntegerTokenType {
     UnsignedInt(u32),
     UnsignedLong(u64),
     UnsignedLongLong(u64),
+}
+
+impl From<IntegerTokenType> for i128 {
+    fn from(v: IntegerTokenType) -> Self {
+        match v {
+            | IntegerTokenType::UnsignedLong(v) | IntegerTokenType::UnsignedLongLong(v) =>
+                i128::from(v),
+            | IntegerTokenType::Long(v) | IntegerTokenType::LongLong(v) => i128::from(v),
+            | IntegerTokenType::UnsignedInt(v) => i128::from(v),
+            | IntegerTokenType::Int(v) => i128::from(v),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -611,11 +542,23 @@ pub(crate) enum OperatorTokenType {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum StringLikeTokenType {
-    Char(char),
+pub(crate) enum StringTokenType {
     String(StringCacheId),
-    WideChar(char),
     WideString(StringCacheId),
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum CharacterTokenType {
+    Char(char),
+    WideChar(char),
+}
+
+impl From<CharacterTokenType> for char {
+    fn from(v: CharacterTokenType) -> Self {
+        match v {
+            | CharacterTokenType::Char(c) | CharacterTokenType::WideChar(c) => c,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -625,7 +568,8 @@ pub(crate) enum TokenType {
     Identifier,
     Keyword(KeywordTokenType),
     Operator(OperatorTokenType),
-    StringLike(StringLikeTokenType),
+    String(StringTokenType),
+    Character(CharacterTokenType),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -654,22 +598,10 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::InvalidOctalIntegerLiteral
             | PreprocessorErrorType::InvalidDecimalIntegerLiteral
             | PreprocessorErrorType::IntegerLiteralOverflow
-            | PreprocessorErrorType::PrefixOperatorNotAllowedInPreprocessorExpression(..)
-            | PreprocessorErrorType::InfixOperatorNotAllowedInPreprocessorExpression(..)
-            | PreprocessorErrorType::PostfixOperatorNotAllowedInPreprocessorExpression(..)
             | PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression
-            | PreprocessorErrorType::UnterminatedParenthesesInPreprocessorExpression
-            | PreprocessorErrorType::NoExpressionAfterPrefixOperatorInPreprocessorExpression(
-                ..,
-            )
-            | PreprocessorErrorType::NoExpressionAfterQuestionMarkInConditionalExpression
-            | PreprocessorErrorType::NoColonAfterQuestionMarkInConditionalExpression(..)
-            | PreprocessorErrorType::NoExpressionAfterColonInConditionalExpression
-            | PreprocessorErrorType::NoExpressionAfterInfixOperatorInPreprocessorExpression(..)
             | PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
                 ..
             }
-            | PreprocessorErrorType::ExpectedAtomInPreprocessorExpression(..)
             | PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(
                 ..,
             )
@@ -725,9 +657,59 @@ impl GetSeverity for InnerPreprocessorError {
             | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
             | PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument
             | PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch
-            | PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(..) => ErrorSeverity::Error,
+            | PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(..)
+            | PreprocessorErrorType::AddressOfOperatorNotSupportedInPreprocessorExpression
+            | PreprocessorErrorType::DereferenceOperatorNotSupportedInPreprocessorExpression
+            | PreprocessorErrorType::FunctionCallOperatorNotSupportedInPreprocessorExpression
+            | PreprocessorErrorType::BinaryPlusOverflow
+            | PreprocessorErrorType::BinaryMinusOverflow
+            | PreprocessorErrorType::DivideOverflow
+            | PreprocessorErrorType::DivideByZero
+            | PreprocessorErrorType::ModuloOverflow
+            | PreprocessorErrorType::ModuloByZero
+            | PreprocessorErrorType::MultiplyOverflow
+            | PreprocessorErrorType::UnaryMinusOverflow
+            | PreprocessorErrorType::LeftShiftOverflow
+            | PreprocessorErrorType::RightShiftOverflow
+            | PreprocessorErrorType::BitwiseNotWithoutOperand
+            | PreprocessorErrorType::LogicalNotWithoutOperand
+            | PreprocessorErrorType::UnaryMinusWithoutOperand
+            | PreprocessorErrorType::UnaryPlusWithoutOperand
+            | PreprocessorErrorType::BinaryPlusWithoutRhs
+            | PreprocessorErrorType::BinaryMinusWithoutRhs
+            | PreprocessorErrorType::MultiplyWithoutRhs
+            | PreprocessorErrorType::DivideWithoutRhs
+            | PreprocessorErrorType::ModuloWithoutRhs
+            | PreprocessorErrorType::BitwiseOrWithoutRhs
+            | PreprocessorErrorType::BitwiseAndWithoutRhs
+            | PreprocessorErrorType::BitwiseXorWithoutRhs
+            | PreprocessorErrorType::LogicalAndWithoutRhs
+            | PreprocessorErrorType::LogicalOrWithoutRhs
+            | PreprocessorErrorType::LessThanWithoutRhs
+            | PreprocessorErrorType::LessThanEqualsWithoutRhs
+            | PreprocessorErrorType::GreaterThanWithoutRhs
+            | PreprocessorErrorType::GreaterThanEqualsWithoutRhs
+            | PreprocessorErrorType::EqualsWithoutRhs
+            | PreprocessorErrorType::NotEqualsWithoutRhs
+            | PreprocessorErrorType::LeftShiftWithoutRhs
+            | PreprocessorErrorType::RightShiftWithoutRhs
+            | PreprocessorErrorType::TernaryOperatorWithoutRhs
+            | PreprocessorErrorType::TernaryOperatorWithoutMhs
+            | PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression
+            | PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(_)
+            | PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::TildeInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::NumberInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::CharacterInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::ExpectedBinaryOperatorInPreprocessorExpression
+            | PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression
+            | PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(_)
+            | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
+             => ErrorSeverity::Error,
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
-            | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression
+            | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
             | PreprocessorErrorType::FloatLiteralOverflow(..)
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
             | PreprocessorErrorType::ForcedUnsignedPromotion { .. }
@@ -777,51 +759,6 @@ where
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum ForbiddenPrefixOperator {
-    PreIncrement,
-    PreDecrement,
-    Dereference,
-    AddressOf,
-    Hash,
-    DigraphHash,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum ForbiddenInfixOperator {
-    MemberAccess,
-    MemberAccessByPointer,
-    Comma,
-    Assignment,
-    AdditionAssignment,
-    SubtractionAssignment,
-    MultiplicationAssignment,
-    DivisionAssignment,
-    RemainderAssignment,
-    LeftShiftAssignment,
-    RightShiftAssignment,
-    BitwiseAndAssignment,
-    BitwiseXorAssignment,
-    BitwiseOrAssignment,
-    HashHash,
-    DigraphHashHash,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum ForbiddenPostfixOperator {
-    PostIncrement,
-    PostDecrement,
-    ArraySubscript,
-    DigraphArraySubscript,
-    ClosingArraySubscript,
-    DigraphClosingArraySubscript,
-    CurlyBrace,
-    DigraphCurlyBrace,
-    ClosingCurlyBrace,
-    DigraphClosingCurlyBrace,
-    OpeningParenthesis,
-}
-
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum PreprocessorErrorType {
     InvalidHexadecimalFloatLiteral,
@@ -848,17 +785,56 @@ pub(crate) enum PreprocessorErrorType {
     HashMustBeFollowedByIdentifier,
     UnknownDirective,
     MissingOpeningParenthesisInFunctionLikeMacroInvocation,
-    PrefixOperatorNotAllowedInPreprocessorExpression(ForbiddenPrefixOperator),
-    InfixOperatorNotAllowedInPreprocessorExpression(ForbiddenInfixOperator),
-    PostfixOperatorNotAllowedInPreprocessorExpression(ForbiddenPostfixOperator),
     EmptyParenthesesInPreprocessorExpression,
-    UnterminatedParenthesesInPreprocessorExpression,
-    NoExpressionAfterPrefixOperatorInPreprocessorExpression(PreprocessorTokenType),
-    NoExpressionAfterQuestionMarkInConditionalExpression,
-    NoColonAfterQuestionMarkInConditionalExpression(PreprocessorTokenType),
-    NoExpressionAfterColonInConditionalExpression,
-    NoExpressionAfterInfixOperatorInPreprocessorExpression(PreprocessorTokenType),
-    ExpectedAtomInPreprocessorExpression(PreprocessorTokenType),
+    UnaryPlusWithoutOperand,
+    UnaryMinusWithoutOperand,
+    BitwiseNotWithoutOperand,
+    LogicalNotWithoutOperand,
+    BinaryPlusWithoutRhs,
+    BinaryMinusWithoutRhs,
+    MultiplyWithoutRhs,
+    DivideWithoutRhs,
+    ModuloWithoutRhs,
+    LessThanWithoutRhs,
+    LessThanEqualsWithoutRhs,
+    GreaterThanWithoutRhs,
+    GreaterThanEqualsWithoutRhs,
+    EqualsWithoutRhs,
+    NotEqualsWithoutRhs,
+    LeftShiftWithoutRhs,
+    RightShiftWithoutRhs,
+    BitwiseAndWithoutRhs,
+    BitwiseXorWithoutRhs,
+    BitwiseOrWithoutRhs,
+    LogicalAndWithoutRhs,
+    LogicalOrWithoutRhs,
+    TernaryOperatorWithoutMhs,
+    TernaryOperatorWithoutRhs,
+    BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(PreprocessorExpressionOperator),
+    DivideByZero,
+    ModuloByZero,
+    UnaryMinusOverflow,
+    BinaryPlusOverflow,
+    BinaryMinusOverflow,
+    MultiplyOverflow,
+    DivideOverflow,
+    ModuloOverflow,
+    LeftShiftOverflow,
+    RightShiftOverflow,
+    UnterminatedOpeningParenthesisInPreprocessorExpression,
+    TildeInsteadOfBinaryOperatorInPreprocessorExpression,
+    ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression,
+    FunctionCallOperatorNotSupportedInPreprocessorExpression,
+    DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression,
+    AddressOfOperatorNotSupportedInPreprocessorExpression,
+    DereferenceOperatorNotSupportedInPreprocessorExpression,
+    ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(PreprocessorExpressionOperator),
+    NumberInsteadOfBinaryOperatorInPreprocessorExpression,
+    IdentifierInsteadOfBinaryOperatorInPreprocessorExpression,
+    CharacterInsteadOfBinaryOperatorInPreprocessorExpression,
+    UnexpectedTokenInPreprocessorExpression(PreprocessorTokenType),
+    FloatInsteadOfIntegerInPreprocessorExpression,
+    ExpectedBinaryOperatorInPreprocessorExpression,
     MissingOpeningParenthesisOrIdentifierInDefinedDirective(PreprocessorTokenType),
     MissingIdentifierInDefinedDirective(PreprocessorTokenType),
     MissingClosingParenthesisInDefinedDirective(PreprocessorTokenType),
@@ -873,7 +849,7 @@ pub(crate) enum PreprocessorErrorType {
     ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
     ExpectedIdentifierInDefineDirective(PreprocessorTokenType),
     RedefinitionOfBuiltInMacro(String),
-    UndefinedIdentifierInPreprocessorExpression,
+    UndefinedIdentifierInPreprocessorExpression(String),
     ExpectedIncludeStringOrAngleBracketString(PreprocessorTokenType),
     UnexpectedEndOfInput(&'static str),
     WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
@@ -1051,65 +1027,6 @@ impl Display for PreprocessorErrorType {
                      'error' | 'pragma'"
                 )
             },
-            | Self::PrefixOperatorNotAllowedInPreprocessorExpression(forbidden_unary_operator) => {
-                write!(
-                    f,
-                    "Prefix operator '{}' is not allowed in preprocessor constant expressions!",
-                    match forbidden_unary_operator {
-                        | ForbiddenPrefixOperator::PreIncrement => "++",
-                        | ForbiddenPrefixOperator::PreDecrement => "--",
-                        | ForbiddenPrefixOperator::Dereference => "*",
-                        | ForbiddenPrefixOperator::AddressOf => "&",
-                        | ForbiddenPrefixOperator::Hash => "#",
-                        | ForbiddenPrefixOperator::DigraphHash => "%:",
-                    }
-                )
-            },
-            | Self::InfixOperatorNotAllowedInPreprocessorExpression(forbidden_binary_operator) => {
-                write!(
-                    f,
-                    "Infix operator '{}' is not allowed in preprocessor constant expressions!",
-                    match forbidden_binary_operator {
-                        | ForbiddenInfixOperator::MemberAccess => ".",
-                        | ForbiddenInfixOperator::MemberAccessByPointer => "->",
-                        | ForbiddenInfixOperator::Comma => ",",
-                        | ForbiddenInfixOperator::Assignment => "=",
-                        | ForbiddenInfixOperator::AdditionAssignment => "+=",
-                        | ForbiddenInfixOperator::SubtractionAssignment => "-=",
-                        | ForbiddenInfixOperator::MultiplicationAssignment => "*=",
-                        | ForbiddenInfixOperator::DivisionAssignment => "/=",
-                        | ForbiddenInfixOperator::RemainderAssignment => "%=",
-                        | ForbiddenInfixOperator::LeftShiftAssignment => "<<=",
-                        | ForbiddenInfixOperator::RightShiftAssignment => ">>=",
-                        | ForbiddenInfixOperator::BitwiseAndAssignment => "&=",
-                        | ForbiddenInfixOperator::BitwiseXorAssignment => "^=",
-                        | ForbiddenInfixOperator::BitwiseOrAssignment => "|=",
-                        | ForbiddenInfixOperator::HashHash => "##",
-                        | ForbiddenInfixOperator::DigraphHashHash => "%:%:",
-                    }
-                )
-            },
-            | Self::PostfixOperatorNotAllowedInPreprocessorExpression(
-                forbidden_postfix_operator,
-            ) => {
-                write!(
-                    f,
-                    "Postfix operator '{}' is not allowed in preprocessor constant expressions!",
-                    match forbidden_postfix_operator {
-                        | ForbiddenPostfixOperator::OpeningParenthesis => "(",
-                        | ForbiddenPostfixOperator::PostIncrement => "++",
-                        | ForbiddenPostfixOperator::PostDecrement => "--",
-                        | ForbiddenPostfixOperator::ArraySubscript => "[",
-                        | ForbiddenPostfixOperator::DigraphArraySubscript => "<:",
-                        | ForbiddenPostfixOperator::ClosingArraySubscript => "]",
-                        | ForbiddenPostfixOperator::DigraphClosingArraySubscript => ":>",
-                        | ForbiddenPostfixOperator::CurlyBrace => "{",
-                        | ForbiddenPostfixOperator::DigraphCurlyBrace => "<%",
-                        | ForbiddenPostfixOperator::ClosingCurlyBrace => "}",
-                        | ForbiddenPostfixOperator::DigraphClosingCurlyBrace => "%>",
-                    }
-                )
-            },
             | Self::EmptyParenthesesInPreprocessorExpression => {
                 write!(
                     f,
@@ -1117,105 +1034,395 @@ impl Display for PreprocessorErrorType {
                      are not allowed in preprocessor constant expressions!"
                 )
             },
-            | Self::UnterminatedParenthesesInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Unterminated parentheses in preprocessor constant expression!"
-                )
-            },
-            | Self::NoExpressionAfterPrefixOperatorInPreprocessorExpression(operator) => {
-                write!(
-                    f,
-                    "No expression after prefix operator '{}' in preprocessor constant expression!",
-                    match operator {
-                        | PreprocessorTokenType::Minus => "-",
-                        | PreprocessorTokenType::Plus => "+",
-                        | PreprocessorTokenType::ExclamationMark => "!",
-                        | PreprocessorTokenType::Tilde => "~",
-                        | _ => unreachable!(),
-                    }
-                )
-            },
-
-            | Self::NoExpressionAfterQuestionMarkInConditionalExpression => {
-                write!(
-                    f,
-                    "No expression after '?' in conditional expression in preprocessor constant \
-                     expression!"
-                )
-            },
-
-            | Self::NoColonAfterQuestionMarkInConditionalExpression(kind) => {
-                write!(
-                    f,
-                    "No ':' after '?' in conditional expression in preprocessor constant \
-                     expression! Found instead {kind:#?}"
-                )
-            },
-
-            | Self::NoExpressionAfterColonInConditionalExpression => {
-                write!(
-                    f,
-                    "No expression after ':' in conditional expression in preprocessor constant \
-                     expression!"
-                )
-            },
-
-            | Self::NoExpressionAfterInfixOperatorInPreprocessorExpression(operator) => {
-                write!(
-                    f,
-                    "No expression after infix operator '{}' in preprocessor constant expression!",
-                    match operator {
-                        | PreprocessorTokenType::HashHash => "##",
-                        | PreprocessorTokenType::Period => ".",
-                        | PreprocessorTokenType::Arrow => "->",
-                        | PreprocessorTokenType::Comma => ",",
-                        | PreprocessorTokenType::Equals => "=",
-                        | PreprocessorTokenType::PlusEquals => "+=",
-                        | PreprocessorTokenType::MinusEquals => "-=",
-                        | PreprocessorTokenType::AsteriskEquals => "*=",
-                        | PreprocessorTokenType::ForwardSlashEquals => "/=",
-                        | PreprocessorTokenType::PercentEquals => "%=",
-                        | PreprocessorTokenType::LessThanLessThanEquals => "<<=",
-                        | PreprocessorTokenType::GreaterThanGreaterThanEquals => ">>=",
-                        | PreprocessorTokenType::AmpersandEquals => "&=",
-                        | PreprocessorTokenType::CaretEquals => "^=",
-                        | PreprocessorTokenType::PipeEquals => "|=",
-                        | PreprocessorTokenType::Asterisk => "*",
-                        | PreprocessorTokenType::ForwardSlash => "/",
-                        | PreprocessorTokenType::Percent => "%",
-                        | PreprocessorTokenType::Plus => "+",
-                        | PreprocessorTokenType::Minus => "-",
-                        | PreprocessorTokenType::LessThanLessThan => "<<",
-                        | PreprocessorTokenType::GreaterThanGreaterThan => ">>",
-                        | PreprocessorTokenType::LessThan => "<",
-                        | PreprocessorTokenType::LessThanEquals => "<=",
-                        | PreprocessorTokenType::GreaterThan => ">",
-                        | PreprocessorTokenType::GreaterThanEquals => ">=",
-                        | PreprocessorTokenType::EqualsEquals => "==",
-                        | PreprocessorTokenType::ExclamationMarkEquals => "!=",
-                        | PreprocessorTokenType::Ampersand => "&",
-                        | PreprocessorTokenType::Caret => "^",
-                        | PreprocessorTokenType::Pipe => "|",
-                        | PreprocessorTokenType::AmpersandAmpersand => "&&",
-                        | PreprocessorTokenType::PipePipe => "||",
-                        | PreprocessorTokenType::QuestionMark => "?",
-                        | _ => unreachable!(),
-                    }
-                )
-            },
-            | Self::ExpectedAtomInPreprocessorExpression(tt) => {
-                write!(
-                    f,
-                    "Expected atom in preprocessor constant expression! An atom is either an \
-                     integer literal, or a character literal. Found instead {tt:#?}"
-                )
-            },
             | Self::MissingOpeningParenthesisOrIdentifierInDefinedDirective(tt) => {
                 write!(
                     f,
                     "Missing opening parenthesis or identifier in 'defined' directive! Found \
                      instead {tt:#?}"
+                )
+            },
+            | Self::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(operator) => {
+                write!(
+                    f,
+                    "Expected right-hand side of binary operator '{}' in preprocessor constant \
+                     expression!",
+                    match operator {
+                        | PreprocessorExpressionOperator::BinaryPlus => "+",
+                        | PreprocessorExpressionOperator::BinaryMinus => "-",
+                        | PreprocessorExpressionOperator::Multiply => "*",
+                        | PreprocessorExpressionOperator::Divide => "/",
+                        | PreprocessorExpressionOperator::Modulo => "%",
+                        | PreprocessorExpressionOperator::LeftShift => "<<",
+                        | PreprocessorExpressionOperator::RightShift => ">>",
+                        | PreprocessorExpressionOperator::LessThan => "<",
+                        | PreprocessorExpressionOperator::LessThanEquals => "<=",
+                        | PreprocessorExpressionOperator::GreaterThan => ">",
+                        | PreprocessorExpressionOperator::GreaterThanEquals => ">=",
+                        | PreprocessorExpressionOperator::Equals => "==",
+                        | PreprocessorExpressionOperator::NotEquals => "!=",
+                        | PreprocessorExpressionOperator::BitwiseAnd => "&",
+                        | PreprocessorExpressionOperator::BitwiseXor => "^",
+                        | PreprocessorExpressionOperator::BitwiseOr => "|",
+                        | PreprocessorExpressionOperator::LogicalAnd => "&&",
+                        | PreprocessorExpressionOperator::LogicalOr => "||",
+                        | PreprocessorExpressionOperator::Ternary => "?",
+                        | PreprocessorExpressionOperator::Else => ":",
+                        | _ => unreachable!(),
+                    }
+                )
+            },
+            | Self::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Exclamation mark '!' instead of binary operator in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::TildeInsteadOfBinaryOperatorInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Tilde '~' instead of binary operator in preprocessor constant expression!"
+                )
+            },
+            | Self::NumberInsteadOfBinaryOperatorInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Number instead of binary operator in preprocessor constant expression!"
+                )
+            },
+            | Self::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Identifier instead of binary operator in preprocessor constant expression!"
+                )
+            },
+            | Self::CharacterInsteadOfBinaryOperatorInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Character instead of binary operator in preprocessor constant expression!"
+                )
+            },
+            | Self::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression => {
+                write!(
+                    f,
+                    "'defined' operator instead of binary operator in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::ExpectedBinaryOperatorInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Expected binary operator in preprocessor constant expression!"
+                )
+            },
+            | Self::UnterminatedOpeningParenthesisInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Unterminated opening parenthesis in preprocessor constant expression!"
+                )
+            },
+            | Self::AddressOfOperatorNotSupportedInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Address-of operator '&' is not supported in preprocessor constant \
+                     expressions!"
+                )
+            },
+            | Self::DereferenceOperatorNotSupportedInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Dereference operator '*' is not supported in preprocessor constant \
+                     expressions!"
+                )
+            },
+            | Self::FunctionCallOperatorNotSupportedInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Function call operator '()' is not supported in preprocessor constant \
+                     expressions!"
+                )
+            },
+            | Self::BinaryPlusOverflow => {
+                write!(
+                    f,
+                    "Overflow while trying to add two operands in preprocessor constant \
+                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
+                     expressions."
+                )
+            },
+            | Self::BinaryMinusOverflow => {
+                write!(
+                    f,
+                    "Overflow while trying to subtract two operands in preprocessor constant \
+                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
+                     expressions."
+                )
+            },
+            | Self::DivideOverflow => {
+                write!(
+                    f,
+                    "Overflow while trying to divide two operands in preprocessor constant \
+                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
+                     expressions."
+                )
+            },
+            | Self::DivideByZero => {
+                write!(
+                    f,
+                    "Division by zero in preprocessor constant expression! Division by zero is \
+                     not allowed in preprocessor constant expressions."
+                )
+            },
+            | Self::ModuloOverflow => {
+                write!(
+                    f,
+                    "Overflow while trying to calculate the remainder of two operands in \
+                     preprocessor constant expression! BCC uses 128-bit integers for evaluating \
+                     preprocessor expressions."
+                )
+            },
+            | Self::ModuloByZero => {
+                write!(
+                    f,
+                    "Modulo by zero in preprocessor constant expression! Modulo by zero is not \
+                     allowed in preprocessor constant expressions."
+                )
+            },
+            | Self::MultiplyOverflow => {
+                write!(
+                    f,
+                    "Overflow while trying to multiply two operands in preprocessor constant \
+                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
+                     expressions."
+                )
+            },
+            | Self::UnaryMinusOverflow => {
+                write!(
+                    f,
+                    "Overflow while trying to negate an operand in preprocessor constant \
+                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
+                     expressions."
+                )
+            },
+            | Self::LeftShiftOverflow => {
+                write!(
+                    f,
+                    "Overflow while trying to left shift an operand in preprocessor constant \
+                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
+                     expressions."
+                )
+            },
+            | Self::RightShiftOverflow => {
+                write!(
+                    f,
+                    "Overflow while trying to right shift an operand in preprocessor constant \
+                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
+                     expressions."
+                )
+            },
+            | Self::BitwiseNotWithoutOperand => {
+                write!(
+                    f,
+                    "Bitwise NOT operator '~' without operand in preprocessor constant expression!"
+                )
+            },
+            | Self::LogicalNotWithoutOperand => {
+                write!(
+                    f,
+                    "Logical NOT operator '!' without operand in preprocessor constant expression!"
+                )
+            },
+            | Self::UnaryMinusWithoutOperand => {
+                write!(
+                    f,
+                    "Unary minus operator '-' without operand in preprocessor constant expression!"
+                )
+            },
+            | Self::UnaryPlusWithoutOperand => {
+                write!(
+                    f,
+                    "Unary plus operator '+' without operand in preprocessor constant expression!"
+                )
+            },
+            | Self::BinaryPlusWithoutRhs => {
+                write!(
+                    f,
+                    "Binary plus operator '+' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::BinaryMinusWithoutRhs => {
+                write!(
+                    f,
+                    "Binary minus operator '-' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::MultiplyWithoutRhs => {
+                write!(
+                    f,
+                    "Multiply operator '*' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::DivideWithoutRhs => {
+                write!(
+                    f,
+                    "Divide operator '/' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::ModuloWithoutRhs => {
+                write!(
+                    f,
+                    "Modulo operator '%' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::LessThanWithoutRhs => {
+                write!(
+                    f,
+                    "Less-than operator '<' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::LessThanEqualsWithoutRhs => {
+                write!(
+                    f,
+                    "Less-than-or-equals operator '<=' without right-hand side in preprocessor \
+                     constant expression!"
+                )
+            },
+            | Self::GreaterThanWithoutRhs => {
+                write!(
+                    f,
+                    "Greater-than operator '>' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::GreaterThanEqualsWithoutRhs => {
+                write!(
+                    f,
+                    "Greater-than-or-equals operator '>=' without right-hand side in preprocessor \
+                     constant expression!"
+                )
+            },
+            | Self::EqualsWithoutRhs => {
+                write!(
+                    f,
+                    "Equals operator '==' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::NotEqualsWithoutRhs => {
+                write!(
+                    f,
+                    "Not-equals operator '!=' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::LeftShiftWithoutRhs => {
+                write!(
+                    f,
+                    "Left-shift operator '<<' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::RightShiftWithoutRhs => {
+                write!(
+                    f,
+                    "Right-shift operator '>>' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::BitwiseAndWithoutRhs => {
+                write!(
+                    f,
+                    "Bitwise AND operator '&' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::BitwiseXorWithoutRhs => {
+                write!(
+                    f,
+                    "Bitwise XOR operator '^' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::BitwiseOrWithoutRhs => {
+                write!(
+                    f,
+                    "Bitwise OR operator '|' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::LogicalAndWithoutRhs => {
+                write!(
+                    f,
+                    "Logical AND operator '&&' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::LogicalOrWithoutRhs => {
+                write!(
+                    f,
+                    "Logical OR operator '||' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::TernaryOperatorWithoutMhs => {
+                write!(
+                    f,
+                    "Ternary operator '?' without middle-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::TernaryOperatorWithoutRhs => {
+                write!(
+                    f,
+                    "Ternary operator ':' without right-hand side in preprocessor constant \
+                     expression!"
+                )
+            },
+            | Self::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(operator) => {
+                write!(
+                    f,
+                    "Binary operator '{}' instead of unary expression in preprocessor constant \
+                     expression!",
+                    match operator {
+                        | PreprocessorExpressionOperator::Multiply => "*",
+                        | PreprocessorExpressionOperator::Divide => "/",
+                        | PreprocessorExpressionOperator::Modulo => "%",
+                        | PreprocessorExpressionOperator::LessThan => "<",
+                        | PreprocessorExpressionOperator::LessThanEquals => "<=",
+                        | PreprocessorExpressionOperator::GreaterThan => ">",
+                        | PreprocessorExpressionOperator::GreaterThanEquals => ">=",
+                        | PreprocessorExpressionOperator::Equals => "==",
+                        | PreprocessorExpressionOperator::NotEquals => "!=",
+                        | PreprocessorExpressionOperator::LeftShift => "<<",
+                        | PreprocessorExpressionOperator::RightShift => ">>",
+                        | PreprocessorExpressionOperator::BitwiseAnd => "&",
+                        | PreprocessorExpressionOperator::BitwiseXor => "^",
+                        | PreprocessorExpressionOperator::BitwiseOr => "|",
+                        | PreprocessorExpressionOperator::LogicalAnd => "&&",
+                        | PreprocessorExpressionOperator::LogicalOr => "||",
+                        | PreprocessorExpressionOperator::Ternary => "?",
+                        | _ => unreachable!(),
+                    }
+                )
+            },
+            | Self::FloatInsteadOfIntegerInPreprocessorExpression => {
+                write!(
+                    f,
+                    "Floating point literal instead of integer literal in preprocessor constant \
+                     expression! Floating point literals are not allowed in preprocessor constant \
+                     expressions."
+                )
+            },
+            | Self::UnexpectedTokenInPreprocessorExpression(tt) => {
+                write!(
+                    f,
+                    "Unexpected token {tt:#?} in preprocessor constant expression!",
                 )
             },
             | Self::MissingIdentifierInDefinedDirective(tt) => {
@@ -1312,11 +1519,11 @@ impl Display for PreprocessorErrorType {
             | Self::UnexpectedEndOfInput(message) => {
                 write!(f, "Unexpected end of input while {message}!")
             },
-            | Self::UndefinedIdentifierInPreprocessorExpression => {
+            | Self::UndefinedIdentifierInPreprocessorExpression(ident) => {
                 write!(
                     f,
-                    "Undefined identifier in preprocessor constant expression! Will be treated as \
-                     if it had a value of 0."
+                    "Undefined identifier '{ident}' in preprocessor constant expression! Will be \
+                     treated as if it had a value of 0."
                 )
             },
             | Self::HeaderNotFound => {
@@ -1685,6 +1892,7 @@ impl Preprocessor<Ppt, Ppte, Pptsp> {
             generate_placeholders: false,
             quote_include_directories,
             system_include_directories,
+            expression_parser: PreprocessorExpressionParser::new(),
         }
     }
 }
@@ -1994,6 +2202,12 @@ where
         }
     }
 
+    fn should_ignore_whitespace(&self) -> bool {
+        !self.should_tokenize_whitespace
+            || self.last_preprocessor_token.as_ref().map(|t| t.kind)
+                == Some(PreprocessorTokenType::Whitespace)
+    }
+
     fn next_preprocessor_token_no_expand(
         &mut self,
     ) -> Option<Result<PreprocessorToken, PreprocessorTokenizerError<PrevPrevError>>> {
@@ -2008,13 +2222,11 @@ where
                 },
                 | Some(Ok(token))
                     if token.kind == PreprocessorTokenType::Whitespace
-                        && (!self.should_tokenize_whitespace
-                            || self.last_preprocessor_token.as_ref().map(|t| t.kind)
-                                == Some(PreprocessorTokenType::Whitespace)) =>
+                        && self.should_ignore_whitespace() =>
                 {
                     continue 'base;
                 },
-                | Some(Ok(token)) => {
+                | Some(Ok(mut token)) => {
                     match self.tokenizer_stack.last_mut().unwrap() {
                         | TokenizerFrame {
                             frame_type:
@@ -2067,7 +2279,14 @@ where
                                     }));
                                 }
                                 continue 'base;
-                            };
+                            }
+                            if token.kind == PreprocessorTokenType::Newline {
+                                if self.should_ignore_whitespace() {
+                                    continue 'base;
+                                }
+                                token.kind = PreprocessorTokenType::Whitespace;
+                                token.contents = self.insert_into_cache(" ");
+                            }
                         },
                         | TokenizerFrame {
                             frame_type: TokenizerFrameType::SourceFile,
@@ -3093,6 +3312,44 @@ where
         }
     }
 
+    fn parse_string(
+        &mut self,
+        token: &PreprocessorToken,
+    ) -> Result<StringTokenType, PreprocessorError<Prev::Error>> {
+        self.eval_escape_sequences(token.clone()).map(|contents| {
+            let cached_contents = self.insert_into_cache(&contents);
+            if get_from_cache!(self, token.contents).starts_with('L') {
+                StringTokenType::WideString(cached_contents)
+            } else {
+                StringTokenType::String(cached_contents)
+            }
+        })
+    }
+
+    fn parse_character(
+        &mut self,
+        token: &PreprocessorToken,
+    ) -> Result<CharacterTokenType, PreprocessorError<Prev::Error>> {
+        self.eval_escape_sequences(token.clone())
+            .and_then(|contents| {
+                if contents.chars().take(2).count() != 1 {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
+                            source_vectors: token.source_vectors.clone(),
+                        },
+                    ));
+                }
+                let char = contents.chars().next().unwrap();
+                if get_from_cache!(self, token.contents).starts_with('L') {
+                    Ok(CharacterTokenType::WideChar(char))
+                } else {
+                    Ok(CharacterTokenType::Char(char))
+                }
+            })
+    }
+
     fn map_preprocessor_token(
         &mut self,
         token: PreprocessorToken,
@@ -3118,7 +3375,7 @@ where
                     }
                 },
             | PreprocessorTokenType::GeneratedString => Ok(Token {
-                kind:           TokenType::StringLike(StringLikeTokenType::String(token.contents)),
+                kind:           TokenType::String(StringTokenType::String(token.contents)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             }),
@@ -3127,50 +3384,21 @@ where
                 let contents = &get_from_cache!(self, token.contents)[1..].to_token_string();
                 let contents = self.insert_into_cache(contents);
                 Ok(Token {
-                    kind: TokenType::StringLike(StringLikeTokenType::WideString(contents)),
+                    kind: TokenType::String(StringTokenType::WideString(contents)),
                     contents,
                     source_vectors: token.source_vectors,
                 })
             },
-            | PreprocessorTokenType::String =>
-                self.eval_escape_sequences(token.clone()).map(|contents| {
-                    let cached_contents = self.insert_into_cache(&contents);
-                    let string_like_token_type =
-                        if get_from_cache!(self, token.contents).starts_with('L') {
-                            StringLikeTokenType::WideString(cached_contents)
-                        } else {
-                            StringLikeTokenType::String(cached_contents)
-                        };
-                    Token {
-                        kind:           TokenType::StringLike(string_like_token_type),
-                        contents:       token.contents,
-                        source_vectors: token.source_vectors.clone(),
-                    }
-                }),
-            | PreprocessorTokenType::Character =>
-                self.eval_escape_sequences(token.clone()).map(|contents| {
-                    if contents.chars().take(2).count() != 1 {
-                        self.pending_results.push_back(Err(
-                            PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
-                                source_vectors: token.source_vectors.clone(),
-                            }),
-                        ));
-                    }
-                    let char = contents.chars().next().unwrap();
-                    let string_like_token_type =
-                        if get_from_cache!(self, token.contents).starts_with('L') {
-                            StringLikeTokenType::WideChar(char)
-                        } else {
-                            StringLikeTokenType::Char(char)
-                        };
-                    Token {
-                        kind:           TokenType::StringLike(string_like_token_type),
-                        contents:       token.contents,
-                        source_vectors: token.source_vectors,
-                    }
-                }),
+            | PreprocessorTokenType::String => self.parse_string(&token).map(|kind| Token {
+                kind:           TokenType::String(kind),
+                contents:       token.contents,
+                source_vectors: token.source_vectors,
+            }),
+            | PreprocessorTokenType::Character => self.parse_character(&token).map(|kind| Token {
+                kind:           TokenType::Character(kind),
+                contents:       token.contents,
+                source_vectors: token.source_vectors,
+            }),
             | PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined =>
                 Ok(Self::build_token(
                     token.clone(),
@@ -3474,7 +3702,6 @@ where
 
         let mut synthetic_contents = String::new();
         let mut paren_depth = 1;
-        let mut last_was_whitespace = false;
         loop {
             let token = loop {
                 match self.previous_phase.next() {
@@ -3497,25 +3724,11 @@ where
                     | Some(Ok(t)) => break t,
                 }
             };
-            if matches!(
-                token.kind,
-                PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
-            ) {
-                if last_was_whitespace {
-                    continue;
-                }
-                last_was_whitespace = true;
-            } else {
-                last_was_whitespace = false;
-            }
             match self.update_macro_argument_paren_depth(&token, argument_id, paren_depth) {
                 | Some(depth) => paren_depth = depth,
                 | None => break,
             }
-            synthetic_contents.push_str(match token.kind {
-                | PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline => " ",
-                | _ => get_from_cache!(self, token.contents),
-            });
+            synthetic_contents.push_str(get_from_cache!(self, token.contents));
         }
         self.previous_phase.restore(save_point);
         self.should_tokenize_whitespace = false;
@@ -3594,510 +3807,941 @@ where
         }
     }
 
-    fn eval_preprocessor_expression(&mut self, expression: &PreprocessorExpression) -> bool {
-        let result = self.eval_preprocessor_sub_expression(
-            &expression.sub_expressions,
-            expression.sub_expressions.len() - 1,
+    fn map_operator(&mut self, operator: &PreprocessorToken) -> PreprocessorExpressionOperator {
+        let state = replace(
+            &mut self.expression_parser.state,
+            PreprocessorExpressionParserState::Unary,
         );
-        println!("Main sub expression returned {result}");
-        result != 0
-    }
-
-    fn eval_preprocessor_sub_expression(
-        &mut self,
-        sub_expressions: &[PreprocessorSubExpression],
-        current_index: usize,
-    ) -> i128 {
-        match &sub_expressions[current_index].kind {
-            | PreprocessorSubExpressionKind::Atom(atom) => match atom.kind {
-                | PreprocessorAtomKind::Character(c) => c as i128,
-                | PreprocessorAtomKind::Number(i) => i,
-                | PreprocessorAtomKind::Identifier(_) => 0,
-            },
-            | PreprocessorSubExpressionKind::Defined { name } =>
-                i128::from(self.macro_definitions.contains_key(name)),
-            | PreprocessorSubExpressionKind::UnaryOperator { operator, operand } => {
-                let operand = self.eval_preprocessor_sub_expression(sub_expressions, *operand);
-                match operator {
-                    | PreprocessorTokenType::Minus => -operand,
-                    | PreprocessorTokenType::Plus => operand,
-                    | PreprocessorTokenType::ExclamationMark => i128::from(operand == 0),
-                    | PreprocessorTokenType::Tilde => !operand,
-                    | _ => unreachable!(),
-                }
-            },
-            | PreprocessorSubExpressionKind::BinaryOperator {
-                operator,
-                left,
-                right,
-            } => {
-                let left = self.eval_preprocessor_sub_expression(sub_expressions, *left);
-                let right = self.eval_preprocessor_sub_expression(sub_expressions, *right);
-                match operator {
-                    | PreprocessorTokenType::Asterisk => left * right,
-                    | PreprocessorTokenType::ForwardSlash => left / right,
-                    | PreprocessorTokenType::Percent => left % right,
-                    | PreprocessorTokenType::Plus => left + right,
-                    | PreprocessorTokenType::Minus => left - right,
-                    | PreprocessorTokenType::LessThanLessThan => left << right,
-                    | PreprocessorTokenType::GreaterThanGreaterThan => left >> right,
-                    | PreprocessorTokenType::LessThan => i128::from(left < right),
-                    | PreprocessorTokenType::LessThanEquals => i128::from(left <= right),
-                    | PreprocessorTokenType::GreaterThan => i128::from(left > right),
-                    | PreprocessorTokenType::GreaterThanEquals => i128::from(left >= right),
-                    | PreprocessorTokenType::EqualsEquals => i128::from(left == right),
-                    | PreprocessorTokenType::ExclamationMarkEquals => i128::from(left != right),
-                    | PreprocessorTokenType::Ampersand => left & right,
-                    | PreprocessorTokenType::Caret => left ^ right,
-                    | PreprocessorTokenType::Pipe => left | right,
-                    | PreprocessorTokenType::AmpersandAmpersand =>
-                        i128::from(left != 0 && right != 0),
-                    | PreprocessorTokenType::PipePipe => i128::from(left != 0 || right != 0),
-                    | _ => unreachable!(),
-                }
-            },
-            | PreprocessorSubExpressionKind::TernaryOperator {
-                condition,
-                if_true,
-                if_false,
-            } => {
-                let condition = self.eval_preprocessor_sub_expression(sub_expressions, *condition);
-                if condition != 0 {
-                    self.eval_preprocessor_sub_expression(sub_expressions, *if_true)
+        match operator.kind {
+            | PreprocessorTokenType::Plus =>
+                if state == PreprocessorExpressionParserState::Unary {
+                    PreprocessorExpressionOperator::UnaryPlus
                 } else {
-                    self.eval_preprocessor_sub_expression(sub_expressions, *if_false)
-                }
-            },
-        }
-    }
-
-    fn parse_preprocessor_expression(
-        &mut self,
-        directive: &PreprocessorToken,
-        no_condition_error_type: PreprocessorErrorType,
-    ) -> Result<PreprocessorExpression, PreprocessorError<Prev::Error>> {
-        let mut expression = PreprocessorExpression {
-            sub_expressions: Vec::new(),
-        };
-        match self.parse_preprocessor_sub_expression(u32::MAX, &mut expression.sub_expressions) {
-            | Ok(Some(sub_expression)) => expression.sub_expressions.push(sub_expression),
-            | Ok(None) =>
-                return Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     no_condition_error_type,
-                        source_vectors: directive.source_vectors.clone(),
-                    },
-                )),
-            | Err(e) => return Err(e),
-        }
-        Ok(expression)
-    }
-
-    #[allow(clippy::similar_names)]
-    fn parse_preprocessor_sub_expression(
-        &mut self,
-        max_binding_power: u32,
-        sub_expressions: &mut Vec<PreprocessorSubExpression>,
-    ) -> Result<Option<PreprocessorSubExpression>, PreprocessorError<Prev::Error>> {
-        let lhs = 'lhs: loop {
-            match self.next_preprocessor_token() {
-                | Some(Err(e)) => self.pending_results.push_back(Err(e)),
-                | Some(Ok(token)) => match token.kind {
-                    | PreprocessorTokenType::OpeningParenthesis => {
-                        let Some(lhs) =
-                            self.parse_preprocessor_sub_expression(u32::MAX, sub_expressions)?
-                        else {
-                            return Err(PreprocessorError::InnerPreprocessorError(
-                                    InnerPreprocessorError {
-                                        error_type:
-                                            PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression,
-                                        source_vectors: token.source_vectors,
-                                    },
-                                ));
-                        };
-                        let save_point = self.previous_phase.save();
-                        let position = self.current_position();
-                        loop {
-                            match self.next_preprocessor_token() {
-                                | Some(Err(e)) => self.pending_results.push_back(Err(e)),
-                                | Some(Ok(token))
-                                    if token.kind == PreprocessorTokenType::ClosingParenthesis =>
-                                    break 'lhs lhs,
-                                | Some(Ok(token)) =>
-                                    return Err(self.handle_unterminated_parens(
-                                        position,
-                                        save_point,
-                                        token.contents,
-                                    )),
-                                | None => {
-                                    let contents = self.insert_into_cache("EOF");
-                                    return Err(self.handle_unterminated_parens(
-                                        position, save_point, contents,
-                                    ));
-                                },
-                            }
-                        }
-                    },
-                    | PreprocessorTokenType::Newline => return Ok(None),
-                    | _ => {
-                        let Some(((), r_bp)) = prefix_binding_power(&token)? else {
-                            let atom = self.parse_preprocessor_atom(token.clone())?;
-                            break PreprocessorSubExpression {
-                                kind: PreprocessorSubExpressionKind::Atom(atom),
-                            };
-                        };
-                        if token.kind == PreprocessorTokenType::Defined {
-                            let position = self.current_position();
-                            let name_or_paren = loop {
-                                match self.next_preprocessor_token_no_expand() {
-                                | Some(Err(e)) => {self.pending_results.push_back(Err(PreprocessorError::PreviousPhaseError(e))); continue},
-                                | Some(Ok(token @ PreprocessorToken {kind: PreprocessorTokenType::OpeningParenthesis |PreprocessorTokenType::Identifier, ..})) =>
-                                    break token,
-                                | Some(Ok(token)) => {
-                                    return Err(PreprocessorError::InnerPreprocessorError(
-                                        InnerPreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(token.kind),
-                                            source_vectors: token.source_vectors,
-                                        },
-                                    ))
-                                },
-                                | None => {
-                                    return Err(PreprocessorError::InnerPreprocessorError(
-                                        InnerPreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::UnexpectedEndOfInput("parsing defined directive"),
-                                            source_vectors: SourceVectors::from(
-                                                SourceVector {
-                                                    position,
-                                                    length: 0,
-                                                }
-                                            ),
-                                        },
-                                    ));
-                                },
-                            }
-                            };
-                            if name_or_paren.kind == PreprocessorTokenType::Identifier {
-                                let name = name_or_paren.contents;
-                                let kind = PreprocessorSubExpressionKind::Defined { name };
-                                return Ok(Some(PreprocessorSubExpression { kind }));
-                            }
-                            let position = self.current_position();
-                            let name = loop {
-                                match self.next_preprocessor_token_no_expand() {
-                                | Some(Err(e)) => {self.pending_results.push_back(Err(PreprocessorError::PreviousPhaseError(e))); continue},
-                                | Some(Ok(token @ PreprocessorToken {kind: PreprocessorTokenType::Identifier, ..})) =>
-                                    break token,
-                                | Some(Ok(token)) => {
-                                    return Err(PreprocessorError::InnerPreprocessorError(
-                                        InnerPreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::MissingIdentifierInDefinedDirective(
-                                                    token.kind,
-                                                ),
-                                            source_vectors: token.source_vectors,
-                                        },
-                                    ))
-                                },
-                                | None => {
-                                    return Err(PreprocessorError::InnerPreprocessorError(
-                                        InnerPreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::UnexpectedEndOfInput("parsing defined directive"),
-                                            source_vectors: SourceVectors::from(
-                                                SourceVector {
-                                                    position,
-                                                    length: 0,
-                                                }
-                                            ),
-                                        },
-                                    ));
-                                },
-                            }
-                            };
-                            loop {
-                                match self.next_preprocessor_token_no_expand() {
-                                    | Some(Err(e)) => {self.pending_results.push_back(Err(PreprocessorError::PreviousPhaseError(e))); continue},
-                                    | Some(Ok(PreprocessorToken {kind: PreprocessorTokenType::ClosingParenthesis, ..})) =>
-                                        break,
-                                    | Some(Ok(token)) => {
-                                        return Err(PreprocessorError::InnerPreprocessorError(
-                                            InnerPreprocessorError {
-                                                error_type:
-                                                    PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(
-                                                        token.kind,
-                                                    ),
-                                                source_vectors: token.source_vectors,
-                                            },
-                                        ))
-                                    },
-                                    | None => {
-                                        return Err(PreprocessorError::InnerPreprocessorError(
-                                            InnerPreprocessorError {
-                                                error_type:
-                                                    PreprocessorErrorType::UnexpectedEndOfInput("parsing defined directive"),
-                                                source_vectors: SourceVectors::from(SourceVector {
-                                                    position,
-                                                    length: 0,
-                                                }),
-                                            },
-                                        ));
-                                    },
-                                }
-                            }
-
-                            let kind = PreprocessorSubExpressionKind::Defined {
-                                name: name.contents,
-                            };
-                            return Ok(Some(PreprocessorSubExpression { kind }));
-                        }
-                        let Some(rhs) =
-                            self.parse_preprocessor_sub_expression(r_bp, sub_expressions)?
-                        else {
-                            return Err(PreprocessorError::InnerPreprocessorError(
-                                    InnerPreprocessorError {
-                                        error_type:
-                                            PreprocessorErrorType::NoExpressionAfterPrefixOperatorInPreprocessorExpression(
-                                                token.kind,
-                                            ),
-                                        source_vectors: token.source_vectors,
-                                    },
-                                ));
-                        };
-                        sub_expressions.push(rhs);
-                        return Ok(Some(PreprocessorSubExpression {
-                            kind: PreprocessorSubExpressionKind::UnaryOperator {
-                                operator: token.kind,
-                                operand:  sub_expressions.len() - 1,
-                            },
-                        }));
-                    },
+                    PreprocessorExpressionOperator::BinaryPlus
                 },
-                | None => return Ok(None),
-            }
-        };
-        let save_point = self.save();
-        'outer: {
-            let op = loop {
-                match self.next_preprocessor_token() {
-                    | Some(Err(e)) => {
-                        self.pending_results.push_back(Err(e));
-                        continue;
-                    },
-                    | Some(Ok(token)) => break token,
-                    | None => return Ok(Some(lhs)),
-                }
-            };
-            if let Some((l_bp, ())) = postfix_binding_power(&op)? {
-                if l_bp > max_binding_power {
-                    break 'outer;
-                }
-                let lhs_index = sub_expressions.len();
-                sub_expressions.push(lhs);
-                return Ok(Some(PreprocessorSubExpression {
-                    kind: PreprocessorSubExpressionKind::UnaryOperator {
-                        operator: op.kind,
-                        operand:  lhs_index,
-                    },
-                }));
-            }
-            self.restore(save_point);
-        }
-        let save_point = self.save();
-        'outer: {
-            let op = loop {
-                match self.next_preprocessor_token() {
-                    | Some(Err(e)) => {
-                        self.pending_results.push_back(Err(e));
-                        continue;
-                    },
-                    | Some(Ok(token)) => break token,
-                    | None => return Ok(Some(lhs)),
-                }
-            };
-
-            if let Some((l_bp, r_bp)) = infix_binding_power(&op)? {
-                if l_bp > max_binding_power {
-                    break 'outer;
-                }
-                let lhs_index = sub_expressions.len();
-                sub_expressions.push(lhs);
-                #[allow(clippy::redundant_else)]
-                if op.kind == PreprocessorTokenType::QuestionMark {
-                    let Some(mhs) =
-                        self.parse_preprocessor_sub_expression(u32::MAX, sub_expressions)?
-                    else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::NoExpressionAfterQuestionMarkInConditionalExpression,
-                                    source_vectors: op.source_vectors,
-                                },
-                            ));
-                    };
-                    match self.next_preprocessor_token() {
-                        | Some(Err(e)) => self.pending_results.push_back(Err(e)),
-                        | Some(Ok(token))
-                            if token.kind == PreprocessorTokenType::Colon => (),
-                        | Some(Ok(token)) => {
-                            return Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::NoColonAfterQuestionMarkInConditionalExpression(token.kind),
-                                    source_vectors: token.source_vectors,
-                                },
-                            ))
-                        },
-                        | None => {
-                            let position = self.previous_phase.current_position();
-                            return Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::UnexpectedEndOfInput("parsing ternary expression"),
-                                    source_vectors: SourceVectors::from(SourceVector {
-                                        position,
-                                        length: 0,
-                                    }),
-                                },
-                            ));
-                        },
-                    };
-
-                    let mhs_index = sub_expressions.len();
-                    sub_expressions.push(mhs);
-                    let Some(rhs) =
-                        self.parse_preprocessor_sub_expression(r_bp, sub_expressions)?
-                    else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::NoExpressionAfterColonInConditionalExpression,
-                                    source_vectors: op.source_vectors,
-                                },
-                            ));
-                    };
-                    let rhs_index = sub_expressions.len();
-                    sub_expressions.push(rhs);
-                    return Ok(Some(PreprocessorSubExpression {
-                        kind: PreprocessorSubExpressionKind::TernaryOperator {
-                            condition: lhs_index,
-                            if_true:   mhs_index,
-                            if_false:  rhs_index,
-                        },
-                    }));
+            | PreprocessorTokenType::Minus =>
+                if state == PreprocessorExpressionParserState::Unary {
+                    PreprocessorExpressionOperator::UnaryMinus
                 } else {
-                    let Some(rhs) =
-                        self.parse_preprocessor_sub_expression(r_bp, sub_expressions)?
-                    else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::NoExpressionAfterInfixOperatorInPreprocessorExpression(
-                                            op.kind,
-                                        ),
-                                    source_vectors: op.source_vectors,
-                                },
-                            ));
-                    };
-                    let rhs_index = sub_expressions.len();
-                    sub_expressions.push(rhs);
-                    return Ok(Some(PreprocessorSubExpression {
-                        kind: PreprocessorSubExpressionKind::BinaryOperator {
-                            operator: op.kind,
-                            left:     lhs_index,
-                            right:    rhs_index,
-                        },
-                    }));
-                }
-            }
-            self.restore(save_point);
+                    PreprocessorExpressionOperator::BinaryMinus
+                },
+            | PreprocessorTokenType::Asterisk => PreprocessorExpressionOperator::Multiply,
+            | PreprocessorTokenType::ForwardSlash => PreprocessorExpressionOperator::Divide,
+            | PreprocessorTokenType::Percent => PreprocessorExpressionOperator::Modulo,
+            | PreprocessorTokenType::LessThanLessThan => PreprocessorExpressionOperator::LeftShift,
+            | PreprocessorTokenType::GreaterThanGreaterThan =>
+                PreprocessorExpressionOperator::RightShift,
+            | PreprocessorTokenType::LessThan => PreprocessorExpressionOperator::LessThan,
+            | PreprocessorTokenType::LessThanEquals =>
+                PreprocessorExpressionOperator::LessThanEquals,
+            | PreprocessorTokenType::GreaterThan => PreprocessorExpressionOperator::GreaterThan,
+            | PreprocessorTokenType::GreaterThanEquals =>
+                PreprocessorExpressionOperator::GreaterThanEquals,
+            | PreprocessorTokenType::EqualsEquals => PreprocessorExpressionOperator::Equals,
+            | PreprocessorTokenType::ExclamationMarkEquals =>
+                PreprocessorExpressionOperator::NotEquals,
+            | PreprocessorTokenType::Ampersand => PreprocessorExpressionOperator::BitwiseAnd,
+            | PreprocessorTokenType::Caret => PreprocessorExpressionOperator::BitwiseXor,
+            | PreprocessorTokenType::Pipe => PreprocessorExpressionOperator::BitwiseOr,
+            | PreprocessorTokenType::AmpersandAmpersand =>
+                PreprocessorExpressionOperator::LogicalAnd,
+            | PreprocessorTokenType::PipePipe => PreprocessorExpressionOperator::LogicalOr,
+            | PreprocessorTokenType::QuestionMark => PreprocessorExpressionOperator::Ternary,
+            | PreprocessorTokenType::Colon => PreprocessorExpressionOperator::Else,
+            | PreprocessorTokenType::Tilde => PreprocessorExpressionOperator::BitwiseNot,
+            | PreprocessorTokenType::ExclamationMark => PreprocessorExpressionOperator::LogicalNot,
+            | _ => unreachable!(),
         }
-        Ok(Some(lhs))
     }
 
-    fn parse_preprocessor_atom(
+    #[allow(clippy::too_many_lines)]
+    fn handle_expression_operator(
         &mut self,
-        token: PreprocessorToken,
-    ) -> Result<PreprocessorAtom, PreprocessorError<Prev::Error>> {
-        match token.kind {
-            | PreprocessorTokenType::Identifier => {
-                self.pending_results
-                    .push_back(Err(PreprocessorError::InnerPreprocessorError(
+        op: PreprocessorExpressionOperator,
+    ) -> Result<(), PreprocessorError<Prev::Error>> {
+        match op {
+            PreprocessorExpressionOperator::UnaryPlus => if self.expression_parser.operand_stack.is_empty() {
+                Err(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::UnaryPlusWithoutOperand,
+                        source_vectors: SourceVectors::from(
+                            SourceVector {
+                                position: self.current_position(),
+                                length: 0,
+                            }
+                        ),
+                    },
+                ))
+            } else {
+                Ok(())
+            },
+            PreprocessorExpressionOperator::UnaryMinus => {
+                let Some(operand) = self.expression_parser.operand_stack.pop() else {return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::UnaryMinusWithoutOperand,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                let Some(new) = operand.checked_neg() else {return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::UnaryMinusOverflow,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(new);
+                Ok(())
+            },
+            PreprocessorExpressionOperator::BitwiseNot => {
+                let Some(operand) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::BitwiseNotWithoutOperand,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(!operand);
+                Ok(())
+            },
+            PreprocessorExpressionOperator::LogicalNot => {
+                let Some(operand) = self.expression_parser.operand_stack.pop() else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::LogicalNotWithoutOperand,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(i128::from(operand == 0));
+                Ok(())
+            },
+            PreprocessorExpressionOperator::BinaryPlus => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BinaryPlus operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::BinaryPlusWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                let Some(new) = lhs.checked_add(rhs) else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::BinaryPlusOverflow,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(new);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::BinaryMinus => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BinaryMinus operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::BinaryMinusWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                let Some(new) = lhs.checked_sub(rhs) else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::BinaryMinusOverflow,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(new);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::Multiply => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Multiply operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::MultiplyWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                let Some(new) = lhs.checked_mul(rhs) else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::MultiplyOverflow,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(new);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::Divide => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Divide operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::DivideWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                if rhs == 0 {
+                    return Err(PreprocessorError::InnerPreprocessorError(
                         InnerPreprocessorError {
-                            error_type:
-                                PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression,
-                            source_vectors: token.source_vectors,
+                            error_type:     PreprocessorErrorType::DivideByZero,
+                            source_vectors: SourceVectors::from(
+                                SourceVector {
+                                    position: self.current_position(),
+                                    length: 0,
+                                }
+                            ),
                         },
-                    )));
-                Ok(PreprocessorAtom {
-                    kind: PreprocessorAtomKind::Identifier(token.contents),
-                })
-            },
-            | PreprocessorTokenType::Character => Ok(PreprocessorAtom {
-                kind: PreprocessorAtomKind::Character(
-                    get_from_cache!(self, token.contents).char_at(1).unwrap(),
-                ),
-            }),
-            | PreprocessorTokenType::Number => {
-                let contents = get_from_cache!(self, token.contents).to_token_string();
-                let token = match if contents.starts_with("0x") || contents.starts_with("0X") {
-                    self.parse_hexadecimal_integer(token, &contents)
-                } else if contents.starts_with("0b") || contents.starts_with("0B") {
-                    self.parse_binary_integer(token, &contents)
-                } else if contents.starts_with('0') {
-                    self.parse_octal_integer(token, &contents)
-                } else {
-                    self.parse_decimal_integer(token, &contents)
-                } {
-                    | Ok(token) => token,
-                    | Err(e) => return Err(e),
+                    ));
+                }
+                let Some(new) = lhs.checked_div(rhs) else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::DivideOverflow,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
                 };
-                let Token {
-                    kind: TokenType::Integer(i),
-                    ..
-                } = token
-                else {
-                    unreachable!()
+                self.expression_parser.operand_stack.push(new);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::Modulo => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Modulo operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::ModuloWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
                 };
-
-                let number = match i {
-                    | IntegerTokenType::UnsignedLongLong(i) | IntegerTokenType::UnsignedLong(i) =>
-                        i128::from(i),
-                    | IntegerTokenType::LongLong(i) | IntegerTokenType::Long(i) => i128::from(i),
-                    | IntegerTokenType::UnsignedInt(i) => i128::from(i),
-                    | IntegerTokenType::Int(i) => i128::from(i),
+                if rhs == 0 {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:     PreprocessorErrorType::ModuloByZero,
+                            source_vectors: SourceVectors::from(
+                                SourceVector {
+                                    position: self.current_position(),
+                                    length: 0,
+                                }
+                            ),
+                        },
+                    ));
+                }
+                let Some(new) = lhs.checked_rem(rhs) else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::ModuloOverflow,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
                 };
-                Ok(PreprocessorAtom {
-                    kind: PreprocessorAtomKind::Number(number),
-                })
-            },
-            | _ => Err(PreprocessorError::InnerPreprocessorError(
+                self.expression_parser.operand_stack.push(new);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::LeftShift => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LeftShift operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::LeftShiftWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                let Some(new) = rhs.try_into().ok().and_then(|rhs| lhs.checked_shl(rhs)) else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:     PreprocessorErrorType::LeftShiftOverflow,
+                            source_vectors: SourceVectors::from(
+                                SourceVector {
+                                    position: self.current_position(),
+                                    length: 0,
+                                }
+                            ),
+                        },
+                    ));
+                };
+                self.expression_parser.operand_stack.push(new);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::RightShift => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: RightShift operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::RightShiftWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                let Some(new) = rhs.try_into().ok().and_then(|rhs| lhs.checked_shr(rhs)) else { return Err(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::RightShiftOverflow,
+                        source_vectors: SourceVectors::from(
+                            SourceVector {
+                                position: self.current_position(),
+                                length: 0,
+                            }
+                        ),
+                    },
+                ));};
+                self.expression_parser.operand_stack.push(new);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::LessThan => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LessThan operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::LessThanWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(i128::from(lhs < rhs));
+                Ok(())
+            }
+            PreprocessorExpressionOperator::LessThanEquals => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LessThanEquals operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::LessThanEqualsWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(i128::from(lhs <= rhs));
+                Ok(())
+            }
+            PreprocessorExpressionOperator::GreaterThan => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: GreaterThan operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::GreaterThanWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(i128::from(lhs > rhs));
+                Ok(())
+            }
+            PreprocessorExpressionOperator::GreaterThanEquals => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: GreaterThanEquals operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::GreaterThanEqualsWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(i128::from(lhs >= rhs));
+                Ok(())
+            }
+            PreprocessorExpressionOperator::Equals => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Equals operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::EqualsWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(i128::from(lhs == rhs));
+                Ok(())
+            }
+            PreprocessorExpressionOperator::NotEquals => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: NotEquals operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::NotEqualsWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(i128::from(lhs != rhs));
+                Ok(())
+            }
+            PreprocessorExpressionOperator::BitwiseAnd => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BitwiseAnd operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::BitwiseAndWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(lhs & rhs);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::BitwiseXor => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BitwiseXor operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::BitwiseXorWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(lhs ^ rhs);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::BitwiseOr => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BitwiseOr operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::BitwiseOrWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(lhs | rhs);
+                Ok(())
+            }
+            PreprocessorExpressionOperator::LogicalAnd => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LogicalAnd operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::LogicalAndWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(i128::from(lhs != 0 && rhs != 0));
+                Ok(())
+            }
+            PreprocessorExpressionOperator::LogicalOr => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LogicalOr operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::LogicalOrWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(i128::from(lhs != 0 || rhs != 0));
+                Ok(())
+            }
+            PreprocessorExpressionOperator::Else => {assert!(!self.expression_parser.operand_stack.is_empty(), "Compiler bug: Else operator without lhs"); Ok(())},
+            PreprocessorExpressionOperator::Ternary => {
+                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Ternary operator without condition");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::TernaryOperatorWithoutMhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                let Some(condition) = self.expression_parser.operand_stack.pop() else {
+                    return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::TernaryOperatorWithoutRhs,
+                                source_vectors: SourceVectors::from(
+                                    SourceVector {
+                                        position: self.current_position(),
+                                        length: 0,
+                                    }
+                                ),
+                            },
+                        ));
+                };
+                self.expression_parser.operand_stack.push(if condition != 0 { lhs } else { rhs });
+                Ok(())
+            }
+            PreprocessorExpressionOperator::OpeningParenthesis => Err(PreprocessorError::InnerPreprocessorError(
                 InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::ExpectedAtomInPreprocessorExpression(
-                        token.kind,
+                    error_type:     PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression,
+                    source_vectors: SourceVectors::from(
+                        SourceVector {
+                            position: self.current_position(),
+                            length: 0,
+                        }
                     ),
-                    source_vectors: token.source_vectors,
                 },
             )),
         }
     }
 
-    fn handle_unterminated_parens(
+    fn parse_defined_operator(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+        let ident_or_opening_paren = self.expect_token_no_expand(
+            |_, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::OpeningParenthesis),
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, t| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(t.kind),
+                        source_vectors: t.source_vectors,
+                    },
+                ))
+            },
+            "parsing defined operator",
+        )?;
+        if ident_or_opening_paren.kind == PreprocessorTokenType::Identifier {
+            let is_defined = self
+                .macro_definitions
+                .contains_key(&ident_or_opening_paren.contents);
+            self.expression_parser
+                .operand_stack
+                .push(i128::from(is_defined));
+            self.expression_parser.state = PreprocessorExpressionParserState::Binary;
+            return Ok(());
+        }
+        assert_eq!(
+            ident_or_opening_paren.kind,
+            PreprocessorTokenType::OpeningParenthesis,
+            "Compiler bug: ident_or_opening_paren should be an opening parenthesis or identifier."
+        );
+        let ident = self.expect_token_no_expand(
+            |_, t| matches!(t.kind, PreprocessorTokenType::Identifier),
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, t| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:     PreprocessorErrorType::MissingIdentifierInDefinedDirective(
+                            t.kind,
+                        ),
+                        source_vectors: t.source_vectors,
+                    },
+                ))
+            },
+            "parsing defined operator",
+        )?;
+
+        drop(self.expect_token_no_expand(
+            |_, t| matches!(t.kind, PreprocessorTokenType::ClosingParenthesis),
+            |this, e| {
+                this.pending_results
+                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
+                ControlFlow::Continue(())
+            },
+            |_, t| {
+                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
+                    InnerPreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(
+                                t.kind,
+                            ),
+                        source_vectors: t.source_vectors,
+                    },
+                ))
+            },
+            "parsing defined operator",
+        )?);
+        let is_defined = self.macro_definitions.contains_key(&ident.contents);
+        self.expression_parser
+            .operand_stack
+            .push(i128::from(is_defined));
+        self.expression_parser.state = PreprocessorExpressionParserState::Binary;
+        Ok(())
+    }
+
+    fn last_binary_operator(&mut self) -> PreprocessorExpressionOperator {
+        loop {
+            match self
+                .expression_parser
+                .operator_stack
+                .pop()
+                .expect("Compiler bug: No binary operator in expression stack")
+            {
+                | PreprocessorExpressionOperator::OpeningParenthesis
+                | PreprocessorExpressionOperator::UnaryMinus
+                | PreprocessorExpressionOperator::UnaryPlus
+                | PreprocessorExpressionOperator::BitwiseNot
+                | PreprocessorExpressionOperator::LogicalNot => continue,
+                | op => return op,
+            }
+        }
+    }
+
+    fn eval_preprocessor_expression(
         &mut self,
-        position: SourcePosition,
-        save_point: Prev::SavePoint,
-        _contents: StringCacheId,
-    ) -> PreprocessorError<Prev::Error> {
-        self.previous_phase.restore(save_point);
-        let source_vectors = SourceVectors::from(SourceVector {
-            position,
-            length: 1,
-        });
-        PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
-            error_type: PreprocessorErrorType::UnterminatedParenthesesInPreprocessorExpression,
-            source_vectors,
-        })
+        on_no_expression_error: PreprocessorErrorType,
+    ) -> Result<bool, PreprocessorError<Prev::Error>> {
+        const UNARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Unary;
+        const BINARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Binary;
+        self.expression_parser.reset();
+        loop {
+            match self.next_preprocessor_token() {
+                | Some(Err(e)) => {
+                    self.pending_results
+                        .push_back(Err(e));
+                    continue;
+                },
+                | None => return Err(PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                    error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
+                    source_vectors: SourceVectors::from(
+                        SourceVector {
+                            position: self.current_position(),
+                            length: 0,
+                        }
+                    )})),
+                | Some(Ok(token)) => match (token.kind, self.expression_parser.state) {
+                    | (PreprocessorTokenType::Newline, _) => {
+                        break;
+                    },
+                    (PreprocessorTokenType::Plus, UNARY) =>
+                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::UnaryPlus),
+                    (PreprocessorTokenType::Minus, UNARY) =>
+                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::UnaryMinus),
+                    (PreprocessorTokenType::Tilde, UNARY) =>
+                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::BitwiseNot),
+                    (PreprocessorTokenType::Tilde, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::TildeInsteadOfBinaryOperatorInPreprocessorExpression,
+                            source_vectors: token.source_vectors,
+                        },
+                    )),
+                    (PreprocessorTokenType::ExclamationMark, UNARY) =>
+                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::LogicalNot),
+                    (PreprocessorTokenType::ExclamationMark, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
+                                InnerPreprocessorError {
+                                    error_type:     PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression,
+                                    source_vectors: token.source_vectors,
+                                },
+                            )),
+                    (PreprocessorTokenType::OpeningParenthesis, UNARY) => {
+                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::OpeningParenthesis);
+                    }
+                    (PreprocessorTokenType::OpeningParenthesis, BINARY) => {
+                        return Err(PreprocessorError::InnerPreprocessorError(
+                            InnerPreprocessorError {
+                                error_type:     PreprocessorErrorType::FunctionCallOperatorNotSupportedInPreprocessorExpression,
+                                source_vectors: token.source_vectors,
+                            },
+                        ));
+                    }
+                    (PreprocessorTokenType::ClosingParenthesis, _) => {
+                        self.expression_parser.state = BINARY;
+                        if !self.expression_parser.operator_stack.last().is_some_and(|op| *op != PreprocessorExpressionOperator::OpeningParenthesis) {
+                            return Err(PreprocessorError::InnerPreprocessorError(
+                                InnerPreprocessorError {
+                                    error_type:     PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression,
+                                    source_vectors: token.source_vectors,
+                                },
+                            ));
+                        }
+                        while let Some(op) = self.expression_parser.operator_stack.pop() {
+                            if op == PreprocessorExpressionOperator::OpeningParenthesis {
+                                break;
+                            }
+                            self.handle_expression_operator(op)?;
+                        }
+                    }
+                    (PreprocessorTokenType::Defined, UNARY) =>
+                        self.parse_defined_operator()?,
+                    (PreprocessorTokenType::Defined, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression,
+                            source_vectors: token.source_vectors,
+                        },
+                    )),
+                    (PreprocessorTokenType::Asterisk, UNARY) => return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::DereferenceOperatorNotSupportedInPreprocessorExpression,
+                            source_vectors: token.source_vectors,
+                        },
+                    )),
+                    (PreprocessorTokenType::Ampersand, UNARY) => return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::AddressOfOperatorNotSupportedInPreprocessorExpression,
+                            source_vectors: token.source_vectors,
+                        },
+                    )),
+                    (
+                        | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
+                        PreprocessorTokenType::GreaterThanGreaterThan | PreprocessorTokenType::LessThan | PreprocessorTokenType::LessThanEquals | PreprocessorTokenType::GreaterThan |
+                        PreprocessorTokenType::GreaterThanEquals | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals |
+                        PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
+                        PreprocessorTokenType::Colon, UNARY) => return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(self.map_operator(&token)),
+                            source_vectors: token.source_vectors,
+                        })),
+                    | (PreprocessorTokenType::Plus | PreprocessorTokenType::Minus | PreprocessorTokenType::Asterisk
+                    | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
+                    PreprocessorTokenType::GreaterThanGreaterThan | PreprocessorTokenType::LessThan | PreprocessorTokenType::LessThanEquals | PreprocessorTokenType::GreaterThan |
+                    PreprocessorTokenType::GreaterThanEquals | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals | PreprocessorTokenType::Ampersand |
+                    PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
+                    PreprocessorTokenType::Colon, BINARY) => {
+                        let token_op = self.map_operator(&token);
+                        while let Some(op) = self.expression_parser.operator_stack.pop() {
+                            if op.has_precedence_over(token_op) {
+                                self.handle_expression_operator(op)?;
+                            } else {
+                                self.expression_parser.operator_stack.push(op);
+                                break;
+                            }
+                        }
+                        self.expression_parser.operator_stack.push(token_op);
+                        self.expression_parser.state = UNARY;
+                    },
+                    (PreprocessorTokenType::Number, UNARY) => {
+                        let mut contents = TokenString::from(get_from_cache!(self, token.contents));
+                        let value = match self.parse_number(token.clone(), &mut contents)?.kind {
+                            | TokenType::Float(_) => return Err(PreprocessorError::InnerPreprocessorError(
+                                InnerPreprocessorError {
+                                    error_type: PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression,
+                                    source_vectors: token.source_vectors,
+                                },
+                            )),
+                            | TokenType::Integer(v) => i128::from(v),
+                            _ => unreachable!("Compiler bug: parse_number should return a number token."),
+                        };
+                        self.expression_parser.operand_stack.push(value);
+                        self.expression_parser.state = BINARY;
+                    },
+                    (PreprocessorTokenType::Number, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::NumberInsteadOfBinaryOperatorInPreprocessorExpression,
+                            source_vectors: token.source_vectors,
+                        },
+                    )),
+                    (PreprocessorTokenType::Identifier, UNARY) => {
+                        self.pending_results.push_back(
+                            Err(PreprocessorError::InnerPreprocessorError(
+                                InnerPreprocessorError {
+                                    error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(get_from_cache!(self, token.contents).to_owned()),
+                                    source_vectors: token.source_vectors,
+                                },
+                            )),
+                        );
+                        self.expression_parser.operand_stack.push(0);
+                        self.expression_parser.state = BINARY;
+                    },
+                    (PreprocessorTokenType::Identifier, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression,
+                            source_vectors: token.source_vectors,
+                        },
+                    )),
+                    (PreprocessorTokenType::Character, UNARY) => {
+                        let value = i128::from(u32::from(char::from(self.parse_character(&token)?)));
+                        self.expression_parser.operand_stack.push(value);
+                        self.expression_parser.state = BINARY;
+                    },
+                    (PreprocessorTokenType::Character, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::CharacterInsteadOfBinaryOperatorInPreprocessorExpression,
+                            source_vectors: token.source_vectors,
+                        },
+                    )),
+                    _ => return Err(PreprocessorError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type: PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(token.kind),
+                            source_vectors: token.source_vectors,
+                        },
+                    )),
+                },
+            }
+        }
+        if self.expression_parser.state == UNARY {
+            return Err(PreprocessorError::InnerPreprocessorError(
+                InnerPreprocessorError {
+                    error_type:     PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(
+                        self.last_binary_operator(),
+                    ),
+                    source_vectors: SourceVectors::from(
+                        SourceVector {
+                            position: self.current_position(),
+                            length: 0,
+                        }
+                    )
+                }
+            ));
+        }
+        while let Some(op) = self.expression_parser.operator_stack.pop() {
+            self.handle_expression_operator(op)?;
+        }
+        match self.expression_parser.operand_stack.len() {
+            | 1 => Ok(self.expression_parser.operand_stack.pop().unwrap() != 0),
+            | 0 => Err(PreprocessorError::InnerPreprocessorError(
+                InnerPreprocessorError {
+                    error_type:     on_no_expression_error,
+                    source_vectors: SourceVectors::from(SourceVector {
+                        position: self.current_position(),
+                        length:   0,
+                    }),
+                },
+            )),
+            | _ => Err(PreprocessorError::InnerPreprocessorError(
+                InnerPreprocessorError {
+                    error_type:
+                        PreprocessorErrorType::ExpectedBinaryOperatorInPreprocessorExpression,
+                    source_vectors: SourceVectors::from(SourceVector {
+                        position: self.current_position(),
+                        length:   0,
+                    }),
+                },
+            )),
+        }
     }
 
     fn skip_over_dead_code(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
@@ -4110,28 +4754,36 @@ where
             match self.next_preprocessor_token_no_expand() {
                 // We don't care about syntax errors in code that's not being compiled.
                 | Some(Err(_)) => continue,
-                | Some(Ok(token)) => match token.kind {
-                    | PreprocessorTokenType::Newline => {
-                        loop {
-                            match self.next_preprocessor_token_no_expand() {
-                                | Some(Err(_)) => continue,
-                                | Some(Ok(token)) if token.kind != PreprocessorTokenType::Hash =>
-                                    continue 'outer,
-                                | Some(Ok(_)) => break,
-                                | None =>
-                                    return Err(PreprocessorError::InnerPreprocessorError(
-                                        InnerPreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::UnexpectedEndOfInput(
-                                                    "parsing dead code. Expected #endif instead",
-                                                ),
-                                            source_vectors: token.source_vectors,
+                | Some(Ok(token)) => {
+                    eprintln!("Token in skipping over dead code: {token:?}");
+                    match token.kind {
+                        | PreprocessorTokenType::Newline => {
+                            'newline: loop {
+                                match self.next_preprocessor_token_no_expand() {
+                                    | Some(Err(_)) => continue,
+                                    | Some(Ok(token))
+                                        if token.kind != PreprocessorTokenType::Hash =>
+                                        if token.kind == PreprocessorTokenType::Newline {
+                                            continue 'newline;
+                                        } else {
+                                            continue 'outer;
                                         },
-                                    )),
+                                    | Some(Ok(_)) => break 'newline,
+                                    | None =>
+                                        return Err(PreprocessorError::InnerPreprocessorError(
+                                            InnerPreprocessorError {
+                                                error_type:
+                                                    PreprocessorErrorType::UnexpectedEndOfInput(
+                                                        "parsing dead code. Expected #endif \
+                                                         instead",
+                                                    ),
+                                                source_vectors: token.source_vectors,
+                                            },
+                                        )),
+                                }
                             }
-                        }
-                        let directive_name = loop {
-                            match self.next_preprocessor_token_no_expand() {
+                            let directive_name = loop {
+                                match self.next_preprocessor_token_no_expand() {
                                 | Some(Err(_)) => continue,
                                 | Some(Ok(token)) if token.kind == PreprocessorTokenType::Identifier => break token,
                                 | Some(Ok(token)) => return Err(PreprocessorError::InnerPreprocessorError(
@@ -4147,29 +4799,27 @@ where
                                     },
                                 ))
                             }
-                        };
-                        match get_from_cache!(self, directive_name.contents) {
-                            | "endif" => {
-                                self.if_directive_balance -= 1;
-                            },
-                            | "if" | "ifndef" | "ifdef" => {
-                                self.if_directive_balance += 1;
-                            },
-                            | "elif" if self.if_directive_balance == start_balance => {
-                                let expression = self.parse_preprocessor_expression(
-                                    &directive_name,
-                                    PreprocessorErrorType::NoConditionInElifDirective,
-                                )?;
-                                let result = self.eval_preprocessor_expression(&expression);
-                                if result {
-                                    break;
-                                }
-                            },
-                            | "else" if self.if_directive_balance == start_balance => break,
-                            | _ => (),
-                        }
-                    },
-                    | _ => continue,
+                            };
+                            match get_from_cache!(self, directive_name.contents) {
+                                | "endif" => {
+                                    self.if_directive_balance -= 1;
+                                },
+                                | "if" | "ifndef" | "ifdef" => {
+                                    self.if_directive_balance += 1;
+                                },
+                                | "elif" if self.if_directive_balance == start_balance => {
+                                    if self.eval_preprocessor_expression(
+                                        PreprocessorErrorType::NoConditionInElifDirective,
+                                    )? {
+                                        break;
+                                    }
+                                },
+                                | "else" if self.if_directive_balance == start_balance => break,
+                                | _ => (),
+                            }
+                        },
+                        | _ => continue,
+                    }
                 },
                 | None => return Ok(()),
             }
@@ -4179,16 +4829,10 @@ where
 
     fn parse_if_directive(
         &mut self,
-        directive: &PreprocessorToken,
+        _directive: &PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
         self.if_directive_balance += 1;
-        let expression = self.parse_preprocessor_expression(
-            directive,
-            PreprocessorErrorType::NoConditionInIfDirective,
-        )?;
-        eprintln!("Parsed preprocessor expression: {expression:#?}");
-        let result = self.eval_preprocessor_expression(&expression);
-        if !result {
+        if !self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective)? {
             self.skip_over_dead_code()?;
         }
         Ok(())
@@ -4904,12 +5548,7 @@ where
         else {
             unreachable!();
         };
-        let value: i128 = match line_number {
-            | IntegerTokenType::UnsignedLong(i) | IntegerTokenType::UnsignedLongLong(i) => i.into(),
-            | IntegerTokenType::Long(i) | IntegerTokenType::LongLong(i) => i.into(),
-            | IntegerTokenType::UnsignedInt(i) => i.into(),
-            | IntegerTokenType::Int(i) => i.into(),
-        };
+        let value = i128::from(line_number);
         if value > usize::MAX as i128 {
             return Err(PreprocessorError::InnerPreprocessorError(
                 InnerPreprocessorError {
@@ -4970,7 +5609,8 @@ where
         &mut self,
         _directive: &PreprocessorToken,
     ) -> Result<(), PreprocessorError<Prev::Error>> {
-        'base: loop {
+        let should_tokenize_whitespace = replace(&mut self.should_tokenize_whitespace, false);
+        let ret = 'base: loop {
             let token = match self.previous_phase.next() {
                 | Some(Err(e)) => {
                     self.pending_results
@@ -5056,7 +5696,6 @@ where
                                                 source_vectors: token.source_vectors,
                                             },
                                         )),
-                                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Whitespace => continue,
                                     | Some(Ok(token)) => {
                                         let s = get_from_cache!(self, token.contents);
                                         if token.kind != PreprocessorTokenType::Identifier || !matches!(s, "FP_CONTRACT" | "FENV_ACCESS" | "CX_LIMITED_RANGE") {
@@ -5098,7 +5737,6 @@ where
                                                 source_vectors: token.source_vectors,
                                             },
                                         )),
-                                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Whitespace => continue,
                                     | Some(Ok(token)) => {
                                         let s = get_from_cache!(self, token.contents);
                                         if token.kind != PreprocessorTokenType::Identifier || !matches!(s, "ON" | "OFF" | "DEFAULT") {
@@ -5137,7 +5775,9 @@ where
                         },
                     )),
             }
-        }
+        };
+        self.should_tokenize_whitespace = should_tokenize_whitespace;
+        ret
     }
 
     #[allow(clippy::inline_always)]
@@ -5528,6 +6168,7 @@ where
             generate_placeholders: self.generate_placeholders,
             quote_include_directories: self.quote_include_directories.clone(),
             system_include_directories: self.system_include_directories.clone(),
+            expression_parser: self.expression_parser.clone(),
         }
     }
 
@@ -5546,6 +6187,7 @@ where
         self.generate_placeholders = save_point.generate_placeholders;
         self.quote_include_directories = save_point.quote_include_directories;
         self.system_include_directories = save_point.system_include_directories;
+        self.expression_parser = save_point.expression_parser;
     }
 
     fn current_position(&self) -> SourcePosition {

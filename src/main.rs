@@ -24,8 +24,9 @@ use util::shared::SharedString;
 use crate::{
     translation_phases::{
         phase_4_preprocessing::{
+            CharacterTokenType,
             Preprocessor,
-            StringLikeTokenType,
+            StringTokenType,
             TokenType,
         },
         GetPosition,
@@ -137,11 +138,10 @@ fn run() -> Result<(), MainError> {
                             .unwrap()
                     ),
                     | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
-                    | TokenType::StringLike(sltt) => format!(
+                    | TokenType::String(sltt) => format!(
                         "String-like token: {}",
                         match sltt {
-                            | StringLikeTokenType::WideString(s)
-                            | StringLikeTokenType::String(s) => {
+                            | StringTokenType::WideString(s) | StringTokenType::String(s) => {
                                 preprocessor
                                     .previous_phase
                                     .string_cache
@@ -149,8 +149,14 @@ fn run() -> Result<(), MainError> {
                                     .unwrap()
                                     .to_string()
                             },
-                            | StringLikeTokenType::WideChar(c) | StringLikeTokenType::Char(c) =>
-                                format!("{c:#?}"),
+                        }
+                    ),
+                    | TokenType::Character(c) => format!(
+                        "Character: {}",
+                        match c {
+                            | CharacterTokenType::WideChar(c) | CharacterTokenType::Char(c) => {
+                                format!("{c:#?}")
+                            },
                         }
                     ),
                     | TokenType::Keyword(k) => format!("Keyword: {k:#?}"),
