@@ -40,9 +40,9 @@ use crate::{
             StringCache,
         },
         unlikely,
+        HashMap,
+        HashSet,
     },
-    HashMap,
-    HashSet,
 };
 
 pub(crate) trait FromInput: ISavePoint {
@@ -1847,14 +1847,14 @@ macro_rules! get_from_cache {
     };
 }
 
-type Pptsp = PreprocessorTokenizerSavePoint<
+pub(crate) type Pptsp = PreprocessorTokenizerSavePoint<
     RemoveEscapedNewlinesSavePoint<MapCharacterSetsSavePoint<NewlineTrackingSavePoint>>,
 >;
-type Ppt = PreprocessorTokenizer<
+pub(crate) type Ppt = PreprocessorTokenizer<
     RemoveEscapedNewlines<MapCharacterSets<NewlineTracking>>,
     RemoveEscapedNewlinesSavePoint<MapCharacterSetsSavePoint<NewlineTrackingSavePoint>>,
 >;
-type Ppte =
+pub(crate) type Ppte =
     PreprocessorTokenizerError<RemoveEscapedNewlinesError<MapCharacterSetsError<Infallible>>>;
 impl Preprocessor<Ppt, Ppte, Pptsp> {
     pub(crate) fn new(

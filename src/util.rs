@@ -1,10 +1,15 @@
 use std::{
-    borrow::Cow,
-    path::Path,
+    borrow::Cow, hash::BuildHasherDefault, path::Path
 };
+
+use rustc_hash::FxHasher;
 
 pub(crate) mod shared;
 pub(crate) mod string_cache;
+
+pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub(crate) type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<FxHasher>>;
+
 pub(crate) trait Captures<U> {}
 
 impl<T: ?Sized, U> Captures<U> for T {}
