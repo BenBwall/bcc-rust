@@ -124,6 +124,7 @@ fn run() -> Result<(), MainError> {
         args.quote_include.into(),
         args.system_include.into(),
     );
+
     while let Some(res) = preprocessor.next() {
         match res {
             | Ok(t) => eprintln!(
