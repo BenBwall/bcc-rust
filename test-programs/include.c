@@ -2,7 +2,7 @@
 
 "Hello world!\n"
 
-#if FOO && BAR(FOO) && 0
+#if !defined FOO
 �
 
 #endif
