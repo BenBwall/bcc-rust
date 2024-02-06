@@ -180,10 +180,6 @@ impl SourceVectors {
     fn new() -> Self {
         Self::default()
     }
-
-    fn lengths(&self) -> usize {
-        self.iter().map(|sv| sv.length).sum()
-    }
 }
 
 impl From<Arc<[SourceVector]>> for SourceVectors {

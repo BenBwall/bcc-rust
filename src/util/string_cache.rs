@@ -58,6 +58,12 @@ impl From<usize> for Id {
     }
 }
 
+impl From<Id> for usize {
+    fn from(id: Id) -> Self {
+        id.id
+    }
+}
+
 impl Id {
     fn from_symbol(symbol: SymbolUsize) -> Self {
         Self {
@@ -65,10 +71,12 @@ impl Id {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) const fn from_usize(id: usize) -> Self {
         Self { id }
     }
 
+    #[allow(dead_code)]
     pub(crate) const fn to_usize(self) -> usize {
         self.id
     }
@@ -109,16 +117,12 @@ impl StringCache {
         inner(self, id.into())
     }
 
+    #[allow(dead_code)]
     /// Returns true if the given string is already interned.
     pub(crate) fn contains(&self, string: impl AsRef<str>) -> bool {
         fn inner(interner: &StringCache, string: &str) -> bool {
             interner.inner.get(string).is_some()
         }
         inner(self, string.as_ref())
-    }
-
-    /// Returns the number of strings interned in the cache.
-    pub(crate) fn len(&self) -> usize {
-        self.inner.len()
     }
 }

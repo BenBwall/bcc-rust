@@ -217,27 +217,27 @@ mod tests {
         index:       0,
         line:        1,
         column:      1,
-        source_file: StringCacheId::from_usize(0),
+        source_file: StringCacheId::from(0),
     }))), Ok('\n')])]
     #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       1,
         line:        1,
         column:      2,
-        source_file: StringCacheId::from_usize(0),
+        source_file: StringCacheId::from(0),
     }))), Ok('\n')])]
     #[case("a\n", vec![Ok('a'), Ok('\n')])]
     #[case("a\\\n", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       3,
         line:        2,
         column:      1,
-        source_file: StringCacheId::from_usize(0),
+        source_file: StringCacheId::from(0),
     }))), Ok('\n')])]
     #[case("abc\n", vec![Ok('a'), Ok('b'), Ok('c'), Ok('\n')])]
     #[case("abcabcbb", vec![Ok('a'), Ok('b'), Ok('c'), Ok('a'), Ok('b'), Ok('c'), Ok('b'), Ok('b'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       8,
         line:        1,
         column:      9,
-        source_file: StringCacheId::from_usize(0),
+        source_file: StringCacheId::from(0),
     }))), Ok('\n')])]
     #[case(
         "#define MAX(a, b) (a > b) \\\n ? a \\\n : b\n",
@@ -262,19 +262,19 @@ mod tests {
         index:       0,
         line:        1,
         column:      1,
-        source_file: StringCacheId::from_usize(0),
+        source_file: StringCacheId::from(0),
     }))), Ok('\n')])]
     #[case("a", vec![Ok('a'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       1,
         line:        1,
         column:      2,
-        source_file: StringCacheId::from_usize(0),
+        source_file: StringCacheId::from(0),
     }))), Ok('\n')])]
     #[case("??=", vec![Ok('#'), Err(RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(SourcePosition {
         index:       3,
         line:        1,
         column:      4,
-        source_file: StringCacheId::from_usize(0),
+        source_file: StringCacheId::from(0),
     }))), Ok('\n')])]
     #[case("??=define FOO 1\\\r\n\r\n", vec![Ok('#'), Ok('d'), Ok('e'), Ok('f'), Ok('i'), Ok('n'), Ok('e'), Ok(' '), Ok('F'), Ok('O'), Ok('O'), Ok(' '), Ok('1'), Ok('\n')])]
     fn test_phase_1_and_2(
