@@ -25,7 +25,7 @@ pub(crate) mod phase_1_map_character_sets;
 pub(crate) mod phase_2_remove_escaped_newlines;
 pub(crate) mod phase_3_preprocessor_tokenizer;
 pub(crate) mod phase_4_preprocessing;
-//pub(crate) mod phase_5_parsing;
+pub(crate) mod phase_5_parsing;
 
 #[doc(hidden)]
 #[macro_export]
