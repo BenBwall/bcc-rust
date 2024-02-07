@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering as CmpOrdering,
     borrow::Borrow,
     fmt::{
         Debug,
@@ -14,7 +15,7 @@ use std::{
     ptr::NonNull,
     sync::atomic::{
         AtomicUsize,
-        Ordering,
+        Ordering as AtomicOrdering,
     },
 };
 
@@ -35,12 +36,12 @@ where
     fn drop(&mut self) {
         if self
             .ref_cnt()
-            .fetch_sub(1, std::sync::atomic::Ordering::Release)
+            .fetch_sub(1, AtomicOrdering::Release)
             == 1
         {
             unsafe {
                 // Fence maybe unnecessary?
-                std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+                std::sync::atomic::fence(AtomicOrdering::Acquire);
                 drop(Box::from_raw(self.ref_count.as_ptr()));
                 drop(Box::from_raw(self.contents.as_ptr()));
             }
@@ -53,7 +54,7 @@ where
     T: ?Sized,
 {
     fn clone(&self) -> Self {
-        _ = self.ref_cnt().fetch_add(1, Ordering::Acquire);
+        _ = self.ref_cnt().fetch_add(1, AtomicOrdering::Acquire);
 
         Self {
             ref_count: self.ref_count,
@@ -98,7 +99,7 @@ impl<T> PartialOrd for Shared<T>
 where
     T: PartialOrd + ?Sized,
 {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
         self.as_ref().partial_cmp(other.as_ref())
     }
 }
@@ -107,7 +108,7 @@ impl<T> Ord for Shared<T>
 where
     T: Ord + ?Sized,
 {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
         self.as_ref().cmp(other.as_ref())
     }
 }
@@ -130,8 +131,8 @@ where
     }
 
     #[allow(dead_code)]
-    pub(crate) fn reference_count(&self) -> usize {
-        self.ref_cnt().load(Ordering::Relaxed)
+    pub(crate) fn strong_reference_count(&self) -> usize {
+        self.ref_cnt().load(AtomicOrdering::Relaxed)
     }
 
     fn ref_cnt(&self) -> &AtomicUsize {
@@ -151,6 +152,11 @@ impl Shared<str> {
 }
 
 impl<T> Shared<[T]> {
+    #[allow(dead_code)]
+    pub(crate) fn as_slice(&self) -> &[T] {
+        self
+    }
+
     pub(crate) fn from_vec(v: Vec<T>) -> Self {
         Self::from_boxed(v.into_boxed_slice())
     }
