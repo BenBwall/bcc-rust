@@ -33,13 +33,12 @@ where
     T: ?Sized,
 {
     fn drop(&mut self) {
-        unsafe {
-            if self
-                .ref_count
-                .as_ref()
-                .fetch_sub(1, std::sync::atomic::Ordering::Release)
-                == 1
-            {
+        if self
+            .ref_cnt()
+            .fetch_sub(1, std::sync::atomic::Ordering::Release)
+            == 1
+        {
+            unsafe {
                 // Fence maybe unnecessary?
                 std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
                 drop(Box::from_raw(self.ref_count.as_ptr()));
@@ -54,9 +53,8 @@ where
     T: ?Sized,
 {
     fn clone(&self) -> Self {
-        unsafe {
-            _ = self.ref_count.as_ref().fetch_add(1, Ordering::Acquire);
-        }
+        _ = self.ref_cnt().fetch_add(1, Ordering::Acquire);
+
         Self {
             ref_count: self.ref_count,
             contents:  self.contents,
@@ -70,7 +68,7 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("Shared")
-            .field("ref_count", unsafe { self.ref_count.as_ref() })
+            .field("ref_count", &self.ref_cnt())
             .field("contents", &self.as_ref())
             .finish()
     }
@@ -129,6 +127,15 @@ where
             ref_count: NonNull::from(Box::leak(Box::new(AtomicUsize::new(1)))),
             contents:  NonNull::from(Box::leak(t)),
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn reference_count(&self) -> usize {
+        self.ref_cnt().load(Ordering::Relaxed)
+    }
+
+    fn ref_cnt(&self) -> &AtomicUsize {
+        unsafe { self.ref_count.as_ref() }
     }
 }
 
@@ -215,7 +222,8 @@ where
     }
 }
 
-// Safety: Shared is Send and Sync if T is Send and Sync. This is safe for the same reason that Arc<T> is Send and Sync if T is Send and Sync.
+// Safety: Shared is Send and Sync if T is Send and Sync. This is safe for the
+// same reason that Arc<T> is Send and Sync if T is Send and Sync.
 unsafe impl<T> Send for Shared<T> where T: Send + ?Sized {}
 unsafe impl<T> Sync for Shared<T> where T: Sync + ?Sized {}
 
