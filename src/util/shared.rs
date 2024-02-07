@@ -1,6 +1,6 @@
 use std::{
-    cmp::Ordering as CmpOrdering,
     borrow::Borrow,
+    cmp::Ordering as CmpOrdering,
     fmt::{
         Debug,
         Formatter,
@@ -12,6 +12,7 @@ use std::{
         RefUnwindSafe,
         UnwindSafe,
     },
+    process::abort,
     ptr::NonNull,
     sync::atomic::{
         AtomicUsize,
@@ -34,11 +35,7 @@ where
     T: ?Sized,
 {
     fn drop(&mut self) {
-        if self
-            .ref_cnt()
-            .fetch_sub(1, AtomicOrdering::Release)
-            == 1
-        {
+        if self.ref_cnt().fetch_sub(1, AtomicOrdering::Release) == 1 {
             unsafe {
                 // Fence maybe unnecessary?
                 std::sync::atomic::fence(AtomicOrdering::Acquire);
@@ -54,7 +51,12 @@ where
     T: ?Sized,
 {
     fn clone(&self) -> Self {
-        _ = self.ref_cnt().fetch_add(1, AtomicOrdering::Acquire);
+        if self.ref_cnt().fetch_add(1, AtomicOrdering::Acquire) == usize::MAX {
+            // Integer overflow.
+            // This can realistically only happen if someone leaks usize::MAX Shareds. If
+            // this happens, we just abort.
+            abort();
+        }
 
         Self {
             ref_count: self.ref_count,

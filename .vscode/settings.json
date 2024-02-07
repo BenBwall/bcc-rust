@@ -26,6 +26,7 @@
     "rstest",
     "savepoint",
     "scopeguard",
+    "Shareds",
     "sltt",
     "smallstr",
     "smallvec",
