@@ -211,5 +211,8 @@ where
     }
 }
 
+unsafe impl<T> Send for Shared<T> where T: Send + ?Sized {}
+unsafe impl<T> Sync for Shared<T> where T: Sync + ?Sized {}
+
 pub(crate) type SharedString = Shared<str>;
 pub(crate) type SharedVec<T> = Shared<[T]>;
