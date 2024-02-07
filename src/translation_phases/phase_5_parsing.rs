@@ -1,24 +1,51 @@
-use std::sync::Arc;
+use std::{
+    fmt::{
+        Display,
+        Formatter,
+        Result as FmtResult,
+    },
+    sync::Arc,
+};
 
-use super::SourceVectors;
+use thiserror::Error;
+
+use super::{
+    phase_4_preprocessing::{
+        CharacterTokenType,
+        FloatTokenType,
+        IntegerTokenType,
+        Token,
+    },
+    ErrorSeverity,
+    GetPosition,
+    GetSeverity,
+    SavePoint as ISavePoint,
+    SourcePosition,
+    SourceVectors,
+    TranslationPhase,
+};
 use crate::util::string_cache::Id as StringCacheId;
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub(crate) struct Parser<Prev> {
     pub(crate) previous_phase: Prev,
     pub(crate) state:          State,
     pub(crate) types:          Vec<Type>,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum State {
     Default,
     Done,
 }
 
-pub(crate) struct TopLevelState {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct TopLevelStatement {
     pub(crate) source_vectors: SourceVectors,
     pub(crate) kind:           TopLevelStatementType,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TopLevelStatementType {
     FunctionDeclaration(FunctionDeclaration),
     FunctionDefinition(FunctionDefinition),
@@ -26,21 +53,172 @@ pub(crate) enum TopLevelStatementType {
     VariableDefinition(VariableDefinition),
 }
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+struct ExpressionIndex(usize);
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+struct StatementIndex(usize);
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+struct TypeIndex(usize);
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct Statement {
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) kind:           StatementType,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum StatementType {
+    Compound(Vec<Statement>),
+    Expression(ExpressionIndex),
+    If {
+        condition_index: ExpressionIndex,
+        then_index:      StatementIndex,
+        else_index:      Option<StatementIndex>,
+    },
+    While {
+        condition_index: ExpressionIndex,
+        body_index:      StatementIndex,
+    },
+    DoWhile {
+        condition_index: ExpressionIndex,
+        body_index:      StatementIndex,
+    },
+    For {
+        initializer_index: Option<StatementIndex>,
+        condition:         Option<ExpressionIndex>,
+        increment:         Option<ExpressionIndex>,
+        body:              StatementIndex,
+    },
+    Return(ExpressionIndex),
+    Break,
+    Continue,
+    Goto(Identifier),
+    Label(Identifier, StatementIndex),
+    Case(i64, StatementIndex),
+    Default(StatementIndex),
+    Null,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct Expression {
+    pub(crate) result_type:    TypeIndex,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) kind:           ExpressionType,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum ExpressionType {
+    Conditional {
+        condition_index: ExpressionIndex,
+        then_index:      ExpressionIndex,
+        else_index:      ExpressionIndex,
+    },
+    Binary {
+        op:          BinaryOperator,
+        left_index:  ExpressionIndex,
+        right_index: ExpressionIndex,
+    },
+    Unary {
+        op:            UnaryOperator,
+        operand_index: ExpressionIndex,
+    },
+    Call {
+        function_index: ExpressionIndex,
+        arguments:      Arc<[ExpressionIndex]>,
+    },
+    CompoundLiteral {
+        type_index: Type,
+        values:     Arc<[ExpressionIndex]>,
+    },
+    Identifier(Identifier),
+    Constant(Constant),
+    StringLiteral(StringCacheId),
+    SizeofType(Type),
+    SizeofExpr(ExpressionIndex),
+    Cast {
+        type_index:    Type,
+        operand_index: ExpressionIndex,
+    },
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum Constant {
+    Integer(IntegerTokenType),
+    Float(FloatTokenType),
+    Char(CharacterTokenType),
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum BinaryOperator {
+    Multiplication,
+    Division,
+    Modulo,
+    Addition,
+    Subtraction,
+    LeftShift,
+    RightShift,
+    LessThan,
+    GreaterThan,
+    LessThanOrEqual,
+    GreaterThanOrEqual,
+    Equal,
+    NotEqual,
+    BitwiseAnd,
+    BitwiseXor,
+    BitwiseOr,
+    LogicalAnd,
+    LogicalOr,
+    Comma,
+    Subscript,
+    Assignment,
+    MultiplicationAssignment,
+    DivisionAssignment,
+    ModuloAssignment,
+    AdditionAssignment,
+    SubtractionAssignment,
+    LeftShiftAssignment,
+    RightShiftAssignment,
+    BitwiseAndAssignment,
+    BitwiseXorAssignment,
+    BitwiseOrAssignment,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum UnaryOperator {
+    AddressOf,
+    Indirection,
+    Plus,
+    Minus,
+    BitwiseNot,
+    LogicalNot,
+    PreIncrement,
+    PreDecrement,
+    PostIncrement,
+    PostDecrement,
+    Cast,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Identifier {
     pub(crate) name: StringCacheId,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct Variable {
     pub(crate) name:          Identifier,
     pub(crate) type_:         Type,
     pub(crate) storage_class: StorageClass,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct VariableDefinition {
-    pub(crate) variable: Variable,
+    pub(crate) variable:    Variable,
     pub(crate) initializer: Expression,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum StorageClass {
     Auto,
     Register,
@@ -49,6 +227,7 @@ pub(crate) enum StorageClass {
     Typedef,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum PrimitiveType {
     Char,
     Short,
@@ -67,12 +246,14 @@ pub(crate) enum PrimitiveType {
     Bool,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct Type {
     is_const:    bool,
     is_volatile: bool,
     kind:        TypeKind,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) enum TypeKind {
     Primitive(PrimitiveType),
     Pointer {
@@ -96,25 +277,135 @@ pub(crate) enum TypeKind {
     },
 }
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct EnumValue {
     pub(crate) name:  Identifier,
     pub(crate) value: i64,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct FunctionDeclaration {
     pub(crate) name:        Identifier,
     pub(crate) parameters:  Arc<[Variable]>,
     pub(crate) return_type: Option<Type>,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct FunctionDefinition {
     pub(crate) declaration: FunctionDeclaration,
-    pub(crate) body:        Vec<Statement>,
+    pub(crate) statements:  Vec<Statement>,
+    pub(crate) expressions: Vec<Expression>,
+}
+
+#[derive(Debug, PartialEq, Clone, Error)]
+pub(crate) enum ParserError<PrevError> {
+    #[error(transparent)]
+    InnerParserError(InnerParserError),
+    #[error(transparent)]
+    PreviousPhaseError(PrevError),
+}
+
+impl<PrevError> GetSeverity for ParserError<PrevError>
+where
+    PrevError: GetSeverity,
+{
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            | ParserError::InnerParserError(e) => e.error_type.severity(),
+            | ParserError::PreviousPhaseError(e) => e.severity(),
+        }
+    }
+}
+
+impl<PrevError> GetPosition for ParserError<PrevError>
+where
+    PrevError: GetPosition,
+{
+    fn position(&self) -> SourcePosition {
+        match self {
+            | ParserError::InnerParserError(e) => e.source_vectors[0].position,
+            | ParserError::PreviousPhaseError(e) => e.position(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct InnerParserError {
+    pub(crate) error_type:     ParserErrorType,
+    pub(crate) source_vectors: SourceVectors,
+}
+
+impl Display for InnerParserError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "{}", self.error_type)
+    }
+}
+
+impl std::error::Error for InnerParserError {}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub(crate) struct SavePoint<PrevSavePoint> {
+    pub(crate) state:          State,
+    pub(crate) types:          Vec<Type>,
+    pub(crate) previous_phase: PrevSavePoint,
+}
+
+impl<PrevSavePoint> ISavePoint for SavePoint<PrevSavePoint>
+where
+    PrevSavePoint: ISavePoint,
+{
+    fn current_position(&self) -> SourcePosition {
+        self.previous_phase.current_position()
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum ParserErrorType {}
+
+impl GetSeverity for ParserErrorType {
+    fn severity(&self) -> ErrorSeverity {
+        match *self {}
+    }
+}
+
+impl Display for ParserErrorType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match *self {}
+    }
 }
 
 impl<Prev, PrevError> Iterator for Parser<Prev>
 where
     Prev: TranslationPhase<Yield = Token, Error = PrevError>,
 {
-    type Item = TopLevelStatement;
+    type Item = Result<TopLevelStatement, ParserError<PrevError>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!();
+    }
+}
+
+impl<Prev> TranslationPhase for Parser<Prev>
+where
+    Prev: TranslationPhase<Yield = Token>,
+{
+    type Error = ParserError<Prev::Error>;
+    type SavePoint = SavePoint<Prev::SavePoint>;
+    type Yield = TopLevelStatement;
+
+    fn save(&self) -> Self::SavePoint {
+        todo!();
+    }
+
+    fn restore(&mut self, save_point: Self::SavePoint) {
+        todo!();
+    }
+
+    fn current_position(&self) -> SourcePosition {
+        todo!();
+    }
+
+    fn set_line_number(&mut self, line: usize) {
+        todo!();
+    }
 }
