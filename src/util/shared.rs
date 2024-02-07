@@ -7,6 +7,10 @@ use std::{
     },
     hash::Hash,
     ops::Deref,
+    panic::{
+        RefUnwindSafe,
+        UnwindSafe,
+    },
     ptr::NonNull,
     sync::atomic::{
         AtomicUsize,
@@ -211,8 +215,15 @@ where
     }
 }
 
+// Safety: Shared is Send and Sync if T is Send and Sync. This is safe for the same reason that Arc<T> is Send and Sync if T is Send and Sync.
 unsafe impl<T> Send for Shared<T> where T: Send + ?Sized {}
 unsafe impl<T> Sync for Shared<T> where T: Sync + ?Sized {}
+
+impl<T> RefUnwindSafe for Shared<T> where T: RefUnwindSafe + ?Sized {}
+
+/// Shared is always Unpin because it is a pointer type.
+impl<T> Unpin for Shared<T> where T: ?Sized {}
+impl<T> UnwindSafe for Shared<T> where T: UnwindSafe + ?Sized {}
 
 pub(crate) type SharedString = Shared<str>;
 pub(crate) type SharedVec<T> = Shared<[T]>;
