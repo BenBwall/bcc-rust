@@ -369,7 +369,7 @@ impl GetSeverity for ParserErrorType {
 }
 
 impl Display for ParserErrorType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> FmtResult {
         match *self {}
     }
 }
@@ -394,18 +394,24 @@ where
     type Yield = TopLevelStatement;
 
     fn save(&self) -> Self::SavePoint {
-        todo!();
+        SavePoint {
+            state:          self.state,
+            types:          self.types.clone(),
+            previous_phase: self.previous_phase.save(),
+        }
     }
 
     fn restore(&mut self, save_point: Self::SavePoint) {
-        todo!();
+        self.state = save_point.state;
+        self.types = save_point.types;
+        self.previous_phase.restore(save_point.previous_phase);
     }
 
     fn current_position(&self) -> SourcePosition {
-        todo!();
+        self.previous_phase.current_position()
     }
 
     fn set_line_number(&mut self, line: usize) {
-        todo!();
+        self.previous_phase.set_line_number(line);
     }
 }
