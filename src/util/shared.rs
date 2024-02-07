@@ -15,6 +15,7 @@ use std::{
     process::abort,
     ptr::NonNull,
     sync::atomic::{
+        fence,
         AtomicUsize,
         Ordering as AtomicOrdering,
     },
@@ -36,12 +37,18 @@ where
 {
     fn drop(&mut self) {
         if self.ref_cnt().fetch_sub(1, AtomicOrdering::Release) == 1 {
-            unsafe {
-                // Fence maybe unnecessary?
-                std::sync::atomic::fence(AtomicOrdering::Acquire);
-                drop(Box::from_raw(self.ref_count.as_ptr()));
-                drop(Box::from_raw(self.contents.as_ptr()));
+            #[cold]
+            #[inline(never)]
+            fn drop_slow<T: ?Sized>(this: &mut Shared<T>) {
+                unsafe {
+                    drop(Box::from_raw(this.ref_count.as_ptr()));
+                    drop(Box::from_raw(this.contents.as_ptr()));
+                }
             }
+
+            // Fence maybe unnecessary?
+            fence(AtomicOrdering::Acquire);
+            drop_slow(self);
         }
     }
 }
