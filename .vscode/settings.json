@@ -12,6 +12,7 @@
     "endptr",
     "ERANGE",
     "errno",
+    "hashbrown",
     "hexdigit",
     "interner",
     "iquote",
