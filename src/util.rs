@@ -1,9 +1,12 @@
 use std::{
-    borrow::Cow, hash::BuildHasherDefault, path::Path
+    borrow::Cow,
+    hash::BuildHasherDefault,
+    path::Path,
 };
 
 use rustc_hash::FxHasher;
 
+pub(crate) mod dedup_arena;
 pub(crate) mod shared;
 pub(crate) mod string_cache;
 

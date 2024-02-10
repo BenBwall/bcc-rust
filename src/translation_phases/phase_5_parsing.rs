@@ -26,17 +26,56 @@ use super::{
 };
 use crate::util::string_cache::Id as StringCacheId;
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser<Prev> {
     pub(crate) previous_phase: Prev,
     pub(crate) state:          State,
     pub(crate) types:          Vec<Type>,
+    pub(crate) token_stack:    Vec<Token>,
+    pub(crate) block_depth:    usize,
+}
+
+impl<Prev> Parser<Prev> {
+    fn new(prev: Prev) -> Self {
+        Self {
+            previous_phase: prev,
+            state:          State::Default,
+            types:          Vec::new(),
+            token_stack:    Vec::new(),
+            block_depth:    0,
+        }
+    }
+}
+
+impl<Prev> Parser<Prev>
+where
+    Prev: TranslationPhase<Yield = Token>,
+{
+    fn parse_statement(&mut self) -> Result<Statement, ParserError<Prev::Error>> {
+        todo!();
+    }
+    fn parse_expression(&mut self) -> Result<Expression, ParserError<Prev::Error>> {
+        todo!();
+    }
+    fn parse_type(&mut self) -> Result<Type, ParserError<Prev::Error>> {
+        todo!();
+    }
+    fn map_token(&mut self, token: Token) -> Result<TopLevelStatement, ParserError<Prev::Error>> {
+        match self.state {
+            State::ParsingTopLevelStatement => self.parse_top_level_statement(token),
+            State::ParsingStatement => self.parse_statement(token),
+            State::ParsingExpression => self.parse_expression(token),
+            State::ParsingType => self.parse_type(token),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum State {
-    Default,
-    Done,
+    ParsingTopLevelStatement,
+    ParsingStatement,
+    ParsingExpression,
+    ParsingType,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -343,11 +382,13 @@ impl Display for InnerParserError {
 
 impl std::error::Error for InnerParserError {}
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct SavePoint<PrevSavePoint> {
     pub(crate) state:          State,
     pub(crate) types:          Vec<Type>,
     pub(crate) previous_phase: PrevSavePoint,
+    pub(crate) token_stack:    Vec<Token>,
+    pub(crate) block_depth:    usize,
 }
 
 impl<PrevSavePoint> ISavePoint for SavePoint<PrevSavePoint>
@@ -381,7 +422,25 @@ where
     type Item = Result<TopLevelStatement, ParserError<PrevError>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!();
+        loop {
+            match self.previous_phase.next() {
+                | Some(Ok(token)) => match self.map_token(token) {
+                    | Ok(()) => {},
+                    | Err(e) => {
+                        return Some(Err(e));
+                    },
+                },
+                | Some(Err(e)) => {
+                    return Some(Err(ParserError::PreviousPhaseError(e)));
+                },
+                | None => {
+                    if self.token_stack.is_empty() {
+                        return None;
+                    }
+                    todo!();
+                },
+            }
+        }
     }
 }
 
@@ -398,12 +457,16 @@ where
             state:          self.state,
             types:          self.types.clone(),
             previous_phase: self.previous_phase.save(),
+            token_stack:    self.token_stack.clone(),
+            block_depth:    self.block_depth,
         }
     }
 
     fn restore(&mut self, save_point: Self::SavePoint) {
         self.state = save_point.state;
         self.types = save_point.types;
+        self.token_stack = save_point.token_stack;
+        self.block_depth = save_point.block_depth;
         self.previous_phase.restore(save_point.previous_phase);
     }
 
