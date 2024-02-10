@@ -8,6 +8,7 @@ use rustc_hash::FxHasher;
 
 pub(crate) mod dedup_arena;
 pub(crate) mod shared;
+pub(crate) mod stack_vec;
 pub(crate) mod string_cache;
 
 pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;

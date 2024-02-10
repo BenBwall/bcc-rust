@@ -1,3 +1,4 @@
+use crate::util::stack_vec::StackVec;
 use thiserror::Error;
 
 use super::{
@@ -11,6 +12,7 @@ use super::{
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct MapCharacterSets<Prev> {
     pub(crate) previous_phase: Prev,
+    pub(crate) pending_chars:  StackVec<char, 3>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Error)]
@@ -39,7 +41,8 @@ where
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct SavePoint<Inner> {
-    pub(crate) inner: Inner,
+    pub(crate) inner:     Inner,
+    pub(crate) pending_chars: StackVec<char, 3>,
 }
 
 impl<Inner> super::SavePoint for SavePoint<Inner>
@@ -58,33 +61,32 @@ where
     type Item = Result<char, MapCharacterSetsError<Prev::Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let c = match self.previous_phase.next()? {
+        let c = match self.next_char()? {
             | Ok(c) => c,
             | Err(e) => return Some(Err(MapCharacterSetsError { inner: e })),
         };
-        let save_point = self.save();
-        let next = self.previous_phase.next();
+        let next = self.next_char();
         if c == '\r' && matches!(next, Some(Ok('\n',),)) {
             return Some(Ok('\n'));
         }
         if c == '\r' {
-            self.restore(save_point);
+            self.last_char = Some(c);
             return Some(Ok('\n'));
         }
         if c != '?' {
-            self.restore(save_point);
+            self.last_char = Some(c);
             return Some(Ok(c));
         }
         let Some(Ok(next)) = next else {
-            self.restore(save_point);
+            self.last_char = Some(c);
             return Some(Ok(c));
         };
         if next != '?' {
-            self.restore(save_point);
+            self.last_char = Some(c);
             return Some(Ok(c));
         }
         let Some(Ok(trigraph)) = self.previous_phase.next() else {
-            self.restore(save_point);
+            self.last_char = Some(c);
             return Some(Ok(c));
         };
         let to_yield = match trigraph {
@@ -121,11 +123,13 @@ where
 
     fn save(&self) -> Self::SavePoint {
         SavePoint {
-            inner: self.previous_phase.save(),
+            inner:     self.previous_phase.save(),
+            pending_chars: self.pending_chars,
         }
     }
 
     fn restore(&mut self, save_point: Self::SavePoint) {
+        self.pending_chars = save_point.pending_chars;
         self.previous_phase.restore(save_point.inner);
     }
 
@@ -140,7 +144,26 @@ where
 
 impl<Prev> MapCharacterSets<Prev> {
     pub(crate) fn new(previous_phase: Prev) -> Self {
-        Self { previous_phase }
+        Self {
+            previous_phase,
+            pending_chars: StackVec::new(),
+        }
+    }
+}
+
+impl<Prev> MapCharacterSets<Prev>
+where
+    Prev: TranslationPhase<Yield = char>,
+{
+    fn next_char(&mut self) -> Option<Result<char, MapCharacterSetsError<Prev::Error>>> {
+        if let Some(c) = self.pending_chars.pop() {
+            return Some(Ok(c));
+        }
+        match self.previous_phase.next() {
+            | Some(Ok(c)) => Some(Ok(c)),
+            | Some(Err(e)) => Some(Err(MapCharacterSetsError { inner: e })),
+            | None => None,
+        }
     }
 }
 

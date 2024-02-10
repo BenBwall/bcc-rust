@@ -29,9 +29,11 @@ use crate::util::string_cache::Id as StringCacheId;
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser<Prev> {
     pub(crate) previous_phase: Prev,
-    pub(crate) state:          State,
+    pub(crate) state_stack:    Vec<State>,
     pub(crate) types:          Vec<Type>,
     pub(crate) token_stack:    Vec<Token>,
+    pub(crate) expressions:    Vec<Expression>,
+    pub(crate) statements:     Vec<Statement>,
     pub(crate) block_depth:    usize,
 }
 
@@ -39,9 +41,11 @@ impl<Prev> Parser<Prev> {
     fn new(prev: Prev) -> Self {
         Self {
             previous_phase: prev,
-            state:          State::Default,
+            state_stack:    vec![State::ParsingTopLevelStatement, State::ParsingType],
             types:          Vec::new(),
             token_stack:    Vec::new(),
+            expressions:    Vec::new(),
+            statements:     Vec::new(),
             block_depth:    0,
         }
     }
@@ -54,19 +58,13 @@ where
     fn parse_statement(&mut self) -> Result<Statement, ParserError<Prev::Error>> {
         todo!();
     }
+
     fn parse_expression(&mut self) -> Result<Expression, ParserError<Prev::Error>> {
         todo!();
     }
+
     fn parse_type(&mut self) -> Result<Type, ParserError<Prev::Error>> {
         todo!();
-    }
-    fn map_token(&mut self, token: Token) -> Result<TopLevelStatement, ParserError<Prev::Error>> {
-        match self.state {
-            State::ParsingTopLevelStatement => self.parse_top_level_statement(token),
-            State::ParsingStatement => self.parse_statement(token),
-            State::ParsingExpression => self.parse_expression(token),
-            State::ParsingType => self.parse_type(token),
-        }
     }
 }
 
@@ -92,13 +90,13 @@ pub(crate) enum TopLevelStatementType {
     VariableDefinition(VariableDefinition),
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 struct ExpressionIndex(usize);
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 struct StatementIndex(usize);
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 struct TypeIndex(usize);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -247,7 +245,7 @@ pub(crate) struct Identifier {
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct Variable {
     pub(crate) name:          Identifier,
-    pub(crate) type_:         Type,
+    pub(crate) type_index:         TypeIndex,
     pub(crate) storage_class: StorageClass,
 }
 
@@ -285,6 +283,12 @@ pub(crate) enum PrimitiveType {
     Bool,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) struct FunctionTypeArgument {
+    pub(crate) type_index: TypeIndex,
+    pub(crate) name: Option<Identifier>,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct Type {
     is_const:    bool,
@@ -313,6 +317,11 @@ pub(crate) enum TypeKind {
     Enum {
         name:   Identifier,
         values: Arc<[EnumValue]>,
+    },
+    Function {
+        return_type_index: Option<usize>,
+        /// None symbolizes a function with an unspecified number of arguments (i.e. `int f()`).
+        parameters:        Option<Arc<[FunctionTypeArgument]>>,
     },
 }
 
@@ -384,11 +393,13 @@ impl std::error::Error for InnerParserError {}
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct SavePoint<PrevSavePoint> {
-    pub(crate) state:          State,
+    pub(crate) state_stack:    Vec<State>,
     pub(crate) types:          Vec<Type>,
     pub(crate) previous_phase: PrevSavePoint,
     pub(crate) token_stack:    Vec<Token>,
     pub(crate) block_depth:    usize,
+    pub(crate) expressions:    Vec<Expression>,
+    pub(crate) statements:     Vec<Statement>,
 }
 
 impl<PrevSavePoint> ISavePoint for SavePoint<PrevSavePoint>
@@ -423,24 +434,46 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.previous_phase.next() {
-                | Some(Ok(token)) => match self.map_token(token) {
-                    | Ok(()) => {},
-                    | Err(e) => {
-                        return Some(Err(e));
-                    },
-                },
-                | Some(Err(e)) => {
-                    return Some(Err(ParserError::PreviousPhaseError(e)));
-                },
-                | None => {
-                    if self.token_stack.is_empty() {
-                        return None;
+            match self.state_stack.pop().unwrap() {
+                | State::ParsingTopLevelStatement => {
+                    let type_ = match self.parse_type() {
+                        | Ok(t) => t,
+                        | Err(e) => return Some(Err(ParserError::PreviousPhaseError(e))),
+                    };
+                    match type_.kind {
+                        TypeKind::Function { return_type_index, parameters }
                     }
-                    todo!();
+                }
+                | State::ParsingType => self.types.push(match self.parse_type() {
+                    | Ok(t) => t,
+                    | Err(e) => return Some(Err(ParserError::PreviousPhaseError(e))),
+                }),
+                | State::ParsingStatement => {
+                    let statement = match self.parse_statement() {
+                        | Ok(s) => s,
+                        | Err(e) => return Some(Err(e)),
+                    };
+                    self.statements.push(statement);
+                },
+                | State::ParsingExpression => {
+                    let expression = match self.parse_expression() {
+                        | Ok(e) => e,
+                        | Err(e) => return Some(Err(ParserError::PreviousPhaseError(e))),
+                    };
+                    self.expressions.push(expression);
                 },
             }
         }
+        Some(Ok(TopLevelStatement {
+            source_vectors: self.previous_phase.current_position().into(),
+            kind:           TopLevelStatementType::FunctionDeclaration(FunctionDeclaration {
+                name:        Identifier {
+                    name: StringCacheId::new(0),
+                },
+                parameters:  Arc::new([]),
+                return_type: None,
+            }),
+        }))
     }
 }
 
@@ -454,16 +487,20 @@ where
 
     fn save(&self) -> Self::SavePoint {
         SavePoint {
-            state:          self.state,
+            state_stack:    self.state_stack.clone(),
             types:          self.types.clone(),
             previous_phase: self.previous_phase.save(),
             token_stack:    self.token_stack.clone(),
             block_depth:    self.block_depth,
+            expressions:    self.expressions.clone(),
+            statements:     self.statements.clone(),
         }
     }
 
     fn restore(&mut self, save_point: Self::SavePoint) {
-        self.state = save_point.state;
+        self.state_stack = save_point.state_stack;
+        self.expressions = save_point.expressions;
+        self.statements = save_point.statements;
         self.types = save_point.types;
         self.token_stack = save_point.token_stack;
         self.block_depth = save_point.block_depth;
