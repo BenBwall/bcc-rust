@@ -51,9 +51,6 @@ impl<Prev> Parser<Prev>
 where
     Prev: TranslationPhase<Yield = Token>,
 {
-    fn parse_top_level_statement(&mut self) -> Result<TopLevelStatement, ParserError<Prev::Error>> {
-        todo!();
-    }
     fn parse_statement(&mut self) -> Result<Statement, ParserError<Prev::Error>> {
         todo!();
     }
