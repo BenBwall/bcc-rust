@@ -1,4 +1,3 @@
-use crate::util::stack_vec::StackVec;
 use thiserror::Error;
 
 use super::{
@@ -8,6 +7,7 @@ use super::{
     SourcePosition,
     TranslationPhase,
 };
+use crate::util::stack_vec::StackVec;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct MapCharacterSets<Prev> {
@@ -39,21 +39,6 @@ where
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct SavePoint<Inner> {
-    pub(crate) inner:     Inner,
-    pub(crate) pending_chars: StackVec<char, 3>,
-}
-
-impl<Inner> super::SavePoint for SavePoint<Inner>
-where
-    Inner: super::SavePoint,
-{
-    fn current_position(&self) -> SourcePosition {
-        self.inner.current_position()
-    }
-}
-
 impl<Prev> Iterator for MapCharacterSets<Prev>
 where
     Prev: TranslationPhase<Yield = char>,
@@ -61,10 +46,7 @@ where
     type Item = Result<char, MapCharacterSetsError<Prev::Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let c = match self.next_char()? {
-            | Ok(c) => c,
-            | Err(e) => return Some(Err(MapCharacterSetsError { inner: e })),
-        };
+        let c = self.next_char()?;
         let next = self.next_char();
         if c == '\r' && matches!(next, Some(Ok('\n',),)) {
             return Some(Ok('\n'));
@@ -123,7 +105,7 @@ where
 
     fn save(&self) -> Self::SavePoint {
         SavePoint {
-            inner:     self.previous_phase.save(),
+            inner:         self.previous_phase.save(),
             pending_chars: self.pending_chars,
         }
     }
@@ -155,14 +137,14 @@ impl<Prev> MapCharacterSets<Prev>
 where
     Prev: TranslationPhase<Yield = char>,
 {
-    fn next_char(&mut self) -> Option<Result<char, MapCharacterSetsError<Prev::Error>>> {
+    fn next_char(&mut self) -> Result<Option<char>, MapCharacterSetsError<Prev::Error>> {
         if let Some(c) = self.pending_chars.pop() {
-            return Some(Ok(c));
+            return Ok(Some(c));
         }
         match self.previous_phase.next() {
             | Some(Ok(c)) => Some(Ok(c)),
-            | Some(Err(e)) => Some(Err(MapCharacterSetsError { inner: e })),
-            | None => None,
+            | Some(Err(e)) => Err(MapCharacterSetsError { inner: e }),
+            | None => Ok(None),
         }
     }
 }
