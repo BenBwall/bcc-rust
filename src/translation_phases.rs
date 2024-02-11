@@ -18,7 +18,7 @@ use std::{
 use owo_colors::OwoColorize;
 use smallvec::SmallVec;
 
-use crate::util::string_cache::Id as StringCacheId;
+use crate::util::string_cache::{Id as StringCacheId, StringCache};
 
 pub(crate) mod phase_0_newline_tracking;
 pub(crate) mod phase_1_map_character_sets;
@@ -255,6 +255,19 @@ impl GetPosition for Infallible {
     fn position(&self) -> SourcePosition {
         match *self {}
     }
+}
+
+pub(crate) struct SourceFile {
+    pub(crate) name: StringCacheId,
+    pub(crate) source: Box<str>,
+    pub(crate) line_number: usize,
+    pub(crate) column_number: usize,
+}
+
+pub(crate) struct Context {
+    pub(crate) source: SourceFile,
+    pub(crate) source_stack: Vec<SourceFile>,
+    pub(crate) string_cache: StringCache,
 }
 
 pub(crate) trait TranslationPhase:
