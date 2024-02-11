@@ -98,23 +98,6 @@ pub(crate) enum State<PrevSavePoint> {
     Done,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct SavePoint<PrevSavePoint> {
-    pub(crate) inner: PrevSavePoint,
-    pub(crate) state: State<PrevSavePoint>,
-    pub(crate) is_tokenizing_include_string: bool,
-    pub(crate) current_token_start: PrevSavePoint,
-}
-
-impl<PrevSavePoint> super::SavePoint for SavePoint<PrevSavePoint>
-where
-    PrevSavePoint: super::SavePoint,
-{
-    fn current_position(&self) -> SourcePosition {
-        self.inner.current_position()
-    }
-}
-
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum PreprocessorTokenizerErrorType {
     UnknownToken,
@@ -149,48 +132,17 @@ impl Display for PreprocessorTokenizerErrorType {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct InnerPreprocessorTokenizerError {
+pub(crate) struct PreprocessorTokenizerError {
     start_position: SourcePosition,
     length:         usize,
     error_type:     PreprocessorTokenizerErrorType,
     contents:       StringCacheId,
 }
 
-impl std::error::Error for InnerPreprocessorTokenizerError {}
+impl std::error::Error for PreprocessorTokenizerError {}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Error)]
-pub(crate) enum PreprocessorTokenizerError<PrevError> {
-    #[error(transparent)]
-    ErrorFromPrev(PrevError),
-    #[error(transparent)]
-    TokenizerError(InnerPreprocessorTokenizerError),
-}
 
-impl<PrevError> GetSeverity for PreprocessorTokenizerError<PrevError>
-where
-    PrevError: GetSeverity,
-{
-    fn severity(&self) -> ErrorSeverity {
-        match self {
-            | Self::ErrorFromPrev(e) => e.severity(),
-            | Self::TokenizerError(e) => e.severity(),
-        }
-    }
-}
-
-impl<PrevError> GetPosition for PreprocessorTokenizerError<PrevError>
-where
-    PrevError: GetPosition,
-{
-    fn position(&self) -> SourcePosition {
-        match self {
-            | Self::ErrorFromPrev(e) => e.position(),
-            | Self::TokenizerError(e) => e.start_position,
-        }
-    }
-}
-
-impl GetSeverity for InnerPreprocessorTokenizerError {
+impl GetSeverity for PreprocessorTokenizerError {
     fn severity(&self) -> ErrorSeverity {
         match self.error_type {
             | PreprocessorTokenizerErrorType::UnknownToken
@@ -204,7 +156,7 @@ impl GetSeverity for InnerPreprocessorTokenizerError {
     }
 }
 
-impl Display for InnerPreprocessorTokenizerError {
+impl Display for PreprocessorTokenizerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.error_type)
     }

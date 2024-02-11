@@ -15,10 +15,73 @@ use std::{
     sync::Arc,
 };
 
-use owo_colors::OwoColorize;
-use smallvec::SmallVec;
+#[derive(Error)]
+enum TranslationError {
+    #[error(transparent)]
+    Phase0(Infallible),
+    #[error(transparent)]
+    Phase1(Infallible),
+    #[error(transparent)]
+    Phase2(RemoveEscapedNewlinesError),
+    #[error(transparent)]
+    Phase3(PreprocessorTokenizerError),
+    #[error(transparent)]
+    Phase4(PreprocessingError),
+    #[error(transparent)]
+    Phase5(ParsingError),
+}
 
-use crate::util::string_cache::{Id as StringCacheId, StringCache};
+macro_rules! run {
+    ($input: expr, $name: expr, $($translation_phase:ident),*) => {
+        {
+            use crate::translation_phases::{
+                Context,
+                TranslationPhase,
+                TranslationError,
+            };
+            use crate::util::string_cache::StringCache;
+            let mut string_cache = StringCache::new();
+            let name = string_cache.intern($name);
+            let mut context = Context::new($input.into(), name, string_cache);
+            let mut result = Vec::new();
+            loop {
+                let next = match context.next_char() {
+                    | Some(c) => c,
+                    | None => break,
+                };
+                $(
+                    let next = match $translation_phase.next_item(next, &mut context) {
+                        | Ok(Some(v)) => v,
+                        | Ok(None) => continue,
+                        | Err(e) => {
+                            let e: TranslationError = e.into();
+                            result.push(Err(Box::new(e)));
+                            continue;
+                        }
+                    };
+                )+
+                result.push(Ok(next));
+            }
+            result
+        }
+    }
+}
+
+use owo_colors::OwoColorize;
+use smallstr::SmallString;
+use smallvec::SmallVec;
+use thiserror::Error;
+
+use self::{
+    phase_2_remove_escaped_newlines::RemoveEscapedNewlinesError,
+    phase_3_preprocessor_tokenizer::PreprocessorTokenizerError,
+    phase_4_preprocessing::PreprocessingError,
+    phase_5_parsing::ParsingError,
+};
+use crate::util::string_cache::{
+    Id as StringCacheId,
+    StringCache,
+};
 
 pub(crate) mod phase_0_newline_tracking;
 pub(crate) mod phase_1_map_character_sets;
@@ -26,6 +89,35 @@ pub(crate) mod phase_2_remove_escaped_newlines;
 pub(crate) mod phase_3_preprocessor_tokenizer;
 pub(crate) mod phase_4_preprocessing;
 pub(crate) mod phase_5_parsing;
+
+pub(crate) type TokenString = SmallString<[u8; 1024]>;
+
+trait StrExt {
+    /// Returns the character at the given index,
+    /// or `None` if the index is out of bounds or index is in the middle of a
+    /// character.
+    fn char_at(&self, index: usize) -> Option<char>;
+
+    /// Returns the character at the given index but in lowercase,
+    /// See [`StrExt::char_at`] for more information.
+    fn char_at_case_insensitive(&self, index: usize) -> Option<char> {
+        self.char_at(index).map(|c| c.to_ascii_lowercase())
+    }
+
+    /// Returns the string cloned into a [`TokenString`].
+    fn to_token_string(&self) -> TokenString
+    where
+        for<'a> &'a Self: Into<TokenString>,
+    {
+        self.into()
+    }
+}
+
+impl StrExt for str {
+    fn char_at(&self, index: usize) -> Option<char> {
+        self.get(index..)?.chars().next()
+    }
+}
 
 #[doc(hidden)]
 #[macro_export]
@@ -215,16 +307,6 @@ impl<'a> From<&'a [SourceVector]> for SourceVectors {
     }
 }
 
-pub(crate) trait SavePoint: Clone + Debug {
-    fn current_position(&self) -> SourcePosition;
-}
-
-impl SavePoint for SourcePosition {
-    fn current_position(&self) -> SourcePosition {
-        *self
-    }
-}
-
 pub(crate) trait GetSeverity {
     fn severity(&self) -> ErrorSeverity;
 }
@@ -258,26 +340,77 @@ impl GetPosition for Infallible {
 }
 
 pub(crate) struct SourceFile {
-    pub(crate) name: StringCacheId,
-    pub(crate) source: Box<str>,
-    pub(crate) line_number: usize,
+    pub(crate) name:          StringCacheId,
+    pub(crate) source:        Box<str>,
+    pub(crate) line_number:   usize,
     pub(crate) column_number: usize,
+    pub(crate) index:         usize,
 }
 
 pub(crate) struct Context {
-    pub(crate) source: SourceFile,
+    pub(crate) source:       SourceFile,
     pub(crate) source_stack: Vec<SourceFile>,
     pub(crate) string_cache: StringCache,
+}
+
+impl Context {
+    fn new(source: Box<str>, name: StringCacheId, string_cache: StringCache) -> Self {
+        Self {
+            source: SourceFile {
+                name,
+                source,
+                line_number: 1,
+                column_number: 1,
+                index: 0,
+            },
+            source_stack: Vec::new(),
+            string_cache,
+        }
+    }
+
+    #[cold]
+    fn pop_source(&mut self) -> bool {
+        let Some(source) = self.source_stack.pop() else {
+            return false;
+        };
+        self.source = source;
+    }
+
+    #[cold]
+    fn push_source(&mut self, source: Box<str>, name: StringCacheId) {
+        let source_file = SourceFile {
+            name,
+            source,
+            line_number: 1,
+            column_number: 1,
+            index: 0,
+        };
+        self.source_stack
+            .push(std::mem::replace(&mut self.source, source_file));
+    }
+
+    fn next_char(&mut self) -> Option<char> {
+        loop {
+            if let Some(c) = self.source.source.char_at(self.source.index) {
+                self.source.index += c.len_utf8();
+                return Some(c);
+            }
+            if !self.pop_source() {
+                return None;
+            }
+        }
+    }
 }
 
 pub(crate) trait TranslationPhase:
     Iterator<Item = Result<Self::Yield, Self::Error>>
 {
+    type Input;
     type Yield;
-    type SavePoint: SavePoint;
     type Error: std::error::Error + GetSeverity + GetPosition + PartialEq;
-    fn save(&self) -> Self::SavePoint;
-    fn restore(&mut self, save_point: Self::SavePoint);
-    fn current_position(&self) -> SourcePosition;
-    fn set_line_number(&mut self, line: usize);
+    fn next_item(
+        &mut self,
+        input: Self::Input,
+        context: &mut Context,
+    ) -> Result<Option<Self::Yield>, Self::Error>;
 }

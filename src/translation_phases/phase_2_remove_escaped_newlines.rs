@@ -21,32 +21,24 @@ pub(crate) struct RemoveEscapedNewlines<Prev> {
 pub(crate) struct MissingNewlineError(pub(crate) SourcePosition);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Error)]
-pub(crate) enum RemoveEscapedNewlinesError<PrevError> {
-    #[error(transparent)]
-    Inner(PrevError),
+pub(crate) enum RemoveEscapedNewlinesError {
     #[error(transparent)]
     MissingFinalNewLine(MissingNewlineError),
 }
 
-impl<PrevError> GetSeverity for RemoveEscapedNewlinesError<PrevError>
-where
-    PrevError: GetSeverity,
+impl GetSeverity for RemoveEscapedNewlinesError
 {
     fn severity(&self) -> ErrorSeverity {
         match self {
-            | Self::Inner(e) => e.severity(),
             | Self::MissingFinalNewLine(_) => ErrorSeverity::Warning,
         }
     }
 }
 
 impl<PrevError> GetPosition for RemoveEscapedNewlinesError<PrevError>
-where
-    PrevError: GetPosition,
 {
     fn position(&self) -> SourcePosition {
         match self {
-            | Self::Inner(e) => e.position(),
             | Self::MissingFinalNewLine(e) => e.0,
         }
     }
