@@ -31,36 +31,61 @@ enum TranslationError {
     Phase5(ParsingError),
 }
 
+pub(crate) fn get_next<T: TranslationPhase>(
+    phase: &mut T,
+    context: &mut Context,
+    input: Option<T::Input>,
+) -> Result<Option<T::Yield>, T::Error> {
+    match input {
+        | Some(input) => phase.next_item(input, context),
+        | None => phase.eoi(context),
+    }
+}
+
 macro_rules! run {
     ($input: expr, $name: expr, $($translation_phase:ident),*) => {
         {
             use crate::translation_phases::{
                 Context,
-                TranslationPhase,
                 TranslationError,
+                get_next,
             };
             use crate::util::string_cache::StringCache;
+            $(let mut $translation_phase = $translation_phase;)*
             let mut string_cache = StringCache::new();
             let name = string_cache.intern($name);
             let mut context = Context::new($input.into(), name, string_cache);
             let mut result = Vec::new();
             loop {
-                let next = match context.next_char() {
-                    | Some(c) => c,
-                    | None => break,
-                };
+                let next = context.next_char();
+                let mut previous_returned_some = false;
                 $(
-                    let next = match $translation_phase.next_item(next, &mut context) {
-                        | Ok(Some(v)) => v,
-                        | Ok(None) => continue,
+                    let next = match get_next(&mut $translation_phase, &mut context, next) {
+                        | Ok(Some(v)) => {
+                                previous_returned_some = true;
+
+                            Some(v)
+                        },
+                        | Ok(None) => {
+                            if previous_returned_some {
+                                continue;
+                            }
+                            None
+                        },
                         | Err(e) => {
                             let e: TranslationError = e.into();
                             result.push(Err(Box::new(e)));
                             continue;
                         }
                     };
-                )+
-                result.push(Ok(next));
+                )*
+                if let Some(next) = next {
+                    result.push(Ok(next));
+                } else {
+                    if !previous_returned_some {
+                        break;
+                    }
+                }
             }
             result
         }
@@ -347,6 +372,17 @@ pub(crate) struct SourceFile {
     pub(crate) index:         usize,
 }
 
+impl SourceFile {
+    pub(crate) fn position(&self) -> SourcePosition {
+        SourcePosition {
+            index:       self.index,
+            line:        self.line_number,
+            column:      self.column_number,
+            source_file: self.name,
+        }
+    }
+}
+
 pub(crate) struct Context {
     pub(crate) source:       SourceFile,
     pub(crate) source_stack: Vec<SourceFile>,
@@ -413,4 +449,5 @@ pub(crate) trait TranslationPhase:
         input: Self::Input,
         context: &mut Context,
     ) -> Result<Option<Self::Yield>, Self::Error>;
+    fn eoi(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error>;
 }

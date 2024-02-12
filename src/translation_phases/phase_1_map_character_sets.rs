@@ -1,77 +1,78 @@
-use thiserror::Error;
+use std::convert::Infallible;
 
-use super::{
-    ErrorSeverity,
-    GetPosition,
-    GetSeverity,
-    SourcePosition,
-    TranslationPhase,
-};
-use crate::util::stack_vec::StackVec;
+use super::TranslationPhase;
+use crate::util::stack_queue::StackQueue;
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+enum QuestionMarksSeen {
+    Zero,
+    One,
+    Two,
+}
+
+impl QuestionMarksSeen {
+    fn increment(&mut self) {
+        *self = match self {
+            | Self::Zero => Self::One,
+            | Self::One => Self::Two,
+            | Self::Two => Self::Two,
+        };
+    }
+
+    fn decrement(&mut self) {
+        *self = match self {
+            | Self::Zero => Self::Zero,
+            | Self::One => Self::Zero,
+            | Self::Two => Self::One,
+        };
+    }
+
+    fn value(&self) -> u8 {
+        match self {
+            | Self::Zero => 0,
+            | Self::One => 1,
+            | Self::Two => 2,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct MapCharacterSets<Prev> {
-    pub(crate) previous_phase: Prev,
-    pub(crate) pending_chars:  StackVec<char, 3>,
+pub(crate) struct MapCharacterSets {
+    pub(crate) pending_chars:       StackQueue<char, 3>,
+    pub(crate) question_marks_seen: QuestionMarksSeen,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Error)]
-#[error(transparent)]
-pub(crate) struct MapCharacterSetsError<PrevError> {
-    inner: PrevError,
-}
+impl TranslationPhase for MapCharacterSets {
+    type Error = Infallible;
+    type Input = char;
+    type Yield = char;
 
-impl<PrevError> GetSeverity for MapCharacterSetsError<PrevError>
-where
-    PrevError: GetSeverity,
-{
-    fn severity(&self) -> ErrorSeverity {
-        self.inner.severity()
-    }
-}
-
-impl<PrevError> GetPosition for MapCharacterSetsError<PrevError>
-where
-    PrevError: GetPosition,
-{
-    fn position(&self) -> SourcePosition {
-        self.inner.position()
-    }
-}
-
-impl<Prev> Iterator for MapCharacterSets<Prev>
-where
-    Prev: TranslationPhase<Yield = char>,
-{
-    type Item = Result<char, MapCharacterSetsError<Prev::Error>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let c = self.next_char()?;
-        let next = self.next_char();
-        if c == '\r' && matches!(next, Some(Ok('\n',),)) {
-            return Some(Ok('\n'));
+    fn next_item(
+        &mut self,
+        input: Self::Input,
+        context: &mut super::Context,
+    ) -> Result<Option<Self::Yield>, Self::Error> {
+        self.pending_chars.push_back(input);
+        match (
+            input == '?',
+            self.question_marks_seen == QuestionMarksSeen::Two,
+        ) {
+            | (false, false) => {
+                self.question_marks_seen = QuestionMarksSeen::Zero;
+                return Ok(Some(self.pending_chars.pop_front().unwrap()));
+            },
+            | (true, false) => {
+                self.question_marks_seen.increment();
+                return Ok(None);
+            },
+            | (true, true) => {
+                self.question_marks_seen.increment();
+                return Ok(Some(self.pending_chars.pop_front().unwrap()));
+            },
+            | (false, true) => (),
         }
-        if c == '\r' {
-            self.last_char = Some(c);
-            return Some(Ok('\n'));
-        }
-        if c != '?' {
-            self.last_char = Some(c);
-            return Some(Ok(c));
-        }
-        let Some(Ok(next)) = next else {
-            self.last_char = Some(c);
-            return Some(Ok(c));
-        };
-        if next != '?' {
-            self.last_char = Some(c);
-            return Some(Ok(c));
-        }
-        let Some(Ok(trigraph)) = self.previous_phase.next() else {
-            self.last_char = Some(c);
-            return Some(Ok(c));
-        };
-        let to_yield = match trigraph {
+        self.question_marks_seen = QuestionMarksSeen::Zero;
+        let to_yield = match input {
             // Top left to bottom right order based on the table in the C99 standard.
             | '=' => '#',
             | ')' => ']',
@@ -82,69 +83,22 @@ where
             | '/' => '\\',
             | '<' => '{',
             | '-' => '~',
-            | _ => {
-                self.restore(save_point);
-                return Some(Ok(c));
-            },
+            | _ => return Ok(Some(self.pending_chars.pop_front().unwrap())),
         };
+        self.pending_chars.clear();
         Some(Ok(to_yield))
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.previous_phase.size_hint()
+    fn eoi(&mut self, _context: &mut super::Context) -> Result<Option<Self::Yield>, Self::Error> {
+        Ok(self.pending_chars.pop_front())
     }
 }
 
-impl<Prev> TranslationPhase for MapCharacterSets<Prev>
-where
-    Prev: TranslationPhase<Yield = char>,
-{
-    type Error = MapCharacterSetsError<Prev::Error>;
-    type SavePoint = SavePoint<Prev::SavePoint>;
-    type Yield = char;
-
-    fn save(&self) -> Self::SavePoint {
-        SavePoint {
-            inner:         self.previous_phase.save(),
-            pending_chars: self.pending_chars,
-        }
-    }
-
-    fn restore(&mut self, save_point: Self::SavePoint) {
-        self.pending_chars = save_point.pending_chars;
-        self.previous_phase.restore(save_point.inner);
-    }
-
-    fn current_position(&self) -> SourcePosition {
-        self.previous_phase.current_position()
-    }
-
-    fn set_line_number(&mut self, line: usize) {
-        self.previous_phase.set_line_number(line);
-    }
-}
-
-impl<Prev> MapCharacterSets<Prev> {
-    pub(crate) fn new(previous_phase: Prev) -> Self {
+impl MapCharacterSets {
+    pub(crate) fn new() -> Self {
         Self {
-            previous_phase,
-            pending_chars: StackVec::new(),
-        }
-    }
-}
-
-impl<Prev> MapCharacterSets<Prev>
-where
-    Prev: TranslationPhase<Yield = char>,
-{
-    fn next_char(&mut self) -> Result<Option<char>, MapCharacterSetsError<Prev::Error>> {
-        if let Some(c) = self.pending_chars.pop() {
-            return Ok(Some(c));
-        }
-        match self.previous_phase.next() {
-            | Some(Ok(c)) => Some(Ok(c)),
-            | Some(Err(e)) => Err(MapCharacterSetsError { inner: e }),
-            | None => Ok(None),
+            pending_chars:       StackQueue::new(),
+            question_marks_seen: QuestionMarksSeen::Zero,
         }
     }
 }
@@ -167,17 +121,11 @@ mod tests {
     #[case("int x = 1;\n", "int x = 1;\n")]
     #[case("int long y = 5;\r", "int long y = 5;\n")]
     fn test_phase_1_map_character_sets(#[case] input: &str, #[case] expected: &str) {
-        use crate::util::string_cache::StringCache;
-
-        let mut string_cache = StringCache::new();
-        let actual = MapCharacterSets::new(NewlineTracking::new(
-            input.to_owned().into(),
-            string_cache.intern("<input>"),
-        ));
+        let phase_0 = NewlineTracking::new();
+        let phase_1 = MapCharacterSets::new();
+        let actual = run!(input, "<input>", phase_0, phase_1);
         assert_eq!(
-            actual
-                .map(|r| r.unwrap_or_else(|e| match e.inner {}))
-                .collect::<String>(),
+            actual.into_iter().map(|r| r.unwrap()).collect::<String>(),
             expected
         );
     }
