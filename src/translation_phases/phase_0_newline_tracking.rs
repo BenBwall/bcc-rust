@@ -14,6 +14,30 @@ impl NewlineTracking {
     pub(crate) fn new() -> Self {
         Self { last: None }
     }
+
+    fn next(
+        &mut self,
+        curr: Option<char>,
+        context: &mut Context,
+    ) -> Result<Option<char>, Infallible> {
+        let last = self.last.take();
+        if last == Some('\r') && curr == Some('\n') {
+            context.source.column_number = 1;
+            context.source.line_number += 1;
+            // Don't set last here, because we want to ignore the '\n' in the next
+            // iteration.
+            return Ok(Some('\n'));
+        }
+
+        if matches!(last, Some('\n' | '\r')) {
+            context.source.column_number = 1;
+            context.source.line_number += 1;
+            self.last = curr;
+            return Some(Ok('\n'));
+        }
+        self.last = curr;
+        Some(None)
+    }
 }
 
 impl TranslationPhase for NewlineTracking {
@@ -26,23 +50,11 @@ impl TranslationPhase for NewlineTracking {
         curr: Self::Input,
         context: &mut Context,
     ) -> Result<Option<Self::Yield>, Self::Error> {
-        let last = self.last.take();
-        if last == Some('\r') && curr == '\n' {
-            context.source.column_number = 1;
-            context.source.line_number += 1;
-            // Don't set last here, because we want to ignore the '\n' in the next
-            // iteration.
-            return Ok(Some('\n'));
-        }
+        self.next(Some(curr), context)
+    }
 
-        if matches!(last, Some('\n' | '\r')) {
-            context.source.column_number = 1;
-            context.source.line_number += 1;
-            self.last = Some(curr);
-            return Some(Ok('\n'));
-        }
-        self.last = Some(curr);
-        Some(None)
+    fn eoi(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error> {
+        self.next(None, context)
     }
 }
 
@@ -51,13 +63,9 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
-    use super::Context;
     use crate::{
         translation_phases::SourcePosition,
-        util::string_cache::{
-            Id,
-            StringCache,
-        },
+        util::string_cache::Id,
     };
 
     const ID0: Id = Id::from_usize(0);
@@ -97,7 +105,7 @@ mod tests {
         position(2, 2, 1),
     ])]
     fn test_current_position(#[case] input: &str, #[case] expected_chars: Vec<char>) {
-        let mut phase = super::NewlineTracking::new();
+        let phase = super::NewlineTracking::new();
         let actual = run!(input, "<input>", phase);
         let expected = expected_chars
             .into_iter()

@@ -7,13 +7,19 @@ use super::{
     SourcePosition,
     TranslationPhase,
 };
-use crate::bail;
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+enum EoiState {
+    Base,
+    HasGeneratedWarning,
+    HasReturnedLast,
+    Done,
+}
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct RemoveEscapedNewlines<Prev> {
-    inner:            Inner<Prev>,
-    last_was_newline: bool,
-    state:            State,
+pub(crate) struct RemoveEscapedNewlines {
+    last:      Option<char>,
+    eoi_state: EoiState,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Error)]
@@ -26,8 +32,7 @@ pub(crate) enum RemoveEscapedNewlinesError {
     MissingFinalNewLine(MissingNewlineError),
 }
 
-impl GetSeverity for RemoveEscapedNewlinesError
-{
+impl GetSeverity for RemoveEscapedNewlinesError {
     fn severity(&self) -> ErrorSeverity {
         match self {
             | Self::MissingFinalNewLine(_) => ErrorSeverity::Warning,
@@ -35,8 +40,7 @@ impl GetSeverity for RemoveEscapedNewlinesError
     }
 }
 
-impl<PrevError> GetPosition for RemoveEscapedNewlinesError<PrevError>
-{
+impl GetPosition for RemoveEscapedNewlinesError {
     fn position(&self) -> SourcePosition {
         match self {
             | Self::MissingFinalNewLine(e) => e.0,
@@ -44,148 +48,64 @@ impl<PrevError> GetPosition for RemoveEscapedNewlinesError<PrevError>
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct SavePoint<Inner> {
-    pub(crate) inner:            Inner,
-    pub(crate) last_was_newline: bool,
-    pub(crate) state:            State,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum State {
-    Default,
-    EscapedNewline,
-    Done,
-}
-
-impl<Inner> super::SavePoint for SavePoint<Inner>
-where
-    Inner: super::SavePoint,
-{
-    fn current_position(&self) -> SourcePosition {
-        self.inner.current_position()
-    }
-}
-
-impl<Prev> RemoveEscapedNewlines<Prev> {
-    pub(crate) fn new(previous_phase: Prev) -> Self {
+impl RemoveEscapedNewlines {
+    pub(crate) fn new() -> Self {
         Self {
-            inner:            Inner { previous_phase },
-            last_was_newline: false,
-            state:            State::Default,
+            last:      None,
+            eoi_state: EoiState::Base,
         }
     }
 }
 
-impl<Prev> Iterator for RemoveEscapedNewlines<Prev>
-where
-    Prev: TranslationPhase<Yield = char> + Iterator<Item = Result<char, Prev::Error>>,
-{
-    type Item = Result<char, RemoveEscapedNewlinesError<Prev::Error>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.state {
-            | State::Default => match self.inner.next() {
-                | Some(Ok(c)) => {
-                    self.last_was_newline = c == '\n';
-                    Some(Ok(c))
-                },
-                | Some(Err(e)) => Some(Err(RemoveEscapedNewlinesError::Inner(e))),
-                | None =>
-                    if self.last_was_newline {
-                        self.state = State::Done;
-                        None
-                    } else {
-                        self.state = State::EscapedNewline;
-                        Some(Err(RemoveEscapedNewlinesError::MissingFinalNewLine(
-                            MissingNewlineError(self.current_position()),
-                        )))
-                    },
-            },
-            | State::EscapedNewline => {
-                self.state = State::Done;
-                Some(Ok('\n'))
-            },
-            | State::Done => None,
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let (lower, upper) = self.inner.previous_phase.size_hint();
-        if let Some(upper) = upper {
-            (lower, Some(upper + 1))
-        } else {
-            (lower, None)
-        }
-    }
-}
-
-impl<Prev> TranslationPhase for RemoveEscapedNewlines<Prev>
-where
-    Prev: TranslationPhase<Yield = char>,
-{
-    type Error = RemoveEscapedNewlinesError<Prev::Error>;
-    type SavePoint = SavePoint<Prev::SavePoint>;
+impl TranslationPhase for RemoveEscapedNewlines {
+    type Error = RemoveEscapedNewlinesError;
+    type Input = char;
     type Yield = char;
 
-    fn save(&self) -> Self::SavePoint {
-        SavePoint {
-            inner:            self.inner.previous_phase.save(),
-            last_was_newline: self.last_was_newline,
-            state:            self.state,
+    fn next_item(
+        &mut self,
+        input: Self::Input,
+        context: &mut super::Context,
+    ) -> Result<Option<Self::Yield>, Self::Error> {
+        let Some(last) = self.last.take() else {
+            self.last = Some(input);
+            return Ok(None);
+        };
+        if last == '\\' && input == '\n' {
+            return Ok(None);
         }
+        self.last = Some(input);
+        Some(Ok(last))
     }
 
-    fn restore(&mut self, save_point: Self::SavePoint) {
-        self.inner.previous_phase.restore(save_point.inner);
-        self.last_was_newline = save_point.last_was_newline;
-        self.state = save_point.state;
-    }
-
-    fn current_position(&self) -> SourcePosition {
-        self.inner.previous_phase.current_position()
-    }
-
-    fn set_line_number(&mut self, line: usize) {
-        self.inner.previous_phase.set_line_number(line);
-    }
-}
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-struct Inner<Prev> {
-    previous_phase: Prev,
-}
-
-impl<Prev> Iterator for Inner<Prev>
-where
-    Prev: TranslationPhase<Yield = char>,
-{
-    type Item = Result<char, Prev::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let c = bail!(self.previous_phase.next()?);
-            let save_point = self.previous_phase.save();
-            let Some(Ok(second)) = self.previous_phase.next() else {
-                self.previous_phase.restore(save_point);
-                return Some(Ok(c));
-            };
-            if c == '\\' && second == '\n' {
-                continue;
-            }
-            self.previous_phase.restore(save_point);
-            break Some(Ok(c));
+    fn eoi(&mut self, context: &mut super::Context) -> Result<Option<Self::Yield>, Self::Error> {
+        match self.last.take() {
+            | Some('\n') => {
+                self.eoi_state = EoiState::Done;
+                Ok(Some('\n'))
+            },
+            | Some(c) if self.eoi_state == EoiState::Base => {
+                self.eoi_state = EoiState::HasGeneratedWarning;
+                self.last = Some(c);
+                Err(RemoveEscapedNewlinesError::MissingFinalNewLine(
+                    MissingNewlineError(context.source.position()),
+                ))
+            },
+            | Some(c) if self.eoi_state == EoiState::HasGeneratedWarning => {
+                self.eoi_state = EoiState::HasReturnedLast;
+                Ok(Some(c))
+            },
+            | None if self.eoi_state == EoiState::HasReturnedLast => {
+                self.eoi_state = EoiState::Done;
+                Ok(Some('\n'))
+            },
+            | None => Ok(None),
         }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.previous_phase.size_hint()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
@@ -193,15 +113,9 @@ mod tests {
     use crate::{
         translation_phases::{
             phase_0_newline_tracking::NewlineTracking,
-            phase_1_map_character_sets::{
-                MapCharacterSets,
-                MapCharacterSetsError,
-            },
+            phase_1_map_character_sets::MapCharacterSets,
         },
-        util::string_cache::{
-            Id as StringCacheId,
-            StringCache,
-        },
+        util::string_cache::Id as StringCacheId,
     };
 
     #[rstest]
@@ -239,14 +153,11 @@ mod tests {
 
     fn test_phase_2_remove_escaped_newlines(
         #[case] input: &str,
-        #[case] expected: Vec<Result<char, RemoveEscapedNewlinesError<Infallible>>>,
+        #[case] expected: Vec<Result<char, RemoveEscapedNewlinesError>>,
     ) {
-        let mut string_cache = StringCache::new();
-        let actual = RemoveEscapedNewlines::new(NewlineTracking::new(
-            input.to_owned().into(),
-            string_cache.intern("<input>"),
-        ))
-        .collect::<Vec<_>>();
+        let phase0 = NewlineTracking::new();
+        let phase2 = RemoveEscapedNewlines::new();
+        let actual = run!(input, "<input>", phase0, phase2);
         assert_eq!(actual, expected);
     }
     #[rstest]
@@ -271,16 +182,12 @@ mod tests {
     #[case("??=define FOO 1\\\r\n\r\n", vec![Ok('#'), Ok('d'), Ok('e'), Ok('f'), Ok('i'), Ok('n'), Ok('e'), Ok(' '), Ok('F'), Ok('O'), Ok('O'), Ok(' '), Ok('1'), Ok('\n')])]
     fn test_phase_1_and_2(
         #[case] input: &str,
-        #[case] expected: Vec<
-            Result<char, RemoveEscapedNewlinesError<MapCharacterSetsError<Infallible>>>,
-        >,
+        #[case] expected: Vec<Result<char, RemoveEscapedNewlinesError>>,
     ) {
-        let mut string_cache = StringCache::new();
-        let actual = RemoveEscapedNewlines::new(MapCharacterSets::new(NewlineTracking::new(
-            input.to_owned().into(),
-            string_cache.intern("<input>"),
-        )))
-        .collect::<Vec<_>>();
+        let phase0 = NewlineTracking::new();
+        let phase1 = MapCharacterSets::new();
+        let phase2 = RemoveEscapedNewlines::new();
+        let actual = run!(input, "<input>", phase0, phase1, phase2);
         assert_eq!(actual, expected);
     }
 }
