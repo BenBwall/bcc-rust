@@ -383,6 +383,11 @@ impl SourceFile {
     }
 }
 
+trait Phases {
+    fn push_frame(&mut self, context: &mut Context);
+    fn pop_frame(&mut self, context: &mut Context);
+}
+
 pub(crate) struct Context {
     pub(crate) source:       SourceFile,
     pub(crate) source_stack: Vec<SourceFile>,

@@ -37,12 +37,11 @@ impl<Prev, PrevSavePoint> IsTokenizingIncludeString for PreprocessorTokenizer<Pr
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct PreprocessorTokenizer<Prev, PrevSavePoint> {
-    previous_phase: Prev,
-    state: State<PrevSavePoint>,
+pub(crate) struct PreprocessorTokenizer {
+    state: State,
     is_tokenizing_include_string: bool,
     pub(crate) string_cache: StringCache,
-    current_token_start: PrevSavePoint,
+    current_token_start: SourcePosition,
 }
 
 impl<Prev, PrevSavePoint> AsRef<StringCache> for PreprocessorTokenizer<Prev, PrevSavePoint> {
@@ -141,7 +140,6 @@ pub(crate) struct PreprocessorTokenizerError {
 
 impl std::error::Error for PreprocessorTokenizerError {}
 
-
 impl GetSeverity for PreprocessorTokenizerError {
     fn severity(&self) -> ErrorSeverity {
         match self.error_type {
@@ -219,36 +217,16 @@ where
     }
 }
 
-impl<Prev> TranslationPhase for PreprocessorTokenizer<Prev, Prev::SavePoint>
-where
-    Prev: TranslationPhase<Yield = char>,
-{
-    type Error = PreprocessorTokenizerError<Prev::Error>;
-    type SavePoint = SavePoint<Prev::SavePoint>;
+impl TranslationPhase for PreprocessorTokenizer {
+    type Error = PreprocessorTokenizerError;
+    type Input = char;
     type Yield = PreprocessorToken;
 
-    fn save(&self) -> Self::SavePoint {
-        SavePoint {
-            inner: self.previous_phase.save(),
-            state: self.state.clone(),
-            is_tokenizing_include_string: self.is_tokenizing_include_string,
-            current_token_start: self.current_token_start.clone(),
-        }
-    }
-
-    fn restore(&mut self, save_point: Self::SavePoint) {
-        self.previous_phase.restore(save_point.inner);
-        self.state = save_point.state;
-        self.is_tokenizing_include_string = save_point.is_tokenizing_include_string;
-        self.current_token_start = save_point.current_token_start;
-    }
-
-    fn current_position(&self) -> SourcePosition {
-        self.previous_phase.current_position()
-    }
-
-    fn set_line_number(&mut self, line: usize) {
-        self.previous_phase.set_line_number(line);
+    fn next_item(
+        &mut self,
+        input: Self::Input,
+        context: &mut super::Context,
+    ) -> Result<Option<Self::Yield>, Self::Error> {
     }
 }
 
