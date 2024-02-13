@@ -43,56 +43,6 @@ pub(crate) fn get_next<T: TranslationPhase>(
     }
 }
 
-#[cfg(test)]
-macro_rules! run {
-    ($input: expr, $name: expr, $($source_sensitive_phases: ident),+ ---- $($translation_phase:ident),+) => {
-        {
-            use crate::translation_phases::{
-                Context,
-                TranslationError,
-                get_next,
-            };
-            use crate::util::string_cache::StringCache;
-            $(let mut $translation_phase = $translation_phase;)*
-            let mut string_cache = StringCache::new();
-            let name = string_cache.intern($name);
-            let mut context = Context::new($input.into(), name, string_cache);
-            let mut result = Vec::new();
-            loop {
-                let next = context.next_char();
-                let mut previous_returned_some = false;
-                $(
-                    let next = match get_next(&mut $translation_phase, &mut context, next) {
-                        | Ok(Some(v)) => {
-                            previous_returned_some = true;
-                            Some(v)
-                        },
-                        | Ok(None) => {
-                            if previous_returned_some {
-                                continue;
-                            }
-                            None
-                        },
-                        | Err(e) => {
-                            let e: TranslationError = e.into();
-                            result.push(Err(Box::new(e)));
-                            continue;
-                        }
-                    };
-                )*
-                if let Some(next) = next {
-                    result.push(Ok(next));
-                } else {
-                    if !previous_returned_some {
-                        break;
-                    }
-                }
-            }
-            result
-        }
-    }
-}
-
 use owo_colors::OwoColorize;
 use smallstr::SmallString;
 use smallvec::SmallVec;
@@ -493,44 +443,40 @@ impl Context {
 }
 
 pub(crate) struct TestArgs {
-    pub(crate) expected_from_phase_0: Vec<Result<char, Infallible>>,
-    pub(crate) expected_from_phase_1: Vec<Result<char, Infallible>>,
-    pub(crate) expected_from_phase_2: Vec<Result<char, RemoveEscapedNewlinesError>>,
-    pub(crate) expected_from_phase_3: Vec<Result<PreprocessorToken, PreprocessorTokenizerError>>,
-    pub(crate) expected_from_phase_4: Vec<Result<Token, PreprocessingError>>,
-    pub(crate) expected_from_phase_5: Vec<Result<TopLevelStatement, ParsingError>>,
+    pub(crate) from_phase_0: Option<&mut Vec<char>>,
+    pub(crate) from_phase_1: Option<&mut Vec<char>>,
+    pub(crate) from_phase_2: Option<&mut Vec<Result<char, RemoveEscapedNewlinesError>>>,
+    pub(crate) from_phase_3:
+        Option<&mut Vec<Result<PreprocessorToken, PreprocessorTokenizerError>>>,
+    pub(crate) from_phase_4: Option<&mut Vec<Result<Token, PreprocessingError>>>,
+    pub(crate) from_phase_5: Option<&mut Vec<Result<TopLevelStatement, ParsingError>>>,
     pub(crate) input:                 Box<str>,
     pub(crate) name:                  PathBuf,
 }
 
 #[cfg(test)]
-pub(crate) fn test(args: TestArgs) {
+pub(crate) fn test_run(args: TestArgs) {
     let TestArgs {
-        expected_from_phase_0,
-        expected_from_phase_1,
-        expected_from_phase_2,
-        expected_from_phase_3,
-        expected_from_phase_4,
-        expected_from_phase_5,
+        from_phase_0,
+        from_phase_1,
+        from_phase_2,
+        from_phase_3,
+        from_phase_4,
+        from_phase_5,
         input,
         name,
     } = args;
     let mut phase4 = Preprocessing::new();
     let mut phase5 = Parsing::new();
-    let mut from_phase_0 = Vec::new();
-    let mut from_phase_1 = Vec::new();
-    let mut from_phase_2 = Vec::new();
-    let mut from_phase_3 = Vec::new();
-    let mut from_phase_4 = Vec::new();
-    let mut from_phase_5 = Vec::new();
     let mut context = Context::new(input, name);
-    let mut result = Vec::new();
     loop {
         let next = context.next_char();
         let mut previous_returned_some = false;
         macro_rules! handle_next {
             ($pending:expr, $res_vec:ident) => {
-                $res_vec.push($pending.clone());
+                if let Some(v) = $res_vec {
+                    v.push($pending.clone());
+                }
                 let next = match $pending {
                     | Ok(Some(v)) => {
                         previous_returned_some = true;
@@ -543,8 +489,6 @@ pub(crate) fn test(args: TestArgs) {
                         None
                     },
                     | Err(e) => {
-                        let e: TranslationError = e.into();
-                        result.push(Err(Box::new(e)));
                         continue;
                     },
                 };
@@ -570,11 +514,8 @@ pub(crate) fn test(args: TestArgs) {
         handle_next!(pending, from_phase_4);
         let pending = phase5.next_item(next, &mut context);
         handle_next!(pending, from_phase_5);
-        if let Some(next) = next {
-            result.push(Ok(next));
-        } else if !previous_returned_some {
+        if !previous_returned_some {
             break;
         }
     }
-    result
 }

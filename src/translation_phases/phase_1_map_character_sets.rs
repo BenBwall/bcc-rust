@@ -121,12 +121,6 @@ mod tests {
     #[case("int x = 1;\n", "int x = 1;\n")]
     #[case("int long y = 5;\r", "int long y = 5;\n")]
     fn test_phase_1_map_character_sets(#[case] input: &str, #[case] expected: &str) {
-        let phase_0 = NewlineTracking::new();
-        let phase_1 = MapCharacterSets::new();
-        let actual = run!(input, "<input>", phase_0, phase_1);
-        assert_eq!(
-            actual.into_iter().map(|r| r.unwrap()).collect::<String>(),
-            expected
-        );
+        test_run(None, )
     }
 }
