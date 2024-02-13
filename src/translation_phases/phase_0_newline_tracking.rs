@@ -106,7 +106,7 @@ mod tests {
     ])]
     fn test_current_position(#[case] input: &str, #[case] expected_chars: Vec<char>) {
         let phase = super::NewlineTracking::new();
-        let actual = run!(input, "<input>", phase);
+        let actual = run!(input, "<input>", phase ---- phase);
         let expected = expected_chars
             .into_iter()
             .map(|c| Ok(c))

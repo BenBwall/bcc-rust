@@ -37,7 +37,7 @@ use crate::{
         },
         string_cache::{
             Id as StringCacheId,
-            StringCache,
+            Interner,
         },
         unlikely,
         HashMap,
@@ -1860,7 +1860,7 @@ where
     fn pop_tokenizer_frame(&mut self) {
         let f = self.tokenizer_stack.pop();
         drop(f);
-        if let Some(last) = self.tokenizer_stack.last() {
+        if let Some(last) Internernizer_stack.last() {
             self.previous_phase.restore(last.save_point.clone());
         }
     }
@@ -1903,8 +1903,8 @@ where
                             source_vectors: SourceVectors::from(SourceVector {
                                 position: self.previous_phase.current_position(),
                                 length:   0,
-                            }),
-                        },
+                  Interner),
+                Interner
                     ));
                 },
             }
@@ -6126,8 +6126,8 @@ where
     type Yield = Token;
 
     fn save(&self) -> Self::SavePoint {
-        SavePoint {
-            inner: self.previous_phase.save(),
+        SavePoint Interner
+            inneInternervious_phase.save(),
             tokenizer_stack: self.tokenizer_stack.clone(),
             hash_hash_stack: self.hash_hash_stack.clone(),
             once_set: self.once_set.clone(),
@@ -6171,3 +6171,4 @@ where
         self.previous_phase.set_line_number(line);
     }
 }
+InternerInterner

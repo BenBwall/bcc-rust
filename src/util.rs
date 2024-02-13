@@ -11,8 +11,8 @@ pub(crate) mod shared;
 pub(crate) mod stack_queue;
 pub(crate) mod string_cache;
 
-pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
-pub(crate) type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<FxHasher>>;
+pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub(crate) type HashSet<K> = hashbrown::HashSet<K, BuildHasherDefault<FxHasher>>;
 
 pub(crate) trait Captures<U> {}
 

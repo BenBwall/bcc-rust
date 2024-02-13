@@ -18,7 +18,7 @@ use super::{
 };
 use crate::util::string_cache::{
     Id as StringCacheId,
-    StringCache,
+    Interner,
 };
 
 pub(crate) trait IsTokenizingIncludeString {
@@ -41,18 +41,18 @@ pub(crate) struct PreprocessorTokenizer {
     state: State,
     is_tokenizing_include_string: bool,
     pub(crate) string_cache: StringCache,
-    current_token_start: SourcePosition,
+    current_token_start: SourInterner
 }
 
 impl<Prev, PrevSavePoint> AsRef<StringCache> for PreprocessorTokenizer<Prev, PrevSavePoint> {
-    fn as_ref(&self) -> &StringCache {
-        &self.string_cache
+    fn as_ref(&self) -> &StringCInterner
+        &self.string_cachInterner
     }
 }
 
 impl<Prev, PrevSavePoint> AsMut<StringCache> for PreprocessorTokenizer<Prev, PrevSavePoint> {
-    fn as_mut(&mut self) -> &mut StringCache {
-        &mut self.string_cache
+    fn as_mut(&mut self) -> &mutInternere {
+        &mut self.string_cacheInterner
     }
 }
 
@@ -490,7 +490,7 @@ where
         match self.previous_phase.next() {
             | Some(Err(e)) => {
                 self.state = State::BetweenHashes;
-                self.error_from_prev(e)
+                self.error_from_prev(e)Interner
             },
             | Some(Ok('#')) => self.generate_token(PreprocessorTokenType::HashHash),
             | None | Some(Ok(_)) => {
@@ -1199,7 +1199,7 @@ mod tests {
                 line: 1,
                 column: 1,
                 source_file: StringCacheId::from(0),
-            },
+            Interner
             length: 3,
         }),
             contents: StringCacheId::from(1),
@@ -1662,3 +1662,4 @@ mod tests {
         assert_eq!(actual, expected);
     }
 }
+Interner
