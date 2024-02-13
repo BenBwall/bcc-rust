@@ -7,26 +7,21 @@ use std::{
     hash::BuildHasherDefault,
 };
 
-use rustc_hash::FxHasher;
-use string_interner::{
-    backend::StringBackend,
-    symbol::SymbolUsize,
-    StringInterner,
-    Symbol,
-};
-
+/// Data structure based on StringBackend from the `string-interner` crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StringCache {
-    inner: StringInterner<StringBackend<SymbolUsize>, BuildHasherDefault<FxHasher>>,
+pub(crate) struct Interner {
+    storage: Vec<u8>,
+    dedup:   HashSet<Id>,
+    ends:    Vec<usize>,
 }
 
-impl Default for StringCache {
+impl Default for Interner {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Display for StringCache {
+impl Display for Interner {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "StringCache:")?;
         for i in 0usize.. {
@@ -43,7 +38,7 @@ impl Display for StringCache {
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Id {
-    id: usize,
+    id: u64,
 }
 
 impl Display for Id {
@@ -92,7 +87,7 @@ impl SymbolExt for SymbolUsize {
     }
 }
 
-impl StringCache {
+impl Interner {
     /// Creates a new empty `StringCache`. Does not allocate.
     pub(crate) fn new() -> Self {
         Self {
@@ -103,7 +98,7 @@ impl StringCache {
     /// Interns the given string and returns an ID representing its position in
     /// the string cache.
     pub(crate) fn intern(&mut self, s: impl AsRef<str>) -> Id {
-        fn inner(interner: &mut StringCache, s: &str) -> Id {
+        fn inner(interner: &mut Interner, s: &str) -> Id {
             Id::from_symbol(interner.inner.get_or_intern(s))
         }
         inner(self, s.as_ref())
@@ -111,7 +106,7 @@ impl StringCache {
 
     /// Returns the string for the given ID if it exists in the cache.
     pub(crate) fn get(&self, id: impl Into<Id>) -> Option<&str> {
-        fn inner(interner: &StringCache, id: Id) -> Option<&str> {
+        fn inner(interner: &Interner, id: Id) -> Option<&str> {
             interner.inner.resolve(SymbolUsize::try_from_usize(id.id)?)
         }
         inner(self, id.into())
@@ -120,9 +115,14 @@ impl StringCache {
     #[allow(dead_code)]
     /// Returns true if the given string is already interned.
     pub(crate) fn contains(&self, string: impl AsRef<str>) -> bool {
-        fn inner(interner: &StringCache, string: &str) -> bool {
+        fn inner(interner: &Interner, string: &str) -> bool {
             interner.inner.get(string).is_some()
         }
         inner(self, string.as_ref())
+    }
+
+    /// Clears the string cache.
+    pub(crate) fn clear(&mut self) {
+        self.inner.clear();
     }
 }

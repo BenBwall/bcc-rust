@@ -36,7 +36,7 @@ use crate::{
             SharedString,
             SharedVec,
         },
-        string_cache::StringCache,
+        string_cache::Interner,
     },
 };
 
@@ -97,7 +97,7 @@ fn parse_include_env_var(env_var: &str, vec: &mut Vec<PathBuf>) {
 #[doc(hidden)]
 pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
-    let mut string_cache = StringCache::new();
+    let mut string_cache = Interner::new();
     eprintln!("{}", "Printing all generated tokens:".bright_green());
     let parsed_input = if args.input.input.is_some() {
         ParsedInput::String(args.input.input.unwrap().into())
@@ -203,7 +203,7 @@ pub fn run() -> Result<(), MainError> {
 #[doc(hidden)]
 pub fn preprocess_hundred_thousand() {
     let million_lines = include_str!(concat!(env!("OUT_DIR"), "/hundred-thousand-lines.c"));
-    let mut string_cache = StringCache::new();
+    let mut string_cache = Interner::new();
     let preprocessor = Preprocessor::new(
         million_lines.to_owned().into(),
         string_cache.intern("<input>"),

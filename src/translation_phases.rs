@@ -12,6 +12,7 @@ use std::{
         Add,
         Deref,
     },
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -42,8 +43,9 @@ pub(crate) fn get_next<T: TranslationPhase>(
     }
 }
 
+#[cfg(test)]
 macro_rules! run {
-    ($input: expr, $name: expr, $($translation_phase:ident),*) => {
+    ($input: expr, $name: expr, $($source_sensitive_phases: ident),+ ---- $($translation_phase:ident),+) => {
         {
             use crate::translation_phases::{
                 Context,
@@ -62,8 +64,7 @@ macro_rules! run {
                 $(
                     let next = match get_next(&mut $translation_phase, &mut context, next) {
                         | Ok(Some(v)) => {
-                                previous_returned_some = true;
-
+                            previous_returned_some = true;
                             Some(v)
                         },
                         | Ok(None) => {
@@ -98,14 +99,29 @@ use smallvec::SmallVec;
 use thiserror::Error;
 
 use self::{
-    phase_2_remove_escaped_newlines::RemoveEscapedNewlinesError,
-    phase_3_preprocessor_tokenizer::PreprocessorTokenizerError,
-    phase_4_preprocessing::PreprocessingError,
-    phase_5_parsing::ParsingError,
+    phase_0_newline_tracking::NewlineTracking,
+    phase_1_map_character_sets::MapCharacterSets,
+    phase_2_remove_escaped_newlines::{
+        RemoveEscapedNewlines,
+        RemoveEscapedNewlinesError,
+    },
+    phase_3_preprocessor_tokenizer::{
+        PreprocessorToken,
+        PreprocessorTokenizer,
+        PreprocessorTokenizerError,
+    },
+    phase_4_preprocessing::{
+        PreprocessingError,
+        Token,
+    },
+    phase_5_parsing::{
+        ParsingError,
+        TopLevelStatement,
+    },
 };
 use crate::util::string_cache::{
     Id as StringCacheId,
-    StringCache,
+    Interner,
 };
 
 pub(crate) mod phase_0_newline_tracking;
@@ -365,7 +381,7 @@ impl GetPosition for Infallible {
 }
 
 pub(crate) struct SourceFile {
-    pub(crate) name:          StringCacheId,
+    pub(crate) name:          PathBuf,
     pub(crate) source:        Box<str>,
     pub(crate) line_number:   usize,
     pub(crate) column_number: usize,
@@ -383,34 +399,67 @@ impl SourceFile {
     }
 }
 
-trait Phases {
-    fn push_frame(&mut self, context: &mut Context);
-    fn pop_frame(&mut self, context: &mut Context);
-}
-
 pub(crate) struct Context {
-    pub(crate) source:       SourceFile,
-    pub(crate) source_stack: Vec<SourceFile>,
-    pub(crate) string_cache: StringCache,
+    pub(crate) source: SourceFile,
+    source_stack:      Vec<SourceFile>,
+    phase_0_stack:     Vec<NewlineTracking>,
+    phase_1_stack:     Vec<MapCharacterSets>,
+    phase_2_stack:     Vec<RemoveEscapedNewlines>,
+    phase_3_stack:     Vec<PreprocessorTokenizer>,
+    current_phase_0:   NewlineTracking,
+    current_phase_1:   MapCharacterSets,
+    current_phase_2:   RemoveEscapedNewlines,
+    current_phase_3:   PreprocessorTokenizer,
+    string_cache:      Interner,
 }
 
 impl Context {
-    fn new(source: Box<str>, name: StringCacheId, string_cache: StringCache) -> Self {
+    fn new(source: Box<str>, name: PathBuf) -> Self {
         Self {
-            source: SourceFile {
+            source:          SourceFile {
                 name,
                 source,
                 line_number: 1,
                 column_number: 1,
                 index: 0,
             },
-            source_stack: Vec::new(),
-            string_cache,
+            source_stack:    Vec::new(),
+            phase_0_stack:   Vec::new(),
+            phase_1_stack:   Vec::new(),
+            phase_2_stack:   Vec::new(),
+            phase_3_stack:   Vec::new(),
+            current_phase_0: NewlineTracking::new(),
+            current_phase_1: MapCharacterSets::new(),
+            current_phase_2: RemoveEscapedNewlines::new(),
+            current_phase_3: PreprocessorTokenizer::new(),
+            string_cache:    Interner::new(),
         }
     }
 
     #[cold]
-    fn pop_source(&mut self) -> bool {
+    pub(crate) fn push_frame(
+        &mut self,
+        phase_0: NewlineTracking,
+        phase_1: MapCharacterSets,
+        phase_2: RemoveEscapedNewlines,
+        phase_3: PreprocessorTokenizer,
+    ) {
+        self.phase_0_stack.push(phase_0);
+        self.phase_1_stack.push(phase_1);
+        self.phase_2_stack.push(phase_2);
+        self.phase_3_stack.push(phase_3);
+    }
+
+    #[cold]
+    pub(crate) fn pop_frame(&mut self) {
+        self.current_phase_0 = self.phase_0_stack.pop().unwrap();
+        self.current_phase_1 = self.phase_1_stack.pop().unwrap();
+        self.current_phase_2 = self.phase_2_stack.pop().unwrap();
+        self.current_phase_3 = self.phase_3_stack.pop().unwrap();
+    }
+
+    #[cold]
+    pub(crate) fn pop_source(&mut self) -> bool {
         let Some(source) = self.source_stack.pop() else {
             return false;
         };
@@ -418,7 +467,7 @@ impl Context {
     }
 
     #[cold]
-    fn push_source(&mut self, source: Box<str>, name: StringCacheId) {
+    pub(crate) fn push_source(&mut self, source: Box<str>, name: StringCacheId) {
         let source_file = SourceFile {
             name,
             source,
@@ -443,16 +492,89 @@ impl Context {
     }
 }
 
-pub(crate) trait TranslationPhase:
-    Iterator<Item = Result<Self::Yield, Self::Error>>
-{
-    type Input;
-    type Yield;
-    type Error: std::error::Error + GetSeverity + GetPosition + PartialEq;
-    fn next_item(
-        &mut self,
-        input: Self::Input,
-        context: &mut Context,
-    ) -> Result<Option<Self::Yield>, Self::Error>;
-    fn eoi(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error>;
+pub(crate) struct TestArgs {
+    pub(crate) expected_from_phase_0: Vec<Result<char, Infallible>>,
+    pub(crate) expected_from_phase_1: Vec<Result<char, Infallible>>,
+    pub(crate) expected_from_phase_2: Vec<Result<char, RemoveEscapedNewlinesError>>,
+    pub(crate) expected_from_phase_3: Vec<Result<PreprocessorToken, PreprocessorTokenizerError>>,
+    pub(crate) expected_from_phase_4: Vec<Result<Token, PreprocessingError>>,
+    pub(crate) expected_from_phase_5: Vec<Result<TopLevelStatement, ParsingError>>,
+    pub(crate) input:                 Box<str>,
+    pub(crate) name:                  PathBuf,
+}
+
+#[cfg(test)]
+pub(crate) fn test(args: TestArgs) {
+    let TestArgs {
+        expected_from_phase_0,
+        expected_from_phase_1,
+        expected_from_phase_2,
+        expected_from_phase_3,
+        expected_from_phase_4,
+        expected_from_phase_5,
+        input,
+        name,
+    } = args;
+    let mut phase4 = Preprocessing::new();
+    let mut phase5 = Parsing::new();
+    let mut from_phase_0 = Vec::new();
+    let mut from_phase_1 = Vec::new();
+    let mut from_phase_2 = Vec::new();
+    let mut from_phase_3 = Vec::new();
+    let mut from_phase_4 = Vec::new();
+    let mut from_phase_5 = Vec::new();
+    let mut context = Context::new(input, name);
+    let mut result = Vec::new();
+    loop {
+        let next = context.next_char();
+        let mut previous_returned_some = false;
+        macro_rules! handle_next {
+            ($pending:expr, $res_vec:ident) => {
+                $res_vec.push($pending.clone());
+                let next = match $pending {
+                    | Ok(Some(v)) => {
+                        previous_returned_some = true;
+                        Some(v)
+                    },
+                    | Ok(None) => {
+                        if previous_returned_some {
+                            continue;
+                        }
+                        None
+                    },
+                    | Err(e) => {
+                        let e: TranslationError = e.into();
+                        result.push(Err(Box::new(e)));
+                        continue;
+                    },
+                };
+            };
+        }
+        let mut phase_0 = context.current_phase_0;
+        let pending = phase_0.next_item(&mut context);
+        context.current_phase_0 = phase_0;
+        handle_next!(pending, from_phase_0);
+        let mut phase_1 = context.current_phase_1;
+        let pending = phase_1.next_item(next, &mut context);
+        context.current_phase_1 = phase_1;
+        handle_next!(pending, from_phase_1);
+        let mut phase_2 = context.current_phase_2;
+        let pending = phase_2.next_item(next, &mut context);
+        context.current_phase_2 = phase_2;
+        handle_next!(pending, from_phase_2);
+        let mut phase_3 = context.current_phase_3;
+        let pending = phase_3.next_item(next, &mut context);
+        context.current_phase_3 = phase_3;
+        handle_next!(pending, from_phase_3);
+        let pending = phase4.next_item(next, &mut context);
+        handle_next!(pending, from_phase_4);
+        let pending = phase5.next_item(next, &mut context);
+        handle_next!(pending, from_phase_5);
+        if let Some(next) = next {
+            result.push(Ok(next));
+        } else if !previous_returned_some {
+            break;
+        }
+    }
+    result
 }
