@@ -105,12 +105,8 @@ mod tests {
         position(2, 2, 1),
     ])]
     fn test_current_position(#[case] input: &str, #[case] expected_chars: Vec<char>) {
-        let phase = super::NewlineTracking::new();
-        let actual = run!(input, "<input>", phase ---- phase);
-        let expected = expected_chars
-            .into_iter()
-            .map(|c| Ok(c))
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected);
+        let mut actual = Vec::new();
+        test_run(Some(&mut actual), None, None, None, None);
+        assert_eq!(actual, expected_chars);
     }
 }
