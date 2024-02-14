@@ -147,10 +147,30 @@ pub(crate) struct SourcePosition {
     pub(crate) source_file: StringCacheId,
 }
 
+impl Default for SourcePosition {
+    fn default() -> Self {
+        Self {
+            index:       0,
+            line:        1,
+            column:      1,
+            source_file: StringCacheId::from_usize(0),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SourceVector {
     pub(crate) position: SourcePosition,
     pub(crate) length:   usize,
+}
+
+impl Default for SourceVector {
+    fn default() -> Self {
+        Self {
+            position: SourcePosition::default(),
+            length:   0,
+        }
+    }
 }
 
 pub(crate) struct SourceVectors {
@@ -215,6 +235,7 @@ pub(crate) struct Context {
     source_vectors:               Vec<SourceVector>,
     string_cache:                 Interner,
     is_tokenizing_include_string: bool,
+    current_token_start:          SourcePosition,
 }
 
 impl Context {
@@ -231,6 +252,7 @@ impl Context {
             source_vectors: Vec::new(),
             string_cache: Interner::new(),
             is_tokenizing_include_string: false,
+            current_token_start: SourcePosition::default(),
         }
     }
 
@@ -267,11 +289,17 @@ impl Context {
         }
     }
 
-    pub(crate) fn push_source_vector(&mut self, start_position: SourcePosition, length: usize) {
+    pub(crate) fn push_source_vector(
+        &mut self,
+        start_position: SourcePosition,
+        length: usize,
+    ) -> usize {
+        let index = self.source_vectors.len();
         self.source_vectors.push(SourceVector {
             position: start_position,
             length,
         });
+        index
     }
 
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
@@ -295,6 +323,18 @@ impl Context {
 
     pub(crate) fn set_is_tokenizing_include_string(&mut self, value: bool) {
         self.is_tokenizing_include_string = value;
+    }
+
+    pub(crate) fn current_position(&self) -> SourcePosition {
+        self.source.position()
+    }
+
+    pub(crate) fn current_token_start(&self) -> SourcePosition {
+        self.current_token_start
+    }
+
+    pub(crate) fn set_current_token_start(&mut self, position: SourcePosition) {
+        self.current_token_start = position;
     }
 }
 
