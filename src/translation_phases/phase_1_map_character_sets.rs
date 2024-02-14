@@ -109,7 +109,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::translation_phases::phase_0_newline_tracking::NewlineTracking;
+    use crate::translation_phases::test_run;
     #[rstest]
     #[case("", "")]
     #[case("a", "a")]
@@ -121,6 +121,13 @@ mod tests {
     #[case("int x = 1;\n", "int x = 1;\n")]
     #[case("int long y = 5;\r", "int long y = 5;\n")]
     fn test_phase_1_map_character_sets(#[case] input: &str, #[case] expected: &str) {
-        test_run(None, )
+        let mut actual = Vec::new();
+        test_run(TestArgs {
+            phase_1: Some(&mut actual),
+            input: Box::new(input),
+            name: "<input>".as_ref::<Path>().to_owned(),
+            ..Default::default()
+        });
+        assert_eq!(actual.into_iter().collect::<String>(), expected);
     }
 }
