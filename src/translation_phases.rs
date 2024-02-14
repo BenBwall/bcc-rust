@@ -154,148 +154,8 @@ pub(crate) struct SourceVector {
 }
 
 pub(crate) struct SourceVectors {
-    inner: SourceVectorsInner,
-}
-
-impl PartialEq for SourceVectors {
-    fn eq(&self, other: &Self) -> bool {
-        **self == **other
-    }
-}
-
-impl Eq for SourceVectors {}
-
-impl Clone for SourceVectors {
-    fn clone(&self) -> Self {
-        Self {
-            inner: match &self.inner {
-                | SourceVectorsInner::Empty => SourceVectorsInner::Empty,
-                | SourceVectorsInner::Inline(sv) => SourceVectorsInner::Inline(*sv),
-                | SourceVectorsInner::Multiple(svs) => SourceVectorsInner::Multiple(svs.clone()),
-            },
-        }
-    }
-}
-
-impl Hash for SourceVectors {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.deref().hash(state);
-    }
-}
-
-fn add(lhs: &[SourceVector], rhs: &[SourceVector]) -> SourceVectors {
-    let mut v = SmallVec::<[SourceVector; 1024]>::new();
-    v.reserve(lhs.len() + rhs.len());
-    v.extend_from_slice(lhs);
-    v.extend_from_slice(rhs);
-    v.as_ref().into()
-}
-
-impl Add<&SourceVectors> for &[SourceVector] {
-    type Output = SourceVectors;
-
-    fn add(self, rhs: &SourceVectors) -> Self::Output {
-        add(self, rhs)
-    }
-}
-
-impl Add<&[SourceVector]> for &SourceVectors {
-    type Output = SourceVectors;
-
-    fn add(self, rhs: &[SourceVector]) -> Self::Output {
-        add(self, rhs)
-    }
-}
-
-impl Add<&SourceVectors> for &SourceVectors {
-    type Output = SourceVectors;
-
-    fn add(self, rhs: &SourceVectors) -> Self::Output {
-        add(self, rhs)
-    }
-}
-
-enum SourceVectorsInner {
-    Empty,
-    Inline(SourceVector),
-    Multiple(Arc<[SourceVector]>),
-}
-
-impl Debug for SourceVectors {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        self.deref().fmt(f)
-    }
-}
-
-impl Deref for SourceVectors {
-    type Target = [SourceVector];
-
-    fn deref(&self) -> &Self::Target {
-        match &self.inner {
-            | SourceVectorsInner::Inline(sv) => std::slice::from_ref(sv),
-            | SourceVectorsInner::Multiple(svs) => svs,
-            | SourceVectorsInner::Empty => &[],
-        }
-    }
-}
-
-impl AsRef<[SourceVector]> for SourceVectors {
-    fn as_ref(&self) -> &[SourceVector] {
-        self
-    }
-}
-
-impl Borrow<[SourceVector]> for SourceVectors {
-    fn borrow(&self) -> &[SourceVector] {
-        self
-    }
-}
-
-impl Default for SourceVectors {
-    fn default() -> Self {
-        Self {
-            inner: SourceVectorsInner::Empty,
-        }
-    }
-}
-
-impl SourceVectors {
-    #[allow(dead_code)]
-    fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl From<Arc<[SourceVector]>> for SourceVectors {
-    fn from(v: Arc<[SourceVector]>) -> Self {
-        Self {
-            inner: match v.len() {
-                | 0 => SourceVectorsInner::Empty,
-                | 1 => SourceVectorsInner::Inline(v[0]),
-                | _ => SourceVectorsInner::Multiple(v),
-            },
-        }
-    }
-}
-
-impl From<SourceVector> for SourceVectors {
-    fn from(v: SourceVector) -> Self {
-        Self {
-            inner: SourceVectorsInner::Inline(v),
-        }
-    }
-}
-
-impl<'a> From<&'a [SourceVector]> for SourceVectors {
-    fn from(v: &'a [SourceVector]) -> Self {
-        Self {
-            inner: match v.len() {
-                | 0 => SourceVectorsInner::Empty,
-                | 1 => SourceVectorsInner::Inline(v[0]),
-                | _ => SourceVectorsInner::Multiple(v.into()),
-            },
-        }
-    }
+    start_index: usize,
+    length:      usize,
 }
 
 pub(crate) trait GetSeverity {
@@ -350,62 +210,28 @@ impl SourceFile {
 }
 
 pub(crate) struct Context {
-    pub(crate) source: SourceFile,
-    source_stack:      Vec<SourceFile>,
-    phase_0_stack:     Vec<NewlineTracking>,
-    phase_1_stack:     Vec<MapCharacterSets>,
-    phase_2_stack:     Vec<RemoveEscapedNewlines>,
-    phase_3_stack:     Vec<PreprocessorTokenizer>,
-    current_phase_0:   NewlineTracking,
-    current_phase_1:   MapCharacterSets,
-    current_phase_2:   RemoveEscapedNewlines,
-    current_phase_3:   PreprocessorTokenizer,
-    string_cache:      Interner,
+    pub(crate) source:            SourceFile,
+    source_stack:                 Vec<SourceFile>,
+    source_vectors:               Vec<SourceVector>,
+    string_cache:                 Interner,
+    is_tokenizing_include_string: bool,
 }
 
 impl Context {
     fn new(source: Box<str>, name: PathBuf) -> Self {
         Self {
-            source:          SourceFile {
+            source: SourceFile {
                 name,
                 source,
                 line_number: 1,
                 column_number: 1,
                 index: 0,
             },
-            source_stack:    Vec::new(),
-            phase_0_stack:   Vec::new(),
-            phase_1_stack:   Vec::new(),
-            phase_2_stack:   Vec::new(),
-            phase_3_stack:   Vec::new(),
-            current_phase_0: NewlineTracking::new(),
-            current_phase_1: MapCharacterSets::new(),
-            current_phase_2: RemoveEscapedNewlines::new(),
-            current_phase_3: PreprocessorTokenizer::new(),
-            string_cache:    Interner::new(),
+            source_stack: Vec::new(),
+            source_vectors: Vec::new(),
+            string_cache: Interner::new(),
+            is_tokenizing_include_string: false,
         }
-    }
-
-    #[cold]
-    pub(crate) fn push_frame(
-        &mut self,
-        phase_0: NewlineTracking,
-        phase_1: MapCharacterSets,
-        phase_2: RemoveEscapedNewlines,
-        phase_3: PreprocessorTokenizer,
-    ) {
-        self.phase_0_stack.push(phase_0);
-        self.phase_1_stack.push(phase_1);
-        self.phase_2_stack.push(phase_2);
-        self.phase_3_stack.push(phase_3);
-    }
-
-    #[cold]
-    pub(crate) fn pop_frame(&mut self) {
-        self.current_phase_0 = self.phase_0_stack.pop().unwrap();
-        self.current_phase_1 = self.phase_1_stack.pop().unwrap();
-        self.current_phase_2 = self.phase_2_stack.pop().unwrap();
-        self.current_phase_3 = self.phase_3_stack.pop().unwrap();
     }
 
     #[cold]
@@ -440,6 +266,36 @@ impl Context {
             }
         }
     }
+
+    pub(crate) fn push_source_vector(&mut self, start_position: SourcePosition, length: usize) {
+        self.source_vectors.push(SourceVector {
+            position: start_position,
+            length,
+        });
+    }
+
+    pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
+        let start_index = self.source_vectors.len();
+        for i in v1.start_index..v1.start_index + v1.length {
+            self.source_vectors.push(self.source_vectors[i]);
+        }
+        for i in v2.start_index..v2.start_index + v2.length {
+            self.source_vectors.push(self.source_vectors[i]);
+        }
+        let length = v1.length + v2.length;
+        SourceVectors {
+            start_index,
+            length,
+        }
+    }
+
+    pub(crate) fn is_tokenizing_include_string(&self) -> bool {
+        self.is_tokenizing_include_string
+    }
+
+    pub(crate) fn set_is_tokenizing_include_string(&mut self, value: bool) {
+        self.is_tokenizing_include_string = value;
+    }
 }
 
 pub(crate) struct TestArgs {
@@ -450,8 +306,23 @@ pub(crate) struct TestArgs {
         Option<&mut Vec<Result<PreprocessorToken, PreprocessorTokenizerError>>>,
     pub(crate) from_phase_4: Option<&mut Vec<Result<Token, PreprocessingError>>>,
     pub(crate) from_phase_5: Option<&mut Vec<Result<TopLevelStatement, ParsingError>>>,
-    pub(crate) input:                 Box<str>,
-    pub(crate) name:                  PathBuf,
+    pub(crate) input:        Box<str>,
+    pub(crate) name:         PathBuf,
+}
+
+impl Default for TestArgs {
+    fn default() -> Self {
+        Self {
+            from_phase_0: None,
+            from_phase_1: None,
+            from_phase_2: None,
+            from_phase_3: None,
+            from_phase_4: None,
+            from_phase_5: None,
+            input:        Box::default(),
+            name:         PathBuf::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -466,6 +337,10 @@ pub(crate) fn test_run(args: TestArgs) {
         input,
         name,
     } = args;
+    let mut phase0 = NewlineTracking::new();
+    let mut phase1 = MapCharacterSets::new();
+    let mut phase2 = RemoveEscapedNewlines::new();
+    let mut phase3 = PreprocessorTokenizer::new();
     let mut phase4 = Preprocessing::new();
     let mut phase5 = Parsing::new();
     let mut context = Context::new(input, name);
@@ -473,11 +348,12 @@ pub(crate) fn test_run(args: TestArgs) {
         let next = context.next_char();
         let mut previous_returned_some = false;
         macro_rules! handle_next {
-            ($pending:expr, $res_vec:ident) => {
+            ($phase:ident, $res_vec:ident) => {
+                let pending = get_next(&mut $phase, &mut context, next);
                 if let Some(v) = $res_vec {
-                    v.push($pending.clone());
+                    v.push(pending.clone());
                 }
-                let next = match $pending {
+                let next = match pending {
                     | Ok(Some(v)) => {
                         previous_returned_some = true;
                         Some(v)
@@ -494,26 +370,12 @@ pub(crate) fn test_run(args: TestArgs) {
                 };
             };
         }
-        let mut phase_0 = context.current_phase_0;
-        let pending = phase_0.next_item(&mut context);
-        context.current_phase_0 = phase_0;
-        handle_next!(pending, from_phase_0);
-        let mut phase_1 = context.current_phase_1;
-        let pending = phase_1.next_item(next, &mut context);
-        context.current_phase_1 = phase_1;
-        handle_next!(pending, from_phase_1);
-        let mut phase_2 = context.current_phase_2;
-        let pending = phase_2.next_item(next, &mut context);
-        context.current_phase_2 = phase_2;
-        handle_next!(pending, from_phase_2);
-        let mut phase_3 = context.current_phase_3;
-        let pending = phase_3.next_item(next, &mut context);
-        context.current_phase_3 = phase_3;
-        handle_next!(pending, from_phase_3);
-        let pending = phase4.next_item(next, &mut context);
-        handle_next!(pending, from_phase_4);
-        let pending = phase5.next_item(next, &mut context);
-        handle_next!(pending, from_phase_5);
+        handle_next!(phase0, from_phase_0);
+        handle_next!(phase1, from_phase_1);
+        handle_next!(phase2, from_phase_2);
+        handle_next!(phase3, from_phase_3);
+        handle_next!(phase4, from_phase_4);
+        handle_next!(phase5, from_phase_5);
         if !previous_returned_some {
             break;
         }

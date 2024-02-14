@@ -8,6 +8,15 @@ where
     start: usize,
 }
 
+impl<T, const N: usize> Default for StackQueue<T, N>
+where
+    T: Copy + Default,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T, const N: usize> StackQueue<T, N>
 where
     T: Copy + Default,

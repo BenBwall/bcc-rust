@@ -3,6 +3,7 @@ use std::{
     mem::replace,
 };
 
+use arrayvec::ArrayVec;
 use smallstr::SmallString;
 use thiserror::Error;
 
@@ -21,45 +22,18 @@ use crate::util::string_cache::{
     Interner,
 };
 
-pub(crate) trait IsTokenizingIncludeString {
-    fn is_tokenizing_include_string(&self) -> bool;
-    fn set_is_tokenizing_include_string(&mut self, value: bool);
-}
-
-impl<Prev, PrevSavePoint> IsTokenizingIncludeString for PreprocessorTokenizer<Prev, PrevSavePoint> {
-    fn is_tokenizing_include_string(&self) -> bool {
-        self.is_tokenizing_include_string
-    }
-
-    fn set_is_tokenizing_include_string(&mut self, value: bool) {
-        self.is_tokenizing_include_string = value;
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PreprocessorTokenizer {
     state: State,
-    is_tokenizing_include_string: bool,
-    pub(crate) string_cache: StringCache,
-    current_token_start: SourInterner
+    current_token_start: SourcePosition,
+    last_char: Option<char>,
+    pending_tokens: StackStack<PreprocessorToken, 2>,
 }
 
-impl<Prev, PrevSavePoint> AsRef<StringCache> for PreprocessorTokenizer<Prev, PrevSavePoint> {
-    fn as_ref(&self) -> &StringCInterner
-        &self.string_cachInterner
-    }
-}
-
-impl<Prev, PrevSavePoint> AsMut<StringCache> for PreprocessorTokenizer<Prev, PrevSavePoint> {
-    fn as_mut(&mut self) -> &mutInternere {
-        &mut self.string_cacheInterner
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) enum State<PrevSavePoint> {
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum State {
     Default,
-    BetweenHashes,
+    MiddleOfHashHash,
     MiddleOfIdentifier,
     MiddleOfWideStringOrIdentifier,
     MiddleOfNumberOrPeriod,
@@ -72,12 +46,8 @@ pub(crate) enum State<PrevSavePoint> {
     MiddleOfForwardSlash,
     MiddleOfPercent,
     MiddleOfHashDigraph,
-    MiddleOfDoubleHashDigraph {
-        end_of_first_half: Box<PrevSavePoint>,
-    },
-    MiddleOfEllipsis {
-        end_of_first_period: Box<PrevSavePoint>,
-    },
+    MiddleOfDoubleHashDigraph,
+    MiddleOfEllipsis,
     MiddleOfColon,
     MiddleOfLeftAngleBracket,
     MiddleOfLeftShift,
@@ -94,7 +64,6 @@ pub(crate) enum State<PrevSavePoint> {
     MiddleOfLineComment,
     MiddleOfBlockComment,
     BeforeBlockCommentEnd,
-    Done,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -106,6 +75,7 @@ pub(crate) enum PreprocessorTokenizerErrorType {
     NewlineInCharacter,
     NewlineInString,
     NewlineInIncludeString,
+    MissingSignInExponent,
 }
 
 impl Display for PreprocessorTokenizerErrorType {
@@ -126,16 +96,18 @@ impl Display for PreprocessorTokenizerErrorType {
                 f,
                 "Unescaped newlines are not allowed in header include strings"
             ),
+            | Self::MissingSignInExponent => write!(
+                f,
+                "Exponent in floating point number is missing a sign"
+            ),
         }
     }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PreprocessorTokenizerError {
-    start_position: SourcePosition,
-    length:         usize,
+    source_vector: SourceVector,
     error_type:     PreprocessorTokenizerErrorType,
-    contents:       StringCacheId,
 }
 
 impl std::error::Error for PreprocessorTokenizerError {}
@@ -149,7 +121,8 @@ impl GetSeverity for PreprocessorTokenizerError {
             | PreprocessorTokenizerErrorType::UnterminatedIncludeString
             | PreprocessorTokenizerErrorType::NewlineInCharacter
             | PreprocessorTokenizerErrorType::NewlineInString
-            | PreprocessorTokenizerErrorType::NewlineInIncludeString => ErrorSeverity::Error,
+            | PreprocessorTokenizerErrorType::NewlineInIncludeString
+            | PreprocessorTokenizerErrorType::MissingSignInExponent => ErrorSeverity::Error,
         }
     }
 }
@@ -157,63 +130,6 @@ impl GetSeverity for PreprocessorTokenizerError {
 impl Display for PreprocessorTokenizerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.error_type)
-    }
-}
-
-impl<Prev> Iterator for PreprocessorTokenizer<Prev, Prev::SavePoint>
-where
-    Prev: TranslationPhase<Yield = char>,
-{
-    type Item = Result<PreprocessorToken, PreprocessorTokenizerError<Prev::Error>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(match replace(&mut self.state, State::Default) {
-            | State::Done => {
-                self.state = State::Done;
-                return None;
-            },
-            | State::BetweenHashes => self.tokenize_hash(),
-            | State::MiddleOfIdentifier => self.tokenize_identifier(),
-            | State::MiddleOfWideStringOrIdentifier => self.tokenize_wide_string_or_identifier(),
-            | State::MiddleOfNumberOrPeriod => self.tokenize_period_or_number(),
-            | State::MiddleOfNumber => self.tokenize_number(),
-            | State::MiddleOfExponent => self.tokenize_exponent_sign(),
-            | State::MiddleOfCharacter => self.tokenize_char(),
-            | State::MiddleOfString => self.tokenize_string(),
-            | State::MiddleOfIncludeString => self.tokenize_include_string(),
-            | State::MiddleOfAngleBracketString => return self.tokenize_angle_bracket_string(),
-            | State::MiddleOfForwardSlash => self.tokenize_or_step_over_forward_slash(),
-            | State::MiddleOfPercent => self.tokenize_percent(),
-            | State::MiddleOfHashDigraph => self.tokenize_hash_digraph(),
-            | State::MiddleOfLeftAngleBracket => self.tokenize_left_angle_bracket(),
-            | State::MiddleOfLeftShift => self.tokenize_left_shift(),
-            | State::MiddleOfRightAngleBracket => self.tokenize_right_angle_bracket(),
-            | State::MiddleOfRightShift => self.tokenize_right_shift(),
-            | State::MiddleOfDoubleHashDigraph { end_of_first_half } =>
-                self.tokenize_double_hash_digraph(*end_of_first_half),
-            | State::MiddleOfEllipsis {
-                end_of_first_period,
-            } => self.tokenize_ellipsis(*end_of_first_period),
-            | State::MiddleOfColon => self.tokenize_colon(),
-            | State::MiddleOfPlus => self.tokenize_plus(),
-            | State::MiddleOfMinus => self.tokenize_minus(),
-            | State::MiddleOfAsterisk => self.tokenize_asterisk(),
-            | State::MiddleOfCaret => self.tokenize_caret(),
-            | State::MiddleOfAmpersand => self.tokenize_ampersand(),
-            | State::MiddleOfPipe => self.tokenize_pipe(),
-            | State::MiddleOfExclamationMark => self.tokenize_exclamation_mark(),
-            | State::MiddleOfEquals => self.tokenize_equals(),
-            | State::MiddleOfLineComment => self.step_over_line_comment(),
-            | State::MiddleOfBlockComment => self.step_over_block_comment(),
-            | State::BeforeBlockCommentEnd => self.step_over_block_comment_end(),
-            | State::Default => {
-                let result = self.tokenize();
-                if result.is_none() {
-                    self.state = State::Done;
-                }
-                return result;
-            },
-        })
     }
 }
 
@@ -227,6 +143,31 @@ impl TranslationPhase for PreprocessorTokenizer {
         input: Self::Input,
         context: &mut super::Context,
     ) -> Result<Option<Self::Yield>, Self::Error> {
+        if let Some(c) = self.last_char {
+            match self.next(c, context) {
+                | Ok(Some(c)) => {
+                    self.last = Some(input);
+                    return Ok(Some(c))
+                },
+                | Ok(None) => self.last = None,
+                | Err(e) => {
+                    self.last = Some(input);
+                    return Err(e);
+                },
+            }
+        }
+        self.next(input, context)
+    }
+
+    fn eoi(&mut self, context: &mut super::Context) -> Result<Option<Self::Yield>, Self::Error> {
+        if let Some(c) = self.last_char.take() {
+            match self.next(c, context) {
+                | Ok(Some(c)) => return Ok(Some(c)),
+                | Ok(None) => (),
+                | Err(e) => return Err(e),
+            }
+        }
+        self.handle_eoi(context)
     }
 }
 
@@ -234,6 +175,67 @@ impl<Prev> PreprocessorTokenizer<Prev, Prev::SavePoint>
 where
     Prev: TranslationPhase<Yield = char>,
 {
+    fn handle_eoi(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error> {
+        match self.state {
+            State::Default => Ok(None),
+            State::MiddleOfHashHash => self.generate_token(PreprocessorTokenType::Hash),
+            State::MiddleOfIdentifier => self.generate_token(PreprocessorTokenType::Identifier),
+            State::MiddleOfWideStringOrIdentifier => self.generate_token(PreprocessorTokenType::Identifier),
+            State::MiddleOfNumberOrPeriod => self.generate_token(PreprocessorTokenType::Period),
+            State::MiddleOfNumber => self.generate_token(PreprocessorTokenType::Number),
+            State::MiddleOfExponent => self.generate_error(PreprocessorTokenizerErrorType::MissingSignInExponent),
+            State::MiddleOfCharacter => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedCharacter),
+            State::MiddleOfString => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedString),
+            State::MiddleOfIncludeString => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedIncludeString),
+            State::MiddleOfAngleBracketString => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedIncludeString),
+            State::MiddleOfForwardSlash => self.generate_token(PreprocessorTokenType::ForwardSlash),
+            State::MiddleOfPercent => self.generate_token(PreprocessorTokenType::Percent),
+            State::MiddleOfHashDigraph => self.generate_token(PreprocessorTokenType::Hash),
+            State::MiddleOfDoubleHashDigraph => {self.pending_tokens.self.}
+        }
+    }
+    
+    fn next(
+        &mut self,
+        input: char,
+        context: &mut Context,
+    ) -> Result<Option<Self::Yield>, Self::Error> {
+        match self.state {
+            | State::MiddleOfHashHash => self.tokenize_hash(input),
+            | State::MiddleOfIdentifier => self.tokenize_identifier(input),
+            | State::MiddleOfWideStringOrIdentifier => self.tokenize_wide_string_or_identifier(input),
+            | State::MiddleOfNumberOrPeriod => self.tokenize_period_or_number(input),
+            | State::MiddleOfNumber => self.tokenize_number(input),
+            | State::MiddleOfExponent => self.tokenize_exponent_sign(input),
+            | State::MiddleOfCharacter => self.tokenize_char(input),
+            | State::MiddleOfString => self.tokenize_string(input),
+            | State::MiddleOfIncludeString => self.tokenize_include_string(input),
+            | State::MiddleOfAngleBracketString => return self.tokenize_angle_bracket_string(input),
+            | State::MiddleOfForwardSlash => self.tokenize_or_step_over_forward_slash(input),
+            | State::MiddleOfPercent => self.tokenize_percent(input),
+            | State::MiddleOfHashDigraph => self.tokenize_hash_digraph(input),
+            | State::MiddleOfLeftAngleBracket => self.tokenize_left_angle_bracket(input),
+            | State::MiddleOfLeftShift => self.tokenize_left_shift(input),
+            | State::MiddleOfRightAngleBracket => self.tokenize_right_angle_bracket(input),
+            | State::MiddleOfRightShift => self.tokenize_right_shift(input),
+            | State::MiddleOfDoubleHashDigraph =>
+                self.tokenize_double_hash_digraph(input),
+            | State::MiddleOfEllipsis => self.tokenize_ellipsis(input),
+            | State::MiddleOfColon => self.tokenize_colon(input),
+            | State::MiddleOfPlus => self.tokenize_plus(input),
+            | State::MiddleOfMinus => self.tokenize_minus(input),
+            | State::MiddleOfAsterisk => self.tokenize_asterisk(input),
+            | State::MiddleOfCaret => self.tokenize_caret(input),
+            | State::MiddleOfAmpersand => self.tokenize_ampersand(input),
+            | State::MiddleOfPipe => self.tokenize_pipe(input),
+            | State::MiddleOfExclamationMark => self.tokenize_exclamation_mark(input),
+            | State::MiddleOfEquals => self.tokenize_equals(input),
+            | State::MiddleOfLineComment => self.step_over_line_comment(input),
+            | State::MiddleOfBlockComment => self.step_over_block_comment(input),
+            | State::BeforeBlockCommentEnd => self.step_over_block_comment_end(input),
+            | State::Default => self.tokenize(input),
+        }
+    }
     fn error_from_prev(
         &self,
         error: Prev::Error,
@@ -245,7 +247,7 @@ where
     fn generate_error(
         &mut self,
         error_type: PreprocessorTokenizerErrorType,
-    ) -> Result<<Self as TranslationPhase>::Yield, <Self as TranslationPhase>::Error> {
+    ) -> Result<Option<PreprocessorToken>, PreprocessorTokenizerError> {
         let current_save = self.previous_phase.save();
         self.previous_phase
             .restore(self.current_token_start.clone());
@@ -274,7 +276,7 @@ where
     fn generate_token(
         &mut self,
         token_type: PreprocessorTokenType,
-    ) -> Result<<Self as TranslationPhase>::Yield, <Self as TranslationPhase>::Error> {
+    ) -> Result<Option<PreprocessorToken>, PreprocessorTokenizerError> {
         let current_save = self.previous_phase.save();
         self.previous_phase
             .restore(self.current_token_start.clone());
@@ -289,7 +291,7 @@ where
         self.previous_phase.restore(current_save);
         let start_position = self.current_token_start.current_position();
 
-        Ok(PreprocessorToken {
+        Ok(Some(PreprocessorToken {
             source_vectors: SourceVector {
                 position: start_position,
                 length:   self.current_position().index - start_position.index,
@@ -297,7 +299,7 @@ where
             .into(),
             kind:           token_type,
             contents:       self.string_cache.intern(contents.as_str()),
-        })
+        }))
     }
 
     fn step_over_whitespace(&mut self) -> ParserResult<Prev::Error> {
@@ -489,7 +491,7 @@ where
         let save_point = self.save();
         match self.previous_phase.next() {
             | Some(Err(e)) => {
-                self.state = State::BetweenHashes;
+                self.state = State::MiddleOfHashHash;
                 self.error_from_prev(e)Interner
             },
             | Some(Ok('#')) => self.generate_token(PreprocessorTokenType::HashHash),
@@ -785,9 +787,7 @@ where
     ) -> ParserResult<Prev::Error> {
         match self.previous_phase.next() {
             | Some(Err(e)) => {
-                self.state = State::MiddleOfDoubleHashDigraph {
-                    end_of_first_half: Box::new(end_of_first_half),
-                };
+                self.state = State::MiddleOfDoubleHashDigraph;
                 self.error_from_prev(e)
             },
             | Some(Ok(':')) => self.generate_token(PreprocessorTokenType::HashHash),
@@ -1104,6 +1104,20 @@ pub(crate) struct PreprocessorToken {
     pub(crate) kind:           PreprocessorTokenType,
     pub(crate) source_vectors: SourceVectors,
     pub(crate) contents:       StringCacheId,
+}
+
+impl Default for PreprocessorToken {
+    fn default() -> Self {
+        Self {
+            kind:           PreprocessorTokenType::WideGeneratedString,
+            source_vectors: SourceVectors {
+                start_index: usize::MAX,
+                length: usize::MAX,
+            },
+            contents:       StringCacheId::from_usize(usize::MAX),
+        }
+    }
+
 }
 
 #[cfg(test)]

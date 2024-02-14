@@ -64,9 +64,14 @@ mod tests {
     use rstest::rstest;
 
     use crate::{
-        translation_phases::SourcePosition,
+        translation_phases::{
+            test_run,
+            SourcePosition,
+        },
         util::string_cache::Id,
     };
+
+    use std::path::{Path, PathBuf};
 
     const ID0: Id = Id::from_usize(0);
 
@@ -106,7 +111,12 @@ mod tests {
     ])]
     fn test_current_position(#[case] input: &str, #[case] expected_chars: Vec<char>) {
         let mut actual = Vec::new();
-        test_run(Some(&mut actual), None, None, None, None);
+        test_run(TestArgs {
+            phase_0: Some(&mut actual),
+            input: Box::new(input),
+            name: "<input>".as_ref::<Path>().to_owned(),
+            ..Default::default()
+        });
         assert_eq!(actual, expected_chars);
     }
 }
