@@ -4,6 +4,7 @@ use std::{
 };
 
 use arrayvec::ArrayVec;
+use proptest::prelude::Rng;
 use smallstr::SmallString;
 use thiserror::Error;
 
@@ -18,7 +19,7 @@ use super::{
     TranslationPhase,
     Context,
 };
-use crate::util::{stack_queue::StackQueue, string_cache::{
+use crate::util::{small_queue::SmallQueue, string_cache::{
     Id as StringCacheId,
     Interner,
 }};
@@ -26,8 +27,8 @@ use crate::util::{stack_queue::StackQueue, string_cache::{
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PreprocessorTokenizer {
     state: State,
-    pending_chars: StackQueue<char, 2>,
-    pending_tokens: StackQueue<PreprocessorToken, 2>,
+    pending_chars: SmallQueue<char, 4>,
+    pending_tokens: SmallQueue<PreprocessorToken, 4>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -151,10 +152,10 @@ impl TranslationPhase for PreprocessorTokenizer {
     fn eoi(&mut self, context: &mut super::Context) -> Result<Option<Self::Yield>, Self::Error> {
         match self.drive(context) {
             | Ok(Some(c)) => Ok(Some(c)),
-            | Ok(None) => self.handle_unexpected_eoi(context),
+            | Ok(None) => self.handle_eoi(context),
             | Err(e) => Err(e),
         }
-        self.handle_unexpected_eoi(context)
+        self.handle_eoi(context)
     }
 }
 
@@ -172,8 +173,8 @@ where
         }
         Ok(None)
     }
-    fn handle_unexpected_eoi(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error> {
-        match self.state {
+    fn handle_eoi(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error> {
+        match replace(&mut self.state, State::Default) {
             State::Default => Ok(None),
             State::MiddleOfHash => self.generate_token(PreprocessorTokenType::Hash),
             State::MiddleOfIdentifier => self.generate_token(PreprocessorTokenType::Identifier),
@@ -188,7 +189,13 @@ where
             State::MiddleOfForwardSlash => self.generate_token(PreprocessorTokenType::ForwardSlash),
             State::MiddleOfPercent => self.generate_token(PreprocessorTokenType::Percent),
             State::MiddleOfHashDigraph => self.generate_token(PreprocessorTokenType::Hash),
-            State::MiddleOfDoubleHashDigraph => {self.pending_tokens.self.}
+            State::MiddleOfLeftAngleBracket => self.generate_token(PreprocessorTokenType::LessThan),
+            State::MiddleOfLeftShift => self.generate_token(PreprocessorTokenType::LessThanLessThan),
+            State::MiddleOfRightAngleBracket => self.generate_token(PreprocessorTokenType::GreaterThan),
+            State::MiddleOfRightShift => self.generate_token(PreprocessorTokenType::GreaterThanGreaterThan),
+            State::MiddleOfDoubleHashDigraph => {
+
+            }
         }
     }
     
@@ -282,7 +289,22 @@ where
         ))
     }
 
-    #[allow(clippy::unnecessary_wraps)]
+    fn generate_token_with_position(&mut self, token_type: PreprocessorTokenType, context: &mut Context, source_position: SourcePosition, length: usize) -> PreprocessorToken {
+        let source_vector = context.push_source_vector(source_position, length);
+        let mut contents = TokenString::new();
+        for c in context.source[current_token_start.index..current_token_start.index + length].chars() {
+            contents.push(c);
+        }
+        PreprocessorToken {
+            source_vectors: SourceVectors {
+                start_index: source_vector,
+                length: 1,
+            },
+            kind:           token_type,
+            contents:       self.string_cache.intern(contents.as_str()),
+        }
+    }
+
     fn generate_token(
         &mut self,
         token_type: PreprocessorTokenType,
@@ -296,19 +318,12 @@ where
         } else {
             current_position.index - current_token_start.index
         };
-        let source_vector = context.push_source_vector(context.current_token_start(), length);
-        let mut contents = TokenString::new();
-        for c in context.source[current_token_start.index..current_token_start.index + length].chars() {
-            contents.push(c);
-        }
-        PreprocessorToken {
-            source_vectors: SourceVectors {
-                start_index: source_vector,
-                length: 1,
-            },
-            kind:           token_type,
-            contents:       self.string_cache.intern(contents.as_str()),
-        }
+        self.generate_token_with_position(
+            token_type,
+            context,
+            current_token_start,
+            length,
+        )
     }
 
     fn step_over_whitespace(&mut self) -> ParserResult<Prev::Error> {
@@ -752,10 +767,6 @@ where
         match input {
             '%' => {
                 self.state = State::MiddleOfDoubleHashDigraph;
-                let start_of_current_token = context.current_token_start();
-                context.set_current_token_start(context.current_position());
-                self.pending_tokens.push_back(self.generate_token(PreprocessorTokenType::Percent, true));
-                context.set_current_token_start(start_of_current_token);
                 Ok(None)
             },
             _ => {
@@ -768,36 +779,25 @@ where
 
     fn tokenize_double_hash_digraph(
         &mut self,
-        input: char
+        input: char,
+        context: &mut Context,
     ) -> ParserResult<Prev::Error> {
-        match input {
+        Ok(Some(match input {
             ':' => self.generate_token(PreprocessorTokenType::HashHash, true),
             _ => {
-
-            }
-        }
-        if input == ':' {
-            self.current_token_length += 1;
-            return Ok(Some(self.generate_token(PreprocessorTokenType::HashHash)));
-        }
-        let length = self.current_token_length;
-        // We previously consumed a '%' as part of the hash hash digraph, but since the current token isn't a hash hash digraph, we need to backtrack one character. 
-        self.pending_tokens.push_back(self.generate_token(PreprocessorTokenType::Hash, SourceVector {
-            length: self.current_token_source_vector.length - 1,
-            position: self.current_token_source_vector.position,
-        }));
-        match input {
-            | Some(Err(e)) => {
-                self.state = State::MiddleOfDoubleHashDigraph;
-                self.error_from_prev(e)
-            },
-            | Some(Ok(':')) => self.generate_token(PreprocessorTokenType::HashHash),
-            | None | Some(Ok(_)) => {
-                self.previous_phase.restore(end_of_first_half);
+                let current_token_start = context.current_token_start();
+                let percent_position = SourcePosition {
+                    index: current_token_start.index + 2,
+                    line: current_token_start.line,
+                    column: current_token_start.column + 2,
+                    source_file: current_token_start.source_file,
+                };
+                self.pending_tokens.push_back(self.generate_token_with_position(PreprocessorTokenType::Percent, context, percent_position, 1));
                 self.state = State::Default;
-                self.generate_token(PreprocessorTokenType::Hash)
-            },
-        }
+                self.pending_chars.push_front(input);
+                self.generate_token_with_position(PreprocessorTokenType::Hash, context, current_token_start, 2)
+            }
+        }))
     }
 
     fn tokenize_left_angle_bracket(&mut self) -> ParserResult<Prev::Error> {

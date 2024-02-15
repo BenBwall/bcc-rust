@@ -8,6 +8,7 @@ use rustc_hash::FxHasher;
 
 pub(crate) mod dedup_arena;
 pub(crate) mod shared;
+pub(crate) mod small_queue;
 pub(crate) mod stack_queue;
 pub(crate) mod string_cache;
 
