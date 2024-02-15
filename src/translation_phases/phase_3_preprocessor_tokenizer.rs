@@ -28,7 +28,8 @@ use crate::util::{small_queue::SmallQueue, string_cache::{
 pub(crate) struct PreprocessorTokenizer {
     state: State,
     pending_chars: SmallQueue<char, 4>,
-    pending_tokens: SmallQueue<PreprocessorToken, 4>,
+    yielded_tokens: SmallQueue<PreprocessorToken, 4>,
+    maybe_tokens: SmallQueue<PreprocessorToken, 4>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -748,11 +749,11 @@ where
 
     fn tokenize_percent(&mut self, input: char, context: &mut Context) -> ParserResult<Prev::Error> {
         Some(Ok(match input {
-            '=' => self.generate_token(PreprocessorTokenType::PercentEquals, true),
-            '>' => self.generate_token(PreprocessorTokenType::ClosingCurlyBrace, true),
+            '=' => self.generate_token(PreprocessorTokenType::PercentEquals, context, true),
+            '>' => self.generate_token(PreprocessorTokenType::ClosingCurlyBrace, context, true),
             ':' => {
                 self.state = State::MiddleOfHashDigraph;
-                self.pending_tokens.push_back(self.generate_token(PreprocessorTokenType::Hash, true));
+                self.maybe_tokens.push_back(self.generate_token(PreprocessorTokenType::Hash, context, true));
                 return Ok(None);
             },
             v => {
@@ -766,6 +767,7 @@ where
     fn tokenize_hash_digraph(&mut self, input: char, context: &mut Context) -> ParserResult<Prev::Error> {
         match input {
             '%' => {
+                self.pending_tokens.push_back(self.generate_token_with_position(PreprocessorTokenType::Percent, context, context.current_char_position(), 1));
                 self.state = State::MiddleOfDoubleHashDigraph;
                 Ok(None)
             },
