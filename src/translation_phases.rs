@@ -236,6 +236,7 @@ pub(crate) struct Context {
     string_cache:                 Interner,
     is_tokenizing_include_string: bool,
     current_token_start:          SourcePosition,
+    current_char_position:        SourcePosition,
 }
 
 impl Context {
@@ -253,6 +254,7 @@ impl Context {
             string_cache: Interner::new(),
             is_tokenizing_include_string: false,
             current_token_start: SourcePosition::default(),
+            current_char_position: SourcePosition::default(),
         }
     }
 
@@ -336,6 +338,14 @@ impl Context {
     pub(crate) fn set_current_token_start(&mut self, position: SourcePosition) {
         self.current_token_start = position;
     }
+
+    pub(crate) fn current_char_position(&self) -> SourcePosition {
+        self.current_char_position
+    }
+
+    pub(crate) fn set_current_char_position(&mut self, position: SourcePosition) {
+        self.current_char_position = position;
+    }
 }
 
 pub(crate) struct TestArgs {
@@ -385,6 +395,7 @@ pub(crate) fn test_run(args: TestArgs) {
     let mut phase5 = Parsing::new();
     let mut context = Context::new(input, name);
     loop {
+        context.set_current_char_position(context.current_position());
         let next = context.next_char();
         let mut previous_returned_some = false;
         macro_rules! handle_next {
