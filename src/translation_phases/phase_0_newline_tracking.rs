@@ -8,6 +8,10 @@ use super::{
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct NewlineTracking {
     last: Option<char>,
+    source: SharedString,
+    index: usize,
+    line_number: usize,
+    column_number: usize,
 }
 
 impl NewlineTracking {

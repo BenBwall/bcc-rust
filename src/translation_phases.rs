@@ -142,8 +142,8 @@ impl Display for ErrorSeverity {
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SourcePosition {
     pub(crate) index:       usize,
-    pub(crate) line:        usize,
-    pub(crate) column:      usize,
+    pub(crate) line:        u32,
+    pub(crate) column:      u32,
     pub(crate) source_file: StringCacheId,
 }
 
@@ -235,8 +235,6 @@ pub(crate) struct Context {
     source_vectors:               Vec<SourceVector>,
     string_cache:                 Interner,
     is_tokenizing_include_string: bool,
-    current_token_start:          SourcePosition,
-    current_char_position:        SourcePosition,
 }
 
 impl Context {
@@ -253,8 +251,6 @@ impl Context {
             source_vectors: Vec::new(),
             string_cache: Interner::new(),
             is_tokenizing_include_string: false,
-            current_token_start: SourcePosition::default(),
-            current_char_position: SourcePosition::default(),
         }
     }
 
@@ -330,22 +326,6 @@ impl Context {
     pub(crate) fn current_position(&self) -> SourcePosition {
         self.source.position()
     }
-
-    pub(crate) fn current_token_start(&self) -> SourcePosition {
-        self.current_token_start
-    }
-
-    pub(crate) fn set_current_token_start(&mut self, position: SourcePosition) {
-        self.current_token_start = position;
-    }
-
-    pub(crate) fn current_char_position(&self) -> SourcePosition {
-        self.current_char_position
-    }
-
-    pub(crate) fn set_current_char_position(&mut self, position: SourcePosition) {
-        self.current_char_position = position;
-    }
 }
 
 pub(crate) struct TestArgs {
@@ -394,6 +374,7 @@ pub(crate) fn test_run(args: TestArgs) {
     let mut phase4 = Preprocessing::new();
     let mut phase5 = Parsing::new();
     let mut context = Context::new(input, name);
+    let mut pending_chars = StackQueue::<u8, 4>::new();
     loop {
         context.set_current_char_position(context.current_position());
         let next = context.next_char();
