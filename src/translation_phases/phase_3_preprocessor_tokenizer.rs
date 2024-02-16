@@ -177,12 +177,12 @@ where
     fn handle_eoi(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error> {
         match replace(&mut self.state, State::Default) {
             State::Default => Ok(None),
-            State::MiddleOfHash => self.generate_token(PreprocessorTokenType::Hash),
-            State::MiddleOfIdentifier => self.generate_token(PreprocessorTokenType::Identifier),
-            State::MiddleOfWideStringOrIdentifier => self.generate_token(PreprocessorTokenType::Identifier),
-            State::MiddleOfNumberOrPeriod => self.generate_token(PreprocessorTokenType::Period),
-            State::MiddleOfNumber => self.generate_token(PreprocessorTokenType::Number),
-            State::MiddleOfExponent => self.generate_error(PreprocessorTokenizerErrorType::MissingSignInExponent),
+            State::MiddleOfHash => Ok(Some(self.generate_token(PreprocessorTokenType::Hash, context, false))),
+            State::MiddleOfIdentifier => Ok(Some(self.generate_token(PreprocessorTokenType::Identifier, context, false))),
+            State::MiddleOfWideStringOrIdentifier => Ok(Some(self.generate_token(PreprocessorTokenType::Identifier, context, false))),
+            State::MiddleOfNumberOrPeriod => Ok(Some(self.generate_token(PreprocessorTokenType::Period, context, false))),
+            State::MiddleOfNumber => Ok(Some(self.generate_token(PreprocessorTokenType::Number, context, false))),
+            State::MiddleOfExponent => Err(self.generate_error(PreprocessorTokenizerErrorType::MissingSignInExponent)),
             State::MiddleOfCharacter => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedCharacter),
             State::MiddleOfString => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedString),
             State::MiddleOfIncludeString => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedIncludeString),
@@ -195,7 +195,9 @@ where
             State::MiddleOfRightAngleBracket => self.generate_token(PreprocessorTokenType::GreaterThan),
             State::MiddleOfRightShift => self.generate_token(PreprocessorTokenType::GreaterThanGreaterThan),
             State::MiddleOfDoubleHashDigraph => {
-
+                let ret = self.maybe_tokens.pop_back().unwrap();
+                self.pending_tokens.push_back(self.maybe_tokens.pop_front().unwrap());
+                Ok(Some(ret))
             }
         }
     }
