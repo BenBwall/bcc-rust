@@ -6,24 +6,21 @@ use super::{
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct NewlineTracking {
+pub(crate) struct NewlineTracking<'ctx> {
     last: Option<char>,
-    source: SharedString,
-    index: usize,
-    line_number: usize,
-    column_number: usize,
+    context: &'ctx RefCell<Context>,
 }
 
-impl NewlineTracking {
-    pub(crate) fn new() -> Self {
-        Self { last: None }
+impl<'ctx> NewlineTracking<'ctx> {
+    pub(crate) fn new(context: &'ctx RefCell<Context>) -> Self {
+        Self { last: None, context }
     }
 
     fn next(
         &mut self,
-        curr: Option<char>,
-        context: &mut Context,
     ) -> Result<Option<char>, Infallible> {
+        let mut borrow = self.context.borrow_mut();
+        let curr = borrow.next_char();
         let last = self.last.take();
         if last == Some('\r') && curr == Some('\n') {
             context.source.column_number = 1;
@@ -46,19 +43,30 @@ impl NewlineTracking {
 
 impl TranslationPhase for NewlineTracking {
     type Error = Infallible;
-    type Input = char;
     type Yield = char;
 
-    fn next_item(
+    fn next(
         &mut self,
-        curr: Self::Input,
-        context: &mut Context,
-    ) -> Result<Option<Self::Yield>, Self::Error> {
-        self.next(Some(curr), context)
-    }
+    ) -> Result<Option<char>, Infallible> {
+        let mut borrow = self.context.borrow_mut();
+        let curr = borrow.next_char();
+        let last = self.last.take();
+        if last == Some('\r') && curr == Some('\n') {
+            context.source.column_number = 1;
+            context.source.line_number += 1;
+            // Don't set last here, because we want to ignore the '\n' in the next
+            // iteration.
+            return Ok(Some('\n'));
+        }
 
-    fn eoi(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error> {
-        self.next(None, context)
+        if matches!(last, Some('\n' | '\r')) {
+            context.source.column_number = 1;
+            context.source.line_number += 1;
+            self.last = curr;
+            return Some(Ok('\n'));
+        }
+        self.last = curr;
+        Some(None)
     }
 }
 
