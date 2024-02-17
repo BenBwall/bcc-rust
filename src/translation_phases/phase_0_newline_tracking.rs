@@ -7,71 +7,80 @@ use super::{
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct NewlineTracking<'ctx> {
-    last: Option<char>,
+    next:    Option<Input>,
     context: &'ctx RefCell<Context>,
 }
 
 impl<'ctx> NewlineTracking<'ctx> {
     pub(crate) fn new(context: &'ctx RefCell<Context>) -> Self {
-        Self { last: None, context }
+        Self {
+            next: None,
+            context,
+        }
     }
 
-    fn next(
-        &mut self,
-    ) -> Result<Option<char>, Infallible> {
-        let mut borrow = self.context.borrow_mut();
-        let curr = borrow.next_char();
-        let last = self.last.take();
-        if last == Some('\r') && curr == Some('\n') {
-            context.source.column_number = 1;
-            context.source.line_number += 1;
-            // Don't set last here, because we want to ignore the '\n' in the next
-            // iteration.
-            return Ok(Some('\n'));
+    fn get_next(&mut self) -> Option<Input> {
+        if let Some(next) = self.next.take() {
+            return Some(next);
         }
+        match self.context.borrow_mut().next_byte() {
+            | Err(e) => match e {},
+            | Ok(Some(next)) => Some(next),
+            | Ok(None) => None,
+        }
+    }
 
-        if matches!(last, Some('\n' | '\r')) {
-            context.source.column_number = 1;
-            context.source.line_number += 1;
-            self.last = curr;
-            return Some(Ok('\n'));
-        }
-        self.last = curr;
-        Some(None)
+    pub(crate) fn borrow_context(&self) -> Ref<Context> {
+        self.context.borrow()
+    }
+
+    pub(crate) fn borrow_context_mut(&self) -> RefMut<Context> {
+        self.context.borrow_mut()
     }
 }
 
 impl TranslationPhase for NewlineTracking {
     type Error = Infallible;
-    type Yield = char;
+    type Yield = Input;
 
-    fn next(
-        &mut self,
-    ) -> Result<Option<char>, Infallible> {
-        let mut borrow = self.context.borrow_mut();
-        let curr = borrow.next_char();
-        let last = self.last.take();
-        if last == Some('\r') && curr == Some('\n') {
-            context.source.column_number = 1;
-            context.source.line_number += 1;
-            // Don't set last here, because we want to ignore the '\n' in the next
-            // iteration.
-            return Ok(Some('\n'));
+    fn next(&mut self) -> Result<Option<Input>, Infallible> {
+        let Some(curr) = self.get_next() else {
+            return Ok(None);
+        };
+        let next = match self.borrow_context_mut().next_value() {
+            | Ok(Some(next)) => Some(next),
+            | Ok(None) => None,
+            | Err(e) => match e {},
+        };
+        if curr.value == b'\r' && matches!(next, Some(Input { value: b'\n', .. })) {
+            let mut borrow = self.borrow_context_mut();
+            borrow.source.column_number = 1;
+            borrow.source.line_number += 1;
+            curr.value = b'\n';
+            curr.length = 2;
+            return Ok(Some(curr));
         }
-
-        if matches!(last, Some('\n' | '\r')) {
-            context.source.column_number = 1;
-            context.source.line_number += 1;
-            self.last = curr;
-            return Some(Ok('\n'));
+        if matches!(curr.value, b'\n' | b'\r') {
+            let mut borrow = self.borrow_context_mut();
+            borrow.source.column_number = 1;
+            borrow.source.line_number += 1;
+            self.next = next;
+            curr.value = b'\n';
+            return Ok(Some(curr));
         }
-        self.last = curr;
-        Some(None)
+        context.source.column_number += 1;
+        self.next = next;
+        Ok(Some(None))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::{
+        Path,
+        PathBuf,
+    };
+
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
@@ -82,8 +91,6 @@ mod tests {
         },
         util::string_cache::Id,
     };
-
-    use std::path::{Path, PathBuf};
 
     const ID0: Id = Id::from_usize(0);
 

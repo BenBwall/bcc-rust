@@ -1,6 +1,9 @@
 use std::convert::Infallible;
 
-use super::{phase_0_newline_tracking::NewlineTracking, TranslationPhase};
+use super::{
+    phase_0_newline_tracking::NewlineTracking,
+    TranslationPhase,
+};
 use crate::util::stack_queue::StackQueue;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -37,30 +40,32 @@ impl QuestionMarksSeen {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct MapCharacterSets {
-    pub(crate) pending_chars:       StackQueue<char, 3>,
-    pub(crate) question_marks_seen: QuestionMarksSeen,
-    pub(crate) prev: NewlineTracking,
+pub(crate) struct MapCharacterSets<'ctx> {
+    pub(crate) question_marks_seen:    u8,
+    pub(crate) pending_question_marks: u8,
+    pub(crate) prev:                   NewlineTracking<'ctx>,
 }
 
-impl TranslationPhase for MapCharacterSets {
+impl<'ctx> TranslationPhase for MapCharacterSets<'ctx> {
     type Error = Infallible;
     type Yield = char;
 
-    fn next(
-        &mut self,
-    ) -> Result<Option<Self::Yield>, Self::Error> {
-        let Some(Ok(next)) = self.prev.next() else {
-            return Ok(self.pending_chars.pop_front());
+    fn next(&mut self) -> Result<Option<Self::Yield>, Self::Error> {
+        if self.pending_question_marks > 0 {
+            self.pending_question_marks -= 1;
+            return Ok(Some(b'?'));
+        }
+        let Ok(Some(next)) = self.prev.next() else {
+            return Ok(None);
         };
-        self.pending_chars.push_back(input);
+        self.pending_bytes.push_back(next);
         match (
-            input == '?',
+            next == b'?',
             self.question_marks_seen == QuestionMarksSeen::Two,
         ) {
             | (false, false) => {
                 self.question_marks_seen = QuestionMarksSeen::Zero;
-                return Ok(Some(self.pending_chars.pop_front().unwrap()));
+                return Ok(Some(self.pending_bytes.pop_front().unwrap()));
             },
             | (true, false) => {
                 self.question_marks_seen.increment();
@@ -68,7 +73,7 @@ impl TranslationPhase for MapCharacterSets {
             },
             | (true, true) => {
                 self.question_marks_seen.increment();
-                return Ok(Some(self.pending_chars.pop_front().unwrap()));
+                return Ok(Some(self.pending_bytes.pop_front().unwrap()));
             },
             | (false, true) => (),
         }
@@ -89,19 +94,23 @@ impl TranslationPhase for MapCharacterSets {
         self.pending_chars.clear();
         Some(Ok(to_yield))
     }
-
-    fn eoi(&mut self, _context: &mut super::Context) -> Result<Option<Self::Yield>, Self::Error> {
-        Ok(self.pending_chars.pop_front())
-    }
 }
 
-impl<Prev> MapCharacterSets<Prev> {
-    pub(crate) fn new(prev: Prev) -> Self {
+impl<'ctx> MapCharacterSets<'ctx> {
+    pub(crate) fn new(context: &'ctx RefCell<Context>) -> Self {
         Self {
-            pending_chars:       StackQueue::new(),
+            pending_chars: StackQueue::new(),
             question_marks_seen: QuestionMarksSeen::Zero,
-            prev,
+            prev: NewlineTracking::new(context),
         }
+    }
+
+    pub(crate) fn borrow_context(&self) -> Ref<Context> {
+        self.prev.borrow_context()
+    }
+
+    pub(crate) fn borrow_context_mut(&self) -> RefMut<Context> {
+        self.prev.borrow_context_mut()
     }
 }
 

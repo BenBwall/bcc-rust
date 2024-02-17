@@ -243,6 +243,14 @@ pub(crate) struct Context {
     is_tokenizing_include_string: bool,
 }
 
+pub(crate) struct Input {
+    pub(crate) source_file: u32,
+    pub(crate) line:        u32,
+    pub(crate) column:      u32,
+    pub(crate) value:       u8,
+    pub(crate) length:      u16,
+}
+
 impl Context {
     fn new(source: Box<str>, name: PathBuf) -> Self {
         Self {
@@ -281,11 +289,17 @@ impl Context {
             .push(std::mem::replace(&mut self.source, source_file));
     }
 
-    fn next_char(&mut self) -> Option<char> {
+    fn next_value(&mut self) -> Option<Input> {
         loop {
-            if let Some(c) = self.source.source.char_at(self.source.index) {
-                self.source.index += c.len_utf8();
-                return Some(c);
+            if let Some(&c) = self.source.source.as_bytes().get(self.source.index) {
+                self.source.index += 1;
+                return Some(Input {
+                    source_file: self.source.name,
+                    line:        self.source.line_number,
+                    column:      self.source.column_number,
+                    value:       c,
+                    length:      1,
+                });
             }
             if !self.pop_source() {
                 return None;
