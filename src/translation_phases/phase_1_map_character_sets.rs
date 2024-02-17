@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use super::TranslationPhase;
+use super::{phase_0_newline_tracking::NewlineTracking, TranslationPhase};
 use crate::util::stack_queue::StackQueue;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -40,18 +40,19 @@ impl QuestionMarksSeen {
 pub(crate) struct MapCharacterSets {
     pub(crate) pending_chars:       StackQueue<char, 3>,
     pub(crate) question_marks_seen: QuestionMarksSeen,
+    pub(crate) prev: NewlineTracking,
 }
 
 impl TranslationPhase for MapCharacterSets {
     type Error = Infallible;
-    type Input = char;
     type Yield = char;
 
-    fn next_item(
+    fn next(
         &mut self,
-        input: Self::Input,
-        context: &mut super::Context,
     ) -> Result<Option<Self::Yield>, Self::Error> {
+        let Some(Ok(next)) = self.prev.next() else {
+            return Ok(self.pending_chars.pop_front());
+        };
         self.pending_chars.push_back(input);
         match (
             input == '?',
@@ -94,11 +95,12 @@ impl TranslationPhase for MapCharacterSets {
     }
 }
 
-impl MapCharacterSets {
-    pub(crate) fn new() -> Self {
+impl<Prev> MapCharacterSets<Prev> {
+    pub(crate) fn new(prev: Prev) -> Self {
         Self {
             pending_chars:       StackQueue::new(),
             question_marks_seen: QuestionMarksSeen::Zero,
+            prev,
         }
     }
 }

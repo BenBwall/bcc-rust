@@ -83,6 +83,12 @@ pub(crate) mod phase_5_parsing;
 
 pub(crate) type TokenString = SmallString<[u8; 1024]>;
 
+pub(crate) trait TranslationPhase {
+    type Error: std::error::Error + GetPosition + GetSeverity;
+    type Yield;
+    fn next(&mut self) -> Result<Option<Self::Yield>, Self::Error>;
+}
+
 trait StrExt {
     /// Returns the character at the given index,
     /// or `None` if the index is out of bounds or index is in the middle of a
