@@ -219,8 +219,8 @@ impl GetPosition for Infallible {
 pub(crate) struct SourceFile {
     pub(crate) name:          PathBuf,
     pub(crate) source:        Box<str>,
-    pub(crate) line_number:   usize,
-    pub(crate) column_number: usize,
+    pub(crate) line_number:   u32,
+    pub(crate) column_number: u32,
     pub(crate) index:         usize,
 }
 
@@ -287,17 +287,11 @@ impl Context {
             .push(std::mem::replace(&mut self.source, source_file));
     }
 
-    fn next_value(&mut self) -> Option<Input> {
+    fn next_char(&mut self) -> Option<char> {
         loop {
-            if let Some(&c) = self.source.source.as_bytes().get(self.source.index) {
-                self.source.index += 1;
-                return Some(Input {
-                    source_file: self.source.name,
-                    line:        self.source.line_number,
-                    column:      self.source.column_number,
-                    value:       c,
-                    length:      1,
-                });
+            if let Some(c) = self.source.source.char_at(self.source.index) {
+                self.source.index += c.len_utf8();
+                return Some(c);
             }
             if !self.pop_source() {
                 return None;
