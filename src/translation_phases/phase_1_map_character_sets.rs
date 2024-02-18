@@ -6,44 +6,11 @@ use super::{
 };
 use crate::util::stack_queue::StackQueue;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-enum QuestionMarksSeen {
-    Zero,
-    One,
-    Two,
-}
-
-impl QuestionMarksSeen {
-    fn increment(&mut self) {
-        *self = match self {
-            | Self::Zero => Self::One,
-            | Self::One => Self::Two,
-            | Self::Two => Self::Two,
-        };
-    }
-
-    fn decrement(&mut self) {
-        *self = match self {
-            | Self::Zero => Self::Zero,
-            | Self::One => Self::Zero,
-            | Self::Two => Self::One,
-        };
-    }
-
-    fn value(&self) -> u8 {
-        match self {
-            | Self::Zero => 0,
-            | Self::One => 1,
-            | Self::Two => 2,
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct MapCharacterSets<'ctx> {
-    pub(crate) question_marks_seen:    u8,
-    pub(crate) pending_question_marks: u8,
-    pub(crate) prev:                   NewlineTracking<'ctx>,
+    pub(crate) pending_question_marks: StackQueue<SourcePosition, 3>,
+    pub(crate) is_popping_question_marks: bool,
+    pub(crate) prev: NewlineTracking<'ctx>,
 }
 
 impl<'ctx> TranslationPhase for MapCharacterSets<'ctx> {
@@ -99,9 +66,9 @@ impl<'ctx> TranslationPhase for MapCharacterSets<'ctx> {
 impl<'ctx> MapCharacterSets<'ctx> {
     pub(crate) fn new(context: &'ctx RefCell<Context>) -> Self {
         Self {
-            pending_chars: StackQueue::new(),
+            pending_chars:       StackQueue::new(),
             question_marks_seen: QuestionMarksSeen::Zero,
-            prev: NewlineTracking::new(context),
+            prev:                NewlineTracking::new(context),
         }
     }
 
