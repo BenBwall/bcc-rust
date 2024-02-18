@@ -7,8 +7,15 @@ use super::{
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct NewlineTracking<'ctx> {
-    next:    Option<Input>,
-    context: &'ctx RefCell<Context>,
+    next:             Option<Input>,
+    context:          &'ctx RefCell<Context>,
+    current_byte_pos: Option<SourcePosition>,
+}
+
+impl GetPosition for NewlineTracking<'_> {
+    fn position(&self) -> SourcePosition {
+        self.current_byte_pos.unwrap_or(self.borrow_context().position())
+    }
 }
 
 impl<'ctx> NewlineTracking<'ctx> {
@@ -54,23 +61,23 @@ impl TranslationPhase for NewlineTracking {
         };
         if curr.value == b'\r' && matches!(next, Some(Input { value: b'\n', .. })) {
             let mut borrow = self.borrow_context_mut();
-            borrow.source.column_number = 1;
-            borrow.source.line_number += 1;
+            borrow.source.column_number = NonZeroU32::MIN();
+            borrow.source.line_number = borrow.source.line_number.saturating_add(1);
             curr.value = b'\n';
             curr.length = 2;
             return Ok(Some(curr));
         }
         if matches!(curr.value, b'\n' | b'\r') {
             let mut borrow = self.borrow_context_mut();
-            borrow.source.column_number = 1;
-            borrow.source.line_number += 1;
+            borrow.source.column_number = NonZeroU32::MIN();
+            borrow.source.line_number = borrow.source.line_number.saturating_add(1);
             self.next = next;
             curr.value = b'\n';
             return Ok(Some(curr));
         }
-        context.source.column_number += 1;
+        borrow.source.column_number = borrow.source.column_number.saturating_add(1);
         self.next = next;
-        Ok(Some(None))
+        Ok(Some(curr))
     }
 }
 

@@ -148,8 +148,8 @@ impl Display for ErrorSeverity {
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SourcePosition {
     pub(crate) index:       usize,
-    pub(crate) line:        u32,
-    pub(crate) column:      u32,
+    pub(crate) line:        NonZeroU32,
+    pub(crate) column:      NonZeroU32,
     pub(crate) source_file: StringCacheId,
 }
 
@@ -157,8 +157,8 @@ impl Default for SourcePosition {
     fn default() -> Self {
         Self {
             index:       0,
-            line:        1,
-            column:      1,
+            line:        NonZeroU32::MIN(),
+            column:      NonZeroU32::MIN(),
             source_file: StringCacheId::from_usize(0),
         }
     }
@@ -224,8 +224,8 @@ pub(crate) struct SourceFile {
     pub(crate) index:         usize,
 }
 
-impl SourceFile {
-    pub(crate) fn position(&self) -> SourcePosition {
+impl GetPosition for SourceFile {
+    fn position(&self) -> SourcePosition {
         SourcePosition {
             index:       self.index,
             line:        self.line_number,
@@ -243,12 +243,10 @@ pub(crate) struct Context {
     is_tokenizing_include_string: bool,
 }
 
-pub(crate) struct Input {
-    pub(crate) source_file: u32,
-    pub(crate) line:        u32,
-    pub(crate) column:      u32,
-    pub(crate) value:       u8,
-    pub(crate) length:      u16,
+impl GetPosition for Context {
+    fn position(&self) -> SourcePosition {
+        self.source.position()
+    }
 }
 
 impl Context {
@@ -341,10 +339,6 @@ impl Context {
 
     pub(crate) fn set_is_tokenizing_include_string(&mut self, value: bool) {
         self.is_tokenizing_include_string = value;
-    }
-
-    pub(crate) fn current_position(&self) -> SourcePosition {
-        self.source.position()
     }
 }
 
