@@ -8,6 +8,7 @@ use std::{
         Result as FmtResult,
     },
     hash::Hash,
+    num::NonZeroU32,
     ops::{
         Add,
         Deref,
@@ -16,12 +17,10 @@ use std::{
     sync::Arc,
 };
 
+const ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
+
 #[derive(Error)]
 enum TranslationError {
-    #[error(transparent)]
-    Phase0(Infallible),
-    #[error(transparent)]
-    Phase1(Infallible),
     #[error(transparent)]
     Phase2(RemoveEscapedNewlinesError),
     #[error(transparent)]
@@ -55,39 +54,31 @@ use self::{
         RemoveEscapedNewlines,
         RemoveEscapedNewlinesError,
     },
-    phase_3_preprocessor_tokenizer::{
+    preprocessor_tokenizer::{
         PreprocessorToken,
         PreprocessorTokenizer,
         PreprocessorTokenizerError,
     },
-    phase_4_preprocessing::{
+    preprocessing::{
         PreprocessingError,
         Token,
     },
-    phase_5_parsing::{
+    parsing::{
         ParsingError,
         TopLevelStatement,
     },
 };
 use crate::util::string_cache::{
-    Id as StringCacheId,
     Interner,
+    StringCacheId,
 };
 
-pub(crate) mod phase_0_newline_tracking;
-pub(crate) mod phase_1_map_character_sets;
-pub(crate) mod phase_2_remove_escaped_newlines;
-pub(crate) mod phase_3_preprocessor_tokenizer;
-pub(crate) mod phase_4_preprocessing;
-pub(crate) mod phase_5_parsing;
+pub(crate) mod initial_processing;
+pub(crate) mod preprocessor_tokenizer;
+pub(crate) mod preprocessing;
+pub(crate) mod parsing;
 
 pub(crate) type TokenString = SmallString<[u8; 1024]>;
-
-pub(crate) trait TranslationPhase {
-    type Error: std::error::Error + GetPosition + GetSeverity;
-    type Yield;
-    fn next(&mut self) -> Result<Option<Self::Yield>, Self::Error>;
-}
 
 trait StrExt {
     /// Returns the character at the given index,
@@ -147,8 +138,8 @@ impl Display for ErrorSeverity {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SourcePosition {
-    pub(crate) index:       usize,
-    pub(crate) line:        NonZeroU32,
+    pub(crate) index:       u32,
+    pub(crate) line:        u32,
     pub(crate) column:      NonZeroU32,
     pub(crate) source_file: StringCacheId,
 }
@@ -157,9 +148,9 @@ impl Default for SourcePosition {
     fn default() -> Self {
         Self {
             index:       0,
-            line:        NonZeroU32::MIN(),
-            column:      NonZeroU32::MIN(),
-            source_file: StringCacheId::from_usize(0),
+            line:        1,
+            column:      1,
+            source_file: StringCacheId::from_u32(0),
         }
     }
 }
@@ -217,30 +208,31 @@ impl GetPosition for Infallible {
 }
 
 pub(crate) struct SourceFile {
-    pub(crate) name:          PathBuf,
-    pub(crate) source:        Box<str>,
-    pub(crate) line_number:   u32,
-    pub(crate) column_number: u32,
-    pub(crate) index:         usize,
+    pub(crate) name:   PathBuf,
+    pub(crate) source: Box<str>,
+    pub(crate) line:   u32,
+    pub(crate) column: NonZeroU32,
+    pub(crate) index:  u32,
 }
 
 impl GetPosition for SourceFile {
     fn position(&self) -> SourcePosition {
         SourcePosition {
             index:       self.index,
-            line:        self.line_number,
-            column:      self.column_number,
+            line:        self.line,
+            column:      self.column,
             source_file: self.name,
         }
     }
 }
 
 pub(crate) struct Context {
-    pub(crate) source:            SourceFile,
-    source_stack:                 Vec<SourceFile>,
-    source_vectors:               Vec<SourceVector>,
-    string_cache:                 Interner,
+    source: SourceFile,
+    source_stack: Vec<SourceFile>,
+    source_vectors: Vec<SourceVector>,
+    string_cache: Interner,
     is_tokenizing_include_string: bool,
+    pending_errors: Vec<TranslationError>,
 }
 
 impl GetPosition for Context {
@@ -255,14 +247,15 @@ impl Context {
             source: SourceFile {
                 name,
                 source,
-                line_number: 1,
-                column_number: 1,
+                line: 1,
+                column: ONE,
                 index: 0,
             },
             source_stack: Vec::new(),
             source_vectors: Vec::new(),
             string_cache: Interner::new(),
             is_tokenizing_include_string: false,
+            pending_errors: Vec::new(),
         }
     }
 
@@ -279,8 +272,8 @@ impl Context {
         let source_file = SourceFile {
             name,
             source,
-            line_number: 1,
-            column_number: 1,
+            line: 1,
+            column: ONE,
             index: 0,
         };
         self.source_stack
@@ -288,15 +281,7 @@ impl Context {
     }
 
     fn next_char(&mut self) -> Option<char> {
-        loop {
-            if let Some(c) = self.source.source.char_at(self.source.index) {
-                self.source.index += c.len_utf8();
-                return Some(c);
-            }
-            if !self.pop_source() {
-                return None;
-            }
-        }
+        self.source.source.char_at(self.source.index as usize)
     }
 
     pub(crate) fn push_source_vector(
@@ -334,6 +319,14 @@ impl Context {
     pub(crate) fn set_is_tokenizing_include_string(&mut self, value: bool) {
         self.is_tokenizing_include_string = value;
     }
+
+    pub(crate) fn missing_final_newline(&mut self) {
+        self.pending_errors.push(TranslationError::Phase2(
+            RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(
+                self.source.position(),
+            )),
+        ));
+    }
 }
 
 pub(crate) struct TestArgs {
@@ -359,65 +352,6 @@ impl Default for TestArgs {
             from_phase_5: None,
             input:        Box::default(),
             name:         PathBuf::default(),
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn test_run(args: TestArgs) {
-    let TestArgs {
-        from_phase_0,
-        from_phase_1,
-        from_phase_2,
-        from_phase_3,
-        from_phase_4,
-        from_phase_5,
-        input,
-        name,
-    } = args;
-    let mut phase0 = NewlineTracking::new();
-    let mut phase1 = MapCharacterSets::new();
-    let mut phase2 = RemoveEscapedNewlines::new();
-    let mut phase3 = PreprocessorTokenizer::new();
-    let mut phase4 = Preprocessing::new();
-    let mut phase5 = Parsing::new();
-    let mut context = Context::new(input, name);
-    let mut pending_chars = StackQueue::<u8, 4>::new();
-    loop {
-        context.set_current_char_position(context.current_position());
-        let next = context.next_char();
-        let mut previous_returned_some = false;
-        macro_rules! handle_next {
-            ($phase:ident, $res_vec:ident) => {
-                let pending = get_next(&mut $phase, &mut context, next);
-                if let Some(v) = $res_vec {
-                    v.push(pending.clone());
-                }
-                let next = match pending {
-                    | Ok(Some(v)) => {
-                        previous_returned_some = true;
-                        Some(v)
-                    },
-                    | Ok(None) => {
-                        if previous_returned_some {
-                            continue;
-                        }
-                        None
-                    },
-                    | Err(e) => {
-                        continue;
-                    },
-                };
-            };
-        }
-        handle_next!(phase0, from_phase_0);
-        handle_next!(phase1, from_phase_1);
-        handle_next!(phase2, from_phase_2);
-        handle_next!(phase3, from_phase_3);
-        handle_next!(phase4, from_phase_4);
-        handle_next!(phase5, from_phase_5);
-        if !previous_returned_some {
-            break;
         }
     }
 }

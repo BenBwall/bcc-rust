@@ -10,7 +10,7 @@ use std::{
 use thiserror::Error;
 
 use super::{
-    phase_4_preprocessing::{
+    preprocessing::{
         CharacterTokenType,
         FloatTokenType,
         IntegerTokenType,
@@ -24,7 +24,7 @@ use super::{
     SourceVectors,
     TranslationPhase,
 };
-use crate::util::string_cache::Id as StringCacheId;
+use crate::util::string_cache::StringCacheId;
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser<Prev> {
@@ -245,7 +245,7 @@ pub(crate) struct Identifier {
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct Variable {
     pub(crate) name:          Identifier,
-    pub(crate) type_index:         TypeIndex,
+    pub(crate) type_index:    TypeIndex,
     pub(crate) storage_class: StorageClass,
 }
 
@@ -286,7 +286,7 @@ pub(crate) enum PrimitiveType {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct FunctionTypeArgument {
     pub(crate) type_index: TypeIndex,
-    pub(crate) name: Option<Identifier>,
+    pub(crate) name:       Option<Identifier>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -320,7 +320,8 @@ pub(crate) enum TypeKind {
     },
     Function {
         return_type_index: Option<usize>,
-        /// None symbolizes a function with an unspecified number of arguments (i.e. `int f()`).
+        /// None symbolizes a function with an unspecified number of arguments
+        /// (i.e. `int f()`).
         parameters:        Option<Arc<[FunctionTypeArgument]>>,
     },
 }
@@ -423,7 +424,7 @@ where
                     match type_.kind {
                         TypeKind::Function { return_type_index, parameters }
                     }
-                }
+                },
                 | State::ParsingType => self.types.push(match self.parse_type() {
                     | Ok(t) => t,
                     | Err(e) => return Some(Err(ParsingError::PreviousPhaseError(e))),

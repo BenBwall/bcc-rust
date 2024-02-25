@@ -4,20 +4,14 @@ use std::{
         Display,
         Formatter,
     },
-    hash::BuildHasherDefault,
 };
 
-use rustc_hash::FxHasher;
-use string_interner::{
-    backend::StringBackend,
-    symbol::SymbolUsize,
-    StringInterner,
-    Symbol,
-};
+const _: () = assert!(usize::BITS >= 32, "StringCache: usize must be at least 32 bits.");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StringCache {
-    inner: StringInterner<StringBackend<SymbolUsize>, BuildHasherDefault<FxHasher>>,
+    ends: Vec<u32>,
+    data: Vec<u8>,
 }
 
 impl Default for StringCache {
@@ -42,53 +36,37 @@ impl Display for StringCache {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct Id {
-    id: usize,
+pub(crate) struct StringCacheId {
+    id: u32,
 }
 
-impl Display for Id {
+impl Display for StringCacheId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.id)
     }
 }
 
-impl From<usize> for Id {
-    fn from(id: usize) -> Self {
+impl From<u32> for StringCacheId {
+    fn from(id: u32) -> Self {
         Self { id }
     }
 }
 
-impl From<Id> for usize {
-    fn from(id: Id) -> Self {
+impl From<StringCacheId> for u32 {
+    fn from(id: StringCacheId) -> Self {
         id.id
     }
 }
 
-impl Id {
-    fn from_symbol(symbol: SymbolUsize) -> Self {
-        Self {
-            id: symbol.to_usize(),
-        }
-    }
-
+impl StringCacheId {
     #[allow(dead_code)]
-    pub(crate) const fn from_usize(id: usize) -> Self {
+    pub(crate) const fn from_u32(id: u32) -> Self {
         Self { id }
     }
 
     #[allow(dead_code)]
-    pub(crate) const fn to_usize(self) -> usize {
+    pub(crate) const fn to_u32(self) -> u32 {
         self.id
-    }
-}
-
-trait SymbolExt {
-    fn to_id(self) -> Id;
-}
-
-impl SymbolExt for SymbolUsize {
-    fn to_id(self) -> Id {
-        Id::from_symbol(self)
     }
 }
 
@@ -96,23 +74,37 @@ impl StringCache {
     /// Creates a new empty `StringCache`. Does not allocate.
     pub(crate) fn new() -> Self {
         Self {
-            inner: StringInterner::new(),
+            ends: vec![0],
+            data: vec![],
         }
     }
 
     /// Interns the given string and returns an ID representing its position in
-    /// the string cache.
-    pub(crate) fn intern(&mut self, s: impl AsRef<str>) -> Id {
-        fn inner(interner: &mut StringCache, s: &str) -> Id {
-            Id::from_symbol(interner.inner.get_or_intern(s))
+    /// the slice cache.
+    pub(crate) fn intern(&mut self, s: impl AsRef<str>) -> StringCacheId {
+        fn inner(interner: &mut StringCache, s: &str) -> StringCacheId {
+            let len = s.len();
+            let start = self.data.len();
+            self.data.extend_from_slice(s.as_bytes());
+            let end = start + len;
+            assert!(
+                end < u32::MAX as usize,
+                "StringCache: string cache cannot store more than 4GB."
+            );
+            self.ends.push(end as u32);
+            StringCacheId::from_u32(self.ends.len() as u32 - 1)
         }
         inner(self, s.as_ref())
     }
 
-    /// Returns the string for the given ID if it exists in the cache.
-    pub(crate) fn get(&self, id: impl Into<Id>) -> Option<&str> {
-        fn inner(interner: &StringCache, id: Id) -> Option<&str> {
-            interner.inner.resolve(SymbolUsize::try_from_usize(id.id)?)
+    /// Returns the bytes for the given ID if it exists in the cache.
+    pub(crate) fn get(&self, id: impl Into<StringCacheId>) -> Option<str> {
+        fn inner(interner: &StringCache, id: StringCacheId) -> Option<str> {
+            let start = *interner.ends.get(id.to_u32() as usize - 1)?;
+            let end = *interner.ends.get(id.to_u32() as usize)?;
+            let slice = &interner.data[start as usize..end as usize];
+            // SAFETY: The slice is guaranteed to be valid UTF-8 because it was interned and we only allow interning strings.
+            Some(unsafe { std::str::from_utf8_unchecked(slice) })
         }
         inner(self, id.into())
     }
@@ -124,5 +116,10 @@ impl StringCache {
             interner.inner.get(string).is_some()
         }
         inner(self, string.as_ref())
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.ends.truncate(1);
+        self.data.clear();
     }
 }
