@@ -20,53 +20,18 @@ use super::{
     Context,
 };
 use crate::util::{small_queue::SmallQueue, string_cache::{
-    Id as StringCacheId,
+    StringCacheId as StringCacheId,
     Interner,
 }};
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct PreprocessorTokenizer {
-    state: State,
-    pending_chars: SmallQueue<char, 4>,
-    yielded_tokens: SmallQueue<PreprocessorToken, 4>,
-    maybe_tokens: SmallQueue<PreprocessorToken, 4>,
-}
+use super::initial_processing::InitialProcessor;
+use super::TokenString;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum State {
-    Default,
-    MiddleOfHash,
-    MiddleOfIdentifier,
-    MiddleOfWideStringOrIdentifier,
-    MiddleOfNumberOrPeriod,
-    MiddleOfNumber,
-    MiddleOfExponent,
-    MiddleOfCharacter,
-    MiddleOfString,
-    MiddleOfIncludeString,
-    MiddleOfAngleBracketString,
-    MiddleOfForwardSlash,
-    MiddleOfPercent,
-    MiddleOfHashDigraph,
-    MiddleOfDoubleHashDigraph,
-    MiddleOfEllipsis,
-    MiddleOfColon,
-    MiddleOfLeftAngleBracket,
-    MiddleOfLeftShift,
-    MiddleOfRightAngleBracket,
-    MiddleOfRightShift,
-    MiddleOfPlus,
-    MiddleOfMinus,
-    MiddleOfAsterisk,
-    MiddleOfCaret,
-    MiddleOfAmpersand,
-    MiddleOfPipe,
-    MiddleOfExclamationMark,
-    MiddleOfEquals,
-    MiddleOfLineComment,
-    MiddleOfBlockComment,
-    BeforeBlockCommentEnd,
-    MiddleOfWhitespace,
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PreprocessorTokenizer<'ctx> {
+    prev: InitialProcessor<'ctx>,
+    next: Option<PreprocessorToken>,
+    contents: TokenString,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -136,142 +101,72 @@ impl Display for PreprocessorTokenizerError {
     }
 }
 
-impl TranslationPhase for PreprocessorTokenizer {
-    type Error = PreprocessorTokenizerError;
-    type Input = char;
-    type Yield = PreprocessorToken;
+impl<'ctx> Iterator for PreprocessorTokenizer<'ctx> {
+    type Item = PreprocessorToken;
 
-    fn next_item(
+    fn next(
         &mut self,
-        input: Self::Input,
-        context: &mut super::Context,
-    ) -> Result<Option<Self::Yield>, Self::Error> {
-        self.pending_chars.push_back(input);
-        self.drive(context)
-    }
-
-    fn eoi(&mut self, context: &mut super::Context) -> Result<Option<Self::Yield>, Self::Error> {
-        match self.drive(context) {
-            | Ok(Some(c)) => Ok(Some(c)),
-            | Ok(None) => self.handle_eoi(context),
-            | Err(e) => Err(e),
+    ) -> Option<PreprocessorToken> {
+        loop {
+            self.contents.clear();
+            self.contents.shrink_to_fit();
+            if let Some(next) = self.next.take() {
+                break Some(next);
+            }
+            break Some(match input {
+                | '\n' => self.generate_token(context, PreprocessorTokenType::Newline),
+                | '0'..='9' => self.tokenize_number(),
+                | '{' => self.generate_token(context, PreprocessorTokenType::OpeningCurlyBrace),
+                | '}' => self.generate_token(context, PreprocessorTokenType::ClosingCurlyBrace),
+                | '(' => self.generate_token(context, PreprocessorTokenType::OpeningParenthesis),
+                | ')' => self.generate_token(context, PreprocessorTokenType::ClosingParenthesis),
+                | '[' => self.generate_token(context, PreprocessorTokenType::OpeningSquareBracket),
+                | ']' => self.generate_token(context, PreprocessorTokenType::ClosingSquareBracket),
+                | 'L' => self.tokenize_wide_string_or_identifier(),
+                | c if c.is_alphabetic() || c == '_' => self.tokenize_identifier(),
+                | '.' => self.tokenize_period_or_number(),
+                | '"' =>
+                    self.state = if context.is_tokenizing_include_string {
+                        self.tokenize_include_string()
+                    } else {
+                        self.tokenize_string()
+                    },
+                | '\'' => self.tokenize_char(),
+                | '#' => self.tokenize_hash(),
+                | ' ' => self.tokenize_whitespace(),
+                | '/' => self.tokenize_or_step_over_forward_slash(),
+                | '%' => self.tokenize_percent(),
+                | '<' =>
+                    self.state = if self.is_tokenizing_include_string {
+                        self.tokenize_angle_bracket_string()
+                    } else {
+                        self.tokenize_left_angle_bracket()
+                    },
+                | '>' => self.tokenize_right_angle_bracket(),
+                | ',' => self.generate_token(context, PreprocessorTokenType::Comma),
+                | ';' => self.generate_token(context, PreprocessorTokenType::SemiColon),
+                | '?' => self.generate_token(context, PreprocessorTokenType::QuestionMark),
+                | '~' => self.generate_token(context, PreprocessorTokenType::Tilde),
+                | ':' => self.tokenize_colon(),
+                | '+' => self.tokenize_plus(),
+                | '-' => self.tokenize_minus(),
+                | '*' => self.tokenize_asterisk(),
+                | '^' => self.tokenize_caret(),
+                | '&' => self.tokenize_ampersand(),
+                | '|' => self.tokenize_pipe(),
+                | '!' => self.tokenize_exclamation_mark(),
+                | '=' => self.tokenize_equals(),
+                | _ => {self.generate_error(PreprocessorTokenizerErrorType::UnknownToken); continue;},
+            });
         }
-        self.handle_eoi(context)
     }
 }
 
-impl<Prev> PreprocessorTokenizer<Prev, Prev::SavePoint>
-where
-    Prev: TranslationPhase<Yield = char>,
-{
-    fn drive(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error> {
-        while let Some(c) = self.pending_chars.pop_front() {
-            match self.next(c, context) {
-                | Ok(Some(c)) => return Ok(Some(c)),
-                | Ok(None) => (),
-                | Err(e) => return Err(e),
-            }
-        }
-        Ok(None)
-    }
-    fn handle_eoi(&mut self, context: &mut Context) -> Result<Option<Self::Yield>, Self::Error> {
-        match replace(&mut self.state, State::Default) {
-            State::Default => Ok(None),
-            State::MiddleOfHash => Ok(Some(self.generate_token(PreprocessorTokenType::Hash, context, false))),
-            State::MiddleOfIdentifier => Ok(Some(self.generate_token(PreprocessorTokenType::Identifier, context, false))),
-            State::MiddleOfWideStringOrIdentifier => Ok(Some(self.generate_token(PreprocessorTokenType::Identifier, context, false))),
-            State::MiddleOfNumberOrPeriod => Ok(Some(self.generate_token(PreprocessorTokenType::Period, context, false))),
-            State::MiddleOfNumber => Ok(Some(self.generate_token(PreprocessorTokenType::Number, context, false))),
-            State::MiddleOfExponent => Err(self.generate_error(PreprocessorTokenizerErrorType::MissingSignInExponent)),
-            State::MiddleOfCharacter => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedCharacter),
-            State::MiddleOfString => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedString),
-            State::MiddleOfIncludeString => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedIncludeString),
-            State::MiddleOfAngleBracketString => self.generate_error(PreprocessorTokenizerErrorType::UnterminatedIncludeString),
-            State::MiddleOfForwardSlash => self.generate_token(PreprocessorTokenType::ForwardSlash),
-            State::MiddleOfPercent => self.generate_token(PreprocessorTokenType::Percent),
-            State::MiddleOfHashDigraph => self.generate_token(PreprocessorTokenType::Hash),
-            State::MiddleOfLeftAngleBracket => self.generate_token(PreprocessorTokenType::LessThan),
-            State::MiddleOfLeftShift => self.generate_token(PreprocessorTokenType::LessThanLessThan),
-            State::MiddleOfRightAngleBracket => self.generate_token(PreprocessorTokenType::GreaterThan),
-            State::MiddleOfRightShift => self.generate_token(PreprocessorTokenType::GreaterThanGreaterThan),
-            State::MiddleOfDoubleHashDigraph => {
-                let ret = self.maybe_tokens.pop_back().unwrap();
-                self.pending_tokens.push_back(self.maybe_tokens.pop_front().unwrap());
-                Ok(Some(ret))
-            }
-        }
-    }
-    
-    fn next(
-        &mut self,
-        input: char,
-        context: &mut Context,
-    ) -> Result<Option<Self::Yield>, Self::Error> {
-        let res = match self.state {
-            | State::MiddleOfHash => self.tokenize_hash(context, input),
-            | State::MiddleOfIdentifier => self.tokenize_identifier(input),
-            | State::MiddleOfWideStringOrIdentifier => self.tokenize_wide_string_or_identifier(input),
-            | State::MiddleOfNumberOrPeriod => self.tokenize_period_or_number(input),
-            | State::MiddleOfNumber => self.tokenize_number(input),
-            | State::MiddleOfExponent => self.tokenize_exponent_sign(input),
-            | State::MiddleOfCharacter => self.tokenize_char(input),
-            | State::MiddleOfString => self.tokenize_string(input),
-            | State::MiddleOfIncludeString => self.tokenize_include_string(input),
-            | State::MiddleOfAngleBracketString => return self.tokenize_angle_bracket_string(input),
-            | State::MiddleOfForwardSlash => self.tokenize_or_step_over_forward_slash(input),
-            | State::MiddleOfPercent => self.tokenize_percent(input),
-            | State::MiddleOfHashDigraph => self.tokenize_hash_digraph(input),
-            | State::MiddleOfLeftAngleBracket => self.tokenize_left_angle_bracket(input),
-            | State::MiddleOfLeftShift => self.tokenize_left_shift(input),
-            | State::MiddleOfRightAngleBracket => self.tokenize_right_angle_bracket(input),
-            | State::MiddleOfRightShift => self.tokenize_right_shift(input),
-            | State::MiddleOfDoubleHashDigraph =>
-                self.tokenize_double_hash_digraph(input),
-            | State::MiddleOfEllipsis => self.tokenize_ellipsis(input),
-            | State::MiddleOfColon => self.tokenize_colon(input),
-            | State::MiddleOfPlus => self.tokenize_plus(input),
-            | State::MiddleOfMinus => self.tokenize_minus(input),
-            | State::MiddleOfAsterisk => self.tokenize_asterisk(input),
-            | State::MiddleOfCaret => self.tokenize_caret(input),
-            | State::MiddleOfAmpersand => self.tokenize_ampersand(input),
-            | State::MiddleOfPipe => self.tokenize_pipe(input),
-            | State::MiddleOfExclamationMark => self.tokenize_exclamation_mark(input),
-            | State::MiddleOfEquals => self.tokenize_equals(input),
-            | State::MiddleOfLineComment => self.step_over_line_comment(input),
-            | State::MiddleOfBlockComment => self.step_over_block_comment(input),
-            | State::BeforeBlockCommentEnd => self.step_over_block_comment_end(input),
-            | State::MiddleOfWhitespace => self.step_over_whitespace(input),
-            | State::Default => self.tokenize(input, context),
-            };
-            match res {
-                | Ok(Some(c)) => {
-                    context.set_current_token_start(context.current_position());
-                    Ok(Some(c))
-                },
-                | Ok(None) => Ok(None),
-                | Err(e) => {
-                    context.set_current_token_start(context.current_position());
-                    Err(e)
-                },
-            }
-        }
-    }
-    fn error_from_prev(
-        &self,
-        error: Prev::Error,
-    ) -> Result<<Self as TranslationPhase>::Yield, <Self as TranslationPhase>::Error> {
-        let _ = self;
-        Err(PreprocessorTokenizerError::ErrorFromPrev(error))
-    }
-
+impl<'ctx> PreprocessorTokenizer<'ctx> {
     fn generate_error(
         &mut self,
         error_type: PreprocessorTokenizerErrorType,
-    ) -> Result<Option<PreprocessorToken>, PreprocessorTokenizerError> {
-        let current_save = self.previous_phase.save();
-        self.previous_phase
-            .restore(self.current_token_source_vectors.clone());
-        let mut contents: SmallString<[u8; 1024]> = SmallString::new();
+    ) {
         while self.previous_phase.current_position().index < current_save.current_position().index {
             match self.previous_phase.next() {
                 | Some(Ok(c)) => contents.push(c),
@@ -294,17 +189,13 @@ where
 
     fn generate_token_with_position(&mut self, token_type: PreprocessorTokenType, context: &mut Context, source_position: SourcePosition, length: usize) -> PreprocessorToken {
         let source_vector = context.push_source_vector(source_position, length);
-        let mut contents = TokenString::new();
-        for c in context.source[current_token_start.index..current_token_start.index + length].chars() {
-            contents.push(c);
-        }
         PreprocessorToken {
             source_vectors: SourceVectors {
                 start_index: source_vector,
                 length: 1,
             },
             kind:           token_type,
-            contents:       self.string_cache.intern(contents.as_str()),
+            contents:       self.string_cache.intern(self.contents.as_str()),
         }
     }
 
@@ -330,15 +221,16 @@ where
     }
 
     fn step_over_whitespace(&mut self) -> ParserResult<Prev::Error> {
-        let mut save_point = self.save();
-        while self
-            .previous_phase
-            .next()
-            .is_some_and(|r| r.is_ok_and(|c| c.is_whitespace() && c != '\n'))
-        {
-            save_point = self.save();
+        let mut current;
+        loop {
+            current = self.previous_phase.next();
+            match current {
+                | None => break,
+                | Some(i) if i.value.is_whitespace() && i.value != '\n' => continue,
+                | Some(_) => break,
+            }
         }
-        self.restore(save_point);
+        self.next = current;
         let mut res = self.generate_token(PreprocessorTokenType::Whitespace);
         let Ok(ref mut token) = res else {
             unreachable!()
@@ -1147,7 +1039,7 @@ mod tests {
             },
         },
         util::string_cache::{
-            Id as StringCacheId,
+            StringCacheId as StringCacheId,
             StringCache,
         },
     };

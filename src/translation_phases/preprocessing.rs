@@ -36,7 +36,7 @@ use crate::{
             SharedVec,
         },
         string_cache::{
-            Id as StringCacheId,
+            StringCacheId as StringCacheId,
             Interner,
         },
         unlikely,
@@ -90,7 +90,7 @@ use super::{
         SavePoint as RemoveEscapedNewlinesSavePoint,
         State as RemoveEscapedNewlinesState,
     },
-    phase_3_preprocessor_tokenizer::{
+    preprocessor_tokenizer::{
         IsTokenizingIncludeString,
         PreprocessorToken,
         PreprocessorTokenType,

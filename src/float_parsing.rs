@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     float_parsing::ffi::ERANGE,
-    translation_phases::phase_4_preprocessing::FloatTokenType,
+    translation_phases::preprocessing::FloatTokenType,
 };
 
 mod ffi {

@@ -19,7 +19,7 @@ use thiserror::Error;
 
 use crate::{
     translation_phases::{
-        phase_4_preprocessing::{
+        preprocessing::{
             CharacterTokenType,
             Ppt,
             Ppte,
@@ -45,7 +45,7 @@ pub(crate) mod translation_phases;
 pub(crate) mod util;
 
 pub type Preprocessor =
-    self::translation_phases::phase_4_preprocessing::Preprocessor<Ppt, Ppte, Pptsp>;
+    self::translation_phases::preprocessing::Preprocessor<Ppt, Ppte, Pptsp>;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about, color = ColorChoice::Always)]
