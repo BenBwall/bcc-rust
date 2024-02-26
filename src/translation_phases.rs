@@ -17,29 +17,23 @@ use std::{
     sync::Arc,
 };
 
+use crate::util::string_cache::{
+    StringCache,
+    StringCacheId,
+};
+
 const ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
 
 #[derive(Error)]
 enum TranslationError {
     #[error(transparent)]
-    Phase2(RemoveEscapedNewlinesError),
+    InitialProcessing(InitialProcessingError),
     #[error(transparent)]
-    Phase3(PreprocessorTokenizerError),
+    PreprocessorTokenizining(PreprocessorTokenizerError),
     #[error(transparent)]
-    Phase4(PreprocessingError),
+    Preprocessing(PreprocessingError),
     #[error(transparent)]
-    Phase5(ParsingError),
-}
-
-pub(crate) fn get_next<T: TranslationPhase>(
-    phase: &mut T,
-    context: &mut Context,
-    input: Option<T::Input>,
-) -> Result<Option<T::Yield>, T::Error> {
-    match input {
-        | Some(input) => phase.next_item(input, context),
-        | None => phase.eoi(context),
-    }
+    Parsing(ParsingError),
 }
 
 use owo_colors::OwoColorize;
@@ -48,24 +42,25 @@ use smallvec::SmallVec;
 use thiserror::Error;
 
 use self::{
+    initial_processing::InitialProcessingError,
+    parsing::{
+        ParsingError,
+        TopLevelStatement,
+    },
     phase_0_newline_tracking::NewlineTracking,
     phase_1_map_character_sets::MapCharacterSets,
     phase_2_remove_escaped_newlines::{
         RemoveEscapedNewlines,
         RemoveEscapedNewlinesError,
     },
-    preprocessor_tokenizer::{
-        PreprocessorToken,
-        PreprocessorTokenizer,
-        PreprocessorTokenizerError,
-    },
     preprocessing::{
         PreprocessingError,
         Token,
     },
-    parsing::{
-        ParsingError,
-        TopLevelStatement,
+    preprocessor_tokenizer::{
+        PreprocessorToken,
+        PreprocessorTokenizer,
+        PreprocessorTokenizerError,
     },
 };
 use crate::util::string_cache::{
@@ -74,11 +69,21 @@ use crate::util::string_cache::{
 };
 
 pub(crate) mod initial_processing;
-pub(crate) mod preprocessor_tokenizer;
-pub(crate) mod preprocessing;
 pub(crate) mod parsing;
+pub(crate) mod preprocessing;
+pub(crate) mod preprocessor_tokenizer;
 
 pub(crate) type TokenString = SmallString<[u8; 1024]>;
+
+trait NonZeroExt {
+    fn saturating_add_assign(&mut self, num: u32);
+}
+
+impl NonZeroExt for NonZeroU32 {
+    fn saturating_add_assign(&mut self, num: u32) {
+        *self = self.saturating_add(num);
+    }
+}
 
 trait StrExt {
     /// Returns the character at the given index,
@@ -158,7 +163,7 @@ impl Default for SourcePosition {
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SourceVector {
     pub(crate) position: SourcePosition,
-    pub(crate) length:   usize,
+    pub(crate) length:   u32,
 }
 
 impl Default for SourceVector {
@@ -171,8 +176,8 @@ impl Default for SourceVector {
 }
 
 pub(crate) struct SourceVectors {
-    start_index: usize,
-    length:      usize,
+    start_index: u32,
+    length:      u32,
 }
 
 pub(crate) trait GetSeverity {
@@ -230,7 +235,7 @@ pub(crate) struct Context {
     source: SourceFile,
     source_stack: Vec<SourceFile>,
     source_vectors: Vec<SourceVector>,
-    string_cache: Interner,
+    string_cache: StringCache,
     is_tokenizing_include_string: bool,
     pending_errors: Vec<TranslationError>,
 }
@@ -287,9 +292,9 @@ impl Context {
     pub(crate) fn push_source_vector(
         &mut self,
         start_position: SourcePosition,
-        length: usize,
-    ) -> usize {
-        let index = self.source_vectors.len();
+        length: u32,
+    ) -> u32 {
+        let index = self.source_vectors.len().try_into().unwrap();
         self.source_vectors.push(SourceVector {
             position: start_position,
             length,
@@ -321,37 +326,19 @@ impl Context {
     }
 
     pub(crate) fn missing_final_newline(&mut self) {
-        self.pending_errors.push(TranslationError::Phase2(
-            RemoveEscapedNewlinesError::MissingFinalNewLine(MissingNewlineError(
-                self.source.position(),
-            )),
-        ));
+        self.pending_errors
+            .push(TranslationError::InitialProcessing(
+                InitialProcessingError::MissingFinalNewLine(self.source.position()),
+            ));
+    }
+
+    pub(crate) fn tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
+        self.pending_errors
+            .push(TranslationError::PreprocessorTokenizining(error));
     }
 }
 
-pub(crate) struct TestArgs {
-    pub(crate) from_phase_0: Option<&mut Vec<char>>,
-    pub(crate) from_phase_1: Option<&mut Vec<char>>,
-    pub(crate) from_phase_2: Option<&mut Vec<Result<char, RemoveEscapedNewlinesError>>>,
-    pub(crate) from_phase_3:
-        Option<&mut Vec<Result<PreprocessorToken, PreprocessorTokenizerError>>>,
-    pub(crate) from_phase_4: Option<&mut Vec<Result<Token, PreprocessingError>>>,
-    pub(crate) from_phase_5: Option<&mut Vec<Result<TopLevelStatement, ParsingError>>>,
-    pub(crate) input:        Box<str>,
-    pub(crate) name:         PathBuf,
-}
-
-impl Default for TestArgs {
-    fn default() -> Self {
-        Self {
-            from_phase_0: None,
-            from_phase_1: None,
-            from_phase_2: None,
-            from_phase_3: None,
-            from_phase_4: None,
-            from_phase_5: None,
-            input:        Box::default(),
-            name:         PathBuf::default(),
-        }
-    }
+pub(crate) trait TranslationPhase {
+    type Item;
+    fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
 }
