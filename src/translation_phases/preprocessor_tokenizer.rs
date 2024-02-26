@@ -19,7 +19,6 @@ use super::{
     SourcePosition,
     SourceVector,
     SourceVectors,
-    TokenString,
     TranslationPhase,
 };
 use crate::util::{
@@ -33,7 +32,6 @@ use crate::util::{
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub(crate) struct PreprocessorTokenizer {
     initial_processor:   InitialProcessor,
-    contents:            TokenString,
     current_token_start: SourcePosition,
 }
 
@@ -116,13 +114,12 @@ impl TranslationPhase for PreprocessorTokenizer {
         let start_column = self.initial_processor.position().column;
         let start_line = self.initial_processor.position().line;
         loop {
-            self.contents.clear();
-            self.contents.shrink_to_fit();
+            context.string_cache.undo_str();
             self.current_token_start = self.initial_processor.position();
             let Some(input) = self.initial_processor.next_item(context) else {
                 break None;
             };
-            self.contents.push(input);
+            context.string_cache.push(input);
             break Some(match input {
                 | '\n' => self.generate_token(context, PreprocessorTokenType::Newline),
                 | '0'..='9' => self.tokenize_number(context),
@@ -155,8 +152,7 @@ impl TranslationPhase for PreprocessorTokenizer {
                                 context.source.column = start_column;
                                 context.source.line = start_line;
                                 context.is_tokenizing_include_string = false;
-                                self.contents.clear();
-                                self.contents.shrink_to_fit();
+                                context.string_cache.undo_str();
                                 continue;
                             },
                         }
@@ -192,34 +188,15 @@ impl PreprocessorTokenizer {
         context: &mut Context,
         error_type: PreprocessorTokenizerErrorType,
     ) {
-        let start_position = self.current_token_start;
+        let position = self.current_token_start;
 
-        context.tokenizer_error(PreprocessorTokenizerError::TokenizerError(
-            InnerPreprocessorTokenizerError {
-                start_position,
-                length: self.position().index - start_position.index,
-                error_type,
-                contents: context.string_cache.intern(self.contents.as_str()),
+        context.preprocessor_tokenizer_error(PreprocessorTokenizerError {
+            source_vector: SourceVector {
+                position,
+                length: self.position().index - position.index,
             },
-        ));
-    }
-
-    fn generate_token_with_position(
-        &mut self,
-        context: &mut Context,
-        token_type: PreprocessorTokenType,
-        source_position: SourcePosition,
-        length: u32,
-    ) -> PreprocessorToken {
-        let source_vector = context.push_source_vector(source_position, length);
-        PreprocessorToken {
-            source_vectors: SourceVectors {
-                start_index: source_vector,
-                length:      1,
-            },
-            kind:           token_type,
-            contents:       context.string_cache.intern(self.contents.as_str()),
-        }
+            error_type,
+        });
     }
 
     fn generate_token(
@@ -227,11 +204,20 @@ impl PreprocessorTokenizer {
         context: &mut Context,
         token_type: PreprocessorTokenType,
     ) -> PreprocessorToken {
-        let current_token_start = self.current_token_start;
         let current_position = context.position();
-        let length = current_position.index - current_token_start.index;
-
-        self.generate_token_with_position(context, token_type, current_token_start, length)
+        let source_vector = context.push_source_vector(
+            current_position,
+            current_position.index - self.current_token_start.index,
+        );
+        let contents = context.string_cache.end_str();
+        PreprocessorToken {
+            source_vectors: SourceVectors {
+                start_index: source_vector,
+                length:      1,
+            },
+            kind: token_type,
+            contents,
+        }
     }
 
     fn tokenize_whitespace(&mut self, context: &mut Context) -> PreprocessorToken {
@@ -255,8 +241,8 @@ impl PreprocessorTokenizer {
         }
         context.source.index = last_index;
         context.source.column = last_column;
-        self.contents.clear();
-        self.contents.push(' ');
+        context.string_cache.undo_str();
+        context.string_cache.push(' ');
         self.generate_token(context, PreprocessorTokenType::Whitespace)
     }
 
@@ -267,7 +253,7 @@ impl PreprocessorTokenizer {
         let current = self.initial_processor.next_item(context);
         match current {
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::ForwardSlashEquals)
             },
             | Some(_) | None => {
@@ -282,7 +268,6 @@ impl PreprocessorTokenizer {
     pub(crate) fn new() -> Self {
         Self {
             initial_processor:   InitialProcessor::new(),
-            contents:            TokenString::new(),
             current_token_start: SourcePosition::default(),
         }
     }
@@ -294,7 +279,7 @@ impl PreprocessorTokenizer {
         let current = self.initial_processor.next_item(context);
         match current {
             | Some('#') => {
-                self.contents.push('#');
+                context.string_cache.push('#');
                 self.generate_token(context, PreprocessorTokenType::HashHash)
             },
             | _ => {
@@ -313,7 +298,7 @@ impl PreprocessorTokenizer {
             let last_line = self.initial_processor.position().line;
             let current = self.initial_processor.next_item(context);
             match current {
-                | Some(c) if c.is_alphanumeric() || c == '_' => self.contents.push(c),
+                | Some(c) if c.is_alphanumeric() || c == '_' => context.string_cache.push(c),
                 | _ => {
                     context.source.index = last_index;
                     context.source.column = last_column;
@@ -374,8 +359,8 @@ impl PreprocessorTokenizer {
                 let last_line = self.initial_processor.position().line;
                 let next = self.initial_processor.next_item(context);
                 if current == '\\' && next == Some(end_char) {
-                    self.contents.push('\\');
-                    self.contents.push(end_char);
+                    context.string_cache.push('\\');
+                    context.string_cache.push(end_char);
                     continue;
                 }
                 context.source.index = last_index;
@@ -383,15 +368,15 @@ impl PreprocessorTokenizer {
                 context.source.line = last_line;
             }
             if current == end_char {
-                self.contents.push(end_char);
+                context.string_cache.push(end_char);
                 break;
             }
             if current == '\n' {
-                self.contents.push(end_char);
+                context.string_cache.push(end_char);
                 self.generate_error(context, newline_error_type);
                 break;
             }
-            self.contents.push(current);
+            context.string_cache.push(current);
         }
 
         self.generate_token(context, return_token_type)
@@ -427,7 +412,7 @@ impl PreprocessorTokenizer {
             let Some(current) = self.initial_processor.next_item(context) else {
                 return None;
             };
-            self.contents.push(current);
+            context.string_cache.push(current);
             if current == '>' {
                 break;
             }
@@ -456,7 +441,7 @@ impl PreprocessorTokenizer {
         match self.initial_processor.next_item(context) {
             | Some('.') => self.tokenize_ellipsis(context, last_index, last_colunn, last_line),
             | Some(v) if v.is_ascii_digit() => {
-                self.contents.push(v);
+                context.string_cache.push(v);
                 self.tokenize_number(context)
             },
             | _ => {
@@ -479,7 +464,7 @@ impl PreprocessorTokenizer {
     ) -> PreprocessorToken {
         match self.initial_processor.next_item(context) {
             | Some('.') => {
-                self.contents.push_str("..");
+                context.string_cache.push_str("..");
                 self.generate_token(context, PreprocessorTokenType::Ellipsis)
             },
             | None | Some(_) => {
@@ -502,8 +487,8 @@ impl PreprocessorTokenizer {
             if matches!(current, 'e' | 'E' | 'p' | 'P') {
                 match self.initial_processor.next_item(context) {
                     | Some('+' | '-') => {
-                        self.contents.push(current);
-                        self.contents.push('+');
+                        context.string_cache.push(current);
+                        context.string_cache.push('+');
                         continue;
                     },
                     | None | Some(_) => {
@@ -520,7 +505,7 @@ impl PreprocessorTokenizer {
             }
 
             if current.is_alphanumeric() || current == '.' {
-                self.contents.push(current);
+                context.string_cache.push(current);
                 continue;
             }
             context.source.index = last_index;
@@ -534,12 +519,12 @@ impl PreprocessorTokenizer {
     fn tokenize_percent(&mut self, context: &mut Context) -> PreprocessorToken {
         match self.initial_processor.next_item(context) {
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::PercentEquals)
             },
             // Digraph.
             | Some('>') => {
-                self.contents.push('>');
+                context.string_cache.push('>');
                 self.generate_token(context, PreprocessorTokenType::ClosingCurlyBrace)
             },
             | Some(':') => self.tokenize_hash_digraph(context),
@@ -579,7 +564,7 @@ impl PreprocessorTokenizer {
     ) -> PreprocessorToken {
         match self.initial_processor.next_item(context) {
             | Some(':') => {
-                self.contents.push_str(":%:");
+                context.string_cache.push_str(":%:");
                 self.generate_token(context, PreprocessorTokenType::HashHash)
             },
             | _ => {
@@ -598,19 +583,19 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some(':') => {
-                self.contents.push(':');
+                context.string_cache.push(':');
                 self.generate_token(context, PreprocessorTokenType::OpeningSquareBracket)
             },
             | Some('%') => {
-                self.contents.push('%');
+                context.string_cache.push('%');
                 self.generate_token(context, PreprocessorTokenType::OpeningCurlyBrace)
             },
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::LessThanEquals)
             },
             | Some('<') => {
-                self.contents.push('<');
+                context.string_cache.push('<');
                 self.tokenize_left_shift(context)
             },
             | None | Some(Ok(_)) => {
@@ -629,7 +614,7 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some(Ok('=')) => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::LessThanLessThanEquals)
             },
             | None | Some(Ok(_)) => {
@@ -648,11 +633,11 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('>') => {
-                self.contents.push('>');
+                context.string_cache.push('>');
                 self.tokenize_right_shift(context)
             },
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::GreaterThanEquals)
             },
             | None | Some(_) => {
@@ -671,7 +656,7 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some(Ok('=')) => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::GreaterThanGreaterThanEquals)
             },
             | None | Some(_) => {
@@ -690,7 +675,7 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('>') => {
-                self.contents.push('>');
+                context.string_cache.push('>');
                 self.generate_token(context, PreprocessorTokenType::ClosingSquareBracket)
             },
             | None | Some(_) => {
@@ -709,11 +694,11 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('+') => {
-                self.contents.push('+');
+                context.string_cache.push('+');
                 self.generate_token(context, PreprocessorTokenType::PlusPlus)
             },
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::PlusEquals)
             },
             | None | Some(_) => {
@@ -732,15 +717,15 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('-') => {
-                self.contents.push('-');
+                context.string_cache.push('-');
                 self.generate_token(context, PreprocessorTokenType::MinusMinus)
             },
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::MinusEquals)
             },
             | Some('>') => {
-                self.contents.push('>');
+                context.string_cache.push('>');
                 self.generate_token(context, PreprocessorTokenType::Arrow)
             },
             | None | Some(_) => {
@@ -759,7 +744,7 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::AsteriskEquals)
             },
             | None | Some(_) => {
@@ -779,7 +764,7 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::CaretEquals)
             },
             | None | Some(_) => {
@@ -799,11 +784,11 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('&') => {
-                self.contents.push('&');
+                context.string_cache.push('&');
                 self.generate_token(context, PreprocessorTokenType::AmpersandAmpersand)
             },
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::AmpersandEquals)
             },
             | None | Some(_) => {
@@ -823,11 +808,11 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('|') => {
-                self.contents.push('|');
+                context.string_cache.push('|');
                 self.generate_token(context, PreprocessorTokenType::PipePipe)
             },
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::PipeEquals)
             },
             | None | Some(_) => {
@@ -847,7 +832,7 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::ExclamationMarkEquals)
             },
             | None | Some(_) => {
@@ -866,7 +851,7 @@ impl PreprocessorTokenizer {
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
-                self.contents.push('=');
+                context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::EqualsEquals)
             },
             | None | Some(_) => {

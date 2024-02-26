@@ -13,7 +13,7 @@ use std::{
         Add,
         Deref,
     },
-    path::PathBuf,
+    path::Path,
     sync::Arc,
 };
 
@@ -27,13 +27,13 @@ const ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
 #[derive(Error)]
 enum TranslationError {
     #[error(transparent)]
-    InitialProcessing(InitialProcessingError),
+    InitialProcessing(InitialProcessorError),
     #[error(transparent)]
     PreprocessorTokenizining(PreprocessorTokenizerError),
     #[error(transparent)]
-    Preprocessing(PreprocessingError),
+    Preprocessing(PreprocessorError),
     #[error(transparent)]
-    Parsing(ParsingError),
+    Parsing(ParserError),
 }
 
 use owo_colors::OwoColorize;
@@ -42,9 +42,9 @@ use smallvec::SmallVec;
 use thiserror::Error;
 
 use self::{
-    initial_processing::InitialProcessingError,
+    initial_processing::InitialProcessorError,
     parsing::{
-        ParsingError,
+        ParserError,
         TopLevelStatement,
     },
     phase_0_newline_tracking::NewlineTracking,
@@ -54,7 +54,7 @@ use self::{
         RemoveEscapedNewlinesError,
     },
     preprocessing::{
-        PreprocessingError,
+        PreprocessorError,
         Token,
     },
     preprocessor_tokenizer::{
@@ -154,7 +154,7 @@ impl Default for SourcePosition {
         Self {
             index:       0,
             line:        1,
-            column:      1,
+            column:      ONE,
             source_file: StringCacheId::from_u32(0),
         }
     }
@@ -178,6 +178,15 @@ impl Default for SourceVector {
 pub(crate) struct SourceVectors {
     start_index: u32,
     length:      u32,
+}
+
+impl Default for SourceVectors {
+    fn default() -> Self {
+        Self {
+            start_index: 0,
+            length:      0,
+        }
+    }
 }
 
 pub(crate) trait GetSeverity {
@@ -213,7 +222,7 @@ impl GetPosition for Infallible {
 }
 
 pub(crate) struct SourceFile {
-    pub(crate) name:   PathBuf,
+    pub(crate) name:   Box<Path>,
     pub(crate) source: Box<str>,
     pub(crate) line:   u32,
     pub(crate) column: NonZeroU32,
@@ -237,6 +246,7 @@ pub(crate) struct Context {
     source_vectors: Vec<SourceVector>,
     string_cache: StringCache,
     is_tokenizing_include_string: bool,
+    is_skipping_over_dead_code: bool,
     pending_errors: Vec<TranslationError>,
 }
 
@@ -247,7 +257,7 @@ impl GetPosition for Context {
 }
 
 impl Context {
-    fn new(source: Box<str>, name: PathBuf) -> Self {
+    fn new(source: Box<str>, name: Box<Path>) -> Self {
         Self {
             source: SourceFile {
                 name,
@@ -260,6 +270,7 @@ impl Context {
             source_vectors: Vec::new(),
             string_cache: Interner::new(),
             is_tokenizing_include_string: false,
+            is_skipping_over_dead_code: false,
             pending_errors: Vec::new(),
         }
     }
@@ -273,7 +284,7 @@ impl Context {
     }
 
     #[cold]
-    pub(crate) fn push_source(&mut self, source: Box<str>, name: StringCacheId) {
+    pub(crate) fn push_source(&mut self, source: Box<str>, name: Box<Path>) {
         let source_file = SourceFile {
             name,
             source,
@@ -325,16 +336,33 @@ impl Context {
         self.is_tokenizing_include_string = value;
     }
 
-    pub(crate) fn missing_final_newline(&mut self) {
-        self.pending_errors
-            .push(TranslationError::InitialProcessing(
-                InitialProcessingError::MissingFinalNewLine(self.source.position()),
-            ));
+    pub(crate) fn is_skipping_over_dead_code(&self) -> bool {
+        self.is_skipping_over_dead_code
     }
 
-    pub(crate) fn tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
+    pub(crate) fn set_is_skipping_over_dead_code(&mut self, value: bool) {
+        self.is_skipping_over_dead_code = value;
+    }
+
+    pub(crate) fn missing_final_newline(&mut self) {
+        if !self.is_skipping_over_dead_code {
+            self.pending_errors
+                .push(TranslationError::InitialProcessing(
+                    InitialProcessorError::MissingFinalNewLine(self.source.position()),
+                ));
+        }
+    }
+
+    pub(crate) fn preprocessor_tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
+        if !self.is_skipping_over_dead_code {
+            self.pending_errors
+                .push(TranslationError::PreprocessorTokenizining(error));
+        }
+    }
+
+    pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError) {
         self.pending_errors
-            .push(TranslationError::PreprocessorTokenizining(error));
+            .push(TranslationError::Preprocessing(error));
     }
 }
 
