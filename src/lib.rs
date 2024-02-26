@@ -36,7 +36,7 @@ use crate::{
             SharedString,
             SharedVec,
         },
-        string_cache::Interner,
+        string_cache::StringCache,
     },
 };
 
@@ -44,8 +44,7 @@ pub(crate) mod float_parsing;
 pub(crate) mod translation_phases;
 pub(crate) mod util;
 
-pub type Preprocessor =
-    self::translation_phases::preprocessing::Preprocessor<Ppt, Ppte, Pptsp>;
+pub type Preprocessor = self::translation_phases::preprocessing::Preprocessor<Ppt, Ppte, Pptsp>;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about, color = ColorChoice::Always)]
@@ -97,7 +96,7 @@ fn parse_include_env_var(env_var: &str, vec: &mut Vec<PathBuf>) {
 #[doc(hidden)]
 pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
-    let mut string_cache = Interner::new();
+    let mut string_cache = StringCache::new();
     eprintln!("{}", "Printing all generated tokens:".bright_green());
     let parsed_input = if args.input.input.is_some() {
         ParsedInput::String(args.input.input.unwrap().into())
@@ -128,11 +127,7 @@ pub fn run() -> Result<(), MainError> {
                 match t.kind {
                     | TokenType::Identifier => format!(
                         "Identifier: {}",
-                        preprocessor
-                            .previous_phase
-                            .string_cache
-                            .get(t.contents)
-                            .unwrap()
+                        preprocessor.tokenizer.string_cache.get(t.contents).unwrap()
                     ),
                     | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
                     | TokenType::String(sltt) => format!(
@@ -140,7 +135,7 @@ pub fn run() -> Result<(), MainError> {
                         match sltt {
                             | StringTokenType::WideString(s) | StringTokenType::String(s) => {
                                 preprocessor
-                                    .previous_phase
+                                    .tokenizer
                                     .string_cache
                                     .get(s)
                                     .unwrap()
@@ -168,7 +163,7 @@ pub fn run() -> Result<(), MainError> {
                     "{}: {e} at {}:{}:{}",
                     e.severity(),
                     preprocessor
-                        .previous_phase
+                        .tokenizer
                         .string_cache
                         .get(position.source_file)
                         .expect("Invalid source file id."),
@@ -185,7 +180,7 @@ pub fn run() -> Result<(), MainError> {
     eprintln!(
         "{}{}",
         "String cache contents: ".bright_yellow(),
-        preprocessor.previous_phase.as_ref().bright_yellow()
+        preprocessor.tokenizer.as_ref().bright_yellow()
     );
     eprintln!(
         "{}{:?}",
@@ -203,7 +198,7 @@ pub fn run() -> Result<(), MainError> {
 #[doc(hidden)]
 pub fn preprocess_hundred_thousand() {
     let million_lines = include_str!(concat!(env!("OUT_DIR"), "/hundred-thousand-lines.c"));
-    let mut string_cache = Interner::new();
+    let mut string_cache = StringCache::new();
     let preprocessor = Preprocessor::new(
         million_lines.to_owned().into(),
         string_cache.intern("<input>"),

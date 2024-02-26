@@ -37,7 +37,7 @@ use crate::{
         },
         string_cache::{
             StringCacheId as StringCacheId,
-            Interner,
+            StringCache,
         },
         unlikely,
         HashMap,
@@ -45,58 +45,12 @@ use crate::{
     },
 };
 
-pub(crate) trait FromInput: ISavePoint {
-    fn from_input(input: SharedString, source_file: StringCacheId) -> Self;
-}
-
-impl FromInput for Pptsp {
-    fn from_input(input: SharedString, source_file: StringCacheId) -> Self {
-        let inner = RemoveEscapedNewlinesSavePoint {
-            inner:            MapCharacterSetsSavePoint {
-                inner: NewlineTrackingSavePoint {
-                    source: input,
-                    position: SourcePosition {
-                        index: 0,
-                        line: 1,
-                        column: 1,
-                        source_file,
-                    },
-                    is_middle_of_windows_newline: false,
-                },
-            },
-            last_was_newline: false,
-            state:            RemoveEscapedNewlinesState::Default,
-        };
-        Self {
-            current_token_start: inner.clone(),
-            inner,
-            state: PreprocessorTokenizerState::Default,
-            is_tokenizing_include_string: false,
-        }
-    }
-}
-
 use super::{
-    phase_0_newline_tracking::{
-        NewlineTracking,
-    },
-    phase_1_map_character_sets::{
-        MapCharacterSets,
-        MapCharacterSetsError,
-    },
-    phase_2_remove_escaped_newlines::{
-        RemoveEscapedNewlines,
-        RemoveEscapedNewlinesError,
-        SavePoint as RemoveEscapedNewlinesSavePoint,
-        State as RemoveEscapedNewlinesState,
-    },
     preprocessor_tokenizer::{
-        IsTokenizingIncludeString,
         PreprocessorToken,
         PreprocessorTokenType,
         PreprocessorTokenizer,
         PreprocessorTokenizerError,
-        State as PreprocessorTokenizerState,
     },
     ErrorSeverity,
     GetPosition,
@@ -105,6 +59,7 @@ use super::{
     SourceVector,
     SourceVectors,
     TranslationPhase,
+    Context,
 };
 
 
@@ -112,32 +67,32 @@ const PREDEFINED_MACRO_NAMES: [&str; 5] =
     ["__LINE__", "__FILE__", "__DATE__", "__TIME__", "_Pragma"];
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum TokenizerFrameType<PrevSavePoint> {
+pub(crate) enum TokenizerFrameType {
     SourceFile,
     ObjectLikeMacroInvocation {
         hash_hash_positions: Arc<HashSet<SourcePosition>>,
     },
     FunctionLikeMacroInvocation {
-        arguments:           Arc<HashMap<StringCacheId, FunctionLikeMacroArgument<PrevSavePoint>>>,
+        arguments:           Arc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
         hash_hash_positions: Arc<HashSet<SourcePosition>>,
         is_variadic:         bool,
     },
     FunctionLikeMacroArgument {
-        argument:            FunctionLikeMacroArgument<PrevSavePoint>,
+        argument:            FunctionLikeMacroArgument,
         paren_depth:         usize,
         has_generated_token: bool,
     },
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum MacroDefinition<PrevSavePoint> {
+pub(crate) enum MacroDefinition {
     ObjectLike {
-        start_save_point:    PrevSavePoint,
+        tokenizer: PreprocessorTokenizer,
         hash_hash_positions: Arc<HashSet<SourcePosition>>,
     },
     FunctionLike {
         argument_names:      Arc<[StringCacheId]>,
-        start_save_point:    PrevSavePoint,
+        tokenizer:    PreprocessorTokenizer,
         is_variadic:         bool,
         hash_hash_positions: Arc<HashSet<SourcePosition>>,
     },
@@ -145,10 +100,9 @@ pub(crate) enum MacroDefinition<PrevSavePoint> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct TokenizerFrame<PrevSavePoint> {
-    frame_type: TokenizerFrameType<PrevSavePoint>,
-    save_point: PrevSavePoint,
-    name:       StringCacheId,
+pub(crate) struct TokenizerFrame {
+    frame_type: TokenizerFrameType,
+    tokenizer: PreprocessorTokenizer,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -159,14 +113,12 @@ pub(crate) enum HashHash {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
-    pub(crate) previous_phase: Prev,
-    pub(crate) tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
+pub(crate) struct Preprocessor {
+    pub(crate) tokenizer: PreprocessorTokenizer,
+    pub(crate) tokenizer_stack: Vec<TokenizerFrame>,
     pub(crate) hash_hash_stack: Vec<HashHash>,
     once_set: HashSet<StringCacheId>,
-    macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
-    pending_results: VecDeque<Result<Token, PreprocessingError<PrevError>>>,
-    state: State,
+    macro_definitions: HashMap<StringCacheId, MacroDefinition>,
     last_preprocessor_token: Option<PreprocessorToken>,
     current_preprocessor_token: Option<PreprocessorToken>,
     if_directive_balance: isize,
@@ -175,25 +127,6 @@ pub(crate) struct Preprocessor<Prev, PrevError, PrevSavePoint> {
     quote_include_directories: SharedVec<PathBuf>,
     system_include_directories: SharedVec<PathBuf>,
     expression_parser: PreprocessorExpressionParser,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct SavePoint<PrevSavePoint, PrevError> {
-    pub(crate) inner: PrevSavePoint,
-    pub(crate) tokenizer_stack: Vec<TokenizerFrame<PrevSavePoint>>,
-    pub(crate) hash_hash_stack: Vec<HashHash>,
-    pub(crate) once_set: HashSet<StringCacheId>,
-    pub(crate) pending_results: VecDeque<Result<Token, PreprocessingError<PrevError>>>,
-    pub(crate) state: State,
-    pub(crate) last_preprocessor_token: Option<PreprocessorToken>,
-    pub(crate) current_preprocessor_token: Option<PreprocessorToken>,
-    pub(crate) macro_definitions: HashMap<StringCacheId, MacroDefinition<PrevSavePoint>>,
-    pub(crate) if_directive_balance: isize,
-    pub(crate) should_tokenize_whitespace: bool,
-    pub(crate) generate_placeholders: bool,
-    pub(crate) quote_include_directories: SharedVec<PathBuf>,
-    pub(crate) system_include_directories: SharedVec<PathBuf>,
-    pub(crate) expression_parser: PreprocessorExpressionParser,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -325,16 +258,6 @@ impl PreprocessorExpressionParser {
         self.operator_stack.clear();
         self.operand_stack.clear();
         self.state = PreprocessorExpressionParserState::Unary;
-    }
-}
-
-impl<PrevSavePoint, PrevError> super::SavePoint for SavePoint<PrevSavePoint, PrevError>
-where
-    PrevSavePoint: super::SavePoint,
-    PrevError: Debug + Clone,
-{
-    fn current_position(&self) -> SourcePosition {
-        self.inner.current_position()
     }
 }
 
@@ -1768,60 +1691,33 @@ impl Display for PreprocessingErrorType {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) struct FunctionLikeMacroArgument<PrevSavePoint> {
+pub(crate) struct FunctionLikeMacroArgument {
     name:             StringCacheId,
-    start_save_point: PrevSavePoint,
+    tokenizer: PreprocessorTokenizer,
 }
 
-macro_rules! get_from_cache {
-    ($self:expr, $id:expr) => {
-        ($self)
-            .previous_phase
-            .as_ref()
-            .get($id)
-            .unwrap_or_else(|| panic!("Compiler bug: StringCacheId is out of bounds: {:#?}", $id))
-    };
+fn get_from_cache(context: &Context, id: StringCacheId) -> &str {
+    context.string_cache.get(id).unwrap_or_else(|| panic!("Compiler bug: StringCacheId is out of bounds: {id:#?}"))
 }
 
-pub(crate) type Pptsp = PreprocessorTokenizerSavePoint<
-    RemoveEscapedNewlinesSavePoint<MapCharacterSetsSavePoint<NewlineTrackingSavePoint>>,
->;
-pub(crate) type Ppt = PreprocessorTokenizer<
-    RemoveEscapedNewlines<MapCharacterSets<NewlineTracking>>,
-    RemoveEscapedNewlinesSavePoint<MapCharacterSetsSavePoint<NewlineTrackingSavePoint>>,
->;
-pub(crate) type Ppte =
-    PreprocessorTokenizerError<RemoveEscapedNewlinesError<MapCharacterSetsError<Infallible>>>;
-impl Preprocessor<Ppt, Ppte, Pptsp> {
+impl Preprocessor {
     pub(crate) fn new(
-        source_string: SharedString,
-        source_file: StringCacheId,
-        mut string_cache: StringCache,
-        quote_include_directories: SharedVec<PathBuf>,
-        system_include_directories: SharedVec<PathBuf>,
-    ) -> Self {
-        let phase0 = NewlineTracking::new(source_string, source_file);
-        let phase1 = MapCharacterSets::new(phase0);
-        let phase2 = RemoveEscapedNewlines::new(phase1);
+        ) -> Self {
         let macro_definitions = PREDEFINED_MACRO_NAMES
             .into_iter()
             .map(|s| -> (StringCacheId, MacroDefinition<Pptsp>) {
                 (string_cache.intern(s), MacroDefinition::BuiltIn)
             })
             .collect();
-        let phase3 = PreprocessorTokenizer::new(phase2, string_cache);
         Self {
             tokenizer_stack: vec![TokenizerFrame {
                 frame_type: TokenizerFrameType::SourceFile,
-                save_point: phase3.save(),
-                name:       source_file,
+                tokenizer: PreprocessorTokenizer::new(),
             }],
             hash_hash_stack: Vec::new(),
             once_set: HashSet::default(),
-            previous_phase: phase3,
+            tokenizer: phase3,
             macro_definitions,
-            pending_results: VecDeque::new(),
-            state: State::Default,
             last_preprocessor_token: None,
             current_preprocessor_token: None,
             if_directive_balance: 0,
@@ -1834,45 +1730,30 @@ impl Preprocessor<Ppt, Ppte, Pptsp> {
     }
 }
 
-impl<PrevPrevError, Prev> Preprocessor<Prev, Prev::Error, Prev::SavePoint>
-where
-    Prev: TranslationPhase<
-            Yield = PreprocessorToken,
-            Error = PreprocessorTokenizerError<PrevPrevError>,
-        > + AsMut<StringCache>
-        + AsRef<StringCache>
-        + IsTokenizingIncludeString,
-    PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
-    Prev::SavePoint: FromInput + PartialEq + Eq + Clone + Debug,
-{
-    fn push_tokenizer_frame(&mut self, frame: TokenizerFrame<Prev::SavePoint>) {
+impl Preprocessor {
+    fn push_tokenizer_frame(&mut self, frame: TokenizerFrame) {
         // eprintln!("pushing frame: {frame:#?}");
         // eprintln!(
         // "Called push_tokenizer_frame with length: {} and frame: {frame:?}",
         // self.tokenizer_stack.len()
         // );
-        self.tokenizer_stack.last_mut().unwrap().save_point = self.previous_phase.save();
-        let save_point = frame.save_point.clone();
-        self.previous_phase.restore(save_point);
+        self.tokenizer_stack.last_mut().unwrap().tokenizer = self.tokenizer;
+        self.tokenizer = frame.tokenizer;
         self.tokenizer_stack.push(frame);
     }
 
     fn pop_tokenizer_frame(&mut self) {
         let f = self.tokenizer_stack.pop();
         drop(f);
-        if let Some(last) Internernizer_stack.last() {
-            self.previous_phase.restore(last.save_point.clone());
+        if let Some(last) = self.tokenizer_stack.last() {
+            self.tokenizer = last.tokenizer;
         }
     }
 
     fn expect_token_no_expand(
         &mut self,
+        context: &mut Context,
         mut is_correct_token: impl FnMut(&mut Self, &PreprocessorToken) -> bool,
-        mut on_previous_phase_error: impl FnMut(
-            &mut Self,
-            Prev::Error,
-        )
-            -> ControlFlow<<Self as TranslationPhase>::Error>,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
             PreprocessorToken,
@@ -1881,7 +1762,7 @@ where
     ) -> Result<PreprocessorToken, <Self as TranslationPhase>::Error> {
         loop {
             match self.next_preprocessor_token_no_expand() {
-                | Some(Ok(token)) => {
+                | Some(token) => {
                     if is_correct_token(self, &token) {
                         return Ok(token);
                     }
@@ -1890,10 +1771,6 @@ where
                         | ControlFlow::Break(e) => break Err(e),
                     }
                 },
-                | Some(Err(e)) => match on_previous_phase_error(self, e) {
-                    | ControlFlow::Continue(()) => continue,
-                    | ControlFlow::Break(e) => break Err(e),
-                },
                 | None => {
                     break Err(PreprocessingError::InnerPreprocessorError(
                         InnerPreprocessorError {
@@ -1901,11 +1778,10 @@ where
                                 eof_message,
                             ),
                             source_vectors: SourceVectors::from(SourceVector {
-                                position: self.previous_phase.current_position(),
+                                position: self.tokenizer.current_position(),
                                 length:   0,
-                  Interner),
-                Interner
-                    ));
+                            })}
+                        ));
                 },
             }
         }
@@ -1914,6 +1790,7 @@ where
     #[allow(dead_code)]
     fn expect_token(
         &mut self,
+        context: &mut Context,
         mut is_correct_token: impl FnMut(&mut Self, &PreprocessorToken) -> bool,
         mut on_error: impl FnMut(
             &mut Self,
@@ -1941,8 +1818,7 @@ where
                     | ControlFlow::Break(e) => break Err(e),
                 },
                 | None => {
-                    break Err(PreprocessingError::InnerPreprocessorError(
-                        InnerPreprocessorError {
+                    break Err(PreprocessorError {
                             error_type:     PreprocessingErrorType::UnexpectedEndOfInput(
                                 eof_message,
                             ),
@@ -1951,7 +1827,7 @@ where
                                 length:   0,
                             }),
                         },
-                    ));
+                    );
                 },
             }
         }
@@ -1959,6 +1835,7 @@ where
 
     fn merge_token_contents(
         &mut self,
+        context: &mut Context,
         lhs: &PreprocessorToken,
         rhs: &PreprocessorToken,
         result_token_type: PreprocessorTokenType,
@@ -1979,11 +1856,12 @@ where
     #[allow(clippy::unnecessary_wraps)]
     fn create_merge_error(
         &mut self,
+        context: &mut Context,
         lhs: &PreprocessorToken,
         rhs: &PreprocessorToken,
     ) -> Option<Result<PreprocessorToken, PreprocessingError<Prev::Error>>> {
-        let lhs_contents = get_from_cache!(self, lhs.contents).to_string();
-        let rhs_contents = get_from_cache!(self, rhs.contents).to_string();
+        let lhs_contents = get_from_cache(context, lhs.contents).to_string();
+        let rhs_contents = get_from_cache(context, rhs.contents).to_string();
         let source_vectors = &lhs.source_vectors + &rhs.source_vectors;
         self.pending_results
             .push_back(Err(PreprocessingError::InnerPreprocessorError(
@@ -2470,10 +2348,10 @@ where
 
     fn next_preprocessor_token(
         &mut self,
-    ) -> Option<Result<PreprocessorToken, PreprocessingError<Prev::Error>>> {
+    ) -> PreprocessorToken {
         // eprintln!("Tokenizer stack: {:#?}", self.tokenizer_stack);
         // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
-        let last = self.current_preprocessor_token.clone();
+        let last = self.current_preprocessor_token;
         let ret = 'base: loop {
             self.generate_placeholders = true;
             let mut token = match self.handle_hash_hash_operator() {
@@ -6106,28 +5984,43 @@ where
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.previous_phase.size_hint()
+        self.tokenizer.size_hint()
     }
 }
 
-impl<PrevPrevError, Prev> TranslationPhase for Preprocessor<Prev, Prev::Error, Prev::SavePoint>
-where
-    Prev: TranslationPhase<
-            Yield = PreprocessorToken,
-            Error = PreprocessorTokenizerError<PrevPrevError>,
-        > + AsMut<StringCache>
-        + AsRef<StringCache>
-        + IsTokenizingIncludeString,
-    PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
-    Prev::SavePoint: FromInput + PartialEq + Eq + Clone + Debug,
-{
-    type Error = PreprocessingError<Prev::Error>;
-    type SavePoint = SavePoint<Prev::SavePoint, Prev::Error>;
-    type Yield = Token;
+impl TranslationPhase for Preprocessor {
+    type Item = Token;
+
+    fn next_item(&mut self, context: &mut super::Context) -> Option<Self::Item> {
+        let token = match self.next_preprocessor_token() {
+            | Some(Ok(token)) => token,
+            | Some(Err(e)) => return Some(Err(e)),
+            | None => {
+                self.state = State::Done;
+                if self.if_directive_balance != 0 {
+                    return Some(Err(PreprocessingError::InnerPreprocessorError(
+                        InnerPreprocessorError {
+                            error_type:
+                                PreprocessingErrorType::MoreIfDirectivesThanEndifDirectives,
+                            source_vectors: SourceVectors::from(SourceVector {
+                                position: self.current_position(),
+                                length:   0,
+                            }),
+                        },
+                    )));
+                }
+                return None;
+            },
+        };
+
+        if let Some(result) = self.map_preprocessor_token(token) {
+            return Some(result);
+        }
+    }
 
     fn save(&self) -> Self::SavePoint {
-        SavePoint Interner
-            inneInternervious_phase.save(),
+        SavePoint
+            innevious_phase.save(),
             tokenizer_stack: self.tokenizer_stack.clone(),
             hash_hash_stack: self.hash_hash_stack.clone(),
             once_set: self.once_set.clone(),
@@ -6171,4 +6064,3 @@ where
         self.previous_phase.set_line_number(line);
     }
 }
-InternerInterner
