@@ -55,15 +55,15 @@ impl<Prev> Parser<Prev>
 where
     Prev: TranslationPhase<Yield = Token>,
 {
-    fn parse_statement(&mut self) -> Result<Statement, ParsingError<Prev::Error>> {
+    fn parse_statement(&mut self) -> Result<Statement, ParserError<Prev::Error>> {
         todo!();
     }
 
-    fn parse_expression(&mut self) -> Result<Expression, ParsingError<Prev::Error>> {
+    fn parse_expression(&mut self) -> Result<Expression, ParserError<Prev::Error>> {
         todo!();
     }
 
-    fn parse_type(&mut self) -> Result<Type, ParsingError<Prev::Error>> {
+    fn parse_type(&mut self) -> Result<Type, ParserError<Prev::Error>> {
         todo!();
     }
 }
@@ -347,30 +347,30 @@ pub(crate) struct FunctionDefinition {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct ParsingError {
+pub(crate) struct ParserError {
     pub(crate) error_type:     ParserErrorType,
     pub(crate) source_vectors: SourceVectors,
 }
 
-impl Display for ParsingError {
+impl Display for ParserError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.error_type)
     }
 }
 
-impl GetSeverity for ParsingError {
+impl GetSeverity for ParserError {
     fn severity(&self) -> ErrorSeverity {
         self.error_type.severity()
     }
 }
 
-impl GetPosition for ParsingError {
+impl GetPosition for ParserError {
     fn position(&self) -> SourcePosition {
         self.source_vectors[0]
     }
 }
 
-impl std::error::Error for ParsingError {}
+impl std::error::Error for ParserError {}
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct SavePoint<PrevSavePoint> {
@@ -411,7 +411,7 @@ impl<Prev, PrevError> Iterator for Parser<Prev>
 where
     Prev: TranslationPhase<Yield = Token, Error = PrevError>,
 {
-    type Item = Result<TopLevelStatement, ParsingError<PrevError>>;
+    type Item = Result<TopLevelStatement, ParserError<PrevError>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -419,7 +419,7 @@ where
                 | State::ParsingTopLevelStatement => {
                     let type_ = match self.parse_type() {
                         | Ok(t) => t,
-                        | Err(e) => return Some(Err(ParsingError::PreviousPhaseError(e))),
+                        | Err(e) => return Some(Err(ParserError::PreviousPhaseError(e))),
                     };
                     match type_.kind {
                         TypeKind::Function { return_type_index, parameters }
@@ -427,7 +427,7 @@ where
                 },
                 | State::ParsingType => self.types.push(match self.parse_type() {
                     | Ok(t) => t,
-                    | Err(e) => return Some(Err(ParsingError::PreviousPhaseError(e))),
+                    | Err(e) => return Some(Err(ParserError::PreviousPhaseError(e))),
                 }),
                 | State::ParsingStatement => {
                     let statement = match self.parse_statement() {
@@ -439,7 +439,7 @@ where
                 | State::ParsingExpression => {
                     let expression = match self.parse_expression() {
                         | Ok(e) => e,
-                        | Err(e) => return Some(Err(ParsingError::PreviousPhaseError(e))),
+                        | Err(e) => return Some(Err(ParserError::PreviousPhaseError(e))),
                     };
                     self.expressions.push(expression);
                 },
@@ -462,7 +462,7 @@ impl<Prev> TranslationPhase for Parser<Prev>
 where
     Prev: TranslationPhase<Yield = Token>,
 {
-    type Error = ParsingError<Prev::Error>;
+    type Error = ParserError<Prev::Error>;
     type SavePoint = SavePoint<Prev::SavePoint>;
     type Yield = TopLevelStatement;
 

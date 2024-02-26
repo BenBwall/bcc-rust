@@ -12,7 +12,7 @@ enum HandleNewline {
     Other,
 }
 
-pub(crate) enum InitialProcessingError {
+pub(crate) enum InitialProcessorError {
     MissingFinalNewline(SourcePosition),
 }
 
