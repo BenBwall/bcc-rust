@@ -1,13 +1,4 @@
-use std::{
-    fmt::Display,
-    mem::replace,
-    num::NonZeroU32,
-};
-
-use arrayvec::ArrayVec;
-use proptest::prelude::Rng;
-use smallstr::SmallString;
-use thiserror::Error;
+use std::fmt::Display;
 
 use super::{
     initial_processing::InitialProcessor,
@@ -15,29 +6,45 @@ use super::{
     ErrorSeverity,
     GetPosition,
     GetSeverity,
-    SavePoint as ISavePoint,
+    GetSourceFileName,
+    SetPosition,
     SourcePosition,
     SourceVector,
     SourceVectors,
     TranslationPhase,
 };
 use crate::util::{
-    small_queue::SmallQueue,
-    string_cache::{
-        Interner,
-        StringCacheId,
+    shared::{
+        SharedPath,
+        SharedString,
     },
+    string_cache::StringCacheId,
 };
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub(crate) struct PreprocessorTokenizer {
     initial_processor:   InitialProcessor,
-    current_token_start: SourcePosition,
+    current_token_start: (SourcePosition, SharedPath),
 }
 
 impl GetPosition for PreprocessorTokenizer {
+    #[inline(always)]
     fn position(&self) -> SourcePosition {
         self.initial_processor.position()
+    }
+}
+
+impl SetPosition for PreprocessorTokenizer {
+    #[inline(always)]
+    fn set_position(&mut self, position: SourcePosition) {
+        self.initial_processor.set_position(position);
+    }
+}
+
+impl GetSourceFileName for PreprocessorTokenizer {
+    #[inline(always)]
+    fn source_file_name(&self) -> &SharedPath {
+        self.initial_processor.source_file_name()
     }
 }
 
@@ -110,12 +117,10 @@ impl TranslationPhase for PreprocessorTokenizer {
     type Item = PreprocessorToken;
 
     fn next_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
-        let start_index = self.initial_processor.position().index;
-        let start_column = self.initial_processor.position().column;
-        let start_line = self.initial_processor.position().line;
+        let start_position = self.position();
         loop {
             context.string_cache.undo_str();
-            self.current_token_start = self.initial_processor.position();
+            self.current_token_start = self.initial_processor.current_char_start_position();
             let Some(input) = self.initial_processor.next_item(context) else {
                 break None;
             };
@@ -148,9 +153,7 @@ impl TranslationPhase for PreprocessorTokenizer {
                         match self.tokenize_angle_bracket_string(context) {
                             | Some(token) => token,
                             | None => {
-                                context.source.index = start_index;
-                                context.source.column = start_column;
-                                context.source.line = start_line;
+                                self.set_position(start_position);
                                 context.is_tokenizing_include_string = false;
                                 context.string_cache.undo_str();
                                 continue;
@@ -183,6 +186,8 @@ impl TranslationPhase for PreprocessorTokenizer {
 }
 
 impl PreprocessorTokenizer {
+    #[inline(never)]
+    #[cold]
     fn generate_error(
         &mut self,
         context: &mut Context,
@@ -192,8 +197,11 @@ impl PreprocessorTokenizer {
 
         context.preprocessor_tokenizer_error(PreprocessorTokenizerError {
             source_vector: SourceVector {
-                position,
-                length: self.position().index - position.index,
+                index:       position.index,
+                column:      position.column,
+                line:        position.line,
+                source_file: self.source_file_name().clone(),
+                length:      self.index() - position.index,
             },
             error_type,
         });
@@ -204,9 +212,10 @@ impl PreprocessorTokenizer {
         context: &mut Context,
         token_type: PreprocessorTokenType,
     ) -> PreprocessorToken {
-        let current_position = context.position();
+        let current_position = self.position();
         let source_vector = context.push_source_vector(
             current_position,
+            self.source_file_name().clone(),
             current_position.index - self.current_token_start.index,
         );
         let contents = context.string_cache.end_str();
@@ -222,34 +231,32 @@ impl PreprocessorTokenizer {
 
     fn tokenize_whitespace(&mut self, context: &mut Context) -> PreprocessorToken {
         let mut current;
-        let mut last_index = self.initial_processor.position().index;
-        let mut last_column = self.initial_processor.position().column;
+        let mut last_index = self.index();
+        let mut last_column = self.column();
         loop {
             current = self.initial_processor.next_item(context);
             match current {
                 | None => {
-                    last_index = self.initial_processor.position().index;
-                    last_column = self.initial_processor.position().column;
+                    last_index = self.index();
+                    last_column = self.column();
                     break;
                 },
                 | Some(i) if i.is_whitespace() && i != '\n' => {
-                    last_index = self.initial_processor.position().index;
-                    last_column = self.initial_processor.position().column;
+                    last_index = self.index();
+                    last_column = self.column();
                 },
                 | Some(_) => break,
             }
         }
-        context.source.index = last_index;
-        context.source.column = last_column;
+        self.set_index(last_index);
+        self.set_column(last_column);
         context.string_cache.undo_str();
         context.string_cache.push(' ');
         self.generate_token(context, PreprocessorTokenType::Whitespace)
     }
 
     fn tokenize_forward_slash(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
         let current = self.initial_processor.next_item(context);
         match current {
             | Some('=') => {
@@ -257,25 +264,21 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::ForwardSlashEquals)
             },
             | Some(_) | None => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::ForwardSlash)
             },
         }
     }
 
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(source_name: SharedPath, source: SharedString) -> Self {
         Self {
-            initial_processor:   InitialProcessor::new(),
+            initial_processor:   InitialProcessor::new(source_name, source),
             current_token_start: SourcePosition::default(),
         }
     }
 
     fn tokenize_hash(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
         let current = self.initial_processor.next_item(context);
         match current {
             | Some('#') => {
@@ -283,9 +286,7 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::HashHash)
             },
             | _ => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Hash)
             },
         }
@@ -293,16 +294,12 @@ impl PreprocessorTokenizer {
 
     fn tokenize_identifier(&mut self, context: &mut Context) -> PreprocessorToken {
         loop {
-            let last_index = self.initial_processor.position().index;
-            let last_column = self.initial_processor.position().column;
-            let last_line = self.initial_processor.position().line;
+            let last_position = self.position();
             let current = self.initial_processor.next_item(context);
             match current {
                 | Some(c) if c.is_alphanumeric() || c == '_' => context.string_cache.push(c),
                 | _ => {
-                    context.source.index = last_index;
-                    context.source.column = last_column;
-                    context.source.line = last_line;
+                    self.set_position(last_position);
                     break self.generate_token(context, PreprocessorTokenType::Identifier);
                 },
             }
@@ -318,17 +315,13 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_wide_string_or_identifier(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
         let current = self.initial_processor.next_item(context);
         match current {
             | Some('"') => self.tokenize_string(context),
             | Some('\'') => self.tokenize_char(context),
             | None | Some(Ok(_)) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Identifier)
             },
         }
@@ -346,32 +339,27 @@ impl PreprocessorTokenizer {
         newline_error_type: PreprocessorTokenizerErrorType,
     ) -> PreprocessorToken {
         loop {
-            let last_index = self.initial_processor.position().index;
-            let last_column = self.initial_processor.position().column;
-            let last_line = self.initial_processor.position().line;
+            let last_position = self.position();
             let Some(current) = self.initial_processor.next_item(context) else {
                 self.generate_error(context, unterminated_error_type);
                 break;
             };
             if !ignore_escapes {
-                let last_index = self.initial_processor.position().index;
-                let last_column = self.initial_processor.position().column;
-                let last_line = self.initial_processor.position().line;
+                let last_position = self.position();
                 let next = self.initial_processor.next_item(context);
                 if current == '\\' && next == Some(end_char) {
                     context.string_cache.push('\\');
                     context.string_cache.push(end_char);
                     continue;
                 }
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
             }
             if current == end_char {
                 context.string_cache.push(end_char);
                 break;
             }
             if current == '\n' {
+                self.set_position(last_position);
                 context.string_cache.push(end_char);
                 self.generate_error(context, newline_error_type);
                 break;
@@ -435,19 +423,15 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_period_or_number(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
         match self.initial_processor.next_item(context) {
-            | Some('.') => self.tokenize_ellipsis(context, last_index, last_colunn, last_line),
+            | Some('.') => self.tokenize_ellipsis(context, last_position),
             | Some(v) if v.is_ascii_digit() => {
                 context.string_cache.push(v);
                 self.tokenize_number(context)
             },
             | _ => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Period)
             },
         }
@@ -458,9 +442,7 @@ impl PreprocessorTokenizer {
     fn tokenize_ellipsis(
         &mut self,
         context: &mut Context,
-        last_index: u32,
-        last_column: NonZeroU32,
-        last_line: u32,
+        last_position: SourcePosition,
     ) -> PreprocessorToken {
         match self.initial_processor.next_item(context) {
             | Some('.') => {
@@ -468,9 +450,7 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::Ellipsis)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Period)
             },
         }
@@ -478,9 +458,7 @@ impl PreprocessorTokenizer {
 
     fn tokenize_number(&mut self, context: &mut Context) -> PreprocessorToken {
         loop {
-            let last_index = self.initial_processor.position().index;
-            let last_column = self.initial_processor.position().column;
-            let last_line = self.initial_processor.position().line;
+            let last_position = self.position();
             let Some(current) = self.initial_processor.next_item(context) else {
                 break;
             };
@@ -496,9 +474,7 @@ impl PreprocessorTokenizer {
                             context,
                             PreprocessorTokenizerErrorType::MissingSignInExponent,
                         );
-                        context.source.index = last_index;
-                        context.source.column = last_column;
-                        context.source.line = last_line;
+                        self.set_position(last_position);
                         break;
                     },
                 }
@@ -508,15 +484,14 @@ impl PreprocessorTokenizer {
                 context.string_cache.push(current);
                 continue;
             }
-            context.source.index = last_index;
-            context.source.column = last_column;
-            context.source.line = last_line;
+            self.set_position(last_position);
             break;
         }
         self.generate_token(context, PreprocessorTokenType::Number)
     }
 
     fn tokenize_percent(&mut self, context: &mut Context) -> PreprocessorToken {
+        let last_position = self.position();
         match self.initial_processor.next_item(context) {
             | Some('=') => {
                 context.string_cache.push('=');
@@ -529,9 +504,7 @@ impl PreprocessorTokenizer {
             },
             | Some(':') => self.tokenize_hash_digraph(context),
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Percent)
             },
         }
@@ -540,16 +513,11 @@ impl PreprocessorTokenizer {
     #[inline(never)]
     #[cold]
     fn tokenize_hash_digraph(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
         match self.initial_processor.next_item(context) {
-            | Some('%') =>
-                self.tokenize_double_hash_digraph(context, last_index, last_column, last_line),
+            | Some('%') => self.tokenize_double_hash_digraph(context, last_position),
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Hash)
             },
         }
@@ -558,9 +526,7 @@ impl PreprocessorTokenizer {
     fn tokenize_double_hash_digraph(
         &mut self,
         context: &mut Context,
-        last_index: u32,
-        last_column: NonZeroU32,
-        last_line: u32,
+        last_position: SourcePosition,
     ) -> PreprocessorToken {
         match self.initial_processor.next_item(context) {
             | Some(':') => {
@@ -568,18 +534,14 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::HashHash)
             },
             | _ => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Hash)
             },
         }
     }
 
     fn tokenize_left_angle_bracket(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some(':') => {
@@ -599,18 +561,14 @@ impl PreprocessorTokenizer {
                 self.tokenize_left_shift(context)
             },
             | None | Some(Ok(_)) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::LessThan)
             },
         }
     }
 
     fn tokenize_left_shift(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some(Ok('=')) => {
@@ -618,18 +576,14 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::LessThanLessThanEquals)
             },
             | None | Some(Ok(_)) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::LessThanLessThan)
             },
         }
     }
 
     fn tokenize_right_angle_bracket(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('>') => {
@@ -641,18 +595,14 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::GreaterThanEquals)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::GreaterThan)
             },
         }
     }
 
     fn tokenize_right_shift(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some(Ok('=')) => {
@@ -660,18 +610,14 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::GreaterThanGreaterThanEquals)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::GreaterThanGreaterThan)
             },
         }
     }
 
     fn tokenize_colon(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('>') => {
@@ -679,18 +625,14 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::ClosingSquareBracket)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Colon)
             },
         }
     }
 
     fn tokenize_plus(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('+') => {
@@ -702,18 +644,14 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::PlusEquals)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Plus)
             },
         }
     }
 
     fn tokenize_minus(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('-') => {
@@ -729,18 +667,14 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::Arrow)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::Minus)
             },
         }
     }
 
     fn tokenize_asterisk(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -748,9 +682,7 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::AsteriskEquals)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
 
                 self.generate_token(context, PreprocessorTokenType::Asterisk)
             },
@@ -758,9 +690,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_caret(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -768,9 +698,7 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::CaretEquals)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
 
                 self.generate_token(context, PreprocessorTokenType::Caret)
             },
@@ -778,9 +706,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_ampersand(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('&') => {
@@ -792,9 +718,7 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::AmpersandEquals)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
 
                 self.generate_token(context, PreprocessorTokenType::Ampersand)
             },
@@ -802,9 +726,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_pipe(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('|') => {
@@ -816,9 +738,7 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::PipeEquals)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
 
                 self.generate_token(context, PreprocessorTokenType::Pipe)
             },
@@ -826,9 +746,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_exclamation_mark(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -836,18 +754,14 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::ExclamationMarkEquals)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
                 self.generate_token(context, PreprocessorTokenType::ExclamationMark)
             },
         }
     }
 
     fn tokenize_equals(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_index = self.initial_processor.position().index;
-        let last_column = self.initial_processor.position().column;
-        let last_line = self.initial_processor.position().line;
+        let last_position = self.position();
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -855,9 +769,7 @@ impl PreprocessorTokenizer {
                 self.generate_token(context, PreprocessorTokenType::EqualsEquals)
             },
             | None | Some(_) => {
-                context.source.index = last_index;
-                context.source.column = last_column;
-                context.source.line = last_line;
+                self.set_position(last_position);
 
                 self.generate_token(context, PreprocessorTokenType::Equals)
             },

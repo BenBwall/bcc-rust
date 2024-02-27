@@ -1,6 +1,4 @@
 use std::{
-    collections::VecDeque,
-    convert::Infallible,
     fmt::{
         Debug,
         Display,
@@ -17,10 +15,26 @@ use std::{
 };
 
 use chrono::Local;
-use smallstr::SmallString;
-use smallvec::SmallVec;
-use thiserror::Error;
 
+use super::{
+    preprocessor_tokenizer::{
+        PreprocessorToken,
+        PreprocessorTokenType,
+        PreprocessorTokenizer,
+        PreprocessorTokenizerError,
+    },
+    Context,
+    ErrorSeverity,
+    GetPosition,
+    GetSeverity,
+    GetSourceFileName,
+    SetPosition,
+    SourcePosition,
+    SourceVector,
+    SourceVectors,
+    TokenString,
+    TranslationPhase,
+};
 use crate::{
     float_parsing::{
         string_to_double,
@@ -32,37 +46,19 @@ use crate::{
     util::{
         read_to_string_lossy,
         shared::{
+            SharedPath,
             SharedString,
             SharedVec,
         },
         string_cache::{
-            StringCacheId as StringCacheId,
             StringCache,
+            StringCacheId,
         },
         unlikely,
         HashMap,
         HashSet,
     },
 };
-
-use super::{
-    preprocessor_tokenizer::{
-        PreprocessorToken,
-        PreprocessorTokenType,
-        PreprocessorTokenizer,
-        PreprocessorTokenizerError,
-    },
-    ErrorSeverity,
-    GetPosition,
-    GetSeverity,
-    SourcePosition,
-    SourceVector,
-    SourceVectors,
-    TranslationPhase,
-    Context,
-    SourceFile,
-};
-
 
 const PREDEFINED_MACRO_NAMES: [&str; 5] =
     ["__LINE__", "__FILE__", "__DATE__", "__TIME__", "_Pragma"];
@@ -88,12 +84,12 @@ pub(crate) enum TokenizerFrameType {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum MacroDefinition {
     ObjectLike {
-        tokenizer: PreprocessorTokenizer,
+        tokenizer:           PreprocessorTokenizer,
         hash_hash_positions: Arc<HashSet<SourcePosition>>,
     },
     FunctionLike {
         argument_names:      Arc<[StringCacheId]>,
-        tokenizer:    PreprocessorTokenizer,
+        tokenizer:           PreprocessorTokenizer,
         is_variadic:         bool,
         hash_hash_positions: Arc<HashSet<SourcePosition>>,
     },
@@ -103,7 +99,7 @@ pub(crate) enum MacroDefinition {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TokenizerFrame {
     frame_type: TokenizerFrameType,
-    tokenizer: PreprocessorTokenizer,
+    tokenizer:  PreprocessorTokenizer,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -115,19 +111,40 @@ pub(crate) enum HashHash {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Preprocessor {
-    pub(crate) tokenizer: PreprocessorTokenizer,
+    pub(crate) tokenizer:       PreprocessorTokenizer,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame>,
     pub(crate) hash_hash_stack: Vec<HashHash>,
-    once_set: HashSet<StringCacheId>,
-    macro_definitions: HashMap<StringCacheId, MacroDefinition>,
-    last_preprocessor_token: Option<PreprocessorToken>,
+    once_set:                   HashSet<StringCacheId>,
+    macro_definitions:          HashMap<StringCacheId, MacroDefinition>,
+    last_preprocessor_token:    Option<PreprocessorToken>,
     current_preprocessor_token: Option<PreprocessorToken>,
-    if_directive_balance: isize,
+    if_directive_balance:       isize,
     should_tokenize_whitespace: bool,
-    generate_placeholders: bool,
-    quote_include_directories: SharedVec<PathBuf>,
+    generate_placeholders:      bool,
+    quote_include_directories:  SharedVec<PathBuf>,
     system_include_directories: SharedVec<PathBuf>,
-    expression_parser: PreprocessorExpressionParser,
+    expression_parser:          PreprocessorExpressionParser,
+}
+
+impl GetPosition for Preprocessor {
+    #[inline(always)]
+    fn position(&self) -> SourcePosition {
+        self.tokenizer.position()
+    }
+}
+
+impl SetPosition for Preprocessor {
+    #[inline(always)]
+    fn set_position(&mut self, position: SourcePosition) {
+        self.tokenizer.set_position(position)
+    }
+}
+
+impl GetSourceFileName for Preprocessor {
+    #[inline(always)]
+    fn source_file_name(&self) -> &Path {
+        self.tokenizer.source_file_name()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -1693,27 +1710,33 @@ impl Display for PreprocessorErrorType {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct FunctionLikeMacroArgument {
-    name:             StringCacheId,
+    name:      StringCacheId,
     tokenizer: PreprocessorTokenizer,
 }
 
 impl Preprocessor {
     pub(crate) fn new(
-        ) -> Self {
+        context: &mut Context,
+        source_name: SharedPath,
+        source: SharedString,
+        quote_include_directories: SharedVec<SharedPath>,
+        system_include_directories: SharedVec<SharedPath>,
+    ) -> Self {
         let macro_definitions = PREDEFINED_MACRO_NAMES
             .into_iter()
             .map(|s| -> (StringCacheId, MacroDefinition) {
-                (string_cache.intern(s), MacroDefinition::BuiltIn)
+                (context.string_cache.intern(s), MacroDefinition::BuiltIn)
             })
             .collect();
+        let tokenizer = PreprocessorTokenizer::new(source_name, source);
         Self {
             tokenizer_stack: vec![TokenizerFrame {
                 frame_type: TokenizerFrameType::SourceFile,
-                tokenizer: PreprocessorTokenizer::new(),
+                tokenizer:  tokenizer.clone(),
             }],
             hash_hash_stack: Vec::new(),
             once_set: HashSet::default(),
-            tokenizer: phase3,
+            tokenizer,
             macro_definitions,
             last_preprocessor_token: None,
             current_preprocessor_token: None,
@@ -1734,41 +1757,19 @@ impl Preprocessor {
         // "Called push_tokenizer_frame with length: {} and frame: {frame:?}",
         // self.tokenizer_stack.len()
         // );
-        self.tokenizer_stack.last_mut().unwrap().tokenizer = self.tokenizer;
-        self.tokenizer = frame.tokenizer;
-        if let TokenizerFrame {
-            frame_type: TokenizerFrameType::SourceFile,
-            ..
-        } = &frame {
-            context.push_source(Source::File(frame.tokenizer.current_file()));
-        }
+        self.tokenizer_stack.last_mut().unwrap().tokenizer = std::mem::take(&mut self.tokenizer);
+        self.tokenizer = frame.tokenizer.clone();
         self.tokenizer_stack.push(frame);
     }
 
     fn pop_tokenizer_frame(&mut self, context: &mut Context) {
         let f = self.tokenizer_stack.pop();
-        if let Some(TokenizerFrame {
-            frame_type: TokenizerFrameType::SourceFile,
-            ..
-        }) = f.as_ref() {
-            context.pop_source();
-        }
         drop(f);
         if let Some(last) = self.tokenizer_stack.last() {
-            self.tokenizer = last.tokenizer;
+            self.tokenizer = last.tokenizer.clone();
         }
     }
 
-    fn push_source_file(&mut self, context: &mut Context, source: Box<str>, name: Box<Path>) {
-        context.push_source(source, name);
-        self.push_tokenizer_frame(
-            context,
-            TokenizerFrame {
-                frame_type: TokenizerFrameType::SourceFile,
-                tokenizer: PreprocessorTokenizer::new(),
-            },
-        );
-    }
     fn expect_token_no_expand(
         &mut self,
         context: &mut Context,
@@ -1776,77 +1777,84 @@ impl Preprocessor {
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
             PreprocessorToken,
-        ) -> ControlFlow<<Self as TranslationPhase>::Error>,
+        ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
-    ) -> Result<PreprocessorToken, <Self as TranslationPhase>::Error> {
+    ) -> Option<PreprocessorToken> {
         loop {
-            match self.next_preprocessor_token_no_expand() {
+            let start = self.position();
+            match self.next_preprocessor_token_no_expand(context) {
                 | Some(token) => {
                     if is_correct_token(self, &token) {
-                        return Ok(token);
+                        return Some(token);
                     }
                     match on_wrong_token_type(self, token) {
                         | ControlFlow::Continue(()) => continue,
-                        | ControlFlow::Break(e) => break Err(e),
+                        | ControlFlow::Break(e) => {
+                            self.set_position(start);
+                            context.preprocessor_error(e);
+                            return None;
+                        },
                     }
                 },
                 | None => {
-                    break Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                eof_message,
+                    self.set_position(start);
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
+                        source_vectors: SourceVectors {
+                            start_index: context.push_source_vector(
+                                start,
+                                self.source_file_name().clone(),
+                                0,
                             ),
-                            source_vectors: SourceVectors::from(SourceVector {
-                                position: self.tokenizer.current_position(),
-                                length:   0,
-                            })}
-                        ));
+                            length:      1,
+                        },
+                    });
+                    return None;
                 },
             }
         }
     }
 
-    #[allow(dead_code)]
     fn expect_token(
         &mut self,
         context: &mut Context,
         mut is_correct_token: impl FnMut(&mut Self, &PreprocessorToken) -> bool,
-        mut on_error: impl FnMut(
-            &mut Self,
-            <Self as TranslationPhase>::Error,
-        ) -> ControlFlow<<Self as TranslationPhase>::Error>,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
             PreprocessorToken,
-        ) -> ControlFlow<<Self as TranslationPhase>::Error>,
+        ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
-    ) -> PreprocessorToken {
+    ) -> Option<PreprocessorToken> {
         loop {
-            match self.next_preprocessor_token() {
-                | Some(Ok(token)) => {
+            let start = self.position();
+            match self.next_preprocessor_token(context) {
+                | Some(token) => {
                     if is_correct_token(self, &token) {
-                        return Ok(token);
+                        return Some(token);
                     }
                     match on_wrong_token_type(self, token) {
                         | ControlFlow::Continue(()) => continue,
-                        | ControlFlow::Break(e) => break Err(e),
+                        | ControlFlow::Break(e) => {
+                            self.set_position(start);
+                            context.preprocessor_error(e);
+                            return None;
+                        },
                     }
                 },
-                | Some(Err(e)) => match on_error(self, e) {
-                    | ControlFlow::Continue(()) => continue,
-                    | ControlFlow::Break(e) => break Err(e),
-                },
                 | None => {
-                    break Err(PreprocessorError {
-                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                eof_message,
+                    self.set_position(start);
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
+                        source_vectors: SourceVectors {
+                            start_index: context.push_source_vector(
+                                start,
+                                self.source_file_name().clone(),
+                                0,
                             ),
-                            source_vectors: SourceVectors::from(SourceVector {
-                                position: self.previous_phase.current_position(),
-                                length:   0,
-                            }),
+                            length:      1,
                         },
-                    );
+                    });
+                    return None;
                 },
             }
         }
@@ -1864,8 +1872,8 @@ impl Preprocessor {
         new_contents.push_str(context.string_cache.at(rhs.contents));
         let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
         PreprocessorToken {
-            kind:           result_token_type,
-            contents:       self.insert_into_cache(&new_contents),
+            kind: result_token_type,
+            contents: self.insert_into_cache(&new_contents),
             source_vectors,
         }
     }
@@ -1881,13 +1889,9 @@ impl Preprocessor {
         let rhs_contents = context.string_cache.at(rhs.contents).to_string();
         let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
         context.preprocessor_error(PreprocessorError {
-                    error_type: PreprocessorErrorType::TokenMergingError(
-                        lhs_contents,
-                        rhs_contents,
-                    ),
-                    source_vectors,
-                },
-            );
+            error_type: PreprocessorErrorType::TokenMergingError(lhs_contents, rhs_contents),
+            source_vectors,
+        });
         *lhs
     }
 
@@ -1912,10 +1916,15 @@ impl Preprocessor {
                 | PreprocessorTokenType::Defined
                 | PreprocessorTokenType::Number,
             ) => {
-                if get_from_cache!(self, rhs.contents).contains('.') {
+                if context.string_cache.at(rhs.contents).contains('.') {
                     return Some(self.create_merge_error(context, &lhs, &rhs));
                 }
-                let new = self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::Identifier);
+                let new = self.merge_token_contents(
+                    context,
+                    &lhs,
+                    &rhs,
+                    PreprocessorTokenType::Identifier,
+                );
                 let kind = if context.string_cache.at(new.contents) == "defined" {
                     PreprocessorTokenType::Defined
                 } else {
@@ -1968,18 +1977,24 @@ impl Preprocessor {
             | (PreprocessorTokenType::Minus, PreprocessorTokenType::Equals) => Some(Ok(
                 self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::MinusEquals)
             )),
-            | (PreprocessorTokenType::Asterisk, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::AsteriskEquals)
-            )),
-            | (PreprocessorTokenType::ForwardSlash, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::ForwardSlashEquals),
-            )),
-            | (PreprocessorTokenType::Percent, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::PercentEquals)
-            )),
-            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::LessThan) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::LessThanLessThan)
-            )),
+            | (PreprocessorTokenType::Asterisk, PreprocessorTokenType::Equals) => Some(Ok(self
+                .merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::AsteriskEquals))),
+            | (PreprocessorTokenType::ForwardSlash, PreprocessorTokenType::Equals) =>
+                Some(Ok(self.merge_token_contents(
+                    context,
+                    &lhs,
+                    &rhs,
+                    PreprocessorTokenType::ForwardSlashEquals,
+                ))),
+            | (PreprocessorTokenType::Percent, PreprocessorTokenType::Equals) => Some(Ok(self
+                .merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::PercentEquals))),
+            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::LessThan) => Some(Ok(self
+                .merge_token_contents(
+                    context,
+                    &lhs,
+                    &rhs,
+                    PreprocessorTokenType::LessThanLessThan,
+                ))),
             | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::GreaterThan) =>
                 Some(Ok(self.merge_token_contents(
                     context,
@@ -1987,12 +2002,15 @@ impl Preprocessor {
                     &rhs,
                     PreprocessorTokenType::GreaterThanGreaterThan,
                 ))),
-            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::LessThanEquals)
-            )),
-            | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::GreaterThanEquals)
-            )),
+            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Equals) => Some(Ok(self
+                .merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::LessThanEquals))),
+            | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::Equals) => Some(Ok(self
+                .merge_token_contents(
+                    context,
+                    &lhs,
+                    &rhs,
+                    PreprocessorTokenType::GreaterThanEquals,
+                ))),
             | (PreprocessorTokenType::LessThanLessThan, PreprocessorTokenType::Equals) =>
                 Some(Ok(self.merge_token_contents(
                     context,
@@ -2007,27 +2025,39 @@ impl Preprocessor {
                     &rhs,
                     PreprocessorTokenType::GreaterThanGreaterThanEquals,
                 ))),
-            | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::AmpersandEquals)
-            )),
+            | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Equals) => Some(Ok(self
+                .merge_token_contents(
+                    context,
+                    &lhs,
+                    &rhs,
+                    PreprocessorTokenType::AmpersandEquals,
+                ))),
             | (PreprocessorTokenType::Caret, PreprocessorTokenType::Equals) => Some(Ok(
                 self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::CaretEquals)
             )),
             | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Equals) => Some(Ok(
                 self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::PipeEquals)
             )),
-            | (PreprocessorTokenType::ExclamationMark, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::ExclamationMarkEquals),
-            )),
+            | (PreprocessorTokenType::ExclamationMark, PreprocessorTokenType::Equals) =>
+                Some(Ok(self.merge_token_contents(
+                    context,
+                    &lhs,
+                    &rhs,
+                    PreprocessorTokenType::ExclamationMarkEquals,
+                ))),
             | (PreprocessorTokenType::Equals, PreprocessorTokenType::Equals) => Some(Ok(
                 self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::EqualsEquals)
             )),
             | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Pipe) => Some(Ok(
                 self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::PipePipe)
             )),
-            | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Ampersand) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::AmpersandAmpersand),
-            )),
+            | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Ampersand) =>
+                Some(Ok(self.merge_token_contents(
+                    context,
+                    &lhs,
+                    &rhs,
+                    PreprocessorTokenType::AmpersandAmpersand,
+                ))),
 
             | _ => Some(self.create_merge_error(context, &lhs, &rhs)),
         }
@@ -2039,8 +2069,10 @@ impl Preprocessor {
                 == Some(PreprocessorTokenType::Whitespace)
     }
 
+    #[allow(clippy::redundant_else)]
     fn next_preprocessor_token_no_expand<const SHOULD_POP_DEAD_FRAMES: bool>(
-        &mut self, context: &mut Context,
+        &mut self,
+        context: &mut Context,
     ) -> Option<PreprocessorToken> {
         let last = self.current_preprocessor_token;
         let ret = 'base: loop {
@@ -2083,6 +2115,7 @@ impl Preprocessor {
                             let argument = *argument;
                             let has_generated_token = *has_generated_token;
                             if let Some(paren_depth) = self.update_macro_argument_paren_depth(
+                                context,
                                 &token,
                                 argument.name,
                                 paren_depth,
@@ -2101,20 +2134,18 @@ impl Preprocessor {
                                 };
                                 *p = paren_depth;
                                 *has_generated_token = true;
-                            } else {
-                                if SHOULD_POP_DEAD_FRAMES {
-                                    self.pop_tokenizer_frame(context);
-                                    if self.generate_placeholders && !has_generated_token {
-                                        break 'base Some(PreprocessorToken {
-                                            kind:           PreprocessorTokenType::Placeholder,
-                                            contents:       self.insert_into_cache(""),
-                                            source_vectors: SourceVectors::default(),
-                                        });
-                                    }
-                                    continue 'base;
-                                } else {
-                                    break 'base None;
+                            } else if SHOULD_POP_DEAD_FRAMES {
+                                self.pop_tokenizer_frame(context);
+                                if self.generate_placeholders && !has_generated_token {
+                                    break 'base Some(PreprocessorToken {
+                                        kind:           PreprocessorTokenType::Placeholder,
+                                        contents:       self.insert_into_cache(""),
+                                        source_vectors: SourceVectors::default(),
+                                    });
                                 }
+                                continue 'base;
+                            } else {
+                                break 'base None;
                             }
                             if token.kind == PreprocessorTokenType::Newline {
                                 if self.should_ignore_whitespace(context) {
@@ -2131,14 +2162,13 @@ impl Preprocessor {
                     }
                     break Some(token);
                 },
-                | None => {
+                | None =>
                     if SHOULD_POP_DEAD_FRAMES {
                         self.pop_tokenizer_frame(context);
                         continue 'base;
                     } else {
                         break 'base None;
-                    }
-                },
+                    },
             }
         };
         // eprintln!(
@@ -2214,9 +2244,9 @@ impl Preprocessor {
         &self,
         context: &Context,
     ) -> Option<(
-        StringCacheId,
-        Prev::SavePoint,
-        Arc<HashMap<&Path, FunctionLikeMacroArgument<Prev::SavePoint>>>,
+        &Path,
+        PreprocessorTokenizer,
+        Arc<HashMap<&Path, FunctionLikeMacroArgument>>,
         Arc<HashSet<SourcePosition>>,
         bool,
     )> {
@@ -2228,10 +2258,10 @@ impl Preprocessor {
                         is_variadic,
                         hash_hash_positions,
                     },
-                tokenizer: _,
+                tokenizer,
             }) => Some((
-                &context.source.name,
-                save_point.clone(),
+                tokenizer.source_file_name(),
+                tokenizer.clone(),
                 arguments.clone(),
                 hash_hash_positions.clone(),
                 *is_variadic,
@@ -2251,9 +2281,7 @@ impl Preprocessor {
         }
     }
 
-    fn handle_hash_operator(
-        &mut self, context: &mut Context,
-    ) -> Option<PreprocessorToken> {
+    fn handle_hash_operator(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
         let Some(token) = self.next_preprocessor_token_no_expand(context) else {
             return None;
         };
@@ -2276,16 +2304,12 @@ impl Preprocessor {
         }
     }
 
-    fn handle_hash_hash_operator(
-        &mut self, context: &mut Context,
-    ) -> Option<PreprocessorToken> {
+    fn handle_hash_hash_operator(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
         loop {
             let Some(token) = self.handle_hash_operator(context) else {
                 return None;
             };
-            let index = context.source.index;
-            let column = context.source.column;
-            let line = context.source.line;
+            let position = self.position();
             let hash_hash = if let Some(TokenizerFrame {
                 frame_type:
                     TokenizerFrameType::FunctionLikeMacroInvocation {
@@ -2297,18 +2321,20 @@ impl Preprocessor {
                     },
                 ..
             }) = self.tokenizer_stack.last()
-            {'inner: {
-                let maybe_whitespace = self.tokenizer.next_item(context);
-                if !matches!(maybe_whitespace, Some(PreprocessorToken {
-                    kind: PreprocessorTokenType::Whitespace,
-                    ..
-                })) {
-                    context.source.index = index;
-                    context.source.column = column;
-                    context.source.line = line;
-                    break 'inner None;
-                }
-                if hash_hash_positions.contains(&self.current_position()) {
+            {
+                'inner: {
+                    let maybe_whitespace = self.tokenizer.next_item(context);
+                    if !matches!(
+                        maybe_whitespace,
+                        Some(PreprocessorToken {
+                            kind: PreprocessorTokenType::Whitespace,
+                            ..
+                        })
+                    ) {
+                        self.set_position(position);
+                        break 'inner None;
+                    }
+                    if hash_hash_positions.contains(&self.current_position()) {
                         match self.tokenizer.next_item(context) {
                             | Some(token) if token.kind == PreprocessorTokenType::HashHash =>
                                 Some(token),
@@ -2316,26 +2342,23 @@ impl Preprocessor {
                                 unreachable!();
                             },
                         }
-                } else {
-                    context.source.index = index;
-                    context.source.column = column;
-                    context.source.line = line;
-                    None
+                    } else {
+                        self.set_position(position);
+                        None
+                    }
                 }
-            }} else {
+            } else {
                 None
             };
             if let Some(h) = hash_hash {
                 let Some(rhs) = self.handle_hash_hash_operator(context) else {
-                    context.preprocessor_error(
-                        PreprocessorError {
-                            error_type: PreprocessorErrorType::UnexpectedEndOfInput(
-                                "parsing hash-hash operator. Hash hash operator must be \
-                                followed by a preprocessor token on the same line.",
-                                ),
-                            source_vectors: context.push_source_vector(self.tokenizer.position(), 0),
-                        }
-                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                            "parsing hash-hash operator. Hash hash operator must be followed by a \
+                             preprocessor token on the same line.",
+                        ),
+                        source_vectors: context.push_source_vector(self.tokenizer.position(), 0),
+                    });
                     return Some(token);
                 };
                 if let Some(r) = self.parse_hash_hash_operator(&token, &h, &rhs) {
@@ -2347,10 +2370,7 @@ impl Preprocessor {
         }
     }
 
-    fn next_preprocessor_token(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<PreprocessorToken> {
+    fn next_preprocessor_token(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
         // eprintln!("Tokenizer stack: {:#?}", self.tokenizer_stack);
         // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
         let last = self.current_preprocessor_token;
@@ -2388,28 +2408,26 @@ impl Preprocessor {
                     {
                         let paren_depth = *paren_depth;
                         let argument = *argument;
-                        let save_point = self.previous_phase.save();
-                        let mut index = context.source.index;
-                        let mut column = context.source.column;
-                        let mut line = context.source.line;
+                        let position = self.position();
                         let next_is_end = match self.tokenizer.next_item(context) {
-                            | Some(token) => self.update_macro_argument_paren_depth(context, &token, argument.name, paren_depth,).is_none(),
+                            | Some(token) => self
+                                .update_macro_argument_paren_depth(
+                                    context,
+                                    &token,
+                                    argument.name,
+                                    paren_depth,
+                                )
+                                .is_none(),
                             | None => break true,
                         };
-                        context.source.index = index;
-                        context.source.column = column;
-                        context.source.line = line;
+                        self.set_position(position);
                         next_is_end
                     } else {
                         false
                     };
                     if next_is_end || token.kind == PreprocessorTokenType::Placeholder {
                         if let Some(x @ HashHash::Empty) = self.hash_hash_stack.last_mut() {
-                            *x = HashHash::Lhs(if let Some(new) = new {
-                                new
-                            } else {
-                                token
-                            });
+                            *x = HashHash::Lhs(if let Some(new) = new { new } else { token });
                             continue 'base;
                         }
                     }
@@ -2448,35 +2466,29 @@ impl Preprocessor {
                         is_variadic,
                         hash_hash_positions,
                     } => {
-                        let save_point = self.save();
-
+                        let position = self.position();
                         loop {
-                            match self.next_preprocessor_token_no_expand(context) {
-                                | Some(Ok(token))
-                                    if token.kind == PreprocessorTokenType::Whitespace =>
+                            match self.next_preprocessor_token_no_expand::<false>(context) {
+                                | Some(brace) if brace.kind == PreprocessorTokenType::Whitespace =>
                                     continue,
-                                | Some(Ok(token))
-                                    if token.kind == PreprocessorTokenType::OpeningParenthesis =>
+                                | Some(brace)
+                                    if brace.kind == PreprocessorTokenType::OpeningParenthesis =>
                                     break,
-                                | Some(Ok(token)) => {
-                                    self.pending_results.push_back(Err(
-                                    PreprocessorError::InnerPreprocessorError(
-                                        InnerPreprocessorError {
-                                            error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
-                                            source_vectors: token.source_vectors.clone(),
-                                        },
-                                    ),
-                                ));
-                                    self.restore(save_point);
-                                    break 'base Some(Ok(token));
-                                },
-                                | Some(Err(e)) => {
-                                    self.pending_results
-                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                                    continue;
+                                | Some(brace) => {
+                                    context.preprocessor_error(PreprocessorError {
+                                        error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
+                                        source_vectors: token.source_vectors,
+                                    });
+                                    self.set_position(position);
+                                    break 'base Some(token);
                                 },
                                 | None => {
-                                    break 'base None;
+                                    context.preprocessor_error(PreprocessorError {
+                                        error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
+                                        source_vectors: context.push_source_vector(position, 1),
+                                    });
+                                    self.set_position(position);
+                                    break 'base Some(token);
                                 },
                             }
                         }
@@ -2495,10 +2507,10 @@ impl Preprocessor {
                             if is_variadic && i >= argument_names.len() {
                                 break;
                             }
-                            let start_save_point = self.previous_phase.save();
+                            let tokenizer = self.tokenizer.clone();
                             loop {
-                                match self.next_preprocessor_token() {
-                                    | Some(Ok(token))
+                                match self.tokenizer.next_item(context) {
+                                    | Some(token)
                                         if token.kind
                                             == PreprocessorTokenType::ClosingParenthesis =>
                                     {
@@ -2507,82 +2519,72 @@ impl Preprocessor {
                                                 at!(),
                                                 FunctionLikeMacroArgument {
                                                     name: at!(),
-                                                    start_save_point,
+                                                    tokenizer,
                                                 },
                                             ));
                                             break 'outer;
                                         }
                                         paren_depth -= 1;
                                     },
-                                    | Some(Ok(token))
-                                        if token.kind == PreprocessorTokenType::Comma =>
-                                    {
+                                    | Some(token) if token.kind == PreprocessorTokenType::Comma => {
                                         drop(arguments.insert(
                                             at!(),
                                             FunctionLikeMacroArgument {
                                                 name: at!(),
-                                                start_save_point,
+                                                tokenizer,
                                             },
                                         ));
                                         i += 1;
                                         continue 'outer;
                                     },
-                                    | Some(Ok(token))
+                                    | Some(token)
                                         if token.kind
                                             == PreprocessorTokenType::OpeningParenthesis =>
                                     {
                                         paren_depth += 1;
                                         continue;
                                     },
-                                    | Some(Ok(_)) => {
-                                        continue;
-                                    },
-                                    | Some(Err(e)) => {
-                                        self.pending_results.push_back(Err(e));
+                                    | Some(_) => {
                                         continue;
                                     },
                                     | None => {
-                                        break 'base Some(Err(
-                                            PreprocessorError::InnerPreprocessorError(
-                                                InnerPreprocessorError {
-                                                    error_type:
-                                                        PreprocessorErrorType::UnexpectedEndOfInput(
-                                                            "parsing function-like macro \
-                                                             invocation",
-                                                        ),
-                                                    source_vectors: token.source_vectors,
-                                                },
-                                            ),
-                                        ));
+                                        context.preprocessor_error(PreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::UnexpectedEndOfInput(
+                                                    "parsing function-like macro invocation",
+                                                ),
+                                            source_vectors: token.source_vectors,
+                                        });
+                                        self.set_position(position);
+                                        break 'base Some(token);
                                     },
                                 }
                             }
                         }
 
                         if arguments.len() != argument_names.len() && !is_variadic {
-                            self.pending_results.push_back(Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
+                            context.preprocessor_error(PreprocessorError {
                                     error_type:     PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
                                         expected:   argument_names.len(),
                                         found:      arguments.len(),
                                     },
                                     source_vectors: token.source_vectors.clone(),
                                 },
-                            )));
+                            );
                         }
                         if is_variadic {
                             drop(arguments.insert(
                                 self.insert_into_cache("__VA_ARGS__"),
                                 FunctionLikeMacroArgument {
-                                    name:             self.insert_into_cache("__VA_ARGS__"),
-                                    start_save_point: self.previous_phase.save(),
+                                    name:      self.insert_into_cache("__VA_ARGS__"),
+                                    tokenizer: self.tokenizer.clone(),
                                 },
                             ));
                             let mut paren_depth = 1isize;
 
                             loop {
-                                match self.next_preprocessor_token() {
-                                    | Some(Ok(token))
+                                match self.tokenizer.next_item(context) {
+                                    | Some(token)
                                         if token.kind
                                             == PreprocessorTokenType::ClosingParenthesis =>
                                     {
@@ -2591,33 +2593,26 @@ impl Preprocessor {
                                         }
                                         paren_depth -= 1;
                                     },
-                                    | Some(Ok(token))
+                                    | Some(token)
                                         if token.kind
                                             == PreprocessorTokenType::OpeningParenthesis =>
                                     {
                                         paren_depth += 1;
                                         continue;
                                     },
-                                    | Some(Ok(_)) => {
-                                        continue;
-                                    },
-                                    | Some(Err(e)) => {
-                                        self.pending_results.push_back(Err(e));
+                                    | Some(_) => {
                                         continue;
                                     },
                                     | None => {
-                                        break 'base Some(Err(
-                                            PreprocessorError::InnerPreprocessorError(
-                                                InnerPreprocessorError {
-                                                    error_type:
-                                                        PreprocessorErrorType::UnexpectedEndOfInput(
-                                                            "parsing function-like macro \
-                                                             invocation",
-                                                        ),
-                                                    source_vectors: token.source_vectors,
-                                                },
-                                            ),
-                                        ));
+                                        context.preprocessor_error(PreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::UnexpectedEndOfInput(
+                                                    "parsing function-like macro invocation",
+                                                ),
+                                            source_vectors: token.source_vectors,
+                                        });
+                                        self.set_position(position);
+                                        break 'base Some(token);
                                     },
                                 }
                             }
@@ -2628,46 +2623,46 @@ impl Preprocessor {
                                 is_variadic,
                                 hash_hash_positions: hash_hash_positions.clone(),
                             },
-                            save_point: start_save_point,
-                            name:       token.contents,
+                            tokenizer,
                         };
-                        self.push_tokenizer_frame(frame);
+                        self.push_tokenizer_frame(context, frame);
                         continue;
                     },
-                    | MacroDefinition::BuiltIn => match get_from_cache!(self, token.contents) {
+                    | MacroDefinition::BuiltIn => match context.string_cache.at(token.contents) {
                         | "__FILE__" => {
                             let file_name = self.insert_into_cache("__builtin__macros");
-                            let source_file = token.source_vectors[0].position.source_file;
-                            let length = get_from_cache!(self, source_file).len();
+                            let source_file = self.source_file_name();
+                            let length = source_file.len();
                             break 'base Some(Ok(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
-                                contents:       token.source_vectors[0].position.source_file,
-                                source_vectors: SourceVectors::from(SourceVector {
-                                    position: SourcePosition {
-                                        index:       0,
-                                        line:        1,
-                                        column:      1,
-                                        source_file: file_name,
+                                contents:       self
+                                    .insert_into_cache(&self.source_file_name().to_string_lossy()),
+                                source_vectors: context.push_source_vector(
+                                    SourcePosition {
+                                        index:  0,
+                                        line:   1,
+                                        column: 1,
                                     },
+                                    SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
                                     length,
-                                }),
+                                ),
                             }));
                         },
                         | "__LINE__" => {
-                            let string = token.source_vectors[0].position.line.to_string();
+                            let string = self.line().to_string();
                             let file_name = self.insert_into_cache("__builtin__macros");
                             break 'base Some(Ok(PreprocessorToken {
                                 kind:           PreprocessorTokenType::Number,
                                 contents:       self.insert_into_cache(&string),
-                                source_vectors: SourceVectors::from(SourceVector {
-                                    position: SourcePosition {
-                                        index:       0,
-                                        line:        1,
-                                        column:      1,
-                                        source_file: file_name,
+                                source_vectors: context.push_source_vector(
+                                    SourcePosition {
+                                        index:  0,
+                                        line:   1,
+                                        column: 1,
                                     },
-                                    length:   string.len(),
-                                }),
+                                    SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
+                                    string.len(),
+                                ),
                             }));
                         },
                         | "__TIME__" => {
@@ -2677,15 +2672,15 @@ impl Preprocessor {
                             break 'base Some(Ok(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       self.insert_into_cache(&string),
-                                source_vectors: SourceVectors::from(SourceVector {
-                                    position: SourcePosition {
-                                        index:       0,
-                                        line:        1,
-                                        column:      1,
-                                        source_file: file_name,
+                                source_vectors: context.push_source_vector(
+                                    SourcePosition {
+                                        index:  0,
+                                        line:   1,
+                                        column: 1,
                                     },
-                                    length:   string.len(),
-                                }),
+                                    SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
+                                    string.len(),
+                                ),
                             }));
                         },
                         | "__DATE__" => {
@@ -2695,19 +2690,20 @@ impl Preprocessor {
                             break 'base Some(Ok(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       self.insert_into_cache(&string),
-                                source_vectors: SourceVectors::from(SourceVector {
-                                    position: SourcePosition {
-                                        index:       0,
-                                        line:        1,
-                                        column:      1,
-                                        source_file: file_name,
+                                source_vectors: context.push_source_vector(
+                                    SourcePosition {
+                                        index:  0,
+                                        line:   1,
+                                        column: 1,
                                     },
-                                    length:   string.len(),
-                                }),
+                                    SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
+                                    string.len(),
+                                ),
                             }));
                         },
                         | "_Pragma" => {
                             if let Err(e) = self.expect_token(
+                                context,
                                 |_, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
                                 |_, e|
                                     ControlFlow::Break(e)
@@ -4929,7 +4925,16 @@ impl Preprocessor {
                 source_vectors: directive.source_vectors.clone(),
             })
         })?;
-        self.push_source_file(context, header_string, header_path);
+        self.push_tokenizer_frame(
+            context,
+            TokenizerFrame {
+                frame_type: TokenizerFrameType::SourceFile,
+                tokenizer:  PreprocessorTokenizer::new(
+                    SharedPath::from(header_path),
+                    SharedString::from(header_string),
+                ),
+            },
+        );
         self.last_preprocessor_token = None;
         self.current_preprocessor_token = None;
         Ok(())
@@ -5972,7 +5977,7 @@ where
 impl TranslationPhase for Preprocessor {
     type Item = Token;
 
-    fn next_item(&mut self, context: &mut super::Context) -> Option<Self::Item> {
+    fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
         let token = match self.next_preprocessor_token() {
             | Some(Ok(token)) => token,
             | Some(Err(e)) => return Some(Err(e)),
@@ -5997,51 +6002,5 @@ impl TranslationPhase for Preprocessor {
         if let Some(result) = self.map_preprocessor_token(token) {
             return Some(result);
         }
-    }
-
-    fn save(&self) -> Self::SavePoint {
-        SavePoint
-            innevious_phase.save(),
-            tokenizer_stack: self.tokenizer_stack.clone(),
-            hash_hash_stack: self.hash_hash_stack.clone(),
-            once_set: self.once_set.clone(),
-            pending_results: self.pending_results.clone(),
-            state: self.state,
-            last_preprocessor_token: self.last_preprocessor_token.clone(),
-            current_preprocessor_token: self.current_preprocessor_token.clone(),
-            macro_definitions: self.macro_definitions.clone(),
-            if_directive_balance: self.if_directive_balance,
-            should_tokenize_whitespace: self.should_tokenize_whitespace,
-            generate_placeholders: self.generate_placeholders,
-            quote_include_directories: self.quote_include_directories.clone(),
-            system_include_directories: self.system_include_directories.clone(),
-            expression_parser: self.expression_parser.clone(),
-        }
-    }
-
-    fn restore(&mut self, save_point: Self::SavePoint) {
-        self.previous_phase.restore(save_point.inner);
-        self.tokenizer_stack = save_point.tokenizer_stack;
-        self.hash_hash_stack = save_point.hash_hash_stack;
-        self.once_set = save_point.once_set;
-        self.pending_results = save_point.pending_results;
-        self.state = save_point.state;
-        self.last_preprocessor_token = save_point.last_preprocessor_token;
-        self.current_preprocessor_token = save_point.current_preprocessor_token;
-        self.macro_definitions = save_point.macro_definitions;
-        self.if_directive_balance = save_point.if_directive_balance;
-        self.should_tokenize_whitespace = save_point.should_tokenize_whitespace;
-        self.generate_placeholders = save_point.generate_placeholders;
-        self.quote_include_directories = save_point.quote_include_directories;
-        self.system_include_directories = save_point.system_include_directories;
-        self.expression_parser = save_point.expression_parser;
-    }
-
-    fn current_position(&self) -> SourcePosition {
-        self.previous_phase.current_position()
-    }
-
-    fn set_line_number(&mut self, line: usize) {
-        self.previous_phase.set_line_number(line);
     }
 }
