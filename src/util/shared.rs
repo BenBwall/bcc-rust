@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    cell::Cell,
     cmp::Ordering as CmpOrdering,
     fmt::{
         Debug,
@@ -12,13 +13,9 @@ use std::{
         RefUnwindSafe,
         UnwindSafe,
     },
+    path::PathBuf,
     process::abort,
     ptr::NonNull,
-    sync::atomic::{
-        fence,
-        AtomicUsize,
-        Ordering as AtomicOrdering,
-    },
 };
 
 /// An Arc but without the weak reference count and with the contents stored in
@@ -27,7 +24,7 @@ pub(crate) struct Shared<T>
 where
     T: ?Sized,
 {
-    ref_count: NonNull<AtomicUsize>,
+    ref_count: NonNull<Cell<usize>>,
     contents:  NonNull<T>,
 }
 
@@ -36,7 +33,8 @@ where
     T: ?Sized,
 {
     fn drop(&mut self) {
-        if self.ref_cnt().fetch_sub(1, AtomicOrdering::Release) == 1 {
+        self.ref_cnt().set(self.ref_cnt().get() - 1);
+        if self.ref_count().get() == 0 {
             #[cold]
             #[inline(never)]
             fn drop_slow<T: ?Sized>(this: &mut Shared<T>) {
@@ -45,9 +43,6 @@ where
                     drop(Box::from_raw(this.contents.as_ptr()));
                 }
             }
-
-            // Fence maybe unnecessary?
-            fence(AtomicOrdering::Acquire);
             drop_slow(self);
         }
     }
@@ -58,12 +53,14 @@ where
     T: ?Sized,
 {
     fn clone(&self) -> Self {
-        if self.ref_cnt().fetch_add(1, AtomicOrdering::Acquire) == usize::MAX {
+        if self.ref_cnt().get() == usize::MAX {
             // Integer overflow.
             // This can realistically only happen if someone leaks usize::MAX Shareds. If
             // this happens, we just abort.
             abort();
         }
+
+        self.ref_cnt().set(self.ref_cnt().get() + 1);
 
         Self {
             ref_count: self.ref_count,
@@ -134,22 +131,22 @@ where
 {
     pub(crate) fn from_boxed(t: Box<T>) -> Self {
         Self {
-            ref_count: NonNull::from(Box::leak(Box::new(AtomicUsize::new(1)))),
+            ref_count: NonNull::from(Box::leak(Box::new(Cell::new(1)))),
             contents:  NonNull::from(Box::leak(t)),
         }
     }
 
     #[allow(dead_code)]
     pub(crate) fn strong_reference_count(&self) -> usize {
-        self.ref_cnt().load(AtomicOrdering::Relaxed)
+        self.ref_cnt().get()
     }
 
-    fn ref_cnt(&self) -> &AtomicUsize {
+    fn ref_cnt(&self) -> &Cell<usize> {
         unsafe { self.ref_count.as_ref() }
     }
 }
 
-impl Shared<str> {
+impl SharedString {
     #[allow(dead_code)]
     pub(crate) fn as_str(&self) -> &str {
         self
@@ -160,7 +157,7 @@ impl Shared<str> {
     }
 }
 
-impl<T> Shared<[T]> {
+impl<T> SharedVec<T> {
     #[allow(dead_code)]
     pub(crate) fn as_slice(&self) -> &[T] {
         self
@@ -168,6 +165,17 @@ impl<T> Shared<[T]> {
 
     pub(crate) fn from_vec(v: Vec<T>) -> Self {
         Self::from_boxed(v.into_boxed_slice())
+    }
+}
+
+impl SharedPath {
+    #[allow(dead_code)]
+    pub(crate) fn as_path(&self) -> &std::path::Path {
+        self
+    }
+
+    pub(crate) fn from_path_buf(p: PathBuf) -> Self {
+        Self::from_boxed(p.into_boxed_path())
     }
 }
 
@@ -200,7 +208,7 @@ where
     }
 }
 
-impl From<String> for Shared<str> {
+impl From<String> for SharedString {
     fn from(s: String) -> Self {
         Self::from_string(s)
     }
@@ -221,9 +229,15 @@ impl<T> From<T> for Shared<T> {
     }
 }
 
-impl<T> From<Vec<T>> for Shared<[T]> {
+impl<T> From<Vec<T>> for SharedVec<T> {
     fn from(v: Vec<T>) -> Self {
         Self::from_vec(v)
+    }
+}
+
+impl From<PathBuf> for SharedPath {
+    fn from(p: PathBuf) -> Self {
+        Self::from_path_buf(p)
     }
 }
 
@@ -237,11 +251,6 @@ where
     }
 }
 
-// Safety: Shared is Send and Sync if T is Send and Sync. This is safe for the
-// same reason that Arc<T> is Send and Sync if T is Send and Sync.
-unsafe impl<T> Send for Shared<T> where T: Send + ?Sized {}
-unsafe impl<T> Sync for Shared<T> where T: Sync + ?Sized {}
-
 impl<T> RefUnwindSafe for Shared<T> where T: RefUnwindSafe + ?Sized {}
 
 /// Shared is always Unpin because it is a pointer type.
@@ -250,3 +259,4 @@ impl<T> UnwindSafe for Shared<T> where T: UnwindSafe + ?Sized {}
 
 pub(crate) type SharedString = Shared<str>;
 pub(crate) type SharedVec<T> = Shared<[T]>;
+pub(crate) type SharedPath = Shared<std::path::Path>;

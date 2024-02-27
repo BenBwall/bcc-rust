@@ -17,9 +17,15 @@ use std::{
     sync::Arc,
 };
 
-use crate::util::string_cache::{
-    StringCache,
-    StringCacheId,
+use crate::util::{
+    shared::{
+        SharedPath,
+        SharedString,
+    },
+    string_cache::{
+        StringCache,
+        StringCacheId,
+    },
 };
 
 const ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
@@ -87,7 +93,7 @@ impl NonZeroExt for NonZeroU32 {
 
 trait StrExt {
     /// Returns the character at the given index,
-    /// or `None` if the index is out of bounds or index is in the middle of a
+    /// or `None` if the index is out of bounds or is in the middle of a
     /// character.
     fn char_at(&self, index: usize) -> Option<char>;
 
@@ -143,34 +149,38 @@ impl Display for ErrorSeverity {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SourcePosition {
-    pub(crate) index:       u32,
-    pub(crate) line:        u32,
-    pub(crate) column:      NonZeroU32,
-    pub(crate) source_file: StringCacheId,
+    pub(crate) index:  usize,
+    pub(crate) line:   u32,
+    pub(crate) column: NonZeroU32,
 }
 
 impl Default for SourcePosition {
     fn default() -> Self {
         Self {
-            index:       0,
-            line:        1,
-            column:      ONE,
-            source_file: StringCacheId::from_u32(0),
+            index:  0,
+            line:   1,
+            column: ONE,
         }
     }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SourceVector {
-    pub(crate) position: SourcePosition,
-    pub(crate) length:   u32,
+    pub(crate) index:       usize,
+    pub(crate) column:      NonZeroU32,
+    pub(crate) line:        u32,
+    pub(crate) source_file: SharedPath,
+    pub(crate) length:      usize,
 }
 
 impl Default for SourceVector {
     fn default() -> Self {
         Self {
-            position: SourcePosition::default(),
-            length:   0,
+            index:       0,
+            column:      ONE,
+            line:        1,
+            source_file: SharedPath::default(),
+            length:      0,
         }
     }
 }
@@ -205,8 +215,52 @@ impl GetSeverity for Infallible {
     }
 }
 
+pub(crate) trait GetSourceFileName {
+    fn source_file_name(&self) -> &Path;
+}
+
 pub(crate) trait GetPosition {
     fn position(&self) -> SourcePosition;
+    #[inline(always)]
+    fn index(&self) -> usize {
+        self.position().index
+    }
+    #[inline(always)]
+    fn column(&self) -> NonZeroU32 {
+        self.position().column
+    }
+    #[inline(always)]
+    fn line(&self) -> u32 {
+        self.position().line
+    }
+}
+
+pub(crate) trait SetPosition {
+    fn set_position(&mut self, position: SourcePosition);
+    #[inline(always)]
+    fn set_index(&mut self, index: usize) {
+        self.set_position(SourcePosition {
+            index,
+            line: self.line(),
+            column: self.column(),
+        });
+    }
+    #[inline(always)]
+    fn set_column(&mut self, column: NonZeroU32) {
+        self.set_position(SourcePosition {
+            index: self.index(),
+            line: self.line(),
+            column,
+        });
+    }
+    #[inline(always)]
+    fn set_line(&mut self, line: u32) {
+        self.set_position(SourcePosition {
+            index: self.index(),
+            line,
+            column: self.column(),
+        });
+    }
 }
 
 impl GetPosition for SourcePosition {
@@ -222,32 +276,41 @@ impl GetPosition for Infallible {
 }
 
 pub(crate) struct SourceFile {
-    pub(crate) name:   Box<Path>,
-    pub(crate) source: Box<str>,
+    pub(crate) name:   SharedPath,
+    pub(crate) source: SharedString,
     pub(crate) line:   u32,
     pub(crate) column: NonZeroU32,
-    pub(crate) index:  u32,
+    pub(crate) index:  usize,
+}
+
+impl SourceFile {
+    pub(crate) fn new(name: SharedPath, source: SharedString) -> Self {
+        Self {
+            name,
+            source,
+            line: 1,
+            column: ONE,
+            index: 0,
+        }
+    }
 }
 
 impl GetPosition for SourceFile {
     fn position(&self) -> SourcePosition {
         SourcePosition {
-            index:       self.index,
-            line:        self.line,
-            column:      self.column,
-            source_file: self.name,
+            index:  self.index,
+            line:   self.line,
+            column: self.column,
         }
     }
 }
 
 pub(crate) struct Context {
-    source: SourceFile,
-    source_stack: Vec<SourceFile>,
-    source_vectors: Vec<SourceVector>,
-    string_cache: StringCache,
+    source_vectors:               Vec<SourceVector>,
+    string_cache:                 StringCache,
     is_tokenizing_include_string: bool,
-    is_skipping_over_dead_code: bool,
-    pending_errors: Vec<TranslationError>,
+    is_skipping_over_dead_code:   bool,
+    pending_errors:               Vec<TranslationError>,
 }
 
 impl GetPosition for Context {
@@ -257,57 +320,28 @@ impl GetPosition for Context {
 }
 
 impl Context {
-    fn new(source: Box<str>, name: Box<Path>) -> Self {
+    fn new() -> Self {
         Self {
-            source: SourceFile {
-                name,
-                source,
-                line: 1,
-                column: ONE,
-                index: 0,
-            },
-            source_stack: Vec::new(),
-            source_vectors: Vec::new(),
-            string_cache: Interner::new(),
+            source_vectors:               Vec::new(),
+            string_cache:                 Interner::new(),
             is_tokenizing_include_string: false,
-            is_skipping_over_dead_code: false,
-            pending_errors: Vec::new(),
+            is_skipping_over_dead_code:   false,
+            pending_errors:               Vec::new(),
         }
-    }
-
-    #[cold]
-    pub(crate) fn pop_source(&mut self) -> bool {
-        let Some(source) = self.source_stack.pop() else {
-            return false;
-        };
-        self.source = source;
-    }
-
-    #[cold]
-    pub(crate) fn push_source(&mut self, source: Box<str>, name: Box<Path>) {
-        let source_file = SourceFile {
-            name,
-            source,
-            line: 1,
-            column: ONE,
-            index: 0,
-        };
-        self.source_stack
-            .push(std::mem::replace(&mut self.source, source_file));
-    }
-
-    fn next_char(&mut self) -> Option<char> {
-        self.source.source.char_at(self.source.index as usize)
     }
 
     pub(crate) fn push_source_vector(
         &mut self,
         start_position: SourcePosition,
-        length: u32,
+        source_file: SharedPath,
+        length: usize,
     ) -> u32 {
         let index = self.source_vectors.len().try_into().unwrap();
         self.source_vectors.push(SourceVector {
-            position: start_position,
+            index: start_position.index,
+            column: start_position.column,
+            line: start_position.line,
+            source_file,
             length,
         });
         index
@@ -366,7 +400,7 @@ impl Context {
     }
 }
 
-pub(crate) trait TranslationPhase {
+pub(crate) trait TranslationPhase: GetPosition + SetPosition + GetSourceFileName {
     type Item;
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
 }
