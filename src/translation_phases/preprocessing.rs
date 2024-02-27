@@ -2039,7 +2039,7 @@ impl Preprocessor {
                 == Some(PreprocessorTokenType::Whitespace)
     }
 
-    fn next_preprocessor_token_no_expand(
+    fn next_preprocessor_token_no_expand<const SHOULD_POP_DEAD_FRAMES: bool>(
         &mut self, context: &mut Context,
     ) -> Option<PreprocessorToken> {
         let last = self.current_preprocessor_token;
@@ -2063,8 +2063,12 @@ impl Preprocessor {
                             ..
                         } =>
                             if token.kind == PreprocessorTokenType::Newline {
-                                self.pop_tokenizer_frame(context);
-                                continue 'base;
+                                if SHOULD_POP_DEAD_FRAMES {
+                                    self.pop_tokenizer_frame(context);
+                                    continue 'base;
+                                } else {
+                                    break 'base None;
+                                }
                             },
                         | TokenizerFrame {
                             frame_type:
@@ -2098,15 +2102,19 @@ impl Preprocessor {
                                 *p = paren_depth;
                                 *has_generated_token = true;
                             } else {
-                                self.pop_tokenizer_frame(context);
-                                if self.generate_placeholders && !has_generated_token {
-                                    break 'base Some(PreprocessorToken {
-                                        kind:           PreprocessorTokenType::Placeholder,
-                                        contents:       self.insert_into_cache(""),
-                                        source_vectors: SourceVectors::default(),
-                                    });
+                                if SHOULD_POP_DEAD_FRAMES {
+                                    self.pop_tokenizer_frame(context);
+                                    if self.generate_placeholders && !has_generated_token {
+                                        break 'base Some(PreprocessorToken {
+                                            kind:           PreprocessorTokenType::Placeholder,
+                                            contents:       self.insert_into_cache(""),
+                                            source_vectors: SourceVectors::default(),
+                                        });
+                                    }
+                                    continue 'base;
+                                } else {
+                                    break 'base None;
                                 }
-                                continue 'base;
                             }
                             if token.kind == PreprocessorTokenType::Newline {
                                 if self.should_ignore_whitespace(context) {
@@ -2124,8 +2132,12 @@ impl Preprocessor {
                     break Some(token);
                 },
                 | None => {
-                    self.pop_tokenizer_frame(context);
-                    continue;
+                    if SHOULD_POP_DEAD_FRAMES {
+                        self.pop_tokenizer_frame(context);
+                        continue 'base;
+                    } else {
+                        break 'base None;
+                    }
                 },
             }
         };
