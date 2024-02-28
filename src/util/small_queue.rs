@@ -5,7 +5,7 @@ use super::stack_queue::StackQueue;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum SmallQueue<T, const N: usize> {
     StackQueue(StackQueue<T, N>),
-    HeapQueue(VecDeque<T, N>),
+    HeapQueue(VecDeque<T>),
 }
 
 impl<T, const N: usize> Default for SmallQueue<T, N>

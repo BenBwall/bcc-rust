@@ -43,7 +43,7 @@ impl SetPosition for PreprocessorTokenizer {
 
 impl GetSourceFileName for PreprocessorTokenizer {
     #[inline(always)]
-    fn source_file_name(&self) -> &SharedPath {
+    fn source_file_name(&self) -> SharedPath {
         self.initial_processor.source_file_name()
     }
 }
@@ -487,6 +487,8 @@ impl PreprocessorTokenizer {
             self.set_position(last_position);
             break;
         }
+        // Push trailing null byte so we can we call libc for float parsing.
+        context.string_cache.push('\0');
         self.generate_token(context, PreprocessorTokenType::Number)
     }
 

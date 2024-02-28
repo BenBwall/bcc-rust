@@ -1,5 +1,4 @@
 use std::{
-    borrow::Borrow,
     convert::Infallible,
     fmt::{
         Debug,
@@ -9,12 +8,7 @@ use std::{
     },
     hash::Hash,
     num::NonZeroU32,
-    ops::{
-        Add,
-        Deref,
-    },
     path::Path,
-    sync::Arc,
 };
 
 use crate::util::{
@@ -22,10 +16,7 @@ use crate::util::{
         SharedPath,
         SharedString,
     },
-    string_cache::{
-        StringCache,
-        StringCacheId,
-    },
+    string_cache::StringCache,
 };
 
 const ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
@@ -44,34 +35,13 @@ enum TranslationError {
 
 use owo_colors::OwoColorize;
 use smallstr::SmallString;
-use smallvec::SmallVec;
 use thiserror::Error;
 
 use self::{
     initial_processing::InitialProcessorError,
-    parsing::{
-        ParserError,
-        TopLevelStatement,
-    },
-    phase_0_newline_tracking::NewlineTracking,
-    phase_1_map_character_sets::MapCharacterSets,
-    phase_2_remove_escaped_newlines::{
-        RemoveEscapedNewlines,
-        RemoveEscapedNewlinesError,
-    },
-    preprocessing::{
-        PreprocessorError,
-        Token,
-    },
-    preprocessor_tokenizer::{
-        PreprocessorToken,
-        PreprocessorTokenizer,
-        PreprocessorTokenizerError,
-    },
-};
-use crate::util::string_cache::{
-    Interner,
-    StringCacheId,
+    parsing::ParserError,
+    preprocessing::PreprocessorError,
+    preprocessor_tokenizer::PreprocessorTokenizerError,
 };
 
 pub(crate) mod initial_processing;
@@ -216,7 +186,7 @@ impl GetSeverity for Infallible {
 }
 
 pub(crate) trait GetSourceFileName {
-    fn source_file_name(&self) -> &Path;
+    fn source_file_name(&self) -> SharedPath;
 }
 
 pub(crate) trait GetPosition {
@@ -307,7 +277,7 @@ impl GetPosition for SourceFile {
 
 pub(crate) struct Context {
     source_vectors:               Vec<SourceVector>,
-    string_cache:                 StringCache,
+    pub(crate) string_cache:      StringCache,
     is_tokenizing_include_string: bool,
     is_skipping_over_dead_code:   bool,
     pending_errors:               Vec<TranslationError>,
@@ -320,10 +290,10 @@ impl GetPosition for Context {
 }
 
 impl Context {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             source_vectors:               Vec::new(),
-            string_cache:                 Interner::new(),
+            string_cache:                 StringCache::new(),
             is_tokenizing_include_string: false,
             is_skipping_over_dead_code:   false,
             pending_errors:               Vec::new(),
@@ -345,6 +315,20 @@ impl Context {
             length,
         });
         index
+    }
+
+    pub(crate) fn create_source_vectors(
+        &mut self,
+        start_position: SourcePosition,
+        source_file: SharedPath,
+        length: usize,
+    ) -> SourceVectors {
+        let start_index = self.push_source_vector(start_position, source_file, length);
+        let length = 1;
+        SourceVectors {
+            start_index,
+            length,
+        }
     }
 
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
@@ -378,6 +362,8 @@ impl Context {
         self.is_skipping_over_dead_code = value;
     }
 
+    #[cold]
+    #[inline(never)]
     pub(crate) fn missing_final_newline(&mut self) {
         if !self.is_skipping_over_dead_code {
             self.pending_errors
@@ -387,6 +373,8 @@ impl Context {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     pub(crate) fn preprocessor_tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
         if !self.is_skipping_over_dead_code {
             self.pending_errors
@@ -394,6 +382,8 @@ impl Context {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError) {
         self.pending_errors
             .push(TranslationError::Preprocessing(error));
