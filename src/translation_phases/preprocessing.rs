@@ -262,7 +262,7 @@ impl PreprocessorExpressionOperator {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct PreprocessorExpressionParser {
     operator_stack: Vec<PreprocessorExpressionOperator>,
-    operand_stack:  Vec<i128>,
+    operand_stack:  Vec<PreprocessorExpressionOperand>,
     state:          PreprocessorExpressionParserState,
 }
 
