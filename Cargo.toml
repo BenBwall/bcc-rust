@@ -55,20 +55,13 @@ variant-size-differences = "warn"
 
 
 [dependencies]
-arrayvec = "0.7.4"
 chrono = "0.4.31"
 clap = { version = "4.4.11", features = ["derive"] }
 hashbrown = { version = "0.14.3", features = ["raw"] }
-libc = "0.2.151"
 owo-colors = "4.0.0"
-
 rustc-hash = "1.1.0"
-scopeguard = "1.2.0"
 smallstr = "0.3.0"
-smallvec = "1.12.0"
-string-interner = "0.14.0"
 thiserror = "1.0.51"
-utf16string = "0.2.0"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }

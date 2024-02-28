@@ -130,7 +130,7 @@ impl StringCache {
 
     pub(crate) fn end_str(&mut self) -> StringCacheId {
         self.ends.push(self.data.len() as u32);
-        StringCacheId::from_u32(interner.ends.len() as u32 - 1)
+        StringCacheId::from_u32(self.ends.len() as u32 - 1)
     }
 
     pub(crate) fn undo_str(&mut self) {

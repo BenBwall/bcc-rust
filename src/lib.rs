@@ -21,18 +21,19 @@ use crate::{
     translation_phases::{
         preprocessing::{
             CharacterTokenType,
-            Ppt,
-            Ppte,
-            Pptsp,
+            Preprocessor,
             StringTokenType,
             TokenType,
         },
+        Context,
         GetPosition,
         GetSeverity,
     },
     util::{
         read_to_string_lossy,
         shared::{
+            shared_path_from_str,
+            SharedPath,
             SharedString,
             SharedVec,
         },
@@ -43,8 +44,6 @@ use crate::{
 pub(crate) mod float_parsing;
 pub(crate) mod translation_phases;
 pub(crate) mod util;
-
-pub type Preprocessor = self::translation_phases::preprocessing::Preprocessor<Ppt, Ppte, Pptsp>;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about, color = ColorChoice::Always)]
@@ -67,7 +66,7 @@ struct CliInput {
     input:      Option<String>,
     /// Input file to be preprocessed.
     #[clap(conflicts_with = "input")]
-    input_file: Option<String>,
+    input_file: Option<PathBuf>,
 }
 
 enum ParsedInput {
@@ -96,7 +95,6 @@ fn parse_include_env_var(env_var: &str, vec: &mut Vec<PathBuf>) {
 #[doc(hidden)]
 pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
-    let mut string_cache = StringCache::new();
     eprintln!("{}", "Printing all generated tokens:".bright_green());
     let parsed_input = if args.input.input.is_some() {
         ParsedInput::String(args.input.input.unwrap().into())
@@ -104,19 +102,18 @@ pub fn run() -> Result<(), MainError> {
         ParsedInput::File(read_to_string_lossy(args.input.input_file.as_ref().unwrap())?.into())
     };
     let (input_string, source_filename) = match parsed_input {
-        | ParsedInput::String(s) => (s, string_cache.intern("<input>")),
-        | ParsedInput::File(s) => (
-            s,
-            string_cache.intern(args.input.input_file.as_ref().unwrap()),
-        ),
+        | ParsedInput::String(s) => (s, shared_path_from_str("<input>")),
+        | ParsedInput::File(s) => (s, SharedPath::from_path_buf(args.input.input_file.unwrap())),
     };
     parse_include_env_var("CPATH", &mut args.system_include);
     parse_include_env_var("C_INCLUDE_PATH", &mut args.system_include);
 
+    let mut context = Context::new();
+
     let mut preprocessor = Preprocessor::new(
-        input_string,
+        &mut context,
         source_filename,
-        string_cache,
+        input_string,
         args.quote_include.into(),
         args.system_include.into(),
     );
@@ -125,21 +122,14 @@ pub fn run() -> Result<(), MainError> {
             | Ok(t) => eprintln!(
                 "{}",
                 match t.kind {
-                    | TokenType::Identifier => format!(
-                        "Identifier: {}",
-                        preprocessor.tokenizer.string_cache.get(t.contents).unwrap()
-                    ),
+                    | TokenType::Identifier =>
+                        format!("Identifier: {}", context.string_cache.at(t.contents)),
                     | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
                     | TokenType::String(sltt) => format!(
                         "String-like token: {}",
                         match sltt {
                             | StringTokenType::WideString(s) | StringTokenType::String(s) => {
-                                preprocessor
-                                    .tokenizer
-                                    .string_cache
-                                    .get(s)
-                                    .unwrap()
-                                    .to_string()
+                                context.string_cache.at(s).to_string()
                             },
                         }
                     ),
@@ -162,11 +152,7 @@ pub fn run() -> Result<(), MainError> {
                 eprintln!(
                     "{}: {e} at {}:{}:{}",
                     e.severity(),
-                    preprocessor
-                        .tokenizer
-                        .string_cache
-                        .get(position.source_file)
-                        .expect("Invalid source file id."),
+                    context.string_cache.at(position.source_file),
                     position.line.bright_blue(),
                     position.column.bright_blue()
                 );
