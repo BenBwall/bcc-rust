@@ -29,6 +29,7 @@ pub(crate) trait SaveCurrentPosition {
     fn restore_position(&mut self, context: &mut Context, saved: SavedPosition);
 }
 
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SavedPosition {
     index: usize,
     column: NonZeroU32,
