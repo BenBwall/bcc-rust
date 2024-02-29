@@ -315,12 +315,8 @@ impl InitialProcessor {
             length:      0,
         });
     }
-}
 
-impl TranslationPhase for InitialProcessor {
-    type Item = char;
-
-    fn next_item(&mut self, context: &mut Context) -> Option<char> {
+    fn impl_(&mut self, context: &mut Context) -> Option<char> {
         // We need to look three characters ahead to handle translation phases 1 and 2.
         // If we don't consume all three characters, we backtrack.
         // Translation phases 1 and 2 are handled in the same iterator for performance
@@ -375,5 +371,19 @@ impl TranslationPhase for InitialProcessor {
                 },
             });
         }
+    }
+}
+
+impl TranslationPhase for InitialProcessor {
+    type Item = char;
+
+    fn next_item(&mut self, context: &mut Context) -> Option<char> {
+        let ret = self.impl_(context);
+        eprintln!(
+            "{ret:?} from {:?} to {:?}",
+            self.current_char_start_position,
+            self.position(context),
+        );
+        ret
     }
 }

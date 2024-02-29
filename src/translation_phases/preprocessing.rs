@@ -3460,7 +3460,7 @@ impl Preprocessor {
             self.set_position(context, position);
             return token;
         };
-        let (token_tokenizer, argument_id) = match self.tokenizer_stack.last().unwrap() {
+        let (mut token_tokenizer, argument_id) = match self.tokenizer_stack.last().unwrap() {
             | TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. },
                 ..
@@ -3480,7 +3480,6 @@ impl Preprocessor {
             },
             | _ => unreachable!(),
         };
-        let mut token_tokenizer = token_tokenizer.clone();
         let mut last_was_whitespace = true;
         let mut synthetic_contents = String::new();
         let mut paren_depth = 1;
