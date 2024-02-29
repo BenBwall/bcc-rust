@@ -2440,6 +2440,10 @@ impl Preprocessor {
     fn next_preprocessor_token(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
         // eprintln!("Tokenizer stack: {:#?}", self.tokenizer_stack);
         // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
+        eprintln!(
+            "Last token: {:?}",
+            self.current_preprocessor_token.map(|t| t.kind)
+        );
         self.last_was_newline = match self.current_preprocessor_token {
             | Some(t) => t.kind == PreprocessorTokenType::Newline,
             | None => true,
@@ -2853,6 +2857,7 @@ impl Preprocessor {
         // );
         // eprintln!("Next preprocessor token returning: {ret:#?}");
         self.generate_placeholders = false;
+        eprintln!("Ret in next_preprocessor_token: {:?}", ret.map(|t| t.kind));
         if let Some(ret) = ret {
             self.current_preprocessor_token = Some(ret);
         }
@@ -4811,12 +4816,12 @@ impl Preprocessor {
 
     fn parse_if_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         self.if_directive_balance += 1;
-        if !self
+        if self
             .eval_preprocessor_expression(context, PreprocessorErrorType::NoConditionInIfDirective)
         {
-            self.skip_over_dead_code(context);
-        } else {
             self.last_was_newline = true;
+        } else {
+            self.skip_over_dead_code(context);
         }
     }
 
