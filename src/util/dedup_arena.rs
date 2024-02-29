@@ -1,8 +1,10 @@
 use std::{
-    borrow::Borrow, hash::{
+    borrow::Borrow,
+    hash::{
         BuildHasher,
         Hash,
-    }, ops::Deref
+    },
+    ops::Deref,
 };
 
 use hashbrown::raw::RawTable;

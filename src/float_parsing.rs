@@ -8,7 +8,10 @@ use std::{
 
 use crate::{
     float_parsing::ffi::ERANGE,
-    translation_phases::preprocessing::FloatTokenType,
+    translation_phases::preprocessing::{
+        FloatTokenType,
+        PreprocessorExpressionOperand,
+    },
 };
 
 mod ffi {
@@ -21,8 +24,10 @@ mod ffi {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct LongDouble {
-    pub(crate) value: [u8; ffi::LONG_DOUBLE_BYTES as _],
+    pub(crate) value: [u8; LONG_DOUBLE_BYTES],
 }
+
+const LONG_DOUBLE_BYTES: usize = ffi::LONG_DOUBLE_BYTES as _;
 
 impl Display for LongDouble {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -64,10 +69,36 @@ fn long_double_to_string(long_double: LongDouble) -> Result<String, i32> {
     Ok(unsafe { String::from_utf8_unchecked(buffer) })
 }
 
+pub(crate) fn long_double_to_operand(
+    long_double: LongDouble,
+) -> Result<PreprocessorExpressionOperand, i32> {
+    let mut error = 0;
+    let ld = ffi::long_double_t {
+        bytes: long_double.value,
+    };
+    let operand = unsafe { ffi::long_double_to_operand(ld, &mut error) };
+    if error != 0 {
+        return Err(error);
+    }
+    if operand.is_unsigned {
+        unsafe {
+            Ok(PreprocessorExpressionOperand::Unsigned(
+                operand.value.unsigned_value,
+            ))
+        }
+    } else {
+        unsafe {
+            Ok(PreprocessorExpressionOperand::Signed(
+                operand.value.signed_value,
+            ))
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum ParseFloatError {
     Overflow(FloatTokenType),
-    Invalid,
+    Invalid(FloatTokenType),
 }
 
 pub(crate) fn string_to_long_double(s: &str) -> Result<LongDouble, ParseFloatError> {
@@ -82,7 +113,11 @@ pub(crate) fn string_to_long_double(s: &str) -> Result<LongDouble, ParseFloatErr
 
     unsafe {
         if endptr.cast_const().cast() != s.as_ptr().add(s.len() - 2) {
-            return Err(ParseFloatError::Invalid);
+            return Err(ParseFloatError::Invalid(FloatTokenType::LongDouble(
+                LongDouble {
+                    value: [0; LONG_DOUBLE_BYTES],
+                },
+            )));
         }
     }
     let ret = LongDouble {
@@ -108,7 +143,7 @@ pub(crate) fn string_to_double(s: &str) -> Result<f64, ParseFloatError> {
         unsafe { ffi::string_to_double(s.as_ptr().cast::<c_char>(), &mut endptr, &mut error) };
     unsafe {
         if endptr.cast_const().cast() != s.as_ptr().add(s.len() - 1) {
-            return Err(ParseFloatError::Invalid);
+            return Err(ParseFloatError::Invalid(FloatTokenType::Double(0.0)));
         }
     }
     if error == ERANGE as i32 {
@@ -129,7 +164,7 @@ pub(crate) fn string_to_float(s: &str) -> Result<f32, ParseFloatError> {
         unsafe { ffi::string_to_float(s.as_ptr().cast::<c_char>(), &mut endptr, &mut error) };
     unsafe {
         if endptr.cast_const().cast() != s.as_ptr().add(s.len() - 2) {
-            return Err(ParseFloatError::Invalid);
+            return Err(ParseFloatError::Invalid(FloatTokenType::Float(0.0)));
         }
     }
     if error == ERANGE as i32 {

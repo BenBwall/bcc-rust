@@ -5,6 +5,7 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
+    io::Error as IoError,
     mem::{
         replace,
         take,
@@ -14,7 +15,7 @@ use std::{
         Path,
         PathBuf,
     },
-    sync::Arc,
+    rc::Rc,
 };
 
 use chrono::Local;
@@ -24,22 +25,24 @@ use super::{
         PreprocessorToken,
         PreprocessorTokenType,
         PreprocessorTokenizer,
-        PreprocessorTokenizerError,
     },
     Context,
     ErrorSeverity,
     GetPosition,
     GetSeverity,
     GetSourceFileName,
+    GetSourceVectors,
     SetPosition,
     SourcePosition,
-    SourceVector,
     SourceVectors,
+    StrExt,
     TokenString,
     TranslationPhase,
+    ONE,
 };
 use crate::{
     float_parsing::{
+        long_double_to_operand,
         string_to_double,
         string_to_float,
         string_to_long_double,
@@ -53,10 +56,7 @@ use crate::{
             SharedString,
             SharedVec,
         },
-        string_cache::{
-            StringCache,
-            StringCacheId,
-        },
+        string_cache::StringCacheId,
         unlikely,
         HashMap,
         HashSet,
@@ -70,11 +70,11 @@ const PREDEFINED_MACRO_NAMES: [&str; 5] =
 pub(crate) enum TokenizerFrameType {
     SourceFile,
     ObjectLikeMacroInvocation {
-        hash_hash_positions: Arc<HashSet<SourcePosition>>,
+        hash_hash_positions: Rc<HashSet<SourcePosition>>,
     },
     FunctionLikeMacroInvocation {
-        arguments:           Arc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
-        hash_hash_positions: Arc<HashSet<SourcePosition>>,
+        arguments:           Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
+        hash_hash_positions: Rc<HashSet<SourcePosition>>,
         is_variadic:         bool,
     },
     FunctionLikeMacroArgument {
@@ -88,13 +88,13 @@ pub(crate) enum TokenizerFrameType {
 pub(crate) enum MacroDefinition {
     ObjectLike {
         tokenizer:           PreprocessorTokenizer,
-        hash_hash_positions: Arc<HashSet<SourcePosition>>,
+        hash_hash_positions: Rc<HashSet<SourcePosition>>,
     },
     FunctionLike {
-        argument_names:      Arc<[StringCacheId]>,
+        argument_names:      Rc<[StringCacheId]>,
         tokenizer:           PreprocessorTokenizer,
         is_variadic:         bool,
-        hash_hash_positions: Arc<HashSet<SourcePosition>>,
+        hash_hash_positions: Rc<HashSet<SourcePosition>>,
     },
     BuiltIn,
 }
@@ -117,7 +117,7 @@ pub(crate) struct Preprocessor {
     pub(crate) tokenizer:       PreprocessorTokenizer,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame>,
     pub(crate) hash_hash_stack: Vec<HashHash>,
-    once_set:                   HashSet<StringCacheId>,
+    once_set:                   HashSet<SharedPath>,
     macro_definitions:          HashMap<StringCacheId, MacroDefinition>,
     last_preprocessor_token:    Option<PreprocessorToken>,
     current_preprocessor_token: Option<PreprocessorToken>,
@@ -131,15 +131,15 @@ pub(crate) struct Preprocessor {
 
 impl GetPosition for Preprocessor {
     #[inline(always)]
-    fn position(&self) -> SourcePosition {
-        self.tokenizer.position()
+    fn position(&self, context: &Context) -> SourcePosition {
+        self.tokenizer.position(context)
     }
 }
 
 impl SetPosition for Preprocessor {
     #[inline(always)]
-    fn set_position(&mut self, position: SourcePosition) {
-        self.tokenizer.set_position(position)
+    fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
+        self.tokenizer.set_position(context, position)
     }
 }
 
@@ -267,9 +267,61 @@ pub(crate) struct PreprocessorExpressionParser {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum PreprocessorExpressionOperand {
+pub(crate) enum PreprocessorExpressionOperand {
     Signed(i64),
     Unsigned(u64),
+}
+
+impl PreprocessorExpressionOperand {
+    fn as_signed(self) -> i64 {
+        match self {
+            | Self::Signed(v) => v,
+            | Self::Unsigned(v) => v as i64,
+        }
+    }
+
+    fn as_unsigned(self) -> u64 {
+        match self {
+            | Self::Signed(v) => v as u64,
+            | Self::Unsigned(v) => v,
+        }
+    }
+
+    fn is_signed(self) -> bool {
+        match self {
+            | Self::Signed(_) => true,
+            | Self::Unsigned(_) => false,
+        }
+    }
+
+    fn is_unsigned(self) -> bool {
+        match self {
+            | Self::Signed(_) => false,
+            | Self::Unsigned(_) => true,
+        }
+    }
+
+    fn set_signed(self, value: i64) -> Self {
+        match self {
+            | Self::Signed(_) => Self::Signed(value),
+            | Self::Unsigned(_) => Self::Unsigned(value as u64),
+        }
+    }
+
+    fn set_unsigned(self, value: u64) -> Self {
+        self.set_signed(value as i64)
+    }
+
+    fn map_signed(self, f: impl FnOnce(i64) -> i64) -> Self {
+        match self {
+            | Self::Signed(v) => Self::Signed(f(v)),
+            | Self::Unsigned(v) => Self::Unsigned(f(v as i64) as u64),
+        }
+    }
+
+    fn map_unsigned(self, f: impl FnOnce(u64) -> u64) -> Self {
+        self.map_signed(|v| f(v as u64) as i64)
+    }
 }
 
 impl PreprocessorExpressionParser {
@@ -301,12 +353,6 @@ pub(crate) enum UnsignedIntegerLiteralType {
     UnsignedInt,
     UnsignedLong,
     UnsignedLongLong,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum State {
-    Default,
-    Done,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -486,7 +532,7 @@ pub(crate) enum TokenType {
     Character(CharacterTokenType),
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug)]
 pub(crate) struct PreprocessorError {
     pub(crate) error_type:     PreprocessorErrorType,
     pub(crate) source_vectors: SourceVectors,
@@ -499,6 +545,18 @@ impl Display for PreprocessorError {
 }
 
 impl std::error::Error for PreprocessorError {}
+
+impl GetPosition for PreprocessorError {
+    fn position(&self, context: &Context) -> SourcePosition {
+        self.source_vectors.position(context)
+    }
+}
+
+impl GetSourceVectors for PreprocessorError {
+    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+        self.source_vectors
+    }
+}
 
 impl GetSeverity for PreprocessorError {
     fn severity(&self) -> ErrorSeverity {
@@ -533,8 +591,8 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::ExpectedIdentifierInDefineDirective(..)
             | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
             | PreprocessorErrorType::HeaderNotFound
-            | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible
-            | PreprocessorErrorType::HeaderFileInaccessible
+            | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible(..)
+            | PreprocessorErrorType::HeaderFileInaccessible(..)
             | PreprocessorErrorType::HashHashUsedOutsideOfMacro
             | PreprocessorErrorType::InvalidEscapeSequence
             | PreprocessorErrorType::UnterminatedEscapeSequence
@@ -563,8 +621,6 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::MissingNumberInLineDirective(..)
             | PreprocessorErrorType::MissingNewlineAfterLineDirective(..)
             | PreprocessorErrorType::FloatingPointNumberInLineDirective(..)
-            | PreprocessorErrorType::NegativeNumberInLineDirective(..)
-            | PreprocessorErrorType::UnsupportedLineDirectiveValue(..)
             | PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingStringLiteralInPragmaOperator(..)
@@ -637,12 +693,15 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::UnknownPragmaDirective
             | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
+            | PreprocessorErrorType::FloatCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(..)
+            | PreprocessorErrorType::DoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(..)
+            | PreprocessorErrorType::LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(..)
             | PreprocessorErrorType::PragmaOnceInNonHeader => ErrorSeverity::Warning,
         }
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug)]
 pub(crate) enum PreprocessorErrorType {
     InvalidHexadecimalFloatLiteral,
     InvalidDecimalFloatLiteral,
@@ -664,6 +723,9 @@ pub(crate) enum PreprocessorErrorType {
         from: SignedIntegerLiteralType,
         to:   SignedIntegerLiteralType,
     },
+    FloatCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(f32),
+    DoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(f64),
+    LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(LongDouble),
     HashMustBeFirstCharacterOnLine,
     HashMustBeFollowedByIdentifier,
     UnknownDirective,
@@ -740,8 +802,8 @@ pub(crate) enum PreprocessorErrorType {
         found:    usize,
     },
     HeaderNotFound,
-    CurrentWorkingDirectoryInaccessible,
-    HeaderFileInaccessible,
+    CurrentWorkingDirectoryInaccessible(IoError),
+    HeaderFileInaccessible(IoError),
     HashHashUsedOutsideOfMacro,
     InvalidEscapeSequence,
     UnterminatedEscapeSequence,
@@ -771,8 +833,6 @@ pub(crate) enum PreprocessorErrorType {
     MissingNewlineAfterLineDirective(PreprocessorTokenType),
     FloatingPointNumberInLineDirective(FloatTokenType),
     LineDirectiveIsNotASimpleDigitSequence,
-    UnsupportedLineDirectiveValue(i128),
-    NegativeNumberInLineDirective(i128),
     LineDirectiveNumberTooLarge(i128),
     MissingOpeningParenthesisInPragmaOperator(PreprocessorTokenType),
     MissingClosingParenthesisInPragmaOperator(PreprocessorTokenType),
@@ -817,6 +877,27 @@ impl Display for PreprocessorErrorType {
                     "Overflow while parsing floating point literal. Value of {float_token_type} \
                      literal was too big to be accurately represented. Some precision may have \
                      been lost.",
+                )
+            },
+            | Self::FloatCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(v) => {
+                write!(
+                    f,
+                    "Floating point literal {v} could not be losslessly converted to an integer \
+                     in preprocessor expression",
+                )
+            },
+            | Self::DoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(v) => {
+                write!(
+                    f,
+                    "Double literal {v} could not be losslessly converted to an integer in \
+                     preprocessor expression",
+                )
+            },
+            | Self::LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(v) => {
+                write!(
+                    f,
+                    "Long double literal {v} could not be losslessly converted to an integer in \
+                     preprocessor expression",
                 )
             },
             | Self::InvalidHexadecimalIntegerLiteral => {
@@ -1413,18 +1494,18 @@ impl Display for PreprocessorErrorType {
             | Self::HeaderNotFound => {
                 write!(f, "Header not found!")
             },
-            | Self::CurrentWorkingDirectoryInaccessible => {
+            | Self::CurrentWorkingDirectoryInaccessible(error) => {
                 write!(
                     f,
                     "Current working directory inaccessible! The operating system returned an \
-                     error when trying to get the current working directory."
+                     error when trying to get the current working directory. IO error: {error:?}"
                 )
             },
-            | Self::HeaderFileInaccessible => {
+            | Self::HeaderFileInaccessible(error) => {
                 write!(
                     f,
                     "Header file inaccessible! The header file was deleted or moved while the \
-                     preprocessor was trying to read it."
+                     preprocessor was trying to read it. IO error: {error:?}"
                 )
             },
             | Self::HashHashUsedOutsideOfMacro => {
@@ -1613,20 +1694,6 @@ impl Display for PreprocessorErrorType {
                      to the C standard!"
                 )
             },
-            | Self::UnsupportedLineDirectiveValue(i) => {
-                write!(
-                    f,
-                    "Unsupported value in 'line' directive! BCC only supports line numbers up to \
-                     SIZE_MAX. Value was '{i}'"
-                )
-            },
-            | Self::NegativeNumberInLineDirective(i) => {
-                write!(
-                    f,
-                    "Negative number in 'line' directive! The 'line' directive must be followed \
-                     by a positive integer! Value was '{i}'"
-                )
-            },
             | Self::LineDirectiveNumberTooLarge(i) => {
                 write!(
                     f,
@@ -1717,7 +1784,7 @@ impl Display for PreprocessorErrorType {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct FunctionLikeMacroArgument {
     name:      StringCacheId,
     tokenizer: PreprocessorTokenizer,
@@ -1728,8 +1795,8 @@ impl Preprocessor {
         context: &mut Context,
         source_name: SharedPath,
         source: SharedString,
-        quote_include_directories: SharedVec<SharedPath>,
-        system_include_directories: SharedVec<SharedPath>,
+        quote_include_directories: SharedVec<PathBuf>,
+        system_include_directories: SharedVec<PathBuf>,
     ) -> Self {
         let macro_definitions = PREDEFINED_MACRO_NAMES
             .into_iter()
@@ -1760,7 +1827,7 @@ impl Preprocessor {
 }
 
 impl Preprocessor {
-    fn push_tokenizer_frame(&mut self, context: &mut Context, frame: TokenizerFrame) {
+    fn push_tokenizer_frame(&mut self, _context: &mut Context, frame: TokenizerFrame) {
         // eprintln!("pushing frame: {frame:#?}");
         // eprintln!(
         // "Called push_tokenizer_frame with length: {} and frame: {frame:?}",
@@ -1771,7 +1838,7 @@ impl Preprocessor {
         self.tokenizer_stack.push(frame);
     }
 
-    fn pop_tokenizer_frame(&mut self, context: &mut Context) {
+    fn pop_tokenizer_frame(&mut self, _context: &mut Context) {
         let f = self.tokenizer_stack.pop();
         drop(f);
         if let Some(last) = self.tokenizer_stack.last() {
@@ -1779,83 +1846,40 @@ impl Preprocessor {
         }
     }
 
-    fn expect_token_no_expand(
-        &mut self,
-        context: &mut Context,
-        mut is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
-        mut on_wrong_token_type: impl FnMut(
-            &mut Self,
-            PreprocessorToken,
-        ) -> ControlFlow<PreprocessorError>,
-        eof_message: &'static str,
-    ) -> Option<PreprocessorToken> {
-        loop {
-            let start = self.position();
-            match self.next_preprocessor_token_no_expand(context) {
-                | Some(token) => {
-                    if is_correct_token(self, &token) {
-                        return Some(token);
-                    }
-                    match on_wrong_token_type(self, token) {
-                        | ControlFlow::Continue(()) => continue,
-                        | ControlFlow::Break(e) => {
-                            self.set_position(start);
-                            context.preprocessor_error(e);
-                            return None;
-                        },
-                    }
-                },
-                | None => {
-                    self.set_position(start);
-                    context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
-                        source_vectors: context.create_source_vectors(
-                                start,
-                                self.source_file_name(),
-                                0,
-                            ),
-                    });
-                    return None;
-                },
-            }
-        }
-    }
-
     fn expect_token(
         &mut self,
         context: &mut Context,
-        mut is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
+        mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
+            &mut Context,
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
         loop {
-            let start = self.position();
+            let start = self.position(context);
             match self.next_preprocessor_token(context) {
                 | Some(token) => {
-                    if is_correct_token(self, &token) {
+                    if is_correct_token(self, context, token) {
                         return Some(token);
                     }
-                    match on_wrong_token_type(self, token) {
+                    match on_wrong_token_type(self, context, token) {
                         | ControlFlow::Continue(()) => continue,
                         | ControlFlow::Break(e) => {
-                            self.set_position(start);
+                            self.set_position(context, start);
                             context.preprocessor_error(e);
                             return None;
                         },
                     }
                 },
                 | None => {
-                    self.set_position(start);
+                    self.set_position(context, start);
+                    let source_vectors =
+                        context.create_source_vectors(start, self.source_file_name(), 0);
                     context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
-                        source_vectors: context.create_source_vectors(
-                                start,
-                                self.source_file_name(),
-                                0,
-                            )
+                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
+                        source_vectors,
                     });
                     return None;
                 },
@@ -1866,38 +1890,37 @@ impl Preprocessor {
     fn expect_token_from_previous_phase(
         &mut self,
         context: &mut Context,
-        mut is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
+        mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
+            &mut Context,
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
         loop {
-            let start = self.position();
+            let start = self.position(context);
             match self.tokenizer.next_item(context) {
                 | Some(token) => {
-                    if is_correct_token(self, &token) {
+                    if is_correct_token(self, context, token) {
                         return Some(token);
                     }
-                    match on_wrong_token_type(self, token) {
+                    match on_wrong_token_type(self, context, token) {
                         | ControlFlow::Continue(()) => continue,
                         | ControlFlow::Break(e) => {
-                            self.set_position(start);
+                            self.set_position(context, start);
                             context.preprocessor_error(e);
                             return None;
                         },
                     }
                 },
                 | None => {
-                    self.set_position(start);
+                    self.set_position(context, start);
+                    let source_vectors =
+                        context.create_source_vectors(start, self.source_file_name(), 0);
                     context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
-                        source_vectors: context.create_source_vectors(
-                                start,
-                                self.source_file_name(),
-                                0,
-                            )
+                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
+                        source_vectors,
                     });
                     return None;
                 },
@@ -1962,38 +1985,34 @@ impl Preprocessor {
                 | PreprocessorTokenType::Number,
             ) => {
                 if context.string_cache.at(rhs.contents).contains('.') {
-                    return Some(self.create_merge_error(context, &lhs, &rhs));
+                    return Some(self.create_merge_error(context, lhs, rhs));
                 }
-                let new = self.merge_token_contents(
-                    context,
-                    &lhs,
-                    &rhs,
-                    PreprocessorTokenType::Identifier,
-                );
+                let new =
+                    self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::Identifier);
                 let kind = if context.string_cache.at(new.contents) == "defined" {
                     PreprocessorTokenType::Defined
                 } else {
                     PreprocessorTokenType::Identifier
                 };
-                Some(Ok(PreprocessorToken {
+                Some(PreprocessorToken {
                     kind,
                     contents: new.contents,
                     source_vectors: new.source_vectors,
-                }))
+                })
             },
             | (
                 PreprocessorTokenType::Identifier,
                 PreprocessorTokenType::String
                 | PreprocessorTokenType::Character
                 | PreprocessorTokenType::GeneratedString,
-            ) =>
+            ) => {
                 if context.string_cache.at(lhs.contents) == "L"
                     && context.string_cache.at(rhs.contents).starts_with('L')
                 {
                     Some(self.merge_token_contents(
                         context,
-                        &lhs,
-                        &rhs,
+                        lhs,
+                        rhs,
                         match rhs.kind {
                             | PreprocessorTokenType::GeneratedString =>
                                 PreprocessorTokenType::WideGeneratedString,
@@ -2001,124 +2020,122 @@ impl Preprocessor {
                         },
                     ))
                 } else {
-                    Some(self.create_merge_error(context, &lhs, &rhs))
-                },
+                    Some(self.create_merge_error(context, lhs, rhs))
+                }
+            },
             | (
                 PreprocessorTokenType::Period | PreprocessorTokenType::Number,
                 PreprocessorTokenType::Number,
             )
-            | (PreprocessorTokenType::Number, PreprocessorTokenType::Period) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::Number)
-            )),
-            | (PreprocessorTokenType::Plus, PreprocessorTokenType::Plus) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::PlusPlus)
-            )),
-            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Minus) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::MinusMinus)
-            )),
-            | (PreprocessorTokenType::Plus, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::PlusEquals)
-            )),
-            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::MinusEquals)
-            )),
-            | (PreprocessorTokenType::Asterisk, PreprocessorTokenType::Equals) => Some(Ok(self
-                .merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::AsteriskEquals))),
+            | (PreprocessorTokenType::Number, PreprocessorTokenType::Period) =>
+                Some(self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::Number)),
+            | (PreprocessorTokenType::Plus, PreprocessorTokenType::Plus) =>
+                Some(self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PlusPlus)),
+            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Minus) => Some(
+                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::MinusMinus),
+            ),
+            | (PreprocessorTokenType::Plus, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PlusEquals),
+            ),
+            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::MinusEquals),
+            ),
+            | (PreprocessorTokenType::Asterisk, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::AsteriskEquals),
+            ),
             | (PreprocessorTokenType::ForwardSlash, PreprocessorTokenType::Equals) =>
-                Some(Ok(self.merge_token_contents(
+                Some(self.merge_token_contents(
                     context,
-                    &lhs,
-                    &rhs,
+                    lhs,
+                    rhs,
                     PreprocessorTokenType::ForwardSlashEquals,
-                ))),
-            | (PreprocessorTokenType::Percent, PreprocessorTokenType::Equals) => Some(Ok(self
-                .merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::PercentEquals))),
-            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::LessThan) => Some(Ok(self
-                .merge_token_contents(
+                )),
+            | (PreprocessorTokenType::Percent, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PercentEquals),
+            ),
+            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::LessThan) =>
+                Some(self.merge_token_contents(
                     context,
-                    &lhs,
-                    &rhs,
+                    lhs,
+                    rhs,
                     PreprocessorTokenType::LessThanLessThan,
-                ))),
+                )),
             | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::GreaterThan) =>
-                Some(Ok(self.merge_token_contents(
+                Some(self.merge_token_contents(
                     context,
-                    &lhs,
-                    &rhs,
+                    lhs,
+                    rhs,
                     PreprocessorTokenType::GreaterThanGreaterThan,
-                ))),
-            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Equals) => Some(Ok(self
-                .merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::LessThanEquals))),
-            | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::Equals) => Some(Ok(self
-                .merge_token_contents(
+                )),
+            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::LessThanEquals),
+            ),
+            | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(
                     context,
-                    &lhs,
-                    &rhs,
+                    lhs,
+                    rhs,
                     PreprocessorTokenType::GreaterThanEquals,
-                ))),
+                )),
             | (PreprocessorTokenType::LessThanLessThan, PreprocessorTokenType::Equals) =>
-                Some(Ok(self.merge_token_contents(
+                Some(self.merge_token_contents(
                     context,
-                    &lhs,
-                    &rhs,
+                    lhs,
+                    rhs,
                     PreprocessorTokenType::LessThanLessThanEquals,
-                ))),
+                )),
             | (PreprocessorTokenType::GreaterThanGreaterThan, PreprocessorTokenType::Equals) =>
-                Some(Ok(self.merge_token_contents(
+                Some(self.merge_token_contents(
                     context,
-                    &lhs,
-                    &rhs,
+                    lhs,
+                    rhs,
                     PreprocessorTokenType::GreaterThanGreaterThanEquals,
-                ))),
-            | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Equals) => Some(Ok(self
-                .merge_token_contents(
+                )),
+            | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(
                     context,
-                    &lhs,
-                    &rhs,
+                    lhs,
+                    rhs,
                     PreprocessorTokenType::AmpersandEquals,
-                ))),
-            | (PreprocessorTokenType::Caret, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::CaretEquals)
-            )),
-            | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::PipeEquals)
-            )),
+                )),
+            | (PreprocessorTokenType::Caret, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::CaretEquals),
+            ),
+            | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PipeEquals),
+            ),
             | (PreprocessorTokenType::ExclamationMark, PreprocessorTokenType::Equals) =>
-                Some(Ok(self.merge_token_contents(
+                Some(self.merge_token_contents(
                     context,
-                    &lhs,
-                    &rhs,
+                    lhs,
+                    rhs,
                     PreprocessorTokenType::ExclamationMarkEquals,
-                ))),
-            | (PreprocessorTokenType::Equals, PreprocessorTokenType::Equals) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::EqualsEquals)
-            )),
-            | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Pipe) => Some(Ok(
-                self.merge_token_contents(context, &lhs, &rhs, PreprocessorTokenType::PipePipe)
-            )),
+                )),
+            | (PreprocessorTokenType::Equals, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::EqualsEquals),
+            ),
+            | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Pipe) =>
+                Some(self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PipePipe)),
             | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Ampersand) =>
-                Some(Ok(self.merge_token_contents(
+                Some(self.merge_token_contents(
                     context,
-                    &lhs,
-                    &rhs,
+                    lhs,
+                    rhs,
                     PreprocessorTokenType::AmpersandAmpersand,
-                ))),
+                )),
 
-            | _ => Some(self.create_merge_error(context, &lhs, &rhs)),
+            | _ => Some(self.create_merge_error(context, lhs, rhs)),
         }
     }
 
-    fn should_ignore_whitespace(&self, context: &mut Context) -> bool {
+    fn should_ignore_whitespace(&self, _context: &mut Context) -> bool {
         !self.should_tokenize_whitespace
             || self.last_preprocessor_token.as_ref().map(|t| t.kind)
                 == Some(PreprocessorTokenType::Whitespace)
     }
 
     #[allow(clippy::redundant_else)]
-    fn next_preprocessor_token_no_expand<const SHOULD_POP_DEAD_FRAMES: bool>(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<PreprocessorToken> {
+    fn expand_macros(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
         let last = self.current_preprocessor_token;
         let ret = 'base: loop {
             if unlikely(self.tokenizer_stack.is_empty()) {
@@ -2140,12 +2157,8 @@ impl Preprocessor {
                             ..
                         } =>
                             if token.kind == PreprocessorTokenType::Newline {
-                                if SHOULD_POP_DEAD_FRAMES {
-                                    self.pop_tokenizer_frame(context);
-                                    continue 'base;
-                                } else {
-                                    break 'base None;
-                                }
+                                self.pop_tokenizer_frame(context);
+                                continue 'base;
                             },
                         | TokenizerFrame {
                             frame_type:
@@ -2157,11 +2170,11 @@ impl Preprocessor {
                             ..
                         } => {
                             let paren_depth = *paren_depth;
-                            let argument = *argument;
+                            let argument = argument.clone();
                             let has_generated_token = *has_generated_token;
                             if let Some(paren_depth) = self.update_macro_argument_paren_depth(
                                 context,
-                                &token,
+                                token,
                                 argument.name,
                                 paren_depth,
                             ) {
@@ -2179,7 +2192,7 @@ impl Preprocessor {
                                 };
                                 *p = paren_depth;
                                 *has_generated_token = true;
-                            } else if SHOULD_POP_DEAD_FRAMES {
+                            } else {
                                 self.pop_tokenizer_frame(context);
                                 if self.generate_placeholders && !has_generated_token {
                                     break 'base Some(PreprocessorToken {
@@ -2189,8 +2202,6 @@ impl Preprocessor {
                                     });
                                 }
                                 continue 'base;
-                            } else {
-                                break 'base None;
                             }
                             if token.kind == PreprocessorTokenType::Newline {
                                 if self.should_ignore_whitespace(context) {
@@ -2207,13 +2218,10 @@ impl Preprocessor {
                     }
                     break Some(token);
                 },
-                | None =>
-                    if SHOULD_POP_DEAD_FRAMES {
-                        self.pop_tokenizer_frame(context);
-                        continue 'base;
-                    } else {
-                        break 'base None;
-                    },
+                | None => {
+                    self.pop_tokenizer_frame(context);
+                    continue 'base;
+                },
             }
         };
         // eprintln!(
@@ -2240,7 +2248,7 @@ impl Preprocessor {
     ) -> Option<usize> {
         // eprintln!("Updating macro argument paren depth: {:#?}", token.kind);
         if (token.kind == PreprocessorTokenType::Comma
-            && context.at(argument_name) != "__VA_ARGS__")
+            && context.string_cache.at(argument_name) != "__VA_ARGS__")
             || (token.kind == PreprocessorTokenType::ClosingParenthesis && paren_depth == 1)
         {
             return None;
@@ -2254,25 +2262,7 @@ impl Preprocessor {
         Some(paren_depth)
     }
 
-    fn current_macro(&self, context: &Context) -> Option<(&Path, SourcePosition)> {
-        match self.tokenizer_stack.last() {
-            | Some(TokenizerFrame {
-                frame_type:
-                    TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                    | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
-                tokenizer: _,
-                ..
-            }) => Some((&context.source.name, context.position())),
-            | _ => None,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn current_is_macro(&self, context: &Context) -> bool {
-        self.current_macro(context).is_some()
-    }
-
-    fn current_is_header(&self, context: &Context) -> bool {
+    fn current_is_header(&self, _context: &Context) -> bool {
         // The first in the tokenizer stack is the original source file.
         for frame in self.tokenizer_stack.iter().skip(1).rev() {
             match frame.frame_type {
@@ -2287,12 +2277,12 @@ impl Preprocessor {
     #[allow(clippy::type_complexity)]
     fn current_function_like_macro(
         &self,
-        context: &Context,
+        _context: &Context,
     ) -> Option<(
         SharedPath,
         PreprocessorTokenizer,
-        Arc<HashMap<&Path, FunctionLikeMacroArgument>>,
-        Arc<HashSet<SourcePosition>>,
+        Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
+        Rc<HashSet<SourcePosition>>,
         bool,
     )> {
         match self.tokenizer_stack.last() {
@@ -2316,7 +2306,7 @@ impl Preprocessor {
     }
 
     #[allow(dead_code)]
-    fn current_is_function_like_macro(&self, context: &Context) -> bool {
+    fn current_is_function_like_macro(&self, _context: &Context) -> bool {
         match self.tokenizer_stack.last() {
             | Some(TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
@@ -2327,7 +2317,7 @@ impl Preprocessor {
     }
 
     fn handle_hash_operator(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
-        let Some(token) = self.next_preprocessor_token_no_expand(context) else {
+        let Some(token) = self.expand_macros(context) else {
             return None;
         };
 
@@ -2342,10 +2332,10 @@ impl Preprocessor {
                 ) {
                     Some(self.parse_hash_operator(context, token))
                 } else {
-                    Some(Ok(token))
+                    Some(token)
                 }
             },
-            | _ => Some(Ok(token)),
+            | _ => Some(token),
         }
     }
 
@@ -2354,7 +2344,7 @@ impl Preprocessor {
             let Some(token) = self.handle_hash_operator(context) else {
                 return None;
             };
-            let position = self.position();
+            let position = self.position(context);
             let hash_hash = if let Some(TokenizerFrame {
                 frame_type:
                     TokenizerFrameType::FunctionLikeMacroInvocation {
@@ -2376,10 +2366,10 @@ impl Preprocessor {
                             ..
                         })
                     ) {
-                        self.set_position(position);
+                        self.set_position(context, position);
                         break 'inner None;
                     }
-                    if hash_hash_positions.contains(&self.current_position()) {
+                    if hash_hash_positions.contains(&self.position(context)) {
                         match self.tokenizer.next_item(context) {
                             | Some(token) if token.kind == PreprocessorTokenType::HashHash =>
                                 Some(token),
@@ -2388,7 +2378,7 @@ impl Preprocessor {
                             },
                         }
                     } else {
-                        self.set_position(position);
+                        self.set_position(context, position);
                         None
                     }
                 }
@@ -2397,24 +2387,25 @@ impl Preprocessor {
             };
             if let Some(h) = hash_hash {
                 let Some(rhs) = self.handle_hash_hash_operator(context) else {
+                    let source_vectors = context.create_source_vectors(
+                        self.tokenizer.position(context),
+                        self.tokenizer.source_file_name(),
+                        0,
+                    );
                     context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                             "parsing hash-hash operator. Hash hash operator must be followed by a \
                              preprocessor token on the same line.",
                         ),
-                        source_vectors: context.create_source_vectors(
-                            self.tokenizer.position(),
-                            self.tokenizer.source_file_name(),
-                            0,
-                        ),
+                        source_vectors,
                     });
                     return Some(token);
                 };
-                if let Some(r) = self.parse_hash_hash_operator(&token, &h, &rhs) {
+                if let Some(r) = self.parse_hash_hash_operator(context, token, h, rhs) {
                     return Some(r);
                 }
             } else {
-                return Some(Ok(token));
+                return Some(token);
             }
         }
     }
@@ -2456,20 +2447,20 @@ impl Preprocessor {
                     }) = self.tokenizer_stack.last()
                     {
                         let paren_depth = *paren_depth;
-                        let argument = *argument;
-                        let position = self.position();
+                        let argument = argument.clone();
+                        let position = self.position(context);
                         let next_is_end = match self.tokenizer.next_item(context) {
                             | Some(token) => self
                                 .update_macro_argument_paren_depth(
                                     context,
-                                    &token,
+                                    token,
                                     argument.name,
                                     paren_depth,
                                 )
                                 .is_none(),
-                            | None => break true,
+                            | None => true,
                         };
-                        self.set_position(position);
+                        self.set_position(context, position);
                         next_is_end
                     } else {
                         false
@@ -2515,29 +2506,31 @@ impl Preprocessor {
                         is_variadic,
                         hash_hash_positions,
                     } => {
-                        let position = self.position();
+                        let position = self.position(context);
                         let file = self.source_file_name();
                         loop {
-                            match self.next_preprocessor_token_no_expand::<false>(context) {
+                            match self.tokenizer.next_item(context) {
                                 | Some(brace) if brace.kind == PreprocessorTokenType::Whitespace =>
                                     continue,
                                 | Some(brace)
                                     if brace.kind == PreprocessorTokenType::OpeningParenthesis =>
                                     break,
-                                | Some(brace) => {
+                                | Some(_) => {
                                     context.preprocessor_error(PreprocessorError {
                                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
                                         source_vectors: token.source_vectors,
                                     });
-                                    self.set_position(position);
+                                    self.set_position(context, position);
                                     break 'base Some(token);
                                 },
                                 | None => {
+                                    let source_vectors =
+                                        context.create_source_vectors(position, file, 1);
                                     context.preprocessor_error(PreprocessorError {
                                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
-                                        source_vectors: context.create_source_vectors(position, 1),
+                                        source_vectors,
                                     });
-                                    self.set_position(position);
+                                    self.set_position(context, position);
                                     break 'base Some(token);
                                 },
                             }
@@ -2605,7 +2598,7 @@ impl Preprocessor {
                                                 ),
                                             source_vectors: token.source_vectors,
                                         });
-                                        self.set_position(position);
+                                        self.set_position(context, position);
                                         break 'base Some(token);
                                     },
                                 }
@@ -2661,7 +2654,7 @@ impl Preprocessor {
                                                 ),
                                             source_vectors: token.source_vectors,
                                         });
-                                        self.set_position(position);
+                                        self.set_position(context, position);
                                         break 'base Some(token);
                                     },
                                 }
@@ -2669,7 +2662,7 @@ impl Preprocessor {
                         }
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
-                                arguments: Arc::new(arguments),
+                                arguments: Rc::new(arguments),
                                 is_variadic,
                                 hash_hash_positions: hash_hash_positions.clone(),
                             },
@@ -2680,82 +2673,79 @@ impl Preprocessor {
                     },
                     | MacroDefinition::BuiltIn => match context.string_cache.at(token.contents) {
                         | "__FILE__" => {
-                            let file_name = context.string_cache.intern("__builtin__macros");
                             let source_file = self.source_file_name();
-                            let length = source_file.len();
-                            break 'base Some(Ok(PreprocessorToken {
+                            let length = source_file.as_os_str().len();
+                            break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
-                                contents:       self
-                                    .insert_into_cache(&source_file.to_string_lossy()),
+                                contents:       context
+                                    .string_cache
+                                    .intern(&source_file.to_string_lossy()),
                                 source_vectors: context.create_source_vectors(
                                     SourcePosition {
                                         index:  0,
                                         line:   1,
-                                        column: 1,
+                                        column: ONE,
                                     },
                                     SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
                                     length,
                                 ),
-                            }));
+                            });
                         },
                         | "__LINE__" => {
-                            let string = self.line().to_string();
-                            let file_name = context.string_cache.intern("__builtin__macros");
-                            break 'base Some(Ok(PreprocessorToken {
+                            let string = self.line(context).to_string();
+                            break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::Number,
                                 contents:       context.string_cache.intern(&string),
                                 source_vectors: context.create_source_vectors(
                                     SourcePosition {
                                         index:  0,
                                         line:   1,
-                                        column: 1,
+                                        column: ONE,
                                     },
                                     SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
                                     string.len(),
                                 ),
-                            }));
+                            });
                         },
                         | "__TIME__" => {
                             let now = Local::now();
                             let string = now.format("%H:%M:%S").to_string();
-                            let file_name = context.string_cache.intern("__builtin__macros");
-                            break 'base Some(Ok(PreprocessorToken {
+                            break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context.string_cache.intern(&string),
                                 source_vectors: context.create_source_vectors(
                                     SourcePosition {
                                         index:  0,
                                         line:   1,
-                                        column: 1,
+                                        column: ONE,
                                     },
                                     SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
                                     string.len(),
                                 ),
-                            }));
+                            });
                         },
                         | "__DATE__" => {
                             let now = Local::now();
                             let string = now.format("%b %e %Y").to_string();
-                            let file_name = context.string_cache.intern("__builtin__macros");
-                            break 'base Some(Ok(PreprocessorToken {
+                            break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context.string_cache.intern(&string),
                                 source_vectors: context.create_source_vectors(
                                     SourcePosition {
                                         index:  0,
                                         line:   1,
-                                        column: 1,
+                                        column: ONE,
                                     },
                                     SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
                                     string.len(),
                                 ),
-                            }));
+                            });
                         },
                         | "_Pragma" => {
                             _ = self.expect_token(
                                 context,
-                                |_, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
-                                |_, token|
+                                |_, _, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
+                                |_, _, token|
                                     ControlFlow::Break(PreprocessorError {
                                             error_type:     PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(token.kind),
                                             source_vectors: token.source_vectors,
@@ -2764,23 +2754,18 @@ impl Preprocessor {
                                 "parsing pragma operator",
                             );
 
-                            let string_token = match self.expect_token(
+                            let Some(string_token) = self.expect_token(
                                 context,
-                                |_, t| t.kind == PreprocessorTokenType::String,
-                                |_, token|
+                                |_, _, t| t.kind == PreprocessorTokenType::String,
+                                |_, _, token|
                                     ControlFlow::Break(PreprocessorError {
                                             error_type:     PreprocessorErrorType::MissingStringLiteralInPragmaOperator(token.kind),
                                             source_vectors: token.source_vectors,
                                         },
                                     ),
                                 "parsing pragma operator",
-                            ) {
-                                | Ok(token) => token,
-                                | Err(e) => PreprocessorToken {
-                                    kind: PreprocessorTokenType::String,
-                                    source_vectors: context.create_source_vectors(self.position(), self.source_file_name(), 0),,
-                                    contents: context.string_cache.intern("\"\""),
-                                },
+                            ) else {
+                                continue 'base;
                             };
 
                             let input =
@@ -2788,27 +2773,27 @@ impl Preprocessor {
 
                             let tokenizer = take(&mut self.tokenizer);
                             let pragma_string =
-                                SharedPath::from_path_buf(PathBuf::form("<pragma string>"));
+                                SharedPath::from_path_buf(PathBuf::from("<pragma string>"));
                             self.tokenizer = PreprocessorTokenizer::new(pragma_string, input);
-                            self.parse_pragma_directive(context, &string_token);
-                            if self.previous_phase.next().is_some() {
+                            self.parse_pragma_directive(context, string_token);
+                            if self.tokenizer.next_item(context).is_some() {
+                                let source_vectors = context.create_source_vectors(
+                                    self.position(context),
+                                    self.source_file_name(),
+                                    0,
+                                );
                                 context.preprocessor_error(PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::ExtraTokensAfterPragmaOperator,
-                                    source_vectors: context.create_source_vectors(
-                                            self.position(),
-                                            self.source_file_name(),
-                                            0,
-                                        ),
-                                    },
-                                );
+                                    source_vectors,
+                                });
                             }
                             self.tokenizer = tokenizer;
 
                             self.expect_token(
                                 context,
-                                |_, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
-                                |_, token|
+                                |_, _, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
+                                |_, _, token|
                                     ControlFlow::Break(PreprocessorError {
                                             error_type:     PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(token.kind),
                                             source_vectors: token.source_vectors,
@@ -2825,11 +2810,11 @@ impl Preprocessor {
                     },
                 }
             } else {
-                if let Some(frame) = self.handle_macro_argument(context, &token) {
+                if let Some(frame) = self.handle_macro_argument(context, token) {
                     self.push_tokenizer_frame(context, frame);
                     continue;
                 }
-                break 'base Some(Ok(token));
+                break 'base Some(token);
             }
         };
         // eprintln!(
@@ -2838,14 +2823,11 @@ impl Preprocessor {
         // );
         // eprintln!("Next preprocessor token returning: {ret:#?}");
         self.generate_placeholders = false;
-        match ret? {
-            | Err(e) => Some(Err(e)),
-            | Ok(t) => {
-                self.last_preprocessor_token = last;
-                self.current_preprocessor_token = Some(t.clone());
-                Some(Ok(t))
-            },
+        if let Some(ret) = ret {
+            self.last_preprocessor_token = last;
+            self.current_preprocessor_token = Some(ret);
         }
+        ret
     }
 
     fn prepare_pragma_operator_string(
@@ -2889,8 +2871,8 @@ impl Preprocessor {
 
     fn get_arguments(
         &self,
-        context: &Context,
-    ) -> Option<Arc<HashMap<StringCacheId, FunctionLikeMacroArgument>>> {
+        _context: &Context,
+    ) -> Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>> {
         for frame in self.tokenizer_stack.iter().rev() {
             return match frame {
                 | TokenizerFrame {
@@ -2929,11 +2911,7 @@ impl Preprocessor {
         None
     }
 
-    fn eval_escape_sequences(
-        &mut self,
-        context: &mut Context,
-        token: PreprocessorToken,
-    ) -> String {
+    fn eval_escape_sequences(&mut self, context: &mut Context, token: PreprocessorToken) -> String {
         let mut ret = String::new();
         let mut index = 0;
         let string = context.string_cache.at(token.contents);
@@ -2976,18 +2954,23 @@ impl Preprocessor {
                             Some(code_point)
                         })();
                         let Some(code_point) = code_point else {
-                            context.preprocessor_error(PreprocessorError {
+                            Context::raw_preprocessor_error(
+                                &mut context.pending_errors,
+                                PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::HexEscapeSequenceTooLarge,
                                     source_vectors: token.source_vectors,
-                            });
+                                },
+                            );
                             continue;
                         };
                         let Ok(c) = char::try_from(code_point) else {
-                            context.preprocessor_error(PreprocessorError {
+                            Context::raw_preprocessor_error(
+                                &mut context.pending_errors,
+                                PreprocessorError {
                                     error_type:     PreprocessorErrorType::InvalidHexEscapeSequence,
                                     source_vectors: token.source_vectors,
-                                }
+                                },
                             );
                             continue;
                         };
@@ -3011,20 +2994,26 @@ impl Preprocessor {
                         })();
 
                         let Some(code_point) = code_point else {
-                            context.preprocessor_error(PreprocessorError {
+                            Context::raw_preprocessor_error(
+                                &mut context.pending_errors,
+                                PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::OctalEscapeSequenceTooLarge,
                                     source_vectors: token.source_vectors,
-                                });
-                            
+                                },
+                            );
+
                             continue;
                         };
                         let Ok(c) = char::try_from(u32::from(code_point)) else {
-                            context.preprocessor_error(PreprocessorError {
+                            Context::raw_preprocessor_error(
+                                &mut context.pending_errors,
+                                PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::InvalidOctalEscapeSequence,
                                     source_vectors: token.source_vectors,
-                                });
+                                },
+                            );
                             continue;
                         };
                         c
@@ -3032,13 +3021,12 @@ impl Preprocessor {
                     | 'u' => {
                         let mut code_point = 0u32;
                         for _ in 0..4 {
-                            let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16))
-                            else {
-                                context.preprocessor_error(PreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
-                                            source_vectors: token.source_vectors,
-                                        });
+                            let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16)) else {
+                                Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
+                                    error_type:
+                                        PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
+                                    source_vectors: token.source_vectors,
+                                });
                                 break;
                             };
                             index += 1;
@@ -3046,10 +3034,12 @@ impl Preprocessor {
                             code_point += d;
                         }
                         let Ok(c) = char::try_from(code_point) else {
-                            context.preprocessor_error(PreprocessorError {
-                                    error_type:     PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence,
+                            Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
+                                    error_type:
+                                        PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence,
                                     source_vectors: token.source_vectors,
-                                });
+                                },
+                            );
                             continue;
                         };
                         c
@@ -3057,13 +3047,12 @@ impl Preprocessor {
                     | 'U' => {
                         let mut code_point = 0u32;
                         for _ in 0..8 {
-                            let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16))
-                            else {
-                                context.preprocessor_error(PreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall,
-                                            source_vectors: token.source_vectors,
-                                        });
+                            let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16)) else {
+                                Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
+                                    error_type:
+                                        PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall,
+                                    source_vectors: token.source_vectors,
+                                });
                                 break;
                             };
                             index += 1;
@@ -3071,21 +3060,24 @@ impl Preprocessor {
                             code_point += d;
                         }
                         let Ok(c) = char::try_from(code_point) else {
-                            context.preprocessor_error(PreprocessorError {
-                                    error_type:     PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence,
+                            Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
+                                    error_type:
+                                        PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence,
                                     source_vectors: token.source_vectors,
-                                });
+                                },
+                            );
                             continue;
                         };
                         c
-                    }
+                    },
                     | _ => {
-                        context.preprocessor_error(PreprocessorError {
+                        Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
                                 error_type:     PreprocessorErrorType::InvalidEscapeSequence,
                                 source_vectors: token.source_vectors,
-                        });
+                            },
+                        );
                         continue;
-                    }
+                    },
                 });
             } else {
                 ret.push(c);
@@ -3110,37 +3102,29 @@ impl Preprocessor {
         Self::build_token(token, TokenType::Operator(kind))
     }
 
-    fn parse_number(
-        &mut self,
-        context: &mut Context,
-        token: PreprocessorToken,
-    ) -> Token {
-        let contents  = context.string_cache.at(token.contents);
+    fn parse_number(&mut self, context: &mut Context, token: PreprocessorToken) -> Token {
+        let contents = context.string_cache.at(token.contents);
         let is_hex = contents.starts_with("0x") || contents.starts_with("0X");
         let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
         let is_octal = contents.starts_with('0') && !is_hex && !is_binary;
         if is_hex {
             if contents.contains(|c| c == '.' || c == 'p' || c == 'P') {
-                self.parse_hexadecimal_float(token, contents)
+                self.parse_hexadecimal_float(context, token)
             } else {
-                self.parse_hexadecimal_integer(token, contents)
+                self.parse_hexadecimal_integer(context, token)
             }
         } else if is_binary {
-            self.parse_binary_integer(token, contents)
+            self.parse_binary_integer(context, token)
         } else if contents.contains(|c| c == '.' || c == 'e' || c == 'E') {
-            self.parse_decimal_float(token, contents)
+            self.parse_decimal_float(context, token)
         } else if is_octal {
-            self.parse_octal_integer(token, contents)
+            self.parse_octal_integer(context, token)
         } else {
-            self.parse_decimal_integer(token, contents)
+            self.parse_decimal_integer(context, token)
         }
     }
 
-    fn parse_string(
-        &mut self,
-        context: &mut Context,
-        token: PreprocessorToken,
-    ) -> StringTokenType {
+    fn parse_string(&mut self, context: &mut Context, token: PreprocessorToken) -> StringTokenType {
         let contents = self.eval_escape_sequences(context, token);
         let cached_contents = context.string_cache.intern(&contents);
         if context.string_cache.at(token.contents).starts_with('L') {
@@ -3158,19 +3142,16 @@ impl Preprocessor {
         let contents = self.eval_escape_sequences(context, token);
         if contents.chars().take(2).count() != 1 {
             context.preprocessor_error(PreprocessorError {
-                    error_type:
-                        PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
-                    source_vectors: token.source_vectors,
-                }
-            );
+                error_type:     PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
+                source_vectors: token.source_vectors,
+            });
         }
         let char = contents.chars().next().unwrap_or('\0');
         if context.string_cache.at(token.contents).starts_with('L') {
-            Ok(CharacterTokenType::WideChar(char))
+            CharacterTokenType::WideChar(char)
         } else {
-            Ok(CharacterTokenType::Char(char))
+            CharacterTokenType::Char(char)
         }
-            
     }
 
     fn map_preprocessor_token(
@@ -3181,7 +3162,7 @@ impl Preprocessor {
         Some(match token.kind {
             | PreprocessorTokenType::Number => self.parse_number(context, token),
             | PreprocessorTokenType::Newline => return None,
-            | PreprocessorTokenType::Hash =>
+            | PreprocessorTokenType::Hash => {
                 if matches!(
                     self.tokenizer_stack.last(),
                     Some(TokenizerFrame {
@@ -3191,39 +3172,38 @@ impl Preprocessor {
                 ) {
                     unreachable!("Handled in next_preprocessor_token");
                 } else {
-                    match self.parse_directive(context, &token) {
-                        | Ok(()) => return None,
-                        | Err(e) => Err(e),
-                    }
-                },
-            | PreprocessorTokenType::GeneratedString => Ok(Token {
+                    self.parse_directive(context, token);
+                    return None;
+                }
+            },
+            | PreprocessorTokenType::GeneratedString => Token {
                 kind:           TokenType::String(StringTokenType::String(token.contents)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
-            }),
+            },
             | PreprocessorTokenType::WideGeneratedString => {
                 // Discard the L prefix.
                 let contents = &context.string_cache.at(token.contents)[1..].to_token_string();
                 let contents = context.string_cache.intern(contents);
-                Ok(Token {
+                Token {
                     kind: TokenType::String(StringTokenType::WideString(contents)),
                     contents,
                     source_vectors: token.source_vectors,
-                })
+                }
             },
             | PreprocessorTokenType::String => Token {
-                kind:           TokenType::String(self.parse_string(context, &token)),
+                kind:           TokenType::String(self.parse_string(context, token)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             },
             | PreprocessorTokenType::Character => Token {
-                kind:           TokenType::Character(self.parse_character(context, &token)),
+                kind:           TokenType::Character(self.parse_character(context, token)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             },
             | PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined =>
-                Ok(Self::build_token(
-                    token.clone(),
+                Self::build_token(
+                    token,
                     match context.string_cache.at(token.contents) {
                         | "auto" => TokenType::Keyword(KeywordTokenType::Auto),
                         | "break" => TokenType::Keyword(KeywordTokenType::Break),
@@ -3264,175 +3244,104 @@ impl Preprocessor {
                         | "_Imaginary" => TokenType::Keyword(KeywordTokenType::Imaginary),
                         | _ => TokenType::Identifier,
                     },
-                )),
+                ),
             | PreprocessorTokenType::Plus =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Plus)),
+                Self::build_operator_token(token, OperatorTokenType::Plus),
             | PreprocessorTokenType::Minus =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Minus)),
-            | PreprocessorTokenType::Asterisk => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::Asterisk,
-            )),
-            | PreprocessorTokenType::ForwardSlash => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::ForwardSlash,
-            )),
-            | PreprocessorTokenType::Percent => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::Percent,
-            )),
-            | PreprocessorTokenType::LessThanLessThan => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::LessThanLessThan,
-            )),
-            | PreprocessorTokenType::GreaterThanGreaterThan => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::GreaterThanGreaterThan,
-            )),
-            | PreprocessorTokenType::LessThan => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::LessThan,
-            )),
-            | PreprocessorTokenType::LessThanEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::LessThanEquals,
-            )),
-            | PreprocessorTokenType::GreaterThan => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::GreaterThan,
-            )),
-            | PreprocessorTokenType::GreaterThanEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::GreaterThanEquals,
-            )),
-            | PreprocessorTokenType::EqualsEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::EqualsEquals,
-            )),
-            | PreprocessorTokenType::ExclamationMarkEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::ExclamationMarkEquals,
-            )),
-            | PreprocessorTokenType::Ampersand => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::Ampersand,
-            )),
+                Self::build_operator_token(token, OperatorTokenType::Minus),
+            | PreprocessorTokenType::Asterisk =>
+                Self::build_operator_token(token, OperatorTokenType::Asterisk),
+            | PreprocessorTokenType::ForwardSlash =>
+                Self::build_operator_token(token, OperatorTokenType::ForwardSlash),
+            | PreprocessorTokenType::Percent =>
+                Self::build_operator_token(token, OperatorTokenType::Percent),
+            | PreprocessorTokenType::LessThanLessThan =>
+                Self::build_operator_token(token, OperatorTokenType::LessThanLessThan),
+            | PreprocessorTokenType::GreaterThanGreaterThan =>
+                Self::build_operator_token(token, OperatorTokenType::GreaterThanGreaterThan),
+            | PreprocessorTokenType::LessThan =>
+                Self::build_operator_token(token, OperatorTokenType::LessThan),
+            | PreprocessorTokenType::LessThanEquals =>
+                Self::build_operator_token(token, OperatorTokenType::LessThanEquals),
+            | PreprocessorTokenType::GreaterThan =>
+                Self::build_operator_token(token, OperatorTokenType::GreaterThan),
+            | PreprocessorTokenType::GreaterThanEquals =>
+                Self::build_operator_token(token, OperatorTokenType::GreaterThanEquals),
+            | PreprocessorTokenType::EqualsEquals =>
+                Self::build_operator_token(token, OperatorTokenType::EqualsEquals),
+            | PreprocessorTokenType::ExclamationMarkEquals =>
+                Self::build_operator_token(token, OperatorTokenType::ExclamationMarkEquals),
+            | PreprocessorTokenType::Ampersand =>
+                Self::build_operator_token(token, OperatorTokenType::Ampersand),
             | PreprocessorTokenType::Caret =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Caret)),
+                Self::build_operator_token(token, OperatorTokenType::Caret),
             | PreprocessorTokenType::Pipe =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Pipe)),
-            | PreprocessorTokenType::AmpersandAmpersand => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::AmpersandAmpersand,
-            )),
-            | PreprocessorTokenType::PipePipe => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::PipePipe,
-            )),
-            | PreprocessorTokenType::QuestionMark => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::QuestionMark,
-            )),
+                Self::build_operator_token(token, OperatorTokenType::Pipe),
+            | PreprocessorTokenType::AmpersandAmpersand =>
+                Self::build_operator_token(token, OperatorTokenType::AmpersandAmpersand),
+            | PreprocessorTokenType::PipePipe =>
+                Self::build_operator_token(token, OperatorTokenType::PipePipe),
+            | PreprocessorTokenType::QuestionMark =>
+                Self::build_operator_token(token, OperatorTokenType::QuestionMark),
             | PreprocessorTokenType::Colon =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Colon)),
-            | PreprocessorTokenType::SemiColon => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::SemiColon,
-            )),
-            | PreprocessorTokenType::OpeningParenthesis => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::OpeningParenthesis,
-            )),
-            | PreprocessorTokenType::ClosingParenthesis => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::ClosingParenthesis,
-            )),
-            | PreprocessorTokenType::OpeningSquareBracket => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::OpeningSquareBracket,
-            )),
-            | PreprocessorTokenType::ClosingSquareBracket => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::ClosingSquareBracket,
-            )),
-            | PreprocessorTokenType::OpeningCurlyBrace => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::OpeningCurlyBrace,
-            )),
-            | PreprocessorTokenType::ClosingCurlyBrace => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::ClosingCurlyBrace,
-            )),
+                Self::build_operator_token(token, OperatorTokenType::Colon),
+            | PreprocessorTokenType::SemiColon =>
+                Self::build_operator_token(token, OperatorTokenType::SemiColon),
+            | PreprocessorTokenType::OpeningParenthesis =>
+                Self::build_operator_token(token, OperatorTokenType::OpeningParenthesis),
+            | PreprocessorTokenType::ClosingParenthesis =>
+                Self::build_operator_token(token, OperatorTokenType::ClosingParenthesis),
+            | PreprocessorTokenType::OpeningSquareBracket =>
+                Self::build_operator_token(token, OperatorTokenType::OpeningSquareBracket),
+            | PreprocessorTokenType::ClosingSquareBracket =>
+                Self::build_operator_token(token, OperatorTokenType::ClosingSquareBracket),
+            | PreprocessorTokenType::OpeningCurlyBrace =>
+                Self::build_operator_token(token, OperatorTokenType::OpeningCurlyBrace),
+            | PreprocessorTokenType::ClosingCurlyBrace =>
+                Self::build_operator_token(token, OperatorTokenType::ClosingCurlyBrace),
             | PreprocessorTokenType::Period =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Period)),
+                Self::build_operator_token(token, OperatorTokenType::Period),
             | PreprocessorTokenType::Arrow =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Arrow)),
-            | PreprocessorTokenType::PlusPlus => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::PlusPlus,
-            )),
-            | PreprocessorTokenType::MinusMinus => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::MinusMinus,
-            )),
-            | PreprocessorTokenType::AsteriskEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::AsteriskEquals,
-            )),
-            | PreprocessorTokenType::ForwardSlashEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::ForwardSlashEquals,
-            )),
-            | PreprocessorTokenType::PercentEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::PercentEquals,
-            )),
-            | PreprocessorTokenType::PlusEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::PlusEquals,
-            )),
-            | PreprocessorTokenType::MinusEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::MinusEquals,
-            )),
-            | PreprocessorTokenType::LessThanLessThanEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::LessThanLessThanEquals,
-            )),
-            | PreprocessorTokenType::GreaterThanGreaterThanEquals => Ok(
+                Self::build_operator_token(token, OperatorTokenType::Arrow),
+            | PreprocessorTokenType::PlusPlus =>
+                Self::build_operator_token(token, OperatorTokenType::PlusPlus),
+            | PreprocessorTokenType::MinusMinus =>
+                Self::build_operator_token(token, OperatorTokenType::MinusMinus),
+            | PreprocessorTokenType::AsteriskEquals =>
+                Self::build_operator_token(token, OperatorTokenType::AsteriskEquals),
+            | PreprocessorTokenType::ForwardSlashEquals =>
+                Self::build_operator_token(token, OperatorTokenType::ForwardSlashEquals),
+            | PreprocessorTokenType::PercentEquals =>
+                Self::build_operator_token(token, OperatorTokenType::PercentEquals),
+            | PreprocessorTokenType::PlusEquals =>
+                Self::build_operator_token(token, OperatorTokenType::PlusEquals),
+            | PreprocessorTokenType::MinusEquals =>
+                Self::build_operator_token(token, OperatorTokenType::MinusEquals),
+            | PreprocessorTokenType::LessThanLessThanEquals =>
+                Self::build_operator_token(token, OperatorTokenType::LessThanLessThanEquals),
+            | PreprocessorTokenType::GreaterThanGreaterThanEquals =>
                 Self::build_operator_token(token, OperatorTokenType::GreaterThanGreaterThanEquals),
-            ),
-            | PreprocessorTokenType::AmpersandEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::AmpersandEquals,
-            )),
-            | PreprocessorTokenType::CaretEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::CaretEquals,
-            )),
-            | PreprocessorTokenType::PipeEquals => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::PipeEquals,
-            )),
+            | PreprocessorTokenType::AmpersandEquals =>
+                Self::build_operator_token(token, OperatorTokenType::AmpersandEquals),
+            | PreprocessorTokenType::CaretEquals =>
+                Self::build_operator_token(token, OperatorTokenType::CaretEquals),
+            | PreprocessorTokenType::PipeEquals =>
+                Self::build_operator_token(token, OperatorTokenType::PipeEquals),
             | PreprocessorTokenType::Equals =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Equals)),
+                Self::build_operator_token(token, OperatorTokenType::Equals),
             | PreprocessorTokenType::Comma =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Comma)),
+                Self::build_operator_token(token, OperatorTokenType::Comma),
             | PreprocessorTokenType::Tilde =>
-                Ok(Self::build_operator_token(token, OperatorTokenType::Tilde)),
-            | PreprocessorTokenType::ExclamationMark => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::ExclamationMark,
-            )),
-            | PreprocessorTokenType::Ellipsis => Ok(Self::build_operator_token(
-                token,
-                OperatorTokenType::Ellipsis,
-            )),
+                Self::build_operator_token(token, OperatorTokenType::Tilde),
+            | PreprocessorTokenType::ExclamationMark =>
+                Self::build_operator_token(token, OperatorTokenType::ExclamationMark),
+            | PreprocessorTokenType::Ellipsis =>
+                Self::build_operator_token(token, OperatorTokenType::Ellipsis),
             | PreprocessorTokenType::HashHash => {
                 context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::HashHashUsedOutsideOfMacro,
-                        source_vectors: token.source_vectors,
-                    });
+                    error_type:     PreprocessorErrorType::HashHashUsedOutsideOfMacro,
+                    source_vectors: token.source_vectors,
+                });
                 return None;
             },
 
@@ -3477,21 +3386,20 @@ impl Preprocessor {
         context: &mut Context,
         token: PreprocessorToken,
     ) -> PreprocessorToken {
-        let position = self.position();
-        let Some(argument_name) = self.expect_token_from_previous_phase( context,
-            |_, t| t.kind == PreprocessorTokenType::Identifier,
-            |_, t| {
+        let position = self.position(context);
+        let Some(argument_name) = self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| t.kind == PreprocessorTokenType::Identifier,
+            |_, _, t| {
                 ControlFlow::Break(PreprocessorError {
-                        error_type:
-                            PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(
-                                t.kind,
-                            ),
-                        source_vectors: t.source_vectors,
-                    })
+                    error_type:
+                        PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(t.kind),
+                    source_vectors: t.source_vectors,
+                })
             },
             "parsing '#' operator in function-like macro invocation.",
         ) else {
-            self.set_position(position);
+            self.set_position(context, position);
             return token;
         };
         let (token_tokenizer, argument_id) = match self.tokenizer_stack.last().unwrap() {
@@ -3500,15 +3408,14 @@ impl Preprocessor {
                 ..
             } => match arguments.get(&argument_name.contents) {
                 | None => {
-                    self.set_position(position);
+                    self.set_position(context, position);
                     context.preprocessor_error(PreprocessorError {
-                            error_type:
-                                PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(
-                                    context.string_cache.at(argument_name.contents).to_owned(),
-                                ),
-                            source_vectors: argument_name.source_vectors,
-                        }
-                    );
+                        error_type:
+                            PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(
+                                context.string_cache.at(argument_name.contents).to_owned(),
+                            ),
+                        source_vectors: argument_name.source_vectors,
+                    });
                     return token;
                 },
                 | Some(v) => (v.tokenizer.clone(), v.name),
@@ -3523,14 +3430,12 @@ impl Preprocessor {
         let mut paren_depth = 1;
         'base: loop {
             let Some(token) = self.tokenizer.next_item(context) else {
-                self.tokenizer = tokenizer;
                 context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                            "parsing '#' operator in function-like macro invocation",
-                        ),
-                        source_vectors: argument_name.source_vectors,
-                    }
-                );
+                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                        "parsing '#' operator in function-like macro invocation",
+                    ),
+                    source_vectors: argument_name.source_vectors,
+                });
                 break 'base;
             };
             match self.update_macro_argument_paren_depth(context, token, argument_id, paren_depth) {
@@ -3548,45 +3453,47 @@ impl Preprocessor {
         }
     }
 
-    fn parse_directive(
-        &mut self,
-        context: &mut Context,
-        token: PreprocessorToken,
-    ) {
+    fn parse_directive(&mut self, context: &mut Context, token: PreprocessorToken) {
         if !matches!(
             self.last_preprocessor_token.as_ref().map(|p| p.kind),
             None | Some(PreprocessorTokenType::Newline)
         ) {
-            /*eprintln!(
-                "Last preprocessor token: {:#?}",
-                self.last_preprocessor_token
-            );*/
+            // eprintln!(
+            // "Last preprocessor token: {:#?}",
+            // self.last_preprocessor_token
+            // );
             context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
-                        source_vectors: token.source_vectors,
-                    },
-            );
+                error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
+                source_vectors: token.source_vectors,
+            });
         }
-        let Some(directive) = self.tokenizer.next_item(context) else {return};
+        let Some(directive) = self.tokenizer.next_item(context) else {
+            return;
+        };
         match directive.kind {
             // Null directive.
-            | PreprocessorTokenType::Newline => return Ok(()),
+            | PreprocessorTokenType::Newline => return,
             // This is the general case. We handle it in the function body.
             // If token is defined, it'll be handled when we match on contents.
             | PreprocessorTokenType::Defined | PreprocessorTokenType::Identifier => (),
             | _ => {
                 context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::HashMustBeFollowedByIdentifier,
-                        source_vectors: directive.source_vectors,
-                    },
-                );
+                    error_type:     PreprocessorErrorType::HashMustBeFollowedByIdentifier,
+                    source_vectors: directive.source_vectors,
+                });
                 // Step over tokens until we hit a newline.
                 loop {
-                    if matches!(self.tokenizer.next_item(context), Some(Token {kind: PreprocessorTokenType::Newline, ..}) | None) {
+                    if matches!(
+                        self.tokenizer.next_item(context),
+                        Some(PreprocessorToken {
+                            kind: PreprocessorTokenType::Newline,
+                            ..
+                        }) | None
+                    ) {
                         return;
                     }
                 }
-            }
+            },
         }
         match context.string_cache.at(directive.contents) {
             | "if" => self.parse_if_directive(context, directive),
@@ -3599,26 +3506,34 @@ impl Preprocessor {
             | "define" => self.parse_define_directive(context, directive),
             | "undef" => self.parse_undef_directive(context, directive),
             | "line" => self.parse_line_directive(context, directive),
-            | "error" => self.parse_error_directive(cotext, directive),
+            | "error" => self.parse_error_directive(context, directive),
             | "pragma" => self.parse_pragma_directive(context, directive),
             | _ => {
-
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnknownDirective,
                     source_vectors: directive.source_vectors,
+                });
+                // Step over tokens until we hit a newline.
+                loop {
+                    if matches!(
+                        self.tokenizer.next_item(context),
+                        Some(PreprocessorToken {
+                            kind: PreprocessorTokenType::Newline,
+                            ..
+                        }) | None
+                    ) {
+                        return;
+                    }
                 }
-            );
-            // Step over tokens until we hit a newline.
-            loop {
-                if matches!(self.tokenizer.next_item(context), Some(Token {kind: PreprocessorTokenType::Newline, ..}) | None) {
-                    return;
-                }
-            }
-            }
+            },
         }
     }
 
-    fn map_operator(&mut self, context: &Context, operator: PreprocessorToken) -> PreprocessorExpressionOperator {
+    fn map_operator(
+        &mut self,
+        _context: &Context,
+        operator: PreprocessorToken,
+    ) -> PreprocessorExpressionOperator {
         let state = replace(
             &mut self.expression_parser.state,
             PreprocessorExpressionParserState::Unary,
@@ -3672,628 +3587,817 @@ impl Preprocessor {
         op: PreprocessorExpressionOperator,
     ) {
         match op {
-            PreprocessorExpressionOperator::UnaryPlus => if self.expression_parser.operand_stack.is_empty() {
-                context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnaryPlusWithoutOperand,
-                        source_vectors: context.create_source_vectors(self.position(), self.source_file_name(), 0),
-                    },
-                );
-            },
-            PreprocessorExpressionOperator::UnaryMinus => {
-                let Some(operand) = self.expression_parser.operand_stack.pop() else {
+            | PreprocessorExpressionOperator::UnaryPlus =>
+                if self.expression_parser.operand_stack.is_empty() {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
                     context.preprocessor_error(PreprocessorError {
-                                error_type:     PreprocessorErrorType::UnaryMinusWithoutOperand,
-                                source_vectors: context.create_source_vectors(self.position(), self.source_file_name(), 0),
-                            },
-                        );
-                        return;
-                };
-                let new = match operand.checked_neg() {
-                    Some(v) => v,
-                    None => {
-                        context.preprocessor_error(PreprocessorError {
-                            error_type:     PreprocessorErrorType::UnaryMinusOverflow,
-                            source_vectors: context.create_source_vectors(self.position(), self.source_file_name(), 0),
-                            }
-                        );
-                        0
-                    }
-                };
-                self.expression_parser.operand_stack.push(new);
-            },
-            PreprocessorExpressionOperator::BitwiseNot => {
+                        error_type: PreprocessorErrorType::UnaryPlusWithoutOperand,
+                        source_vectors,
+                    });
+                },
+            | PreprocessorExpressionOperator::UnaryMinus => {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
                     context.preprocessor_error(PreprocessorError {
-                                error_type:     PreprocessorErrorType::BitwiseNotWithoutOperand,
-                                source_vectors: context.create_source_vectors(self.position(), self.source_file_name(), 0),
-                            }
-                        );
+                        error_type: PreprocessorErrorType::UnaryMinusWithoutOperand,
+                        source_vectors,
+                    });
                     return;
                 };
-                self.expression_parser.operand_stack.push((!operand) & u64::MAX as i128);
-                Ok(())
+                let (new, did_overflow) = operand.as_signed().overflowing_neg();
+                if operand.is_signed() && did_overflow {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::UnaryMinusOverflow,
+                        source_vectors,
+                    });
+                }
+                self.expression_parser
+                    .operand_stack
+                    .push(operand.set_signed(new));
             },
-            PreprocessorExpressionOperator::LogicalNot => {
+            | PreprocessorExpressionOperator::BitwiseNot => {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::LogicalNotWithoutOperand,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::BitwiseNotWithoutOperand,
+                        source_vectors,
+                    });
+                    return;
                 };
-                self.expression_parser.operand_stack.push(i128::from(operand == 0));
-                Ok(())
+                self.expression_parser
+                    .operand_stack
+                    .push(operand.map_unsigned(|v| !v));
             },
-            PreprocessorExpressionOperator::BinaryPlus => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BinaryPlus operator without lhs");
+            | PreprocessorExpressionOperator::LogicalNot => {
+                let Some(operand) = self.expression_parser.operand_stack.pop() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::LogicalNotWithoutOperand,
+                        source_vectors,
+                    });
+                    return;
+                };
+                self.expression_parser
+                    .operand_stack
+                    .push(PreprocessorExpressionOperand::Signed(i64::from(
+                        operand.as_signed() == 0,
+                    )));
+            },
+            | PreprocessorExpressionOperator::BinaryPlus => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: BinaryPlus operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::BinaryPlusWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::BinaryPlusWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                let Some(new) = lhs.checked_add(rhs) else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::BinaryPlusOverflow,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
-                };
-                self.expression_parser.operand_stack.push(new);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::BinaryMinus => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BinaryMinus operator without lhs");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::BinaryMinusWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
-                };
-                let Some(new) = lhs.checked_sub(rhs) else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::BinaryMinusOverflow,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
-                };
-                self.expression_parser.operand_stack.push(new);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::Multiply => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Multiply operator without lhs");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::MultiplyWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
-                };
-                let Some(new) = lhs.checked_mul(rhs) else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::MultiplyOverflow,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
-                };
-                self.expression_parser.operand_stack.push(new);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::Divide => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Divide operator without lhs");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::DivideWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
-                };
-                if rhs == 0 {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type:     PreprocessorErrorType::DivideByZero,
-                            source_vectors: SourceVectors::from(
-                                SourceVector {
-                                    position: self.current_position(),
-                                    length: 0,
-                                }
-                            ),
-                        },
-                    ));
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let (new, did_overflow) = lhs.as_signed().overflowing_add(rhs.as_signed());
+                if did_overflow && !is_unsigned {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::BinaryPlusOverflow,
+                        source_vectors,
+                    });
                 }
-                let Some(new) = lhs.checked_div(rhs) else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::DivideOverflow,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
-                };
-                self.expression_parser.operand_stack.push(new);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::Modulo => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Modulo operator without lhs");
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(new as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(new)
+                });
+            },
+            | PreprocessorExpressionOperator::BinaryMinus => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: BinaryMinus operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::ModuloWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::BinaryMinusWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                if rhs == 0 {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type:     PreprocessorErrorType::ModuloByZero,
-                            source_vectors: SourceVectors::from(
-                                SourceVector {
-                                    position: self.current_position(),
-                                    length: 0,
-                                }
-                            ),
-                        },
-                    ));
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let (new, did_overflow) = lhs.as_signed().overflowing_sub(rhs.as_signed());
+                if did_overflow && !is_unsigned {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::BinaryMinusOverflow,
+                        source_vectors,
+                    });
                 }
-                let Some(new) = lhs.checked_rem(rhs) else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::ModuloOverflow,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
-                };
-                self.expression_parser.operand_stack.push(new);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::LeftShift => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LeftShift operator without lhs");
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(new as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(new)
+                });
+            },
+            | PreprocessorExpressionOperator::Multiply => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: Multiply operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::LeftShiftWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::MultiplyWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                let Some(new) = rhs.try_into().ok().and_then(|rhs| lhs.checked_shl(rhs)) else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type:     PreprocessorErrorType::LeftShiftOverflow,
-                            source_vectors: SourceVectors::from(
-                                SourceVector {
-                                    position: self.current_position(),
-                                    length: 0,
-                                }
-                            ),
-                        },
-                    ));
-                };
-                self.expression_parser.operand_stack.push(new);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::RightShift => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: RightShift operator without lhs");
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let (new, did_overflow) = lhs.as_signed().overflowing_mul(rhs.as_signed());
+                if did_overflow && !is_unsigned {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::MultiplyOverflow,
+                        source_vectors,
+                    });
+                }
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(new as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(new)
+                });
+            },
+            | PreprocessorExpressionOperator::Divide => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: Divide operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::RightShiftWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::DivideWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                let Some(new) = rhs.try_into().ok().and_then(|rhs| lhs.checked_shr(rhs)) else { return Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::RightShiftOverflow,
-                        source_vectors: SourceVectors::from(
-                            SourceVector {
-                                position: self.current_position(),
-                                length: 0,
-                            }
-                        ),
-                    },
-                ));};
-                self.expression_parser.operand_stack.push(new);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::LessThan => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LessThan operator without lhs");
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                if rhs.as_signed() == 0 {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::DivideByZero,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(if is_unsigned {
+                        PreprocessorExpressionOperand::Unsigned(0)
+                    } else {
+                        PreprocessorExpressionOperand::Signed(0)
+                    });
+                    return;
+                }
+                let (new, did_overflow) = lhs.as_signed().overflowing_div(rhs.as_signed());
+                if did_overflow && !is_unsigned {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::DivideOverflow,
+                        source_vectors,
+                    });
+                }
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(new as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(new)
+                });
+            },
+            | PreprocessorExpressionOperator::Modulo => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: Modulo operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::LessThanWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::ModuloWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                self.expression_parser.operand_stack.push(i128::from(lhs < rhs));
-                Ok(())
-            }
-            PreprocessorExpressionOperator::LessThanEquals => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LessThanEquals operator without lhs");
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                if rhs.as_signed() == 0 {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::ModuloByZero,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(if is_unsigned {
+                        PreprocessorExpressionOperand::Unsigned(0)
+                    } else {
+                        PreprocessorExpressionOperand::Signed(0)
+                    });
+                    return;
+                }
+                let (new, did_overflow) = lhs.as_signed().overflowing_rem(rhs.as_signed());
+                if did_overflow && !is_unsigned {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::ModuloOverflow,
+                        source_vectors,
+                    });
+                }
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(new as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(new)
+                });
+            },
+            | PreprocessorExpressionOperator::LeftShift => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: LeftShift operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::LessThanEqualsWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::LeftShiftWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                self.expression_parser.operand_stack.push(i128::from(lhs <= rhs));
-                Ok(())
-            }
-            PreprocessorExpressionOperator::GreaterThan => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: GreaterThan operator without lhs");
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let (new, did_overflow) =
+                    (|lhs: PreprocessorExpressionOperand, rhs: PreprocessorExpressionOperand| {
+                        let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
+                        let (new, overflow) =
+                            lhs.as_signed().overflowing_shl(rhs.as_unsigned() as u32);
+                        (new, did_overflow || overflow)
+                    })(lhs, rhs);
+                if did_overflow {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::LeftShiftOverflow,
+                        source_vectors,
+                    });
+                }
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(new as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(new)
+                });
+            },
+            | PreprocessorExpressionOperator::RightShift => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: RightShift operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::GreaterThanWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::RightShiftWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                self.expression_parser.operand_stack.push(i128::from(lhs > rhs));
-                Ok(())
-            }
-            PreprocessorExpressionOperator::GreaterThanEquals => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: GreaterThanEquals operator without lhs");
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let (new, did_overflow) =
+                    (|lhs: PreprocessorExpressionOperand, rhs: PreprocessorExpressionOperand| {
+                        let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
+                        let (new, overflow) =
+                            lhs.as_signed().overflowing_shr(rhs.as_unsigned() as u32);
+                        (new, did_overflow || overflow)
+                    })(lhs, rhs);
+                if did_overflow {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::RightShiftOverflow,
+                        source_vectors,
+                    });
+                }
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(new as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(new)
+                });
+            },
+            | PreprocessorExpressionOperator::LessThan => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: LessThan operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::GreaterThanEqualsWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::LessThanWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                self.expression_parser.operand_stack.push(i128::from(lhs >= rhs));
-                Ok(())
-            }
-            PreprocessorExpressionOperator::Equals => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Equals operator without lhs");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::EqualsWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let result = if is_unsigned {
+                    lhs.as_unsigned() < rhs.as_unsigned()
+                } else {
+                    lhs.as_signed() < rhs.as_signed()
                 };
-                self.expression_parser.operand_stack.push(i128::from(lhs == rhs));
-                Ok(())
-            }
-            PreprocessorExpressionOperator::NotEquals => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: NotEquals operator without lhs");
+                self.expression_parser
+                    .operand_stack
+                    .push(PreprocessorExpressionOperand::Signed(i64::from(result)));
+            },
+            | PreprocessorExpressionOperator::LessThanEquals => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: LessThanEquals operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::NotEqualsWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::LessThanEqualsWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                self.expression_parser.operand_stack.push(i128::from(lhs != rhs));
-                Ok(())
-            }
-            PreprocessorExpressionOperator::BitwiseAnd => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BitwiseAnd operator without lhs");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::BitwiseAndWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let result = if is_unsigned {
+                    lhs.as_unsigned() <= rhs.as_unsigned()
+                } else {
+                    lhs.as_signed() <= rhs.as_signed()
                 };
-                self.expression_parser.operand_stack.push(lhs & rhs);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::BitwiseXor => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BitwiseXor operator without lhs");
+                self.expression_parser
+                    .operand_stack
+                    .push(PreprocessorExpressionOperand::Signed(i64::from(result)));
+            },
+            | PreprocessorExpressionOperator::GreaterThan => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: GreaterThan operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::BitwiseXorWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::GreaterThanWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                self.expression_parser.operand_stack.push(lhs ^ rhs);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::BitwiseOr => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: BitwiseOr operator without lhs");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::BitwiseOrWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let result = if is_unsigned {
+                    lhs.as_unsigned() > rhs.as_unsigned()
+                } else {
+                    lhs.as_signed() > rhs.as_signed()
                 };
-                self.expression_parser.operand_stack.push(lhs | rhs);
-                Ok(())
-            }
-            PreprocessorExpressionOperator::LogicalAnd => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LogicalAnd operator without lhs");
+                self.expression_parser
+                    .operand_stack
+                    .push(PreprocessorExpressionOperand::Signed(i64::from(result)));
+            },
+            | PreprocessorExpressionOperator::GreaterThanEquals => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: GreaterThanEquals operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::LogicalAndWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::GreaterThanEqualsWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
                 };
-                self.expression_parser.operand_stack.push(i128::from(lhs != 0 && rhs != 0));
-                Ok(())
-            }
-            PreprocessorExpressionOperator::LogicalOr => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: LogicalOr operator without lhs");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::LogicalOrWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let result = if is_unsigned {
+                    lhs.as_unsigned() >= rhs.as_unsigned()
+                } else {
+                    lhs.as_signed() >= rhs.as_signed()
                 };
-                self.expression_parser.operand_stack.push(i128::from(lhs != 0 || rhs != 0));
-                Ok(())
-            }
-            PreprocessorExpressionOperator::Else => {assert!(!self.expression_parser.operand_stack.is_empty(), "Compiler bug: Else operator without lhs"); Ok(())},
-            PreprocessorExpressionOperator::Ternary => {
-                let rhs = self.expression_parser.operand_stack.pop().expect("Compiler bug: Ternary operator without condition");
+                self.expression_parser
+                    .operand_stack
+                    .push(PreprocessorExpressionOperand::Signed(i64::from(result)));
+            },
+            | PreprocessorExpressionOperator::Equals => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: Equals operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::TernaryOperatorWithoutMhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::EqualsWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
+                };
+                self.expression_parser
+                    .operand_stack
+                    .push(PreprocessorExpressionOperand::Signed(i64::from(
+                        lhs.as_signed() == rhs.as_signed(),
+                    )));
+            },
+            | PreprocessorExpressionOperator::NotEquals => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: NotEquals operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::NotEqualsWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
+                };
+                self.expression_parser
+                    .operand_stack
+                    .push(PreprocessorExpressionOperand::Signed(i64::from(
+                        lhs.as_signed() != rhs.as_signed(),
+                    )));
+            },
+            | PreprocessorExpressionOperator::BitwiseAnd => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: BitwiseAnd operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::BitwiseAndWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
+                };
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let result = lhs.as_signed() & rhs.as_signed();
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(result as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(result)
+                });
+            },
+            | PreprocessorExpressionOperator::BitwiseXor => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: BitwiseXor operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::BitwiseXorWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
+                };
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let result = lhs.as_signed() ^ rhs.as_signed();
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(result as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(result)
+                });
+            },
+            | PreprocessorExpressionOperator::BitwiseOr => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: BitwiseOr operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::BitwiseOrWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
+                };
+                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                let result = lhs.as_signed() | rhs.as_signed();
+                self.expression_parser.operand_stack.push(if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(result as u64)
+                } else {
+                    PreprocessorExpressionOperand::Signed(result)
+                });
+            },
+            | PreprocessorExpressionOperator::LogicalAnd => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: LogicalAnd operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::LogicalAndWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
+                };
+                self.expression_parser
+                    .operand_stack
+                    .push(PreprocessorExpressionOperand::Signed(i64::from(
+                        lhs.as_signed() != 0 && rhs.as_signed() != 0,
+                    )));
+            },
+            | PreprocessorExpressionOperator::LogicalOr => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: LogicalOr operator without lhs");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::LogicalOrWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
+                };
+                self.expression_parser
+                    .operand_stack
+                    .push(PreprocessorExpressionOperand::Signed(i64::from(
+                        lhs.as_signed() != 0 || rhs.as_signed() != 0,
+                    )));
+            },
+            | PreprocessorExpressionOperator::Else => assert!(
+                !self.expression_parser.operand_stack.is_empty(),
+                "Compiler bug: Else operator without lhs"
+            ),
+            | PreprocessorExpressionOperator::Ternary => {
+                let rhs = self
+                    .expression_parser
+                    .operand_stack
+                    .pop()
+                    .expect("Compiler bug: Ternary operator without condition");
+                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
+                        source_vectors,
+                    });
+                    self.expression_parser
+                        .operand_stack
+                        .push(PreprocessorExpressionOperand::Signed(0));
+                    return;
                 };
                 let Some(condition) = self.expression_parser.operand_stack.pop() else {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::TernaryOperatorWithoutRhs,
-                                source_vectors: SourceVectors::from(
-                                    SourceVector {
-                                        position: self.current_position(),
-                                        length: 0,
-                                    }
-                                ),
-                            },
-                        ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::TernaryOperatorWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser
+                        .operand_stack
+                        .push(PreprocessorExpressionOperand::Signed(0));
+                    return;
                 };
-                self.expression_parser.operand_stack.push(if condition != 0 { lhs } else { rhs });
-                Ok(())
-            }
-            PreprocessorExpressionOperator::OpeningParenthesis => Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
+                self.expression_parser
+                    .operand_stack
+                    .push(if condition.as_signed() != 0 { lhs } else { rhs });
+            },
+            | PreprocessorExpressionOperator::OpeningParenthesis => {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_name(),
+                    0,
+                );
+                context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression,
-                    source_vectors: SourceVectors::from(
-                        SourceVector {
-                            position: self.current_position(),
-                            length: 0,
-                        }
-                    ),
+                    source_vectors,
                 },
-            )),
+            )
+            },
         }
     }
 
-    fn parse_defined_operator(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
-        let ident_or_opening_paren = self.expect_token_no_expand(
-            |_, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::OpeningParenthesis),
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, t| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
+    fn parse_defined_operator(&mut self, context: &mut Context) {
+        let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase(context,
+            |_, _, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::OpeningParenthesis),
+            |_, _, t|
+                ControlFlow::Break(PreprocessorError {
                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(t.kind),
                         source_vectors: t.source_vectors,
                     },
-                ))
-            },
+                )
+            ,
             "parsing defined operator",
-        )?;
+        ) else {
+            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+            return;
+        };
         if ident_or_opening_paren.kind == PreprocessorTokenType::Identifier {
             let is_defined = self
                 .macro_definitions
                 .contains_key(&ident_or_opening_paren.contents);
             self.expression_parser
                 .operand_stack
-                .push(i128::from(is_defined));
+                .push(PreprocessorExpressionOperand::Signed(i64::from(is_defined)));
             self.expression_parser.state = PreprocessorExpressionParserState::Binary;
-            return Ok(());
+            return;
         }
         assert_eq!(
             ident_or_opening_paren.kind,
             PreprocessorTokenType::OpeningParenthesis,
             "Compiler bug: ident_or_opening_paren should be an opening parenthesis or identifier."
         );
-        let ident = self.expect_token_no_expand(
-            |_, t| matches!(t.kind, PreprocessorTokenType::Identifier),
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, t| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::MissingIdentifierInDefinedDirective(
-                            t.kind,
-                        ),
-                        source_vectors: t.source_vectors,
-                    },
-                ))
+        let Some(ident) = self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| matches!(t.kind, PreprocessorTokenType::Identifier),
+            |_, _, t| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     PreprocessorErrorType::MissingIdentifierInDefinedDirective(
+                        t.kind,
+                    ),
+                    source_vectors: t.source_vectors,
+                })
             },
             "parsing defined operator",
-        )?;
+        ) else {
+            self.expression_parser
+                .operand_stack
+                .push(PreprocessorExpressionOperand::Signed(0));
+            return;
+        };
 
-        drop(self.expect_token_no_expand(
-            |_, t| matches!(t.kind, PreprocessorTokenType::ClosingParenthesis),
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, t| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:
-                            PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(
-                                t.kind,
-                            ),
-                        source_vectors: t.source_vectors,
-                    },
-                ))
+        drop(self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| matches!(t.kind, PreprocessorTokenType::ClosingParenthesis),
+            |_, _, t| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:
+                        PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(t.kind),
+                    source_vectors: t.source_vectors,
+                })
             },
             "parsing defined operator",
-        )?);
+        ));
         let is_defined = self.macro_definitions.contains_key(&ident.contents);
         self.expression_parser
             .operand_stack
-            .push(i128::from(is_defined));
+            .push(PreprocessorExpressionOperand::Signed(i64::from(is_defined)));
         self.expression_parser.state = PreprocessorExpressionParserState::Binary;
-        Ok(())
     }
 
     fn last_binary_operator(&mut self) -> PreprocessorExpressionOperator {
@@ -4314,120 +4418,134 @@ impl Preprocessor {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn eval_preprocessor_expression(
         &mut self,
+        context: &mut Context,
         on_no_expression_error: PreprocessorErrorType,
-    ) -> Result<bool, PreprocessorError<Prev::Error>> {
+    ) -> bool {
         const UNARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Unary;
         const BINARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Binary;
         self.expression_parser.reset();
-        loop {
-            match self.next_preprocessor_token() {
-                | Some(Err(e)) => {
-                    self.pending_results
-                        .push_back(Err(e));
-                    continue;
+        'main: loop {
+            match self.next_preprocessor_token(context) {
+                | None => {
+                    let source_vectors = context.create_source_vectors(self.position(context), self.source_file_name(), 0);
+                    context.preprocessor_error(
+                        PreprocessorError {
+                            error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
+                            source_vectors,
+                        });
+                    break 'main;
                 },
-                | None => return Err(PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
-                    error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
-                    source_vectors: SourceVectors::from(
-                        SourceVector {
-                            position: self.current_position(),
-                            length: 0,
-                        }
-                    )})),
-                | Some(Ok(token)) => match (token.kind, self.expression_parser.state) {
-                    | (PreprocessorTokenType::Newline, _) => {
-                        break;
-                    },
+                | Some(token) => match (token.kind, self.expression_parser.state) {
+                    | (PreprocessorTokenType::Newline, _) =>
+                        break 'main,
                     (PreprocessorTokenType::Plus, UNARY) =>
                         self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::UnaryPlus),
                     (PreprocessorTokenType::Minus, UNARY) =>
                         self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::UnaryMinus),
                     (PreprocessorTokenType::Tilde, UNARY) =>
                         self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::BitwiseNot),
-                    (PreprocessorTokenType::Tilde, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type: PreprocessorErrorType::TildeInsteadOfBinaryOperatorInPreprocessorExpression,
-                            source_vectors: token.source_vectors,
-                        },
-                    )),
+                    (PreprocessorTokenType::Tilde, BINARY) =>
+                        context.preprocessor_error(PreprocessorError {
+                                error_type: PreprocessorErrorType::TildeInsteadOfBinaryOperatorInPreprocessorExpression,
+                                source_vectors: token.source_vectors,
+                            },
+                        )
+                ,
                     (PreprocessorTokenType::ExclamationMark, UNARY) =>
                         self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::LogicalNot),
-                    (PreprocessorTokenType::ExclamationMark, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type:     PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression,
-                                    source_vectors: token.source_vectors,
-                                },
-                            )),
+                    (PreprocessorTokenType::ExclamationMark, BINARY) =>
+                        context.preprocessor_error(PreprocessorError {
+                                error_type:     PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression,
+                                source_vectors: token.source_vectors,
+                            },
+                        )
+                    ,
                     (PreprocessorTokenType::OpeningParenthesis, UNARY) => {
                         self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::OpeningParenthesis);
                     }
                     (PreprocessorTokenType::OpeningParenthesis, BINARY) => {
-                        return Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
+                        context.preprocessor_error(PreprocessorError {
                                 error_type:     PreprocessorErrorType::FunctionCallOperatorNotSupportedInPreprocessorExpression,
                                 source_vectors: token.source_vectors,
                             },
-                        ));
+                        );
+                        let mut paren_depth = 1;
+                        // Step over function call.
+                        while paren_depth > 0 {
+                            match self.next_preprocessor_token(context) {
+                                | None => {
+                                    let source_vectors = context.create_source_vectors(self.position(context), self.source_file_name(), 0);
+                                    context.preprocessor_error(PreprocessorError {
+                                            error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
+                                            source_vectors,
+                                        },
+                                    );
+                                    break 'main;
+                                },
+                                | Some(token) => match token.kind {
+                                    | PreprocessorTokenType::OpeningParenthesis => paren_depth += 1,
+                                    | PreprocessorTokenType::ClosingParenthesis => paren_depth -= 1,
+                                    | _ => (),
+                                },
+                            }
+                        }
                     }
                     (PreprocessorTokenType::ClosingParenthesis, _) => {
                         self.expression_parser.state = BINARY;
                         if !self.expression_parser.operator_stack.last().is_some_and(|op| *op != PreprocessorExpressionOperator::OpeningParenthesis) {
-                            return Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
+                            context.preprocessor_error(PreprocessorError {
                                     error_type:     PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression,
                                     source_vectors: token.source_vectors,
                                 },
-                            ));
+                            );
+                            continue 'main;
                         }
                         while let Some(op) = self.expression_parser.operator_stack.pop() {
                             if op == PreprocessorExpressionOperator::OpeningParenthesis {
                                 break;
                             }
-                            self.handle_expression_operator(op)?;
+                            self.handle_expression_operator(context, op);
                         }
                     }
                     (PreprocessorTokenType::Defined, UNARY) =>
-                        self.parse_defined_operator()?,
-                    (PreprocessorTokenType::Defined, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
+                        self.parse_defined_operator(context),
+                    (PreprocessorTokenType::Defined, BINARY) => context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
-                    )),
-                    (PreprocessorTokenType::Asterisk, UNARY) => return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
+                    ),
+                    (PreprocessorTokenType::Asterisk, UNARY) => context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::DereferenceOperatorNotSupportedInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
-                    )),
-                    (PreprocessorTokenType::Ampersand, UNARY) => return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
+                    ),
+                    (PreprocessorTokenType::Ampersand, UNARY) => context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::AddressOfOperatorNotSupportedInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
-                    )),
+                    ),
                     (
                         | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
                         PreprocessorTokenType::GreaterThanGreaterThan | PreprocessorTokenType::LessThan | PreprocessorTokenType::LessThanEquals | PreprocessorTokenType::GreaterThan |
                         PreprocessorTokenType::GreaterThanEquals | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals |
                         PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
-                        PreprocessorTokenType::Colon, UNARY) => return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type: PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(self.map_operator(&token)),
+                        PreprocessorTokenType::Colon, UNARY) => context.preprocessor_error(PreprocessorError {
+                            error_type: PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(self.map_operator(context, token)),
                             source_vectors: token.source_vectors,
-                        })),
+                        }),
                     | (PreprocessorTokenType::Plus | PreprocessorTokenType::Minus | PreprocessorTokenType::Asterisk
                     | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
                     PreprocessorTokenType::GreaterThanGreaterThan | PreprocessorTokenType::LessThan | PreprocessorTokenType::LessThanEquals | PreprocessorTokenType::GreaterThan |
                     PreprocessorTokenType::GreaterThanEquals | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals | PreprocessorTokenType::Ampersand |
                     PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
                     PreprocessorTokenType::Colon, BINARY) => {
-                        let token_op = self.map_operator(&token);
+                        let token_op = self.map_operator(context, token);
                         while let Some(op) = self.expression_parser.operator_stack.pop() {
                             if op.has_precedence_over(token_op) {
-                                self.handle_expression_operator(op)?;
+                                self.handle_expression_operator(context, op);
                             } else {
                                 self.expression_parser.operator_stack.push(op);
                                 break;
@@ -4437,163 +4555,211 @@ impl Preprocessor {
                         self.expression_parser.state = UNARY;
                     },
                     (PreprocessorTokenType::Number, UNARY) => {
-                        let mut contents = TokenString::from(get_from_cache!(self, token.contents));
-                        let value = match self.parse_number(token.clone(), &mut contents)?.kind {
-                            | TokenType::Float(_) => return Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
+                        match self.parse_number(context, token,).kind {
+                            | TokenType::Float(f) => {
+                                context.preprocessor_error(PreprocessorError {
                                     error_type: PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression,
                                     source_vectors: token.source_vectors,
-                                },
-                            )),
-                            | TokenType::Integer(v) => i128::from(v),
+                                });
+                                match f {
+                                    FloatTokenType::Float(f) => {
+                                        if f.fract() != 0.0 || !f.is_finite() || f < i32::MIN as f32 || f > u32::MIN as f32 {
+                                            context.preprocessor_error(PreprocessorError {
+                                                error_type: PreprocessorErrorType::FloatCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(f),
+                                                source_vectors: token.source_vectors,
+                                            });
+                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                                        } else if f.is_sign_negative() {
+                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(f as i64));
+                                        } else {
+                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(f as u64));
+                                        }
+                                    }
+                                    FloatTokenType::Double(d) => {
+                                        if d.fract() != 0.0 || !d.is_finite() || d < i64::MIN as f64 || d > u64::MIN as f64 {
+                                            context.preprocessor_error(PreprocessorError {
+                                                error_type: PreprocessorErrorType::DoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(d),
+                                                source_vectors: token.source_vectors,
+                                            });
+                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                                        } else if d.is_sign_negative() {
+                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(d as i64));
+                                        } else {
+                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(d as u64));
+                                        }
+                                    }
+                                    FloatTokenType::LongDouble(ld) => {
+                                        match long_double_to_operand(ld) {
+                                            Err(e) => {
+                                                match e {
+                                                    1 => context.preprocessor_error(PreprocessorError {
+                                                        error_type: PreprocessorErrorType::LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(ld),
+                                                        source_vectors: token.source_vectors,
+                                                    }),
+                                                    _ => unreachable!("Compiler bug: long_double_to_operand should only return 1 or 0."),
+                                                }
+                                                self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                                            }
+                                            Ok(o) => self.expression_parser.operand_stack.push(o),
+                                        }
+                                    }
+                                }
+                            },
+                            | TokenType::Integer(v) => match v {
+                                | IntegerTokenType::Int(i) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(i64::from(i))),
+                                | IntegerTokenType::Long(l) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(l)),
+                                | IntegerTokenType::LongLong(ll) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(ll)),
+                                | IntegerTokenType::UnsignedInt(ui) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(u64::from(ui))),
+                                | IntegerTokenType::UnsignedLong(ul) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ul)),
+                                | IntegerTokenType::UnsignedLongLong(ull) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ull)),
+                            },
                             _ => unreachable!("Compiler bug: parse_number should return a number token."),
                         };
-                        self.expression_parser.operand_stack.push(value);
                         self.expression_parser.state = BINARY;
                     },
-                    (PreprocessorTokenType::Number, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
+                    (PreprocessorTokenType::Number, BINARY) => context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::NumberInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
-                    )),
+                    ),
                     (PreprocessorTokenType::Identifier, UNARY) => {
-                        self.pending_results.push_back(
-                            Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(get_from_cache!(self, token.contents).to_owned()),
+                        context.preprocessor_error(PreprocessorError {
+                                    error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(context.string_cache.at(token.contents).to_owned()),
                                     source_vectors: token.source_vectors,
                                 },
-                            )),
                         );
-                        self.expression_parser.operand_stack.push(0);
+                        self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
                         self.expression_parser.state = BINARY;
                     },
-                    (PreprocessorTokenType::Identifier, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
+                    (PreprocessorTokenType::Identifier, BINARY) => context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
-                    )),
+                    ),
                     (PreprocessorTokenType::Character, UNARY) => {
-                        let value = i128::from(u32::from(char::from(self.parse_character(&token)?)));
-                        self.expression_parser.operand_stack.push(value);
+                        let value = i64::from(u32::from(char::from(self.parse_character(context, token))));
+                        self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(value));
                         self.expression_parser.state = BINARY;
                     },
-                    (PreprocessorTokenType::Character, BINARY) => return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
+                    (PreprocessorTokenType::Character, BINARY) => context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::CharacterInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
-                    )),
-                    _ => return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
+                    ),
+                    _ => context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(token.kind),
                             source_vectors: token.source_vectors,
                         },
-                    )),
+                    ),
                 },
             }
         }
         if self.expression_parser.state == UNARY {
-            return Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
+            let source_vectors =
+                context.create_source_vectors(self.position(context), self.source_file_name(), 0);
+            context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(
                         self.last_binary_operator(),
                     ),
-                    source_vectors: SourceVectors::from(
-                        SourceVector {
-                            position: self.current_position(),
-                            length: 0,
-                        }
-                    )
+                    source_vectors
                 }
-            ));
+            );
         }
         while let Some(op) = self.expression_parser.operator_stack.pop() {
-            self.handle_expression_operator(op)?;
+            self.handle_expression_operator(context, op);
         }
         match self.expression_parser.operand_stack.len() {
-            | 1 => Ok(self.expression_parser.operand_stack.pop().unwrap() != 0),
-            | 0 => Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     on_no_expression_error,
-                    source_vectors: SourceVectors::from(SourceVector {
-                        position: self.current_position(),
-                        length:   0,
-                    }),
-                },
-            )),
-            | _ => Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
+            | 1 =>
+                self.expression_parser
+                    .operand_stack
+                    .pop()
+                    .unwrap()
+                    .as_signed()
+                    != 0,
+            | 0 => {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_name(),
+                    0,
+                );
+                context.preprocessor_error(PreprocessorError {
+                    error_type: on_no_expression_error,
+                    source_vectors,
+                });
+                true
+            },
+            | _ => {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_name(),
+                    0,
+                );
+                context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::ExpectedBinaryOperatorInPreprocessorExpression,
-                    source_vectors: SourceVectors::from(SourceVector {
-                        position: self.current_position(),
-                        length:   0,
-                    }),
-                },
-            )),
+                    source_vectors,
+                });
+                true
+            },
         }
     }
 
-    fn skip_over_dead_code(&mut self) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn skip_over_dead_code(&mut self, context: &mut Context) {
         let start_balance = self.if_directive_balance;
+        context.set_is_skipping_over_dead_code(true);
         'outer: while start_balance <= self.if_directive_balance {
-            println!(
-                "Start balance: {start_balance}, current balance: {}",
-                self.if_directive_balance
-            );
-            match self.next_preprocessor_token_no_expand() {
-                // We don't care about syntax errors in code that's not being compiled.
-                | Some(Err(_)) => continue,
-                | Some(Ok(token)) => {
-                    eprintln!("Token in skipping over dead code: {token:?}");
+            // println!(
+            // "Start balance: {start_balance}, current balance: {}",
+            // self.if_directive_balance
+            // );
+            match self.tokenizer.next_item(context) {
+                | Some(token) => {
+                    // eprintln!("Token in skipping over dead code: {token:?}");
                     match token.kind {
                         | PreprocessorTokenType::Newline => {
                             'newline: loop {
-                                match self.next_preprocessor_token_no_expand() {
-                                    | Some(Err(_)) => continue,
-                                    | Some(Ok(token))
-                                        if token.kind != PreprocessorTokenType::Hash =>
+                                match self.tokenizer.next_item(context) {
+                                    | Some(token) if token.kind != PreprocessorTokenType::Hash =>
                                         if token.kind == PreprocessorTokenType::Newline {
                                             continue 'newline;
                                         } else {
                                             continue 'outer;
                                         },
-                                    | Some(Ok(_)) => break 'newline,
-                                    | None =>
-                                        return Err(PreprocessorError::InnerPreprocessorError(
-                                            InnerPreprocessorError {
-                                                error_type:
-                                                    PreprocessorErrorType::UnexpectedEndOfInput(
-                                                        "parsing dead code. Expected #endif \
-                                                         instead",
-                                                    ),
-                                                source_vectors: token.source_vectors,
-                                            },
-                                        )),
+                                    | Some(_) => break 'newline,
+                                    | None => {
+                                        context.preprocessor_error(PreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::UnexpectedEndOfInput(
+                                                    "parsing dead code. Expected #endif instead",
+                                                ),
+                                            source_vectors: token.source_vectors,
+                                        });
+                                        return;
+                                    },
                                 }
                             }
-                            let directive_name = loop {
-                                match self.next_preprocessor_token_no_expand() {
-                                | Some(Err(_)) => continue,
-                                | Some(Ok(token)) if token.kind == PreprocessorTokenType::Identifier => break token,
-                                | Some(Ok(token)) => return Err(PreprocessorError::InnerPreprocessorError(
-                                    InnerPreprocessorError {
-                                        error_type: PreprocessorErrorType::ExpectedIdentifierInPreprocessorDirective(token.kind),
+                            let directive_name = match self.tokenizer.next_item(context) {
+                                | Some(token) if token.kind == PreprocessorTokenType::Identifier =>
+                                    token,
+                                | Some(token) => {
+                                    context.preprocessor_error(PreprocessorError {
+                                            error_type: PreprocessorErrorType::ExpectedIdentifierInPreprocessorDirective(token.kind),
+                                            source_vectors: token.source_vectors,
+                                        },
+                                    );
+                                    return;
+                                },
+                                | None => {
+                                    context.preprocessor_error(PreprocessorError {
+                                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                            "parsing dead code. Expected #endif instead.",
+                                        ),
                                         source_vectors: token.source_vectors,
-                                    },
-                                )),
-                                | None => return Err(PreprocessorError::InnerPreprocessorError(
-                                    InnerPreprocessorError {
-                                        error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing dead code. Expected #endif instead."),
-                                        source_vectors: token.source_vectors,
-                                    },
-                                ))
-                            }
+                                    });
+                                    return;
+                                },
                             };
-                            match get_from_cache!(self, directive_name.contents) {
+                            match context.string_cache.at(directive_name.contents) {
                                 | "endif" => {
                                     self.if_directive_balance -= 1;
                                 },
@@ -4602,8 +4768,9 @@ impl Preprocessor {
                                 },
                                 | "elif" if self.if_directive_balance == start_balance => {
                                     if self.eval_preprocessor_expression(
+                                        context,
                                         PreprocessorErrorType::NoConditionInElifDirective,
-                                    )? {
+                                    ) {
                                         break;
                                     }
                                 },
@@ -4614,137 +4781,106 @@ impl Preprocessor {
                         | _ => continue,
                     }
                 },
-                | None => return Ok(()),
+                | None => {
+                    context.set_is_skipping_over_dead_code(false);
+                    return;
+                },
             }
         }
-        Ok(())
+        context.set_is_skipping_over_dead_code(false);
     }
 
-    fn parse_if_directive(
-        &mut self,
-        _directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_if_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         self.if_directive_balance += 1;
-        if !self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective)? {
-            self.skip_over_dead_code()?;
+        if !self
+            .eval_preprocessor_expression(context, PreprocessorErrorType::NoConditionInIfDirective)
+        {
+            self.skip_over_dead_code(context);
         }
-        Ok(())
     }
 
-    fn parse_elif_directive(
-        &mut self,
-        directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_elif_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         if self.if_directive_balance <= 0 {
-            return Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
-                    source_vectors: directive.source_vectors.clone(),
-                },
-            ));
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
+                source_vectors: directive.source_vectors,
+            });
         }
-        // Elif directives only matter if we are currently skipping over dead code.
-        Ok(())
+        // Elif directives only matter if we are currently skipping over dead
+        // code.
     }
 
-    fn parse_else_directive(
-        &mut self,
-        directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_else_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         if self.if_directive_balance <= 0 {
-            return Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
-                    source_vectors: directive.source_vectors.clone(),
-                },
-            ));
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
+                source_vectors: directive.source_vectors,
+            });
         }
-        // Else directives only matter if we are currently skipping over dead code.
-        Ok(())
+        // Else directives only matter if we are currently skipping over dead
+        // code.
     }
 
-    fn parse_endif_directive(
-        &mut self,
-        directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_endif_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         self.if_directive_balance -= 1;
         if self.if_directive_balance < 0 {
-            return Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
-                    source_vectors: directive.source_vectors.clone(),
-                },
-            ));
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
+                source_vectors: directive.source_vectors,
+            });
         }
-        Ok(())
     }
 
-    fn parse_ifdef_directive(
-        &mut self,
-        _directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_ifdef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         self.if_directive_balance += 1;
-        let name = self.expect_token_no_expand(
-            |_, t| t.kind == PreprocessorTokenType::Identifier,
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, token| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    },
-                ))
+        let Some(name) = self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| t.kind == PreprocessorTokenType::Identifier,
+            |_, _, token| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(
+                        token.kind,
+                    ),
+                    source_vectors: token.source_vectors,
+                })
             },
             "parsing ifdef directive",
-        )?;
+        ) else {
+            return;
+        };
         if !self.macro_definitions.contains_key(&name.contents) {
-            self.skip_over_dead_code()?;
+            self.skip_over_dead_code(context);
         }
-        Ok(())
     }
 
-    fn parse_ifndef_directive(
-        &mut self,
-        _directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_ifndef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         self.if_directive_balance += 1;
-        let name = self.expect_token_no_expand(
-            |_, t| t.kind == PreprocessorTokenType::Identifier,
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, token| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    },
-                ))
+        let Some(name) = self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| t.kind == PreprocessorTokenType::Identifier,
+            |_, _, token| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(
+                        token.kind,
+                    ),
+                    source_vectors: token.source_vectors,
+                })
             },
             "parsing ifndef directive",
-        )?;
+        ) else {
+            return;
+        };
         if self.macro_definitions.contains_key(&name.contents) {
-            self.skip_over_dead_code()?;
+            self.skip_over_dead_code(context);
         }
-        Ok(())
     }
 
     fn search_for_header_in(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
         for dir in dirs {
-            println!("Searching for header in {dir:#?}");
+            // println!("Searching for header in {dir:#?}");
             let mut header_path = dir.clone();
             header_path.push(path);
-            println!("Synthesized path: {header_path:#?}");
+            // println!("Synthesized path: {header_path:#?}");
             if header_path.exists() {
                 return Some(header_path);
             }
@@ -4754,317 +4890,283 @@ impl Preprocessor {
 
     fn find_header_from_path(
         &mut self,
-        include_token: &PreprocessorToken,
+        context: &mut Context,
+        include_token: PreprocessorToken,
         path: &Path,
         is_system_header: bool,
-    ) -> Result<Option<PathBuf>, <Self as TranslationPhase>::Error> {
-        eprintln!(
-            "Including {}header from path: {:#?}",
-            if is_system_header { "system " } else { "" },
-            path
-        );
-        let ret = 'ret: {
+    ) -> Option<SharedPath> {
+        // eprintln!(
+        // "Including {}header from path: {:#?}",
+        // if is_system_header { "system " } else { "" },
+        // path
+        // );
+        let header = 'ret: {
             if path.is_absolute() {
                 if path.exists() {
-                    break 'ret Ok(path.to_owned());
+                    break 'ret path.to_owned();
                 }
-                break 'ret Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::HeaderNotFound,
-                        source_vectors: include_token.source_vectors.clone(),
-                    },
-                ));
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::HeaderNotFound,
+                    source_vectors: include_token.source_vectors,
+                });
+                return None;
             }
 
             if is_system_header {
                 if let Some(header) =
                     Self::search_for_header_in(path, &self.system_include_directories)
                 {
-                    break 'ret Ok(header);
+                    break 'ret header;
                 }
             }
             if let Some(header) = Self::search_for_header_in(path, &self.quote_include_directories)
             {
-                break 'ret Ok(header);
+                break 'ret header;
             }
 
-            let cwd = std::env::current_dir().map_err(|_| {
-                PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::CurrentWorkingDirectoryInaccessible,
-                    source_vectors: include_token.source_vectors.clone(),
+            let Ok(cwd) = std::env::current_dir().map_err(|e| {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::CurrentWorkingDirectoryInaccessible(e),
+                    source_vectors: include_token.source_vectors,
                 })
-            })?;
+            }) else {
+                return None;
+            };
             if let Some(header) = Self::search_for_header_in(path, &[cwd]) {
-                break 'ret Ok(header);
+                break 'ret header;
             }
 
-            Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::HeaderNotFound,
-                    source_vectors: include_token.source_vectors.clone(),
-                },
-            ))
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::HeaderNotFound,
+                source_vectors: include_token.source_vectors,
+            });
+            return None;
         };
-        eprintln!("Returning {ret:?}");
-        match ret {
-            | Ok(header) => {
-                let s = header.to_string_lossy();
-                let id = context.string_cache.intern(&s);
-                if self.once_set.contains(&id) {
-                    eprintln!(
-                        "Not including header {s} because it should only be included once and \
-                         already been included"
-                    );
-                    Ok(None)
-                } else {
-                    Ok(Some(header))
-                }
-            },
-            | Err(e) => Err(e),
+        // eprintln!("Returning {ret:?}");
+        let header = SharedPath::from_path_buf(header);
+        if self.once_set.contains(&header) {
+            // eprintln!(
+            // "Not including header {s} because it should only be included once and \
+            // already been included"
+            // );
+            None
+        } else {
+            Some(header)
         }
     }
 
-    fn parse_include_directive(
-        &mut self,
-        directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
-        self.previous_phase.set_is_tokenizing_include_string(true);
-        let include_string = self.expect_token(
-            |this, token| match token.kind {
-                | PreprocessorTokenType::AngleBracketString
-                | PreprocessorTokenType::IncludeString => true,
-                | _ if get_from_cache!(this, token.contents).starts_with('<') => true,
-                | _ => false,
-            },
-            |_, e| ControlFlow::Break(e),
-            |_, token| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
+    fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
+        context.set_is_tokenizing_include_string(true);
+        let Some(include_string) =
+            self.expect_token(
+                context,
+                |_, context, token| match token.kind {
+                    | PreprocessorTokenType::AngleBracketString
+                    | PreprocessorTokenType::IncludeString => true,
+                    | _ if context.string_cache.at(token.contents).starts_with('<') => true,
+                    | _ => false,
+                },
+                |_, _, token| {
+                    ControlFlow::Break(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(
                                 token.kind,
                             ),
                         source_vectors: token.source_vectors,
-                    },
-                ))
-            },
-            "parsing include directive",
-        )?;
-        self.previous_phase.set_is_tokenizing_include_string(false);
+                    })
+                },
+                "parsing include directive",
+            )
+        else {
+            return;
+        };
+        context.set_is_tokenizing_include_string(false);
         let header_path = match include_string.kind {
             | PreprocessorTokenType::IncludeString => {
-                let contents = get_from_cache!(self, include_string.contents);
+                let contents = context.string_cache.at(include_string.contents);
                 let contents = &contents[1..contents.len() - 1].to_token_string();
                 let path = Path::new(contents.as_str());
-                self.find_header_from_path(&include_string, path, false)
+                self.find_header_from_path(context, include_string, path, false)
             },
             | PreprocessorTokenType::AngleBracketString => {
-                let contents = get_from_cache!(self, include_string.contents);
+                let contents = context.string_cache.at(include_string.contents);
                 let contents = &contents[1..contents.len() - 1].to_token_string();
                 let path = Path::new(contents.as_str());
-                self.find_header_from_path(&include_string, path, true)
+                self.find_header_from_path(context, include_string, path, true)
             },
             | _ => {
                 self.should_tokenize_whitespace = true;
                 let mut contents = TokenString::new();
-                contents.push_str(&get_from_cache!(self, include_string.contents)[1..]);
+                contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
+                let start_index = Context::duplicate_source_vectors(
+                    &mut context.source_vectors,
+                    include_string.source_vectors,
+                );
                 loop {
-                    match self.next_preprocessor_token() {
-                        | Some(Err(e)) => {
-                            self.pending_results.push_back(Err(e));
-                            continue;
-                        },
-                        | Some(Ok(token)) => {
+                    match self.next_preprocessor_token(context) {
+                        | Some(token) => {
                             if token.kind == PreprocessorTokenType::Newline {
                                 break;
                             }
-                            let token_contents = get_from_cache!(self, token.contents);
+                            let token_contents = context.string_cache.at(token.contents);
+                            Context::duplicate_source_vectors(
+                                &mut context.source_vectors,
+                                token.source_vectors,
+                            );
                             if let Some(idx) = token_contents.find('>') {
                                 contents.push_str(&token_contents[..idx]);
                                 break;
                             }
-                            contents.push_str(get_from_cache!(self, token.contents));
+                            contents.push_str(context.string_cache.at(token.contents));
                         },
                         | None => {
-                            return Err(PreprocessorError::InnerPreprocessorError(
-                                InnerPreprocessorError {
-                                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                        "parsing include directive",
-                                    ),
-                                    source_vectors: directive.source_vectors.clone(),
-                                },
-                            ));
+                            context.preprocessor_error(PreprocessorError {
+                                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                    "parsing include directive",
+                                ),
+                                source_vectors: directive.source_vectors,
+                            });
+                            break;
                         },
                     }
                 }
                 self.should_tokenize_whitespace = false;
                 let path = Path::new(contents.as_str());
                 let synthetic_token = PreprocessorToken {
-                    source_vectors: include_string.source_vectors,
+                    source_vectors: SourceVectors {
+                        start_index,
+                        length: context.source_vectors.len() as u32 - start_index,
+                    },
                     contents:       context.string_cache.intern(&contents),
                     kind:           PreprocessorTokenType::AngleBracketString,
                 };
-                self.find_header_from_path(&synthetic_token, path, true)
+                self.find_header_from_path(context, synthetic_token, path, true)
             },
-        }?;
-        let Some(header_path) = header_path else {
-            return Ok(());
         };
-        let header_string = read_to_string_lossy(&header_path).map_err(|_| {
-            PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
-                error_type:     PreprocessorErrorType::HeaderFileInaccessible,
-                source_vectors: directive.source_vectors.clone(),
-            })
-        })?;
+        let Some(header_path) = header_path else {
+            return;
+        };
+        let Ok(header_string) = read_to_string_lossy(&header_path).map_err(|e| {
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::HeaderFileInaccessible(e),
+                source_vectors: directive.source_vectors,
+            });
+        }) else {
+            return;
+        };
         self.push_tokenizer_frame(
             context,
             TokenizerFrame {
                 frame_type: TokenizerFrameType::SourceFile,
                 tokenizer:  PreprocessorTokenizer::new(
-                    SharedPath::from(header_path),
+                    header_path,
                     SharedString::from(header_string),
                 ),
             },
         );
         self.last_preprocessor_token = None;
         self.current_preprocessor_token = None;
-        Ok(())
     }
 
-    fn parse_define_directive(
-        &mut self,
-        _directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
-        let name = self.expect_token_no_expand(
-            |_, t| t.kind == PreprocessorTokenType::Identifier,
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, token| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ExpectedIdentifierInDefineDirective(
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    },
-                ))
+    fn parse_define_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
+        let Some(name) = self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| t.kind == PreprocessorTokenType::Identifier,
+            |_, _, token| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ExpectedIdentifierInDefineDirective(
+                        token.kind,
+                    ),
+                    source_vectors: token.source_vectors,
+                })
             },
             "parsing define directive",
-        )?;
+        ) else {
+            return;
+        };
         let old_definition = self.macro_definitions.get(&name.contents).cloned();
-        let save_point = self.previous_phase.save();
-        let old_save_point = match old_definition {
+        let tokenizer = self.tokenizer.clone();
+        let old_tokenizer = match old_definition {
             | None => None,
             | Some(ref v) => match v {
-                | MacroDefinition::FunctionLike {
-                    start_save_point, ..
-                }
-                | MacroDefinition::ObjectLike {
-                    start_save_point, ..
-                } => Some(start_save_point.clone()),
+                | MacroDefinition::FunctionLike { tokenizer, .. }
+                | MacroDefinition::ObjectLike { tokenizer, .. } => Some(tokenizer.clone()),
                 | MacroDefinition::BuiltIn => {
-                    self.pending_results.push_back(Err(
-                        PreprocessorError::<Prev::Error>::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:     PreprocessorErrorType::RedefinitionOfBuiltInMacro(
-                                    get_from_cache!(self, name.contents).to_owned(),
-                                ),
-                                source_vectors: name.source_vectors.clone(),
-                            },
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::RedefinitionOfBuiltInMacro(
+                            context.string_cache.at(name.contents).to_owned(),
                         ),
-                    ));
+                        source_vectors: name.source_vectors,
+                    });
                     None
                 },
             },
         };
-        let opening_paren = loop {
-            match self.next_preprocessor_token_no_expand() {
-                | Some(Err(e)) => {
-                    self.pending_results
-                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                    continue;
+        let opening_paren = match self.tokenizer.next_item(context) {
+            | Some(
+                token @ PreprocessorToken {
+                    kind: PreprocessorTokenType::OpeningParenthesis,
+                    ..
                 },
-                | Some(Ok(
-                    token @ PreprocessorToken {
-                        kind: PreprocessorTokenType::OpeningParenthesis,
-                        ..
-                    },
-                )) => break Some(token),
-                | Some(Ok(_)) => {
-                    break None;
-                },
-                | None => {
-                    return Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                "parsing macro definition",
-                            ),
-                            source_vectors: name.source_vectors,
-                        },
-                    ));
-                },
-            }
+            ) => Some(token),
+            | Some(_) => None,
+            | None => {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                        "parsing macro definition",
+                    ),
+                    source_vectors: name.source_vectors,
+                });
+                None
+            },
         };
         if opening_paren.is_some() {
             if old_definition.is_some_and(|d| match d {
                 | MacroDefinition::ObjectLike { .. } => true,
                 | MacroDefinition::FunctionLike { .. } => false,
-                | MacroDefinition::BuiltIn =>
-                    unreachable!("The case where name is a built-in macro is handled above"),
+                | MacroDefinition::BuiltIn => {
+                    unreachable!("The case where name is a built-in macro is handled above")
+                },
             }) {
-                self.pending_results
-                    .push_back(Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:
-                            PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(
-                                get_from_cache!(self, name.contents).to_owned(),
-                            ),
-                        source_vectors: name.source_vectors.clone(),
-                    },
-                )));
+                context.preprocessor_error(PreprocessorError {
+                    error_type:
+                        PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(
+                            context.string_cache.at(name.contents).to_owned(),
+                        ),
+                    source_vectors: name.source_vectors,
+                });
             }
             let mut argument_names = Vec::new();
             let mut is_variadic = false;
             loop {
-                let name_or_ellipsis = self.expect_token_no_expand(
-                    |_, t| {
+                let Some(name_or_ellipsis) = self.expect_token_from_previous_phase(
+                    context,
+                    |_, _, t| {
                         t.kind == PreprocessorTokenType::Identifier
                             || t.kind == PreprocessorTokenType::Ellipsis
                             || (t.kind == PreprocessorTokenType::ClosingParenthesis
                                 && argument_names.is_empty())
                     },
-                    |this, e| {
-                        this.pending_results
-                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                        ControlFlow::Continue(())
-                    },
-                    |_, token| {
-                        ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(
-                                        token.kind,
-                                    ),
-                                source_vectors: token.source_vectors,
-                            },
-                        ))
+                    |_, _, token| {
+                        ControlFlow::Break(PreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(
+                                    token.kind,
+                                ),
+                            source_vectors: token.source_vectors,
+                        })
                     },
                     "parsing macro definition",
-                )?;
+                ) else {
+                    break;
+                };
                 if is_variadic {
-                    self.pending_results
-                        .push_back(Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::VariadicMacroMustBeLastParameter(
-                                        get_from_cache!(self, name.contents).to_owned(),
-                                    ),
-                                source_vectors: name.source_vectors.clone(),
-                            },
-                        )));
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::VariadicMacroMustBeLastParameter(
+                            context.string_cache.at(name.contents).to_owned(),
+                        ),
+                        source_vectors: name.source_vectors,
+                    });
                 }
                 if name_or_ellipsis.kind == PreprocessorTokenType::Ellipsis {
                     is_variadic = true;
@@ -5073,121 +5175,89 @@ impl Preprocessor {
                 } else if name_or_ellipsis.kind == PreprocessorTokenType::ClosingParenthesis {
                     break;
                 }
-                let comma_or_closing_parent = self.expect_token_no_expand(
-                    |_, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
-                    |this, e| {
-                        this.pending_results
-                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                        ControlFlow::Continue(())
-                    },
-                    |_, token| {
-                        ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
+                let Some(comma_or_closing_parent) = self.expect_token_from_previous_phase(
+                    context,
+                    |_, _, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
+                    |_, _, token|
+                        ControlFlow::Break(PreprocessorError {
                                 error_type:     PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(token.kind),
                                 source_vectors: token.source_vectors,
                             },
-                        ))
-                    },
+                        )
+                    ,
                     "parsing macro definition",
-                )?;
+                ) else {break;};
                 if comma_or_closing_parent.kind == PreprocessorTokenType::ClosingParenthesis {
                     break;
                 }
             }
-            let save_point = self.previous_phase.save();
+            let tokenizer = self.tokenizer.clone();
             drop(self.macro_definitions.insert(
                 name.contents,
                 MacroDefinition::FunctionLike {
-                    start_save_point: save_point,
+                    tokenizer,
                     argument_names: argument_names.into(),
                     is_variadic,
-                    hash_hash_positions: Arc::new(HashSet::default()),
+                    hash_hash_positions: Rc::new(HashSet::default()),
                 },
             ));
         } else {
             if old_definition.is_some_and(|d| match d {
                 | MacroDefinition::ObjectLike { .. } => false,
                 | MacroDefinition::FunctionLike { .. } => true,
-                | MacroDefinition::BuiltIn =>
-                    unreachable!("The case where name is a built-in macro is handled above"),
+                | MacroDefinition::BuiltIn => {
+                    unreachable!("The case where name is a built-in macro is handled above")
+                },
             }) {
-                self.pending_results
-                    .push_back(Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:
-                            PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(
-                                get_from_cache!(self, name.contents).to_owned(),
-                            ),
-                        source_vectors: name.source_vectors.clone(),
-                    },
-                )));
+                context.preprocessor_error(PreprocessorError {
+                    error_type:
+                        PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(
+                            context.string_cache.at(name.contents).to_owned(),
+                        ),
+                    source_vectors: name.source_vectors,
+                });
             }
             drop(self.macro_definitions.insert(
                 name.contents,
                 MacroDefinition::ObjectLike {
-                    start_save_point:    save_point.clone(),
-                    hash_hash_positions: Arc::new(HashSet::default()),
+                    tokenizer:           tokenizer.clone(),
+                    hash_hash_positions: Rc::new(HashSet::default()),
                 },
             ));
         }
         let mut hash_hash_positions = HashSet::default();
         let mut last = Option::<PreprocessorToken>::None;
-        if let Some(mut old_save_point) = old_save_point {
+        if let Some(mut old_tokenizer) = old_tokenizer {
             let mut error_has_been_generated = false;
-            let mut new_save_point = save_point;
+            let mut new_tokenizer = tokenizer;
             loop {
-                self.previous_phase.restore(old_save_point);
-                let old_next = loop {
-                    match self.previous_phase.next() {
-                        | Some(Err(_)) => {
-                            // Don't generate errors while validating macro definitions.
-                            continue;
-                        },
-                        | Some(Ok(token)) => break Some(token),
-                        | None => break None,
-                    }
-                };
-                old_save_point = self.previous_phase.save();
-                self.previous_phase.restore(new_save_point);
-                let new_next = loop {
-                    match self.previous_phase.next() {
-                        | Some(Err(_)) => {
-                            // Don't generate errors while validating macro definitions.
-                            continue;
-                        },
-                        | Some(Ok(token)) => break Some(token),
-                        | None => break None,
-                    }
-                };
+                let old_next = old_tokenizer.next_item(context);
+                let new_next = new_tokenizer.next_item(context);
                 if let Some(t) = new_next.as_ref() {
                     if t.kind == PreprocessorTokenType::HashHash {
                         // Hash-hash tokens cannot be created as a result of token pasting, so they
                         // will always have only one source vector.
-                        _ = hash_hash_positions.insert(t.source_vectors[0].position);
+                        _ = hash_hash_positions.insert(
+                            context.source_vectors[t.source_vectors.start_index as usize]
+                                .position(context),
+                        );
                         if last.is_none() {
-                            self.pending_results
-                                .push_back(Err(PreprocessorError::InnerPreprocessorError(
-                                    InnerPreprocessorError {
-                                        error_type:
-                                            PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator,
-                                        source_vectors: t.source_vectors.clone(),
-                                    },
-                                )));
+                            context.preprocessor_error(PreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator,
+                                source_vectors: t.source_vectors,
+                            });
                         }
                     }
                 }
-                new_save_point = self.previous_phase.save();
                 if old_next != new_next && !error_has_been_generated {
-                    self.pending_results
-                        .push_back(Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
-                                        get_from_cache!(self, name.contents).to_owned(),
-                                    ),
-                                source_vectors: name.source_vectors.clone(),
-                            },
-                        )));
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
+                                context.string_cache.at(name.contents).to_owned(),
+                            ),
+                        source_vectors: name.source_vectors,
+                    });
                     error_has_been_generated = true;
                 }
                 if !new_next
@@ -5198,13 +5268,11 @@ impl Preprocessor {
                         .as_ref()
                         .is_some_and(|t| t.kind == PreprocessorTokenType::HashHash)
                     {
-                        self.pending_results.push_back(Err(
-                            PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
-                                source_vectors: last.unwrap().source_vectors.clone(),
-                            }),
-                        ));
+                        context.preprocessor_error(PreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
+                            source_vectors: last.unwrap().source_vectors,
+                        });
                     }
                     break;
                 }
@@ -5212,17 +5280,16 @@ impl Preprocessor {
             }
         } else {
             loop {
-                match self.next_preprocessor_token_no_expand() {
-                    | Some(Err(_)) => {
-                        // Don't generate errors while validating macro definitions.
-                        continue;
+                match self.tokenizer.next_item(context) {
+                    | Some(token) if token.kind == PreprocessorTokenType::HashHash => {
+                        _ = hash_hash_positions.insert(
+                            context.source_vectors[token.source_vectors.start_index as usize]
+                                .position(context),
+                        );
                     },
-                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::HashHash => {
-                        _ = hash_hash_positions.insert(token.source_vectors[0].position);
-                    },
-                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline => break,
+                    | Some(token) if token.kind == PreprocessorTokenType::Newline => break,
                     | None => break,
-                    | Some(Ok(_)) => continue,
+                    | Some(_) => continue,
                 }
             }
         }
@@ -5237,406 +5304,336 @@ impl Preprocessor {
             },
         ) = self.macro_definitions.get_mut(&name.contents)
         {
-            *Arc::get_mut(hhp).unwrap() = hash_hash_positions;
+            *Rc::get_mut(hhp).unwrap() = hash_hash_positions;
         }
-        Ok(())
     }
 
-    fn parse_undef_directive(
-        &mut self,
-        _directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
-        let name = self.expect_token_no_expand(
-            |_, t| t.kind == PreprocessorTokenType::Identifier,
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, token| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ExpectedIdentifierInUndefDirective(
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    },
-                ))
+    fn parse_undef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
+        let Some(name) = self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| t.kind == PreprocessorTokenType::Identifier,
+            |_, _, token| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ExpectedIdentifierInUndefDirective(
+                        token.kind,
+                    ),
+                    source_vectors: token.source_vectors,
+                })
             },
             "parsing undef directive",
-        )?;
+        ) else {
+            return;
+        };
         drop(self.macro_definitions.remove(&name.contents));
-        drop(self.expect_token_no_expand(
-            |_, t| t.kind == PreprocessorTokenType::Newline,
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, token| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    },
-                ))
+        drop(self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| t.kind == PreprocessorTokenType::Newline,
+            |_, _, token| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(
+                        token.kind,
+                    ),
+                    source_vectors: token.source_vectors,
+                })
             },
             "parsing undef directive",
-        )?);
-        Ok(())
+        ));
     }
 
-    fn parse_line_directive(
-        &mut self,
-        _directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
-        let token = self.expect_token_no_expand(
-            |_this, t| t.kind == PreprocessorTokenType::Number,
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, t| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::MissingNumberInLineDirective(t.kind),
-                        source_vectors: t.source_vectors,
-                    },
-                ))
+    fn parse_line_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
+        let Some(token) = self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| t.kind == PreprocessorTokenType::Number,
+            |_, _, t| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     PreprocessorErrorType::MissingNumberInLineDirective(t.kind),
+                    source_vectors: t.source_vectors,
+                })
             },
             "parsing line directive",
-        )?;
-        let mut contents = TokenString::from(get_from_cache!(self, token.contents));
-        let line_number = self.parse_number(token.clone(), &mut contents)?;
-        for b in contents.bytes() {
-            if !b.is_ascii_digit() {
-                self.pending_results
-                    .push_back(Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
+        ) else {
+            return;
+        };
+        let (value, did_overflow) = (|context: &mut Context, token: PreprocessorToken| {
+            let mut value = 0i128;
+            let mut did_generate_error = false;
+            let mut did_overflow = false;
+            for b in context.string_cache.at(token.contents).bytes() {
+                if !b.is_ascii_digit() && !did_generate_error {
+                    did_generate_error = true;
+                    Context::raw_preprocessor_error(
+                        &mut context.pending_errors,
+                        PreprocessorError {
                             error_type:
                                 PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence,
-                            source_vectors: token.source_vectors.clone(),
+                            source_vectors: token.source_vectors,
                         },
-                    )));
-                break;
+                    );
+                    continue;
+                }
+                value *= 10;
+                if value > i32::MAX as i128 {
+                    did_overflow = true;
+                }
+                value += i128::from(b - b'0');
+                if value > i32::MAX as i128 {
+                    did_overflow = true;
+                }
             }
-        }
-        if let Token {
-            kind: TokenType::Float(f),
-            ..
-        } = line_number
-        {
-            return Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::FloatingPointNumberInLineDirective(f),
-                    source_vectors: line_number.source_vectors,
-                },
-            ));
-        }
-        let Token {
-            kind: TokenType::Integer(line_number),
-            ..
-        } = line_number
-        else {
-            unreachable!();
+            (value, did_overflow)
+        })(context, token);
+        if did_overflow {
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(value),
+                source_vectors: token.source_vectors,
+            });
+            return;
         };
-        let value = i128::from(line_number);
-        if value > usize::MAX as i128 {
-            return Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::UnsupportedLineDirectiveValue(value),
-                    source_vectors: token.source_vectors,
-                },
-            ));
-        }
-        if value < 0 {
-            self.pending_results
-                .push_back(Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::NegativeNumberInLineDirective(value),
-                        source_vectors: token.source_vectors.clone(),
-                    },
-                )));
-        }
-        if value > i128::from(i32::MAX) {
-            self.pending_results
-                .push_back(Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(value),
-                        source_vectors: token.source_vectors,
-                    },
-                )));
-        }
-        self.set_line_number(value as usize);
-        drop(self.expect_token_no_expand(
-            |_, t| t.kind == PreprocessorTokenType::Newline,
-            |this, e| {
-                this.pending_results
-                    .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                ControlFlow::Continue(())
-            },
-            |_, t| {
-                ControlFlow::Break(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::MissingNewlineAfterLineDirective(
-                            t.kind,
-                        ),
-                        source_vectors: t.source_vectors,
-                    },
-                ))
+        self.set_line(context, value as u32);
+        drop(self.expect_token_from_previous_phase(
+            context,
+            |_, _, t| t.kind == PreprocessorTokenType::Newline,
+            |_, _, t| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     PreprocessorErrorType::MissingNewlineAfterLineDirective(t.kind),
+                    source_vectors: t.source_vectors,
+                })
             },
             "parsing line directive",
-        )?);
-        Ok(())
+        ));
     }
 
-    fn parse_error_directive(
-        &mut self,
-        _directive: &PreprocessorToken,
-    ) -> PreprocessorError<Prev::Error> {
+    fn parse_error_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         self.should_tokenize_whitespace = true;
         let mut contents = String::new();
         loop {
-            match self.previous_phase.next() {
-                | Some(Err(e)) => {
-                    self.pending_results
-                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                    continue;
-                },
-                | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline => break,
-                | Some(Ok(token)) => {
-                    contents.push_str(get_from_cache!(self, token.contents));
+            match self.tokenizer.next_item(context) {
+                | Some(token) if token.kind == PreprocessorTokenType::Newline => break,
+                | Some(token) => {
+                    contents.push_str(context.string_cache.at(token.contents));
                 },
                 | None => {
-                    return PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                             "parsing error directive",
                         ),
-                        source_vectors: SourceVectors::from(SourceVector {
-                            position: self.previous_phase.current_position(),
-                            length:   0,
-                        }),
+                        source_vectors,
                     });
+                    break;
                 },
             }
         }
         self.should_tokenize_whitespace = false;
-        PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
-            error_type:     PreprocessorErrorType::ErrorDirective(contents),
-            source_vectors: SourceVectors::from(SourceVector {
-                position: self.previous_phase.current_position(),
-                length:   0,
-            }),
-        })
+        let source_vectors =
+            context.create_source_vectors(self.position(context), self.source_file_name(), 0);
+        context.preprocessor_error(PreprocessorError {
+            error_type: PreprocessorErrorType::ErrorDirective(contents),
+            source_vectors,
+        });
     }
 
-    fn parse_pragma_directive(
-        &mut self,
-        context: &mut Context,
-        _directive: &PreprocessorToken,
-    ) -> Result<(), PreprocessorError<Prev::Error>> {
+    fn parse_pragma_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         let should_tokenize_whitespace = replace(&mut self.should_tokenize_whitespace, false);
-        let ret = 'base: loop {
-            let token = match self.previous_phase.next() {
-                | Some(Err(e)) => {
-                    self.pending_results
-                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                    continue;
-                },
-                | Some(Ok(token)) => token,
+        'base: loop {
+            let token = match self.tokenizer.next_item(context) {
+                | Some(token) => token,
                 | None => {
-                    break 'base Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                "parsing pragma directive",
-                            ),
-                            source_vectors: SourceVectors::from(SourceVector {
-                                position: self.previous_phase.current_position(),
-                                length:   0,
-                            }),
-                        },
-                    ));
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                            "parsing pragma directive",
+                        ),
+                        source_vectors,
+                    });
+                    break 'base;
                 },
             };
             match token.kind {
                 | PreprocessorTokenType::Whitespace => continue 'base,
-                | PreprocessorTokenType::Newline => break 'base Ok(()),
-                | PreprocessorTokenType::Identifier =>
-                    match get_from_cache!(self, token.contents) {
+                | PreprocessorTokenType::Newline => break 'base,
+                | PreprocessorTokenType::Identifier => {
+                    match context.string_cache.at(token.contents) {
                         | "once" => {
-                            if !self.current_is_header() {
-                                self.pending_results.push_back(Err(
-                                    PreprocessorError::InnerPreprocessorError(
-                                        InnerPreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::PragmaOnceInNonHeader,
-                                            source_vectors: token.source_vectors.clone(),
-                                        },
-                                    ),
-                                ));
+                            if !self.current_is_header(context) {
+                                context.preprocessor_error(PreprocessorError {
+                                    error_type:     PreprocessorErrorType::PragmaOnceInNonHeader,
+                                    source_vectors: token.source_vectors,
+                                });
                             }
-                            _ = self.once_set.insert(self.current_position().source_file);
-                            loop {
-                                match self.previous_phase.next() {
-                                | Some(Err(e)) => {
-                                    self.pending_results
-                                        .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                                    continue;
-                                },
-                                | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline =>
-                                    break 'base Ok(()),
-                                | Some(Ok(t)) => break 'base Err(PreprocessorError::InnerPreprocessorError(
-                                    InnerPreprocessorError {
-                                        error_type:     PreprocessorErrorType::ExtraTokensAfterPragmaOnce(t.kind),
-                                        source_vectors: token.source_vectors,
-                                    },
-                                )),
-                                | None => {
-                                    break 'base Err(PreprocessorError::InnerPreprocessorError(
-                                        InnerPreprocessorError {
-                                            error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                                "parsing pragma directive",
+                            _ = self.once_set.insert(self.source_file_name());
+                            match self.tokenizer.next_item(context) {
+                                | Some(token) if token.kind == PreprocessorTokenType::Newline =>
+                                    break 'base,
+                                | Some(t) => {
+                                    context.preprocessor_error(PreprocessorError {
+                                        error_type:
+                                            PreprocessorErrorType::ExtraTokensAfterPragmaOnce(
+                                                t.kind,
                                             ),
-                                            source_vectors: SourceVectors::from(SourceVector {
-                                                position: self.previous_phase.current_position(),
-                                                length:   0,
-                                            }),
-                                        },
-                                    ));
+                                        source_vectors: token.source_vectors,
+                                    });
+                                    break 'base;
                                 },
-                            }
+                                | None => {
+                                    let source_vectors = context.create_source_vectors(
+                                        self.position(context),
+                                        self.source_file_name(),
+                                        0,
+                                    );
+                                    context.preprocessor_error(PreprocessorError {
+                                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                                            "parsing pragma directive",
+                                        ),
+                                        source_vectors,
+                                    });
+                                    break 'base;
+                                },
                             }
                         },
                         | "STDC" => {
-                            loop {
-                                match self.previous_phase.next() {
-                                    | Some(Err(e)) => {
-                                        self.pending_results
-                                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                                        continue;
-                                    },
-                                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline =>
-                                        break 'base Err(PreprocessorError::InnerPreprocessorError(
-                                            InnerPreprocessorError {
+                            match self.tokenizer.next_item(context) {
+                                | Some(token) if token.kind == PreprocessorTokenType::Newline => {
+                                    context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument,
                                                 source_vectors: token.source_vectors,
                                             },
-                                        )),
-                                    | Some(Ok(token)) => {
-                                        let s = get_from_cache!(self, token.contents);
-                                        if token.kind != PreprocessorTokenType::Identifier || !matches!(s, "FP_CONTRACT" | "FENV_ACCESS" | "CX_LIMITED_RANGE") {
-                                            break 'base Err(PreprocessorError::InnerPreprocessorError(
-                                                InnerPreprocessorError {
-                                                    error_type:     PreprocessorErrorType::UnknownPragmaSTDCArgument(s.to_owned()),
-                                                    source_vectors: token.source_vectors,
-                                                },
-                                            ));
-                                        }
-                                        break;
-                                    }
-                                    | None => {
-                                        break 'base Err(PreprocessorError::InnerPreprocessorError(
-                                            InnerPreprocessorError {
-                                                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                                    "parsing pragma directive",
+                                        );
+                                    break 'base;
+                                },
+                                | Some(token) => {
+                                    let s = context.string_cache.at(token.contents);
+                                    if token.kind != PreprocessorTokenType::Identifier
+                                        || !matches!(
+                                            s,
+                                            "FP_CONTRACT" | "FENV_ACCESS" | "CX_LIMITED_RANGE"
+                                        )
+                                    {
+                                        context.preprocessor_error(PreprocessorError {
+                                            error_type:
+                                                PreprocessorErrorType::UnknownPragmaSTDCArgument(
+                                                    s.to_owned(),
                                                 ),
-                                                source_vectors: SourceVectors::from(SourceVector {
-                                                    position: self.previous_phase.current_position(),
-                                                    length:   0,
-                                                }),
-                                            },
-                                        ));
-                                    },
-                                }
+                                            source_vectors: token.source_vectors,
+                                        });
+                                        break 'base;
+                                    }
+                                },
+                                | None => {
+                                    let source_vectors = context.create_source_vectors(
+                                        self.position(context),
+                                        self.source_file_name(),
+                                        0,
+                                    );
+                                    context.preprocessor_error(PreprocessorError {
+                                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                                            "parsing pragma directive",
+                                        ),
+                                        source_vectors,
+                                    });
+                                    break 'base;
+                                },
                             }
-                            loop {
-                                match self.previous_phase.next() {
-                                    | Some(Err(e)) => {
-                                        self.pending_results
-                                            .push_back(Err(PreprocessorError::PreviousPhaseError(e)));
-                                        continue;
-                                    },
-                                    | Some(Ok(token)) if token.kind == PreprocessorTokenType::Newline =>
-                                        break 'base Err(PreprocessorError::InnerPreprocessorError(
-                                            InnerPreprocessorError {
+
+                            match self.tokenizer.next_item(context) {
+                                | Some(token) if token.kind == PreprocessorTokenType::Newline => {
+                                    context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch,
                                                 source_vectors: token.source_vectors,
                                             },
-                                        )),
-                                    | Some(Ok(token)) => {
-                                        let s = get_from_cache!(self, token.contents);
-                                        if token.kind != PreprocessorTokenType::Identifier || !matches!(s, "ON" | "OFF" | "DEFAULT") {
-                                            break 'base Err(PreprocessorError::InnerPreprocessorError(
-                                                InnerPreprocessorError {
+                                        );
+                                    break 'base;
+                                },
+                                | Some(token) => {
+                                    let s = context.string_cache.at(token.contents);
+                                    if token.kind != PreprocessorTokenType::Identifier
+                                        || !matches!(s, "ON" | "OFF" | "DEFAULT")
+                                    {
+                                        context.preprocessor_error(PreprocessorError {
                                                     error_type:     PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(s.to_owned()),
                                                     source_vectors: token.source_vectors,
                                                 },
-                                            ));
-                                        }
-                                        break;
+                                            );
+                                        break 'base;
                                     }
-                                    | None => {
-                                        break 'base Err(PreprocessorError::InnerPreprocessorError(
-                                            InnerPreprocessorError {
-                                                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                                    "parsing pragma directive",
-                                                ),
-                                                source_vectors: SourceVectors::from(SourceVector {
-                                                    position: self.previous_phase.current_position(),
-                                                    length:   0,
-                                                }),
-                                            },
-                                        ));
-                                    },
-                                }
+                                },
+                                | None => {
+                                    let source_vectors = context.create_source_vectors(
+                                        self.position(context),
+                                        self.source_file_name(),
+                                        0,
+                                    );
+                                    context.preprocessor_error(PreprocessorError {
+                                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                                            "parsing pragma directive",
+                                        ),
+                                        source_vectors,
+                                    });
+                                    break 'base;
+                                },
                             }
                         },
-                        | _ => break 'base Ok(()),
-                    },
-                | _ =>
-                    break 'base Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type:     PreprocessorErrorType::UnknownPragmaDirective,
-                            source_vectors: token.source_vectors,
-                        },
-                    )),
+                        | _ => break 'base,
+                    }
+                },
+                | _ => {
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::UnknownPragmaDirective,
+                        source_vectors: token.source_vectors,
+                    });
+                    break 'base;
+                },
             }
-        };
+        }
         self.should_tokenize_whitespace = should_tokenize_whitespace;
-        ret
     }
 
     #[allow(clippy::inline_always)]
     #[inline(always)]
     fn parse_integer_radix(
         &mut self,
+        context: &mut Context,
         radix: u32,
         start_index: usize,
         invalid_integer_literal_error: PreprocessorErrorType,
         token: PreprocessorToken,
-        contents: &str,
-    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+    ) -> Token {
+        _ = self;
         let mut index = start_index;
-        let result = (|| {
+        let (result, did_overflow) = {
+            let contents = context.string_cache.at(token.contents);
             let mut result = 0u64;
+            let mut did_overflow = false;
             while let Some(digit) = contents.char_at(index).and_then(|c| c.to_digit(radix)) {
-                result = result.checked_mul(u64::from(radix))?;
-                result = result.checked_add(u64::from(digit))?;
+                let (new_result, overflow) = result.overflowing_mul(u64::from(radix));
+                if overflow {
+                    did_overflow = true;
+                }
+                result = new_result;
+                let (new_result, overflow) = result.overflowing_add(u64::from(digit));
+                if overflow {
+                    did_overflow = true;
+                }
+                result = new_result;
                 index += 1;
             }
-            Some(result)
-        })();
-        let Some(result) = result else {
-            return Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     PreprocessorErrorType::IntegerLiteralOverflow,
-                    source_vectors: token.source_vectors,
-                },
-            ));
+            (result, did_overflow)
         };
+        if did_overflow {
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::IntegerLiteralOverflow,
+                source_vectors: token.source_vectors,
+            });
+        }
+        let contents = context.string_cache.at(token.contents);
         let suffix_type = match (
             contents.char_at(index),
             contents.char_at(index + 1),
@@ -5670,183 +5667,159 @@ impl Preprocessor {
             },
             | _ => None,
         };
-        if index != contents.len() {
-            return Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
-                    error_type:     invalid_integer_literal_error,
-                    source_vectors: token.source_vectors,
-                },
-            ));
+        if index != contents.len() - 1 {
+            context.preprocessor_error(PreprocessorError {
+                error_type:     invalid_integer_literal_error,
+                source_vectors: token.source_vectors,
+            });
         }
         match suffix_type {
-            | Some(IntegerSuffix::UnsignedLongLong) => Ok(Token {
+            | Some(IntegerSuffix::UnsignedLongLong) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
-            }),
-            | Some(IntegerSuffix::LongLong) if result > i64::MAX as u64 => {
-                self.pending_results.push_back(Ok(Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
-                    source_vectors: token.source_vectors.clone(),
-                    contents:       token.contents,
-                }));
-                Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
-                            from: SignedIntegerLiteralType::LongLong,
-                            to:   UnsignedIntegerLiteralType::UnsignedLongLong,
-                        },
-                        source_vectors: token.source_vectors,
-                    },
-                ))
             },
-            | Some(IntegerSuffix::LongLong) => Ok(Token {
+            | Some(IntegerSuffix::LongLong) if result > i64::MAX as u64 => {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
+                        from: SignedIntegerLiteralType::LongLong,
+                        to:   UnsignedIntegerLiteralType::UnsignedLongLong,
+                    },
+                    source_vectors: token.source_vectors,
+                });
+                Token {
+                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
+                    source_vectors: token.source_vectors,
+                    contents:       token.contents,
+                }
+            },
+            | Some(IntegerSuffix::LongLong) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::LongLong(result as _)),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
-            }),
-            | Some(IntegerSuffix::UnsignedLong) => Ok(Token {
+            },
+            | Some(IntegerSuffix::UnsignedLong) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
-            }),
-            | Some(IntegerSuffix::Long) if result > i64::MAX as u64 => {
-                self.pending_results.push_back(Ok(Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
-                    source_vectors: token.source_vectors.clone(),
-                    contents:       token.contents,
-                }));
-                Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
-                            from: SignedIntegerLiteralType::Long,
-                            to:   UnsignedIntegerLiteralType::UnsignedLong,
-                        },
-                        source_vectors: token.source_vectors,
-                    },
-                ))
             },
-            | Some(IntegerSuffix::Long) => Ok(Token {
+            | Some(IntegerSuffix::Long) if result > i64::MAX as u64 => {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
+                        from: SignedIntegerLiteralType::Long,
+                        to:   UnsignedIntegerLiteralType::UnsignedLong,
+                    },
+                    source_vectors: token.source_vectors,
+                });
+                Token {
+                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
+                    source_vectors: token.source_vectors,
+                    contents:       token.contents,
+                }
+            },
+            | Some(IntegerSuffix::Long) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::Long(result as _)),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
-            }),
+            },
             | Some(IntegerSuffix::Unsigned) if result > u64::from(u32::MAX) => {
-                self.pending_results.push_back(Ok(Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
-                    source_vectors: token.source_vectors.clone(),
-                    contents:       token.contents,
-                }));
-                Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ForcedUnsignedPromotion {
-                            from: UnsignedIntegerLiteralType::UnsignedInt,
-                            to:   UnsignedIntegerLiteralType::UnsignedLong,
-                        },
-                        source_vectors: token.source_vectors,
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ForcedUnsignedPromotion {
+                        from: UnsignedIntegerLiteralType::UnsignedInt,
+                        to:   UnsignedIntegerLiteralType::UnsignedLong,
                     },
-                ))
+                    source_vectors: token.source_vectors,
+                });
+                Token {
+                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
+                    source_vectors: token.source_vectors,
+                    contents:       token.contents,
+                }
             },
             #[allow(clippy::cast_possible_truncation)]
-            | Some(IntegerSuffix::Unsigned) => Ok(Token {
+            | Some(IntegerSuffix::Unsigned) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::UnsignedInt(result as u32)),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
-            }),
+            },
             | None if result > i64::MAX as u64 => {
-                self.pending_results.push_back(Ok(Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
-                    source_vectors: token.source_vectors.clone(),
-                    contents:       token.contents,
-                }));
-                Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
-                            from: SignedIntegerLiteralType::Int,
-                            to:   UnsignedIntegerLiteralType::UnsignedLong,
-                        },
-                        source_vectors: token.source_vectors,
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
+                        from: SignedIntegerLiteralType::Int,
+                        to:   UnsignedIntegerLiteralType::UnsignedLong,
                     },
-                ))
+                    source_vectors: token.source_vectors,
+                });
+                Token {
+                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
+                    source_vectors: token.source_vectors,
+                    contents:       token.contents,
+                }
             },
             | None if result > i32::MAX as u64 => {
-                self.pending_results.push_back(Ok(Token {
-                    kind:           TokenType::Integer(IntegerTokenType::Long(result as i64)),
-                    source_vectors: token.source_vectors.clone(),
-                    contents:       token.contents,
-                }));
-                Err(PreprocessorError::InnerPreprocessorError(
-                    InnerPreprocessorError {
-                        error_type:     PreprocessorErrorType::ForcedSignedPromotion {
-                            from: SignedIntegerLiteralType::Int,
-                            to:   SignedIntegerLiteralType::Long,
-                        },
-                        source_vectors: token.source_vectors,
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::ForcedSignedPromotion {
+                        from: SignedIntegerLiteralType::Int,
+                        to:   SignedIntegerLiteralType::Long,
                     },
-                ))
+                    source_vectors: token.source_vectors,
+                });
+                Token {
+                    kind:           TokenType::Integer(IntegerTokenType::Long(result as i64)),
+                    source_vectors: token.source_vectors,
+                    contents:       token.contents,
+                }
             },
             #[allow(clippy::cast_possible_truncation)]
-            | None => Ok(Token {
+            | None => Token {
                 kind:           TokenType::Integer(IntegerTokenType::Int(result as i32)),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
-            }),
+            },
         }
     }
 
     fn parse_hexadecimal_integer(
         &mut self,
+        context: &mut Context,
         token: PreprocessorToken,
-        contents: &str,
-    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+    ) -> Token {
         self.parse_integer_radix(
+            context,
             16,
             2,
             PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
             token,
-            contents,
         )
     }
 
-    fn parse_binary_integer(
-        &mut self,
-        token: PreprocessorToken,
-        contents: &str,
-    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+    fn parse_binary_integer(&mut self, context: &mut Context, token: PreprocessorToken) -> Token {
         self.parse_integer_radix(
+            context,
             2,
             2,
             PreprocessorErrorType::InvalidBinaryIntegerLiteral,
             token,
-            contents,
         )
     }
 
-    fn parse_octal_integer(
-        &mut self,
-        token: PreprocessorToken,
-        contents: &str,
-    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+    fn parse_octal_integer(&mut self, context: &mut Context, token: PreprocessorToken) -> Token {
         self.parse_integer_radix(
+            context,
             8,
             1,
             PreprocessorErrorType::InvalidOctalIntegerLiteral,
             token,
-            contents,
         )
     }
 
-    fn parse_decimal_integer(
-        &mut self,
-        token: PreprocessorToken,
-        contents: &str,
-    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+    fn parse_decimal_integer(&mut self, context: &mut Context, token: PreprocessorToken) -> Token {
         self.parse_integer_radix(
+            context,
             10,
             0,
             PreprocessorErrorType::InvalidDecimalIntegerLiteral,
             token,
-            contents,
         )
     }
 
@@ -5855,114 +5828,67 @@ impl Preprocessor {
     #[inline(always)]
     fn parse_float(
         &mut self,
+        context: &mut Context,
         invalid_float_literal_error: PreprocessorErrorType,
         token: PreprocessorToken,
-        contents: &mut TokenString,
-    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+    ) -> Token {
         _ = self;
-        contents.push('\0');
+        let contents = context.string_cache.at(token.contents);
+
         let res = match contents.char_at(contents.len() - 2) {
-            | Some('f' | 'F') => string_to_float(contents.as_str()).map(FloatTokenType::Float),
-            | Some('l' | 'L') =>
-                string_to_long_double(contents.as_str()).map(FloatTokenType::LongDouble),
-            | _ => string_to_double(contents.as_str()).map(FloatTokenType::Double),
+            | Some('f' | 'F') => string_to_float(contents).map(FloatTokenType::Float),
+            | Some('l' | 'L') => string_to_long_double(contents).map(FloatTokenType::LongDouble),
+            | _ => string_to_double(contents).map(FloatTokenType::Double),
         };
         match res {
-            | Ok(kind) => Ok(Token {
+            | Ok(kind) => Token {
                 kind:           TokenType::Float(kind),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
-            }),
-            | Err(ParseFloatError::Invalid) => Err(PreprocessorError::InnerPreprocessorError(
-                InnerPreprocessorError {
+            },
+            | Err(ParseFloatError::Invalid(kind)) => {
+                context.preprocessor_error(PreprocessorError {
                     error_type:     invalid_float_literal_error,
                     source_vectors: token.source_vectors,
-                },
-            )),
-            | Err(ParseFloatError::Overflow(kind)) => Err(
-                PreprocessorError::InnerPreprocessorError(InnerPreprocessorError {
+                });
+                Token {
+                    kind:           TokenType::Float(kind),
+                    source_vectors: token.source_vectors,
+                    contents:       token.contents,
+                }
+            },
+            | Err(ParseFloatError::Overflow(kind)) => {
+                context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::FloatLiteralOverflow(kind),
                     source_vectors: token.source_vectors,
-                }),
-            ),
+                });
+                Token {
+                    kind:           TokenType::Float(kind),
+                    source_vectors: token.source_vectors,
+                    contents:       token.contents,
+                }
+            },
         }
     }
 
     fn parse_hexadecimal_float(
         &mut self,
+        context: &mut Context,
         token: PreprocessorToken,
-        contents: &mut TokenString,
-    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+    ) -> Token {
         self.parse_float(
+            context,
             PreprocessorErrorType::InvalidHexadecimalFloatLiteral,
             token,
-            contents,
         )
     }
 
-    fn parse_decimal_float(
-        &mut self,
-        token: PreprocessorToken,
-        contents: &mut TokenString,
-    ) -> Result<Token, PreprocessorError<Prev::Error>> {
+    fn parse_decimal_float(&mut self, context: &mut Context, token: PreprocessorToken) -> Token {
         self.parse_float(
+            context,
             PreprocessorErrorType::InvalidDecimalFloatLiteral,
             token,
-            contents,
         )
-    }
-}
-
-impl<PrevPrevError, Prev> Iterator for Preprocessor<Prev, Prev::Error, Prev::SavePoint>
-where
-    Prev: TranslationPhase<
-            Yield = PreprocessorToken,
-            Error = PreprocessorTokenizerError<PrevPrevError>,
-        > + AsMut<StringCache>
-        + AsRef<StringCache>
-        + IsTokenizingIncludeString,
-    PrevPrevError: GetPosition + GetSeverity + std::error::Error + Clone + PartialEq,
-    Prev::SavePoint: FromInput + PartialEq + Eq + Clone + Debug,
-{
-    type Item = Result<Token, PreprocessorError<Prev::Error>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(result) = self.pending_results.pop_front() {
-                return Some(result);
-            }
-            if self.state == State::Done {
-                return None;
-            }
-            let token = match self.next_preprocessor_token() {
-                | Some(Ok(token)) => token,
-                | Some(Err(e)) => return Some(Err(e)),
-                | None => {
-                    self.state = State::Done;
-                    if self.if_directive_balance != 0 {
-                        return Some(Err(PreprocessorError::InnerPreprocessorError(
-                            InnerPreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
-                                source_vectors: SourceVectors::from(SourceVector {
-                                    position: self.current_position(),
-                                    length:   0,
-                                }),
-                            },
-                        )));
-                    }
-                    return None;
-                },
-            };
-
-            if let Some(result) = self.map_preprocessor_token(token) {
-                return Some(result);
-            }
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.tokenizer.size_hint()
     }
 }
 
@@ -5970,29 +5896,26 @@ impl TranslationPhase for Preprocessor {
     type Item = Token;
 
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
-        let token = match self.next_preprocessor_token() {
-            | Some(Ok(token)) => token,
-            | Some(Err(e)) => return Some(Err(e)),
-            | None => {
-                self.state = State::Done;
+        loop {
+            let Some(token) = self.next_preprocessor_token(context) else {
                 if self.if_directive_balance != 0 {
-                    return Some(Err(PreprocessorError::InnerPreprocessorError(
-                        InnerPreprocessorError {
-                            error_type:
-                                PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
-                            source_vectors: SourceVectors::from(SourceVector {
-                                position: self.current_position(),
-                                length:   0,
-                            }),
-                        },
-                    )));
+                    self.if_directive_balance = 0;
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_name(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
+                        source_vectors,
+                    });
                 }
                 return None;
-            },
-        };
+            };
 
-        if let Some(result) = self.map_preprocessor_token(token) {
-            return Some(result);
+            if let Some(result) = self.map_preprocessor_token(context, token) {
+                return Some(result);
+            }
         }
     }
 }

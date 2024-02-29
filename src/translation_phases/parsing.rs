@@ -7,63 +7,83 @@ use std::{
     sync::Arc,
 };
 
-use thiserror::Error;
-
 use super::{
     preprocessing::{
         CharacterTokenType,
         FloatTokenType,
         IntegerTokenType,
+        Preprocessor,
         Token,
     },
+    Context,
     ErrorSeverity,
     GetPosition,
     GetSeverity,
-    SavePoint as ISavePoint,
+    GetSourceFileName,
+    GetSourceVectors,
+    SetPosition,
     SourcePosition,
     SourceVectors,
     TranslationPhase,
 };
-use crate::util::string_cache::StringCacheId;
+use crate::util::{
+    shared::SharedPath,
+    string_cache::StringCacheId,
+};
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Parser<Prev> {
-    pub(crate) previous_phase: Prev,
-    pub(crate) state_stack:    Vec<State>,
-    pub(crate) types:          Vec<Type>,
-    pub(crate) token_stack:    Vec<Token>,
-    pub(crate) expressions:    Vec<Expression>,
-    pub(crate) statements:     Vec<Statement>,
-    pub(crate) block_depth:    usize,
+pub(crate) struct Parser {
+    pub(crate) preprocessor: Preprocessor,
+    pub(crate) state_stack:  Vec<State>,
+    pub(crate) types:        Vec<Type>,
+    pub(crate) token_stack:  Vec<Token>,
+    pub(crate) expressions:  Vec<Expression>,
+    pub(crate) statements:   Vec<Statement>,
+    pub(crate) block_depth:  usize,
 }
 
-impl<Prev> Parser<Prev> {
-    fn new(prev: Prev) -> Self {
+impl GetPosition for Parser {
+    fn position(&self, context: &Context) -> SourcePosition {
+        self.preprocessor.position(context)
+    }
+}
+
+impl SetPosition for Parser {
+    fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
+        self.preprocessor.set_position(context, position);
+    }
+}
+
+impl GetSourceFileName for Parser {
+    fn source_file_name(&self) -> SharedPath {
+        self.preprocessor.source_file_name()
+    }
+}
+
+impl Parser {
+    fn new(preprocessor: Preprocessor) -> Self {
         Self {
-            previous_phase: prev,
-            state_stack:    vec![State::ParsingTopLevelStatement, State::ParsingType],
-            types:          Vec::new(),
-            token_stack:    Vec::new(),
-            expressions:    Vec::new(),
-            statements:     Vec::new(),
-            block_depth:    0,
+            preprocessor,
+            state_stack: vec![State::ParsingTopLevelStatement, State::ParsingType],
+            types: Vec::new(),
+            token_stack: Vec::new(),
+            expressions: Vec::new(),
+            statements: Vec::new(),
+            block_depth: 0,
         }
     }
 }
 
-impl<Prev> Parser<Prev>
-where
-    Prev: TranslationPhase<Yield = Token>,
-{
-    fn parse_statement(&mut self) -> Result<Statement, ParserError<Prev::Error>> {
+impl Parser {
+    fn parse_statement(&mut self) -> Statement {
         todo!();
     }
 
-    fn parse_expression(&mut self) -> Result<Expression, ParserError<Prev::Error>> {
+    fn parse_expression(&mut self) -> Expression {
         todo!();
     }
 
-    fn parse_type(&mut self) -> Result<Type, ParserError<Prev::Error>> {
+    fn parse_type(&mut self) -> Type {
         todo!();
     }
 }
@@ -365,8 +385,14 @@ impl GetSeverity for ParserError {
 }
 
 impl GetPosition for ParserError {
-    fn position(&self) -> SourcePosition {
-        self.source_vectors[0]
+    fn position(&self, context: &Context) -> SourcePosition {
+        self.source_vectors.position(context)
+    }
+}
+
+impl GetSourceVectors for ParserError {
+    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+        self.source_vectors
     }
 }
 
@@ -381,15 +407,6 @@ pub(crate) struct SavePoint<PrevSavePoint> {
     pub(crate) block_depth:    usize,
     pub(crate) expressions:    Vec<Expression>,
     pub(crate) statements:     Vec<Statement>,
-}
-
-impl<PrevSavePoint> ISavePoint for SavePoint<PrevSavePoint>
-where
-    PrevSavePoint: ISavePoint,
-{
-    fn current_position(&self) -> SourcePosition {
-        self.previous_phase.current_position()
-    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -407,92 +424,42 @@ impl Display for ParserErrorType {
     }
 }
 
-impl<Prev, PrevError> Iterator for Parser<Prev>
-where
-    Prev: TranslationPhase<Yield = Token, Error = PrevError>,
-{
-    type Item = Result<TopLevelStatement, ParserError<PrevError>>;
+impl TranslationPhase for Parser {
+    type Item = TopLevelStatement;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next_item(&mut self, _context: &mut Context) -> Option<Self::Item> {
         loop {
             match self.state_stack.pop().unwrap() {
                 | State::ParsingTopLevelStatement => {
-                    let type_ = match self.parse_type() {
-                        | Ok(t) => t,
-                        | Err(e) => return Some(Err(ParserError::PreviousPhaseError(e))),
-                    };
+                    let type_ = self.parse_type();
                     match type_.kind {
-                        TypeKind::Function { return_type_index, parameters }
+                        | _ => todo!(),
                     }
                 },
-                | State::ParsingType => self.types.push(match self.parse_type() {
-                    | Ok(t) => t,
-                    | Err(e) => return Some(Err(ParserError::PreviousPhaseError(e))),
-                }),
+                | State::ParsingType => {
+                    let type_ = self.parse_type();
+                    self.types.push(type_)
+                },
                 | State::ParsingStatement => {
-                    let statement = match self.parse_statement() {
-                        | Ok(s) => s,
-                        | Err(e) => return Some(Err(e)),
-                    };
+                    let statement = self.parse_statement();
                     self.statements.push(statement);
                 },
                 | State::ParsingExpression => {
-                    let expression = match self.parse_expression() {
-                        | Ok(e) => e,
-                        | Err(e) => return Some(Err(ParserError::PreviousPhaseError(e))),
-                    };
+                    let expression = self.parse_expression();
                     self.expressions.push(expression);
                 },
             }
         }
-        Some(Ok(TopLevelStatement {
-            source_vectors: self.previous_phase.current_position().into(),
-            kind:           TopLevelStatementType::FunctionDeclaration(FunctionDeclaration {
-                name:        Identifier {
-                    name: StringCacheId::new(0),
-                },
-                parameters:  Arc::new([]),
-                return_type: None,
-            }),
-        }))
-    }
-}
-
-impl<Prev> TranslationPhase for Parser<Prev>
-where
-    Prev: TranslationPhase<Yield = Token>,
-{
-    type Error = ParserError<Prev::Error>;
-    type SavePoint = SavePoint<Prev::SavePoint>;
-    type Yield = TopLevelStatement;
-
-    fn save(&self) -> Self::SavePoint {
-        SavePoint {
-            state_stack:    self.state_stack.clone(),
-            types:          self.types.clone(),
-            previous_phase: self.previous_phase.save(),
-            token_stack:    self.token_stack.clone(),
-            block_depth:    self.block_depth,
-            expressions:    self.expressions.clone(),
-            statements:     self.statements.clone(),
-        }
-    }
-
-    fn restore(&mut self, save_point: Self::SavePoint) {
-        self.state_stack = save_point.state_stack;
-        self.expressions = save_point.expressions;
-        self.statements = save_point.statements;
-        self.types = save_point.types;
-        self.token_stack = save_point.token_stack;
-        self.block_depth = save_point.block_depth;
-        self.previous_phase.restore(save_point.previous_phase);
-    }
-
-    fn current_position(&self) -> SourcePosition {
-        self.previous_phase.current_position()
-    }
-
-    fn set_line_number(&mut self, line: usize) {
-        self.previous_phase.set_line_number(line);
+        // Some(TopLevelStatement {
+        // source_vectors: self.previous_phase.current_position().into(),
+        // kind:
+        // TopLevelStatementType::FunctionDeclaration(FunctionDeclaration {
+        // name:        Identifier {
+        // name: StringCacheId::new(0),
+        // },
+        // parameters:  Arc::new([]),
+        // return_type: None,
+        // }),
+        // })
     }
 }

@@ -8,7 +8,7 @@ use std::{
     },
     hash::Hash,
     num::NonZeroU32,
-    path::Path,
+    path::PathBuf,
 };
 
 use crate::util::{
@@ -19,10 +19,14 @@ use crate::util::{
     string_cache::StringCache,
 };
 
-const ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
+const ONE: NonZeroU32 = match NonZeroU32::new(1) {
+    | Some(one) => one,
+    | None => panic!("NonZeroU32::new(1) failed"),
+};
 
-#[derive(Error)]
-enum TranslationError {
+#[allow(dead_code)]
+#[derive(Error, Debug)]
+pub(crate) enum TranslationError {
     #[error(transparent)]
     InitialProcessing(InitialProcessorError),
     #[error(transparent)]
@@ -31,6 +35,39 @@ enum TranslationError {
     Preprocessing(PreprocessorError),
     #[error(transparent)]
     Parsing(ParserError),
+}
+
+impl GetSeverity for TranslationError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            | Self::InitialProcessing(error) => error.severity(),
+            | Self::PreprocessorTokenizining(error) => error.severity(),
+            | Self::Preprocessing(error) => error.severity(),
+            | Self::Parsing(error) => error.severity(),
+        }
+    }
+}
+
+impl GetPosition for TranslationError {
+    fn position(&self, context: &Context) -> SourcePosition {
+        match self {
+            | Self::InitialProcessing(error) => error.position(context),
+            | Self::PreprocessorTokenizining(error) => error.position(context),
+            | Self::Preprocessing(error) => error.position(context),
+            | Self::Parsing(error) => error.position(context),
+        }
+    }
+}
+
+impl GetSourceVectors for TranslationError {
+    fn source_vectors(&self, context: &mut Context) -> SourceVectors {
+        match self {
+            | Self::InitialProcessing(error) => error.source_vectors(context),
+            | Self::PreprocessorTokenizining(error) => error.source_vectors(context),
+            | Self::Preprocessing(error) => error.source_vectors(context),
+            | Self::Parsing(error) => error.source_vectors(context),
+        }
+    }
 }
 
 use owo_colors::OwoColorize;
@@ -134,7 +171,7 @@ impl Default for SourcePosition {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub(crate) struct SourceVector {
     pub(crate) index:       usize,
     pub(crate) column:      NonZeroU32,
@@ -149,23 +186,42 @@ impl Default for SourceVector {
             index:       0,
             column:      ONE,
             line:        1,
-            source_file: SharedPath::default(),
+            source_file: SharedPath::from_path_buf(PathBuf::new()),
             length:      0,
         }
     }
 }
 
+impl GetPosition for SourceVector {
+    fn position(&self, _context: &Context) -> SourcePosition {
+        SourcePosition {
+            index:  self.index,
+            line:   self.line,
+            column: self.column,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone, Hash, Copy, Default)]
 pub(crate) struct SourceVectors {
     start_index: u32,
     length:      u32,
 }
 
-impl Default for SourceVectors {
-    fn default() -> Self {
-        Self {
-            start_index: 0,
-            length:      0,
+impl GetPosition for SourceVectors {
+    fn position(&self, context: &Context) -> SourcePosition {
+        let start = &context.source_vectors[self.start_index as usize];
+        SourcePosition {
+            index:  start.index,
+            line:   start.line,
+            column: start.column,
         }
+    }
+}
+
+impl GetSourceVectors for SourceVectors {
+    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+        *self
     }
 }
 
@@ -190,67 +246,99 @@ pub(crate) trait GetSourceFileName {
 }
 
 pub(crate) trait GetPosition {
-    fn position(&self) -> SourcePosition;
+    fn position(&self, context: &Context) -> SourcePosition;
+    #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn index(&self) -> usize {
-        self.position().index
+    fn index(&self, context: &Context) -> usize {
+        self.position(context).index
     }
+    #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn column(&self) -> NonZeroU32 {
-        self.position().column
+    fn column(&self, context: &Context) -> NonZeroU32 {
+        self.position(context).column
     }
+    #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn line(&self) -> u32 {
-        self.position().line
+    fn line(&self, context: &Context) -> u32 {
+        self.position(context).line
     }
 }
 
-pub(crate) trait SetPosition {
-    fn set_position(&mut self, position: SourcePosition);
+pub(crate) trait GetSourceVectors {
+    fn source_vectors(&self, context: &mut Context) -> SourceVectors;
+}
+
+pub(crate) trait SetPosition: GetPosition {
+    fn set_position(&mut self, context: &mut Context, position: SourcePosition);
+    #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn set_index(&mut self, index: usize) {
-        self.set_position(SourcePosition {
-            index,
-            line: self.line(),
-            column: self.column(),
-        });
+    fn set_index(&mut self, context: &mut Context, index: usize) {
+        self.set_position(
+            context,
+            SourcePosition {
+                index,
+                line: self.line(context),
+                column: self.column(context),
+            },
+        );
     }
+    #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn set_column(&mut self, column: NonZeroU32) {
-        self.set_position(SourcePosition {
-            index: self.index(),
-            line: self.line(),
-            column,
-        });
+    fn set_column(&mut self, context: &mut Context, column: NonZeroU32) {
+        self.set_position(
+            context,
+            SourcePosition {
+                index: self.index(context),
+                line: self.line(context),
+                column,
+            },
+        );
     }
+    #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn set_line(&mut self, line: u32) {
-        self.set_position(SourcePosition {
-            index: self.index(),
-            line,
-            column: self.column(),
-        });
+    fn set_line(&mut self, context: &mut Context, line: u32) {
+        self.set_position(
+            context,
+            SourcePosition {
+                index: self.index(context),
+                line,
+                column: self.column(context),
+            },
+        );
     }
 }
 
 impl GetPosition for SourcePosition {
-    fn position(&self) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         *self
     }
 }
 
 impl GetPosition for Infallible {
-    fn position(&self) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         match *self {}
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct SourceFile {
     pub(crate) name:   SharedPath,
     pub(crate) source: SharedString,
     pub(crate) line:   u32,
     pub(crate) column: NonZeroU32,
     pub(crate) index:  usize,
+}
+
+impl Default for SourceFile {
+    fn default() -> Self {
+        Self {
+            name:   SharedPath::from_path_buf(PathBuf::new()),
+            source: SharedString::default(),
+            line:   1,
+            column: ONE,
+            index:  0,
+        }
+    }
 }
 
 impl SourceFile {
@@ -266,7 +354,7 @@ impl SourceFile {
 }
 
 impl GetPosition for SourceFile {
-    fn position(&self) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
             index:  self.index,
             line:   self.line,
@@ -281,12 +369,6 @@ pub(crate) struct Context {
     is_tokenizing_include_string: bool,
     is_skipping_over_dead_code:   bool,
     pending_errors:               Vec<TranslationError>,
-}
-
-impl GetPosition for Context {
-    fn position(&self) -> SourcePosition {
-        self.source.position()
-    }
 }
 
 impl Context {
@@ -317,6 +399,22 @@ impl Context {
         index
     }
 
+    #[allow(clippy::cast_possible_truncation)]
+    pub(crate) fn duplicate_source_vectors(
+        self_source_vectors: &mut Vec<SourceVector>,
+        source_vectors: SourceVectors,
+    ) -> u32 {
+        assert!(
+            u32::try_from(source_vectors.length as usize + self_source_vectors.len()).is_ok(),
+            "overflow in duplicate_source_vectors"
+        );
+        let start_index = self_source_vectors.len() as u32;
+        for i in source_vectors.start_index..source_vectors.start_index + source_vectors.length {
+            self_source_vectors.push(self_source_vectors[i as usize].clone());
+        }
+        start_index
+    }
+
     pub(crate) fn create_source_vectors(
         &mut self,
         start_position: SourcePosition,
@@ -331,14 +429,21 @@ impl Context {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
-        let start_index = self.source_vectors.len();
+        let start_index = self.source_vectors.len() as u32;
         for i in v1.start_index..v1.start_index + v1.length {
-            self.source_vectors.push(self.source_vectors[i]);
+            self.source_vectors
+                .push(self.source_vectors[i as usize].clone());
         }
         for i in v2.start_index..v2.start_index + v2.length {
-            self.source_vectors.push(self.source_vectors[i]);
+            self.source_vectors
+                .push(self.source_vectors[i as usize].clone());
         }
+        assert!(
+            u32::try_from(self.source_vectors.len()).is_ok(),
+            "overflow in merge_vectors"
+        );
         let length = v1.length + v2.length;
         SourceVectors {
             start_index,
@@ -364,11 +469,11 @@ impl Context {
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn missing_final_newline(&mut self) {
-        if !self.is_skipping_over_dead_code {
+    pub(crate) fn missing_final_newline(&mut self, vector: SourceVector) {
+        if !self.is_skipping_over_dead_code() {
             self.pending_errors
                 .push(TranslationError::InitialProcessing(
-                    InitialProcessorError::MissingFinalNewLine(self.source.position()),
+                    InitialProcessorError::MissingFinalNewline(vector),
                 ));
         }
     }
@@ -376,7 +481,7 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn preprocessor_tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
-        if !self.is_skipping_over_dead_code {
+        if !self.is_skipping_over_dead_code() {
             self.pending_errors
                 .push(TranslationError::PreprocessorTokenizining(error));
         }
@@ -387,6 +492,27 @@ impl Context {
     pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError) {
         self.pending_errors
             .push(TranslationError::Preprocessing(error));
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn raw_preprocessor_error(
+        self_pending_errors: &mut Vec<TranslationError>,
+        error: PreprocessorError,
+    ) {
+        self_pending_errors.push(TranslationError::Preprocessing(error));
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError> {
+        self.pending_errors.pop()
+    }
+
+    pub(crate) fn get_source_vectors(&self, source_vectors: SourceVectors) -> &[SourceVector] {
+        let start_index = source_vectors.start_index as usize;
+        let end_index = start_index + source_vectors.length as usize;
+        &self.source_vectors[start_index..end_index]
     }
 }
 

@@ -2,8 +2,11 @@ use std::collections::VecDeque;
 
 use super::stack_queue::StackQueue;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum SmallQueue<T, const N: usize> {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum SmallQueue<T, const N: usize>
+where
+    T: Copy + Default,
+{
     StackQueue(StackQueue<T, N>),
     HeapQueue(VecDeque<T>),
 }
@@ -17,7 +20,10 @@ where
     }
 }
 
-impl<T, const N: usize> SmallQueue<T, N> {
+impl<T, const N: usize> SmallQueue<T, N>
+where
+    T: Copy + Default,
+{
     pub(crate) fn new() -> Self {
         Self::StackQueue(StackQueue::new())
     }

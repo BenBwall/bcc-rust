@@ -5,7 +5,7 @@ use std::{
         Formatter,
     },
 };
-
+#[allow(clippy::assertions_on_constants)]
 const _: () = assert!(
     usize::BITS >= 32,
     "StringCache: usize must be at least 32 bits."
@@ -26,7 +26,7 @@ impl Default for StringCache {
 impl Display for StringCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "StringCache:")?;
-        for i in 0usize.. {
+        for i in 1u32.. {
             if let Some(s) = self.get(i) {
                 writeln!(f, "\t{i}: {s}")?;
             } else {
@@ -78,7 +78,7 @@ impl StringCache {
     pub(crate) fn new() -> Self {
         Self {
             ends: vec![0],
-            data: vec![],
+            data: String::new(),
         }
     }
 
@@ -125,7 +125,7 @@ impl StringCache {
         if self.ends.last().copied() >= Some(self.data.len() as u32 + len - 1) {
             panic!("StringCache: cannot pop across string boundaries.");
         }
-        self.data.truncate(self.data.len() - len);
+        self.data.truncate(self.data.len() - len as usize);
     }
 
     pub(crate) fn end_str(&mut self) -> StringCacheId {
@@ -155,15 +155,6 @@ impl StringCache {
                 .unwrap_or_else(|| panic!("Compiler bug: StringCacheId is out of bounds: {id:#?}"))
         }
         inner(self, id.into())
-    }
-
-    #[allow(dead_code)]
-    /// Returns true if the given string is already interned.
-    pub(crate) fn contains(&self, string: impl AsRef<str>) -> bool {
-        fn inner(interner: &StringCache, string: &str) -> bool {
-            interner.inner.get(string).is_some()
-        }
-        inner(self, string.as_ref())
     }
 
     pub(crate) fn clear(&mut self) {
