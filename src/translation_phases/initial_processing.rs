@@ -309,6 +309,8 @@ impl InitialProcessor {
         HandleNewline::Other
     }
 
+    #[inline(never)]
+    #[cold]
     fn missing_final_newline(&mut self, context: &mut Context) {
         context.missing_final_newline(SourceVector {
             index:       self.source_file.index,
