@@ -160,6 +160,7 @@ impl InitialProcessor {
                 return '?';
             },
         };
+        // Step over `next_next`.
         self.source_file.index += 1;
         self.source_file.column.saturating_add_assign(3);
         to_yield
@@ -177,7 +178,6 @@ impl InitialProcessor {
         self.source_file.column.saturating_add_assign(2);
         loop {
             let start_index = self.source_file.index;
-            let start_column = self.source_file.column;
             let start_line = self.source_file.line;
             let Some(curr) = self.next_char(context) else {
                 return ' ';
@@ -191,9 +191,9 @@ impl InitialProcessor {
             let next_next = self.next_char(context);
             match self.handle_newline(context, curr, next, next_next, next_index) {
                 | HandleNewline::Newline => {
-                    self.source_file.index = start_index;
-                    self.source_file.column = start_column;
-                    self.source_file.line = start_line;
+                    self.source_file.index = start_index + 1;
+                    self.source_file.column = ONE;
+                    self.source_file.line = start_line + 1;
                     return ' ';
                 },
                 | HandleNewline::EscapedNewline => (),
@@ -229,6 +229,7 @@ impl InitialProcessor {
             match (curr, next) {
                 | ('*', Some('/')) => {
                     self.source_file.column.saturating_add_assign(2);
+                    // Step over `next`.
                     self.source_file.index += 1;
                     return ' ';
                 },
@@ -236,6 +237,7 @@ impl InitialProcessor {
                     self.last_was_newline = true;
                     self.source_file.column = ONE;
                     self.source_file.line += 1;
+                    // Step over `next`.
                     self.source_file.index += 1;
                 },
                 | ('\n' | '\r', _) => {
@@ -290,6 +292,7 @@ impl InitialProcessor {
                 | (Some('\r'), Some('\n')) => {
                     self.source_file.column = ONE;
                     self.source_file.line += 1;
+                    // Step over `next_next`.
                     self.source_file.index += 1;
                     self.last_was_newline = true;
                     return HandleNewline::EscapedNewline;

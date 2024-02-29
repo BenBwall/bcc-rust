@@ -2257,8 +2257,8 @@ impl Preprocessor {
     }
 
     fn update_macro_argument_paren_depth(
-        &mut self,
-        context: &mut Context,
+        &self,
+        context: &Context,
         token: PreprocessorToken,
         argument_name: StringCacheId,
         paren_depth: usize,
@@ -3444,6 +3444,7 @@ impl Preprocessor {
         context: &mut Context,
         token: PreprocessorToken,
     ) -> PreprocessorToken {
+        eprintln!("Parsing hash operator");
         let position = self.position(context);
         let Some(argument_name) = self.expect_token_from_previous_phase::<true>(
             context,
@@ -3458,7 +3459,11 @@ impl Preprocessor {
             "parsing '#' operator in function-like macro invocation.",
         ) else {
             self.set_position(context, position);
-            return token;
+            return PreprocessorToken {
+                kind:           PreprocessorTokenType::GeneratedString,
+                contents:       context.string_cache.intern(""),
+                source_vectors: token.source_vectors,
+            };
         };
         let (mut token_tokenizer, argument_id) = match self.tokenizer_stack.last().unwrap() {
             | TokenizerFrame {
@@ -3474,7 +3479,11 @@ impl Preprocessor {
                             ),
                         source_vectors: argument_name.source_vectors,
                     });
-                    return token;
+                    return PreprocessorToken {
+                        kind:           PreprocessorTokenType::GeneratedString,
+                        contents:       context.string_cache.intern(""),
+                        source_vectors: token.source_vectors,
+                    };
                 },
                 | Some(v) => (v.tokenizer.clone(), v.name),
             },
