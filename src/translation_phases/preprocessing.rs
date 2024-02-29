@@ -2881,6 +2881,7 @@ impl Preprocessor {
                             }
                             *last_was_whitespace = true;
                             t.contents = context.string_cache.intern(" ");
+                            t.kind = PreprocessorTokenType::Whitespace;
                         },
                         | _ => *last_was_whitespace = false,
                     }
