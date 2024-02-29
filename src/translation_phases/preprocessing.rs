@@ -120,8 +120,8 @@ pub(crate) struct Preprocessor {
     pub(crate) hash_hash_stack: Vec<HashHash>,
     once_set:                   HashSet<SharedPath>,
     macro_definitions:          HashMap<StringCacheId, MacroDefinition>,
+    current_is_newline:         bool,
     last_was_newline:           bool,
-    current_preprocessor_token: Option<PreprocessorToken>,
     if_directive_balance:       isize,
 
     generate_placeholders:      bool,
@@ -1822,7 +1822,7 @@ impl Preprocessor {
             tokenizer,
             macro_definitions,
             last_was_newline: true,
-            current_preprocessor_token: None,
+            current_is_newline: true,
             if_directive_balance: 0,
             generate_placeholders: false,
             quote_include_directories,
@@ -1841,6 +1841,7 @@ impl Preprocessor {
                 }) | None
             ) {
                 self.last_was_newline = true;
+                self.current_is_newline = true;
                 return;
             }
         }
@@ -1856,17 +1857,13 @@ impl Preprocessor {
                 }) | None
             ) {
                 self.last_was_newline = true;
+                self.current_is_newline = true;
                 return;
             }
         }
     }
 
     fn push_tokenizer_frame(&mut self, _context: &mut Context, frame: TokenizerFrame) {
-        // eprintln!("pushing frame: {frame:#?}");
-        // eprintln!(
-        // "Called push_tokenizer_frame with length: {} and frame: {frame:?}",
-        // self.tokenizer_stack.len()
-        // );
         self.tokenizer_stack.last_mut().unwrap().tokenizer = take(&mut self.tokenizer);
         self.tokenizer = frame.tokenizer.clone();
         self.tokenizer_stack.push(frame);
@@ -2011,11 +2008,6 @@ impl Preprocessor {
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
-        // eprintln!(
-        // "Called merge tokens with lhs: {:#?} and rhs: {:#?}",
-        // lhs.kind, rhs.kind
-        // );
-
         match (lhs.kind, rhs.kind) {
             | (PreprocessorTokenType::Placeholder, PreprocessorTokenType::Placeholder) => None,
             | (PreprocessorTokenType::Placeholder, _) => Some(rhs),
@@ -2175,7 +2167,7 @@ impl Preprocessor {
         &mut self,
         context: &mut Context,
     ) -> Option<PreprocessorToken> {
-        let ret = 'base: loop {
+        'base: loop {
             if unlikely(self.tokenizer_stack.is_empty()) {
                 break 'base None;
             }
@@ -2261,13 +2253,7 @@ impl Preprocessor {
                     continue 'base;
                 },
             }
-        };
-        // eprintln!(
-        // "Ret in next_preprocessor_token_no_expand_no_hash_hash: {:#?}",
-        // ret.as_ref().map(|r| r.as_ref().map(|t| t.kind))
-        // );
-        // eprintln!("Ret in next_preprocessor_token_no_expand_no_hash_hash: {ret:#?}");
-        ret
+        }
     }
 
     fn update_macro_argument_paren_depth(
@@ -2278,7 +2264,6 @@ impl Preprocessor {
         paren_depth: usize,
     ) -> Option<usize> {
         _ = self;
-        // eprintln!("Updating macro argument paren depth: {:#?}", token.kind);
         if (token.kind == PreprocessorTokenType::Comma
             && context.string_cache.at(argument_name) != "__VA_ARGS__")
             || (token.kind == PreprocessorTokenType::ClosingParenthesis && paren_depth == 1)
@@ -2452,16 +2437,7 @@ impl Preprocessor {
         &mut self,
         context: &mut Context,
     ) -> Option<PreprocessorToken> {
-        // eprintln!("Tokenizer stack: {:#?}", self.tokenizer_stack);
-        // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
-        eprintln!(
-            "Last token: {:?}",
-            self.current_preprocessor_token.map(|t| t.kind)
-        );
-        self.last_was_newline = match self.current_preprocessor_token {
-            | Some(t) => t.kind == PreprocessorTokenType::Newline,
-            | None => true,
-        };
+        self.last_was_newline = self.current_is_newline;
         let ret = 'base: loop {
             self.generate_placeholders = true;
             let Some(mut token) =
@@ -2472,7 +2448,6 @@ impl Preprocessor {
             self.generate_placeholders = false;
             if !self.hash_hash_stack.is_empty() {
                 'merge: loop {
-                    // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
                     let new = match self.hash_hash_stack.last() {
                         | None | Some(HashHash::Empty) => None,
                         | Some(HashHash::Lhs(lhs)) => {
@@ -2867,16 +2842,8 @@ impl Preprocessor {
                 break 'base Some(token);
             }
         };
-        // eprintln!(
-        // "Ret in next_preprocessor_token: {:#?}",
-        // ret.as_ref().map(|r| r.as_ref().map(|t| t.kind))
-        // );
-        // eprintln!("Next preprocessor token returning: {ret:#?}");
         self.generate_placeholders = false;
-        eprintln!("Ret in next_preprocessor_token: {:?}", ret.map(|t| t.kind));
-        if let Some(ret) = ret {
-            self.current_preprocessor_token = Some(ret);
-        }
+        self.current_is_newline = ret.map_or(true, |t| t.kind == PreprocessorTokenType::Newline);
         ret
     }
 
@@ -3421,12 +3388,8 @@ impl Preprocessor {
         _hash_hash: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
-        // eprintln!("Parsing hash hash operator");
-        // eprintln!("lhs: {lhs:#?}");
-        // eprintln!("rhs: {rhs:#?}");
         self.hash_hash_stack.push(HashHash::Empty);
         let rhs_is_macro_argument = if let Some(frame) = self.handle_macro_argument(context, rhs) {
-            // eprintln!("rhs is macro argument");
             self.push_tokenizer_frame(context, frame);
             true
         } else {
@@ -3434,14 +3397,12 @@ impl Preprocessor {
             false
         };
         if let Some(frame) = self.handle_macro_argument(context, lhs) {
-            // eprintln!("lhs is macro argument");
             self.push_tokenizer_frame(context, frame);
         } else if rhs_is_macro_argument {
             *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs);
         } else {
             _ = self.hash_hash_stack.pop();
             return self.merge_tokens(context, lhs, rhs);
-            // drop(self.hash_hash_stack.pop());
         }
         None
     }
@@ -3518,10 +3479,6 @@ impl Preprocessor {
 
     fn parse_directive(&mut self, context: &mut Context, token: PreprocessorToken) {
         if !self.last_was_newline {
-            // eprintln!(
-            // "Last preprocessor token: {:#?}",
-            // self.last_preprocessor_token
-            // );
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
                 source_vectors: token.source_vectors,
@@ -4744,81 +4701,73 @@ impl Preprocessor {
         let start_balance = self.if_directive_balance;
         context.set_is_skipping_over_dead_code(true);
         'outer: while start_balance <= self.if_directive_balance {
-            // println!(
-            // "Start balance: {start_balance}, current balance: {}",
-            // self.if_directive_balance
-            // );
             match self.tokenizer.next_item(context) {
-                | Some(token) => {
-                    // eprintln!("Token in skipping over dead code: {token:?}");
-                    match token.kind {
-                        | PreprocessorTokenType::Newline => {
-                            'newline: loop {
-                                match self.tokenizer.next_item(context) {
-                                    | Some(token) if token.kind != PreprocessorTokenType::Hash =>
-                                        if token.kind == PreprocessorTokenType::Newline {
-                                            continue 'newline;
-                                        } else {
-                                            continue 'outer;
-                                        },
-                                    | Some(_) => break 'newline,
-                                    | None => {
-                                        context.preprocessor_error(PreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::UnexpectedEndOfInput(
-                                                    "parsing dead code. Expected #endif instead",
-                                                ),
-                                            source_vectors: token.source_vectors,
-                                        });
-                                        return;
+                | Some(token) => match token.kind {
+                    | PreprocessorTokenType::Newline => {
+                        'newline: loop {
+                            match self.tokenizer.next_item(context) {
+                                | Some(token) if token.kind != PreprocessorTokenType::Hash =>
+                                    if token.kind == PreprocessorTokenType::Newline {
+                                        continue 'newline;
+                                    } else {
+                                        continue 'outer;
                                     },
-                                }
-                            }
-                            let directive_name = match Self::next_ignore_whitespace(
-                                &mut self.tokenizer,
-                                context,
-                            ) {
-                                | Some(token) if token.kind == PreprocessorTokenType::Identifier =>
-                                    token,
-                                | Some(token) => {
-                                    context.preprocessor_error(PreprocessorError {
-                                            error_type: PreprocessorErrorType::ExpectedIdentifierInPreprocessorDirective(token.kind),
-                                            source_vectors: token.source_vectors,
-                                        },
-                                    );
-                                    return;
-                                },
+                                | Some(_) => break 'newline,
                                 | None => {
                                     context.preprocessor_error(PreprocessorError {
                                         error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                            "parsing dead code. Expected #endif instead.",
+                                            "parsing dead code. Expected #endif instead",
                                         ),
                                         source_vectors: token.source_vectors,
                                     });
                                     return;
                                 },
-                            };
-                            match context.string_cache.at(directive_name.contents) {
-                                | "endif" => {
-                                    self.if_directive_balance -= 1;
-                                },
-                                | "if" | "ifndef" | "ifdef" => {
-                                    self.if_directive_balance += 1;
-                                },
-                                | "elif" if self.if_directive_balance == start_balance => {
-                                    if self.eval_preprocessor_expression(
-                                        context,
-                                        PreprocessorErrorType::NoConditionInElifDirective,
-                                    ) {
-                                        break;
-                                    }
-                                },
-                                | "else" if self.if_directive_balance == start_balance => break,
-                                | _ => (),
                             }
-                        },
-                        | _ => continue,
-                    }
+                        }
+                        let directive_name = match Self::next_ignore_whitespace(
+                            &mut self.tokenizer,
+                            context,
+                        ) {
+                            | Some(token) if token.kind == PreprocessorTokenType::Identifier =>
+                                token,
+                            | Some(token) => {
+                                context.preprocessor_error(PreprocessorError {
+                                            error_type: PreprocessorErrorType::ExpectedIdentifierInPreprocessorDirective(token.kind),
+                                            source_vectors: token.source_vectors,
+                                        },
+                                    );
+                                return;
+                            },
+                            | None => {
+                                context.preprocessor_error(PreprocessorError {
+                                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                        "parsing dead code. Expected #endif instead.",
+                                    ),
+                                    source_vectors: token.source_vectors,
+                                });
+                                return;
+                            },
+                        };
+                        match context.string_cache.at(directive_name.contents) {
+                            | "endif" => {
+                                self.if_directive_balance -= 1;
+                            },
+                            | "if" | "ifndef" | "ifdef" => {
+                                self.if_directive_balance += 1;
+                            },
+                            | "elif" if self.if_directive_balance == start_balance => {
+                                if self.eval_preprocessor_expression(
+                                    context,
+                                    PreprocessorErrorType::NoConditionInElifDirective,
+                                ) {
+                                    break;
+                                }
+                            },
+                            | "else" if self.if_directive_balance == start_balance => break,
+                            | _ => (),
+                        }
+                    },
+                    | _ => continue,
                 },
                 | None => {
                     context.set_is_skipping_over_dead_code(false);
@@ -4835,6 +4784,7 @@ impl Preprocessor {
             .eval_preprocessor_expression(context, PreprocessorErrorType::NoConditionInIfDirective)
         {
             self.last_was_newline = true;
+            self.current_is_newline = true;
         } else {
             self.skip_over_dead_code(context);
         }
@@ -4953,10 +4903,8 @@ impl Preprocessor {
 
     fn search_for_header_in(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
         for dir in dirs {
-            // println!("Searching for header in {dir:#?}");
             let mut header_path = dir.clone();
             header_path.push(path);
-            // println!("Synthesized path: {header_path:#?}");
             if header_path.exists() {
                 return Some(header_path);
             }
@@ -4971,11 +4919,6 @@ impl Preprocessor {
         path: &Path,
         is_system_header: bool,
     ) -> Option<SharedPath> {
-        // eprintln!(
-        // "Including {}header from path: {:#?}",
-        // if is_system_header { "system " } else { "" },
-        // path
-        // );
         let header = 'ret: {
             if path.is_absolute() {
                 if path.exists() {
@@ -5018,13 +4961,8 @@ impl Preprocessor {
             });
             return None;
         };
-        // eprintln!("Returning {ret:?}");
         let header = SharedPath::from_path_buf(header);
         if self.once_set.contains(&header) {
-            // eprintln!(
-            // "Not including header {s} because it should only be included once and \
-            // already been included"
-            // );
             None
         } else {
             Some(header)
@@ -5175,7 +5113,7 @@ impl Preprocessor {
             },
         );
         self.last_was_newline = true;
-        self.current_preprocessor_token = None;
+        self.current_is_newline = true;
     }
 
     fn parse_define_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
@@ -5417,6 +5355,8 @@ impl Preprocessor {
         {
             *Rc::get_mut(hhp).unwrap() = hash_hash_positions;
         }
+        self.last_was_newline = true;
+        self.current_is_newline = true;
     }
 
     fn parse_undef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
