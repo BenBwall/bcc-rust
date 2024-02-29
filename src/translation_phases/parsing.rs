@@ -21,8 +21,6 @@ use super::{
     GetSeverity,
     GetSourceFileName,
     GetSourceVectors,
-    SaveCurrentPosition,
-    SavedPosition,
     SetPosition,
     SetSourceFileName,
     SourcePosition,
@@ -46,48 +44,26 @@ pub(crate) struct Parser {
 }
 
 impl GetPosition for Parser {
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         self.preprocessor.position(context)
     }
 }
 
 impl SetPosition for Parser {
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
     fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
         self.preprocessor.set_position(context, position);
     }
 }
 
 impl GetSourceFileName for Parser {
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
     fn source_file_name(&self) -> SharedPath {
         self.preprocessor.source_file_name()
     }
 }
 
 impl SetSourceFileName for Parser {
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
     fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath) {
         self.preprocessor.set_source_file_name(context, name);
-    }
-}
-
-impl SaveCurrentPosition for Parser {
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    fn save_position(&self, context: &mut Context) -> SavedPosition {
-        self.preprocessor.save_position(context)
-    }
-
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    fn restore_position(&mut self, context: &mut Context, saved_position: SavedPosition) {
-        self.preprocessor.restore_position(context, saved_position);
     }
 }
 

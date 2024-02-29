@@ -24,6 +24,7 @@ const ONE: NonZeroU32 = match NonZeroU32::new(1) {
     | None => panic!("NonZeroU32::new(1) failed"),
 };
 
+<<<<<<< HEAD
 pub(crate) trait SaveCurrentPosition {
     fn save_position(&self, context: &mut Context) -> SavedPosition;
     fn restore_position(&mut self, context: &mut Context, saved: SavedPosition);
@@ -51,6 +52,8 @@ impl GetPosition for SavedPosition {
     }
 }
 
+=======
+>>>>>>> parent of 5990b99 (Add save pos trait)
 #[allow(dead_code)]
 #[derive(Error, Debug)]
 pub(crate) enum TranslationError {
@@ -557,9 +560,7 @@ impl Context {
     }
 }
 
-pub(crate) trait TranslationPhase:
-    GetPosition + SetPosition + GetSourceFileName + SetSourceFileName + SaveCurrentPosition
-{
+pub(crate) trait TranslationPhase: GetPosition + SetPosition + GetSourceFileName + SetSourceFileName {
     type Item;
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
 }

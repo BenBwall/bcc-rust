@@ -1,44 +1,21 @@
-//! Partially based on the `string_interner` crate.
-
 use std::{
+    fmt,
     fmt::{
-        self,
         Display,
         Formatter,
     },
-    hash::{
-        BuildHasher,
-        BuildHasherDefault,
-    },
-    num::NonZeroU32,
 };
-
-use hashbrown::{
-    hash_map::RawEntryMut,
-    HashMap,
-};
-use rustc_hash::FxHasher;
 #[allow(clippy::assertions_on_constants)]
 const _: () = assert!(
     usize::BITS >= 32,
     "StringCache: usize must be at least 32 bits."
 );
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StringCache {
-    ends:   Vec<u32>,
-    data:   String,
-    dedup:  HashMap<StringCacheId, (), ()>,
-    hasher: BuildHasherDefault<FxHasher>,
+    ends: Vec<u32>,
+    data: String,
 }
-
-impl PartialEq<StringCache> for StringCache {
-    fn eq(&self, other: &StringCache) -> bool {
-        self.ends == other.ends && self.data == other.data
-    }
-}
-
-impl Eq for StringCache {}
 
 impl Default for StringCache {
     fn default() -> Self {
@@ -63,7 +40,7 @@ impl Display for StringCache {
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StringCacheId {
-    id: NonZeroU32,
+    id: u32,
 }
 
 impl Display for StringCacheId {
@@ -74,30 +51,25 @@ impl Display for StringCacheId {
 
 impl From<u32> for StringCacheId {
     fn from(id: u32) -> Self {
-        Self::from_u32(id)
+        Self { id }
     }
 }
 
 impl From<StringCacheId> for u32 {
     fn from(id: StringCacheId) -> Self {
-        StringCacheId::to_u32(id)
+        id.id
     }
 }
 
 impl StringCacheId {
     #[allow(dead_code)]
     pub(crate) const fn from_u32(id: u32) -> Self {
-        Self {
-            id: match NonZeroU32::new(id) {
-                | Some(id) => id,
-                | None => panic!("StringCacheId: ID cannot be zero."),
-            },
-        }
+        Self { id }
     }
 
     #[allow(dead_code)]
     pub(crate) const fn to_u32(self) -> u32 {
-        self.id.get()
+        self.id
     }
 }
 
@@ -105,76 +77,26 @@ impl StringCache {
     /// Creates a new empty `StringCache`. Does not allocate.
     pub(crate) fn new() -> Self {
         Self {
-            ends:   vec![0],
-            data:   String::new(),
-            dedup:  HashMap::default(),
-            hasher: BuildHasherDefault::default(),
+            ends: vec![0],
+            data: String::new(),
         }
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn intern_impl(data: &mut String, ends: &mut Vec<u32>, s: &str) -> StringCacheId {
-        let len = s.len();
-        let start = data.len();
-        data.push_str(s);
-        let end = start + len;
-        assert!(
-            end < u32::MAX as usize,
-            "StringCache: string cache cannot store more than 4GB."
-        );
-        ends.push(end as u32);
-        StringCacheId::from_u32(ends.len() as u32 - 1)
     }
 
     /// Interns the given string and returns an ID representing its position in
     /// the slice cache.
+    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn intern(&mut self, s: impl AsRef<str>) -> StringCacheId {
         fn inner(interner: &mut StringCache, s: &str) -> StringCacheId {
-            let hash = interner.hasher.hash_one(s);
-            let entry = interner.dedup.raw_entry_mut().from_hash(hash, |id| {
-                // SAFETY: This is safe because we only operate on id that have been previously
-                // interned.
-                s == unsafe {
-                    StringCache::get_impl(&interner.data, &interner.ends, *id).unwrap_unchecked()
-                }
-            });
-            let (&mut symbol, &mut ()) = match entry {
-                | RawEntryMut::Occupied(occupied) => occupied.into_key_value(),
-                | RawEntryMut::Vacant(vacant) => {
-                    let symbol =
-                        StringCache::intern_impl(&mut interner.data, &mut interner.ends, s);
-                    vacant.insert_with_hasher(hash, symbol, (), |id| {
-                        // SAFETY: This is safe because we only operate on symbols that
-                        //         we receive from our backend making them valid.
-                        let string = unsafe {
-                            StringCache::get_impl(&interner.data, &interner.ends, *id)
-                                .unwrap_unchecked()
-                        };
-                        interner.hasher.hash_one(string)
-                    })
-                },
-            };
-            symbol
-        }
-        inner(self, s.as_ref())
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
-        fn inner(interner: &StringCache, s: &str) -> Option<StringCacheId> {
-            let hash = interner.hasher.hash_one(s);
-            interner
-                .dedup
-                .raw_entry()
-                .from_hash(hash, |symbol| {
-                    // SAFETY: This is safe because we only operate on id that have been previously
-                    // interned.
-                    s == unsafe {
-                        StringCache::get_impl(&interner.data, &interner.ends, *symbol)
-                            .unwrap_unchecked()
-                    }
-                })
-                .map(|(&id, &())| id)
+            let len = s.len();
+            let start = interner.data.len();
+            interner.data.push_str(s);
+            let end = start + len;
+            assert!(
+                end < u32::MAX as usize,
+                "StringCache: string cache cannot store more than 4GB."
+            );
+            interner.ends.push(end as u32);
+            StringCacheId::from_u32(interner.ends.len() as u32 - 1)
         }
         inner(self, s.as_ref())
     }
@@ -216,51 +138,22 @@ impl StringCache {
     #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn end_str(&mut self) -> StringCacheId {
         self.ends.push(self.data.len() as u32);
-        let id = StringCacheId::from_u32(self.ends.len() as u32 - 1);
-        let s = unsafe { Self::get_impl(&self.data, &self.ends, id).unwrap_unchecked() };
-        let hash = self.hasher.hash_one(s);
-        let entry = self.dedup.raw_entry_mut().from_hash(hash, |id| {
-            // SAFETY: This is safe because we only operate on id that have been previously
-            // interned.
-            s == unsafe { Self::get_impl(&self.data, &self.ends, *id).unwrap_unchecked() }
-        });
-        let (&mut symbol, &mut ()) = match entry {
-            | RawEntryMut::Occupied(occupied) => {
-                _ = self.ends.pop();
-                Self::undo_str_impl(&mut self.data, &self.ends);
-                occupied.into_key_value()
-            },
-            | RawEntryMut::Vacant(vacant) => {
-                vacant.insert_with_hasher(hash, id, (), |id| {
-                    // SAFETY: This is safe because we only operate on symbols that
-                    //         we receive from our backend making them valid.
-                    let string =
-                        unsafe { Self::get_impl(&self.data, &self.ends, *id).unwrap_unchecked() };
-                    self.hasher.hash_one(string)
-                })
-            },
-        };
-        symbol
+        StringCacheId::from_u32(self.ends.len() as u32 - 1)
     }
 
     pub(crate) fn undo_str(&mut self) {
         self.data.truncate(*self.ends.last().unwrap() as usize);
     }
 
-    fn undo_str_impl(data: &mut String, ends: &[u32]) {
-        data.truncate(*ends.last().unwrap() as usize);
-    }
-
     /// Returns the bytes for the given ID if it exists in the cache.
     pub(crate) fn get(&self, id: impl Into<StringCacheId>) -> Option<&str> {
-        Self::get_impl(&self.data, &self.ends, id.into())
-    }
-
-    fn get_impl<'a>(data: &'a str, ends: &[u32], id: StringCacheId) -> Option<&'a str> {
-        let start = *ends.get(id.to_u32() as usize - 1)?;
-        let end = *ends.get(id.to_u32() as usize)?;
-        let slice = &data[start as usize..end as usize];
-        Some(slice)
+        fn inner(interner: &StringCache, id: StringCacheId) -> Option<&str> {
+            let start = *interner.ends.get(id.to_u32() as usize - 1)?;
+            let end = *interner.ends.get(id.to_u32() as usize)?;
+            let slice = &interner.data[start as usize..end as usize];
+            Some(slice)
+        }
+        inner(self, id.into())
     }
 
     pub(crate) fn at(&self, id: impl Into<StringCacheId>) -> &str {

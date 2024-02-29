@@ -8,8 +8,6 @@ use super::{
     GetSeverity,
     GetSourceFileName,
     GetSourceVectors,
-    SaveCurrentPosition,
-    SavedPosition,
     SetPosition,
     SetSourceFileName,
     SourcePosition,
@@ -58,21 +56,6 @@ impl GetSourceFileName for PreprocessorTokenizer {
 impl SetSourceFileName for PreprocessorTokenizer {
     fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath) {
         self.initial_processor.set_source_file_name(context, name);
-    }
-}
-
-impl SaveCurrentPosition for PreprocessorTokenizer {
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    fn save_position(&self, context: &mut Context) -> SavedPosition {
-        self.initial_processor.save_position(context)
-    }
-
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    fn restore_position(&mut self, context: &mut Context, saved_position: SavedPosition) {
-        self.initial_processor
-            .restore_position(context, saved_position);
     }
 }
 
