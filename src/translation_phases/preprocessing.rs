@@ -1877,7 +1877,7 @@ impl Preprocessor {
         }
     }
 
-    fn expect_token<const IGNORE_WHITESPACE: bool>(
+    fn expect_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         context: &mut Context,
         mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
@@ -1890,9 +1890,9 @@ impl Preprocessor {
     ) -> Option<PreprocessorToken> {
         loop {
             let start = self.position(context);
-            match self.next_preprocessor_token::<IGNORE_WHITESPACE>(context) {
+            match self.next_preprocessor_token::<SHOULD_IGNORE_WHITESPACE>(context) {
                 | Some(token) => {
-                    if IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
+                    if SHOULD_IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
                         continue;
                     }
                     if is_correct_token(self, context, token) {
@@ -1921,7 +1921,7 @@ impl Preprocessor {
         }
     }
 
-    fn expect_token_from_previous_phase<const IGNORE_WHITESPACE: bool>(
+    fn expect_token_from_previous_phase<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         context: &mut Context,
         mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
@@ -1936,7 +1936,7 @@ impl Preprocessor {
             let start = self.position(context);
             match self.tokenizer.next_item(context) {
                 | Some(token) => {
-                    if IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
+                    if SHOULD_IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
                         continue;
                     }
                     if is_correct_token(self, context, token) {
