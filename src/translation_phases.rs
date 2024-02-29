@@ -39,6 +39,18 @@ pub(crate) struct SavedPosition {
     current_char_start_line: u32,
 }
 
+impl GetPosition for SavedPosition {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn position(&self, _context: &Context) -> SourcePosition {
+        SourcePosition {
+            index:  self.index,
+            line:   self.line,
+            column: self.column,
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Error, Debug)]
 pub(crate) enum TranslationError {
@@ -208,6 +220,8 @@ impl Default for SourceVector {
 }
 
 impl GetPosition for SourceVector {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
             index:  self.index,
@@ -224,6 +238,8 @@ pub(crate) struct SourceVectors {
 }
 
 impl GetPosition for SourceVectors {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         let start = &context.source_vectors[self.start_index as usize];
         SourcePosition {
@@ -328,12 +344,16 @@ pub(crate) trait SetSourceFileName {
 }
 
 impl GetPosition for SourcePosition {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         *self
     }
 }
 
 impl GetPosition for Infallible {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         match *self {}
     }
@@ -373,6 +393,8 @@ impl SourceFile {
 }
 
 impl GetPosition for SourceFile {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
             index:  self.index,
