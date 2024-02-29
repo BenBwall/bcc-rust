@@ -2549,8 +2549,7 @@ impl Preprocessor {
                                     break 'base Some(token);
                                 },
                                 | None => {
-                                    let p = position.position(context);
-                                    let source_vectors = context.create_source_vectors(p, file, 1);
+                                    let source_vectors = context.create_source_vectors(position, file, 1);
                                     context.preprocessor_error(PreprocessorError {
                                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
                                         source_vectors,
