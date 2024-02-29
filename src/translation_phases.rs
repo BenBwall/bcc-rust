@@ -530,9 +530,7 @@ impl Context {
     }
 }
 
-pub(crate) trait TranslationPhase:
-    GetPosition + SetPosition + GetSourceFileName + SetSourceFileName
-{
+pub(crate) trait TranslationPhase: GetPosition + SetPosition + GetSourceFileName + SetSourceFileName {
     type Item;
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
 }
