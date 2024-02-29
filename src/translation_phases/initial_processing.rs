@@ -9,6 +9,7 @@ use super::{
     GetSourceVectors,
     NonZeroExt,
     SetPosition,
+    SetSourceFileName,
     SourceFile,
     SourcePosition,
     SourceVector,
@@ -99,6 +100,12 @@ impl GetSourceFileName for InitialProcessor {
     #[inline(always)]
     fn source_file_name(&self) -> SharedPath {
         self.source_file.name.clone()
+    }
+}
+
+impl SetSourceFileName for InitialProcessor {
+    fn set_source_file_name(&mut self, _context: &mut Context, name: SharedPath) {
+        self.source_file.name = name;
     }
 }
 

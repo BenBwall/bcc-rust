@@ -308,6 +308,10 @@ pub(crate) trait SetPosition: GetPosition {
     }
 }
 
+pub(crate) trait SetSourceFileName {
+    fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath);
+}
+
 impl GetPosition for SourcePosition {
     fn position(&self, _context: &Context) -> SourcePosition {
         *self
@@ -516,7 +520,7 @@ impl Context {
     }
 }
 
-pub(crate) trait TranslationPhase: GetPosition + SetPosition + GetSourceFileName {
+pub(crate) trait TranslationPhase: GetPosition + SetPosition + GetSourceFileName + SetSourceFileName {
     type Item;
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
 }
