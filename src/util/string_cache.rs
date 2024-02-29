@@ -84,6 +84,7 @@ impl StringCache {
 
     /// Interns the given string and returns an ID representing its position in
     /// the slice cache.
+    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn intern(&mut self, s: impl AsRef<str>) -> StringCacheId {
         fn inner(interner: &mut StringCache, s: &str) -> StringCacheId {
             let len = s.len();
@@ -104,30 +105,37 @@ impl StringCache {
         fn inner(interner: &mut StringCache, c: char) {
             interner.data.push(c);
         }
-        inner(self, c.into())
+        inner(self, c.into());
     }
 
     pub(crate) fn push_str(&mut self, s: impl AsRef<str>) {
         fn inner(interner: &mut StringCache, s: &str) {
             interner.data.push_str(s);
         }
-        inner(self, s.as_ref())
+        inner(self, s.as_ref());
     }
 
+    #[allow(dead_code)]
+    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn pop(&mut self) {
-        if self.ends.last().copied() == Some(self.data.len() as u32) {
-            panic!("StringCache: cannot pop across string boundaries.");
-        }
+        assert!(
+            self.ends.last().copied() != Some(self.data.len() as u32),
+            "StringCache: cannot pop across string boundaries."
+        );
         _ = self.data.pop();
     }
 
+    #[allow(dead_code)]
+    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn pop_str(&mut self, len: u32) {
-        if self.ends.last().copied() >= Some(self.data.len() as u32 + len - 1) {
-            panic!("StringCache: cannot pop across string boundaries.");
-        }
+        assert!(
+            self.ends.last().copied() < Some(self.data.len() as u32 + len - 1),
+            "StringCache: cannot pop across string boundaries."
+        );
         self.data.truncate(self.data.len() - len as usize);
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn end_str(&mut self) -> StringCacheId {
         self.ends.push(self.data.len() as u32);
         StringCacheId::from_u32(self.ends.len() as u32 - 1)
@@ -157,6 +165,7 @@ impl StringCache {
         inner(self, id.into())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn clear(&mut self) {
         self.ends.truncate(1);
         self.data.clear();

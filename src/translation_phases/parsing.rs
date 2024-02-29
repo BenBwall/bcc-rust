@@ -68,7 +68,8 @@ impl SetSourceFileName for Parser {
 }
 
 impl Parser {
-    fn new(preprocessor: Preprocessor) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn new(preprocessor: Preprocessor) -> Self {
         Self {
             preprocessor,
             state_stack: vec![State::ParsingTopLevelStatement, State::ParsingType],
@@ -96,6 +97,8 @@ impl Parser {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[allow(dead_code)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum State {
     ParsingTopLevelStatement,
     ParsingStatement,
@@ -109,6 +112,7 @@ pub(crate) struct TopLevelStatement {
     pub(crate) kind:           TopLevelStatementType,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TopLevelStatementType {
     FunctionDeclaration(FunctionDeclaration),
@@ -118,13 +122,13 @@ pub(crate) enum TopLevelStatementType {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-struct ExpressionIndex(usize);
+pub(crate) struct ExpressionIndex(usize);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-struct StatementIndex(usize);
+pub(crate) struct StatementIndex(usize);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-struct TypeIndex(usize);
+pub(crate) struct TypeIndex(usize);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Statement {
@@ -133,6 +137,7 @@ pub(crate) struct Statement {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+#[allow(dead_code)]
 pub(crate) enum StatementType {
     Compound(Vec<Statement>),
     Expression(ExpressionIndex),
@@ -173,6 +178,7 @@ pub(crate) struct Expression {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[allow(dead_code)]
 pub(crate) enum ExpressionType {
     Conditional {
         condition_index: ExpressionIndex,
@@ -208,6 +214,7 @@ pub(crate) enum ExpressionType {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[allow(dead_code)]
 pub(crate) enum Constant {
     Integer(IntegerTokenType),
     Float(FloatTokenType),
@@ -215,6 +222,7 @@ pub(crate) enum Constant {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[allow(dead_code)]
 pub(crate) enum BinaryOperator {
     Multiplication,
     Division,
@@ -250,6 +258,7 @@ pub(crate) enum BinaryOperator {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[allow(dead_code)]
 pub(crate) enum UnaryOperator {
     AddressOf,
     Indirection,
@@ -283,6 +292,7 @@ pub(crate) struct VariableDefinition {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[allow(dead_code)]
 pub(crate) enum StorageClass {
     Auto,
     Register,
@@ -292,6 +302,7 @@ pub(crate) enum StorageClass {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[allow(dead_code)]
 pub(crate) enum PrimitiveType {
     Char,
     Short,
@@ -323,6 +334,7 @@ pub(crate) struct Type {
     kind:        TypeKind,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) enum TypeKind {
     Primitive(PrimitiveType),
@@ -445,7 +457,7 @@ impl TranslationPhase for Parser {
                 },
                 | State::ParsingType => {
                     let type_ = self.parse_type();
-                    self.types.push(type_)
+                    self.types.push(type_);
                 },
                 | State::ParsingStatement => {
                     let statement = self.parse_statement();

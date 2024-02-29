@@ -79,7 +79,7 @@ pub(crate) enum TokenizerFrameType {
         is_variadic:         bool,
     },
     FunctionLikeMacroArgument {
-        argument:            FunctionLikeMacroArgument,
+        argument:            Box<FunctionLikeMacroArgument>,
         paren_depth:         usize,
         has_generated_token: bool,
     },
@@ -131,6 +131,7 @@ pub(crate) struct Preprocessor {
 }
 
 impl GetPosition for Preprocessor {
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         self.tokenizer.position(context)
@@ -138,13 +139,15 @@ impl GetPosition for Preprocessor {
 }
 
 impl SetPosition for Preprocessor {
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
-        self.tokenizer.set_position(context, position)
+        self.tokenizer.set_position(context, position);
     }
 }
 
 impl GetSourceFileName for Preprocessor {
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn source_file_name(&self) -> SharedPath {
         self.tokenizer.source_file_name()
@@ -315,6 +318,7 @@ impl PreprocessorExpressionOperand {
         }
     }
 
+    #[allow(dead_code)]
     fn set_unsigned(self, value: u64) -> Self {
         self.set_signed(value as i64)
     }
@@ -1972,6 +1976,7 @@ impl Preprocessor {
         rhs: PreprocessorToken,
         result_token_type: PreprocessorTokenType,
     ) -> PreprocessorToken {
+        _ = self;
         let mut new_contents = TokenString::new();
         new_contents.push_str(context.string_cache.at(lhs.contents));
         new_contents.push_str(context.string_cache.at(rhs.contents));
@@ -1990,6 +1995,7 @@ impl Preprocessor {
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> PreprocessorToken {
+        _ = self;
         let lhs_contents = context.string_cache.at(lhs.contents).to_string();
         let rhs_contents = context.string_cache.at(rhs.contents).to_string();
         let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
@@ -2273,6 +2279,7 @@ impl Preprocessor {
         argument_name: StringCacheId,
         paren_depth: usize,
     ) -> Option<usize> {
+        _ = self;
         // eprintln!("Updating macro argument paren depth: {:#?}", token.kind);
         if (token.kind == PreprocessorTokenType::Comma
             && context.string_cache.at(argument_name) != "__VA_ARGS__")
@@ -2946,7 +2953,7 @@ impl Preprocessor {
             if let Some(arg) = arguments.get(&token.contents) {
                 let frame = TokenizerFrame {
                     frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
-                        argument:            arg.clone(),
+                        argument:            Box::new(arg.clone()),
                         paren_depth:         1,
                         has_generated_token: false,
                     },
@@ -4439,6 +4446,7 @@ impl Preprocessor {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::cast_precision_loss)]
     fn eval_preprocessor_expression(
         &mut self,
@@ -4884,7 +4892,7 @@ impl Preprocessor {
             .expect_token_from_previous_phase::<true>(
                 context,
                 |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                |_, context, t| {
+                |_, _, t| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:     PreprocessorErrorType::ExtraTokensAfterIfdefDirective,
                         source_vectors: t.source_vectors,
@@ -4922,7 +4930,7 @@ impl Preprocessor {
             .expect_token_from_previous_phase::<true>(
                 context,
                 |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                |_, context, t| {
+                |_, _, t| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:     PreprocessorErrorType::ExtraTokensAfterIfndefDirective,
                         source_vectors: t.source_vectors,
@@ -5016,6 +5024,7 @@ impl Preprocessor {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         context.set_is_tokenizing_include_string(true);
         let Some(include_string) =
@@ -5051,7 +5060,7 @@ impl Preprocessor {
                     .expect_token_from_previous_phase::<true>(
                         context,
                         |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                        |_, context, t| {
+                        |_, _, t| {
                             ControlFlow::Break(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
@@ -5075,7 +5084,7 @@ impl Preprocessor {
                     .expect_token_from_previous_phase::<true>(
                         context,
                         |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                        |_, context, t| {
+                        |_, _, t| {
                             ControlFlow::Break(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
