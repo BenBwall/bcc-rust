@@ -2,14 +2,15 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    /* 
+    // if let Err(e) = bcc_rust::run() {
+    // eprintln!("{e}");
+    // ExitCode::FAILURE
+    // } else {
+    // ExitCode::SUCCESS
+    // }
     if let Err(e) = bcc_rust::run() {
         eprintln!("{e}");
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
-    */
-    bcc_rust::preprocess_hundred_thousand();
+        return ExitCode::FAILURE;
+    };
     ExitCode::SUCCESS
 }

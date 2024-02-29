@@ -16,6 +16,11 @@ use clap::{
 };
 use owo_colors::OwoColorize;
 use thiserror::Error;
+use translation_phases::{
+    preprocessing::Token,
+    TranslationError,
+    TranslationPhase,
+};
 
 use crate::{
     translation_phases::{
@@ -26,8 +31,9 @@ use crate::{
             TokenType,
         },
         Context,
-        GetPosition,
         GetSeverity,
+        GetSourceFileName,
+        GetSourceVectors,
     },
     util::{
         read_to_string_lossy,
@@ -37,13 +43,53 @@ use crate::{
             SharedString,
             SharedVec,
         },
-        string_cache::StringCache,
     },
 };
 
 pub(crate) mod float_parsing;
 pub(crate) mod translation_phases;
 pub(crate) mod util;
+
+struct PreprocessorIterator {
+    preprocessor: Preprocessor,
+    context:      Context,
+}
+
+impl PreprocessorIterator {
+    fn new(
+        source_filename: SharedPath,
+        input_string: SharedString,
+        quote_include: SharedVec<PathBuf>,
+        system_include: SharedVec<PathBuf>,
+    ) -> Self {
+        let mut context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            source_filename,
+            input_string,
+            quote_include,
+            system_include,
+        );
+        Self {
+            preprocessor,
+            context,
+        }
+    }
+}
+
+impl Iterator for PreprocessorIterator {
+    type Item = Result<Token, TranslationError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(error) = self.context.pop_pending_error() {
+            return Some(Err(error));
+        }
+        match self.preprocessor.next_item(&mut self.context) {
+            | Some(token) => Some(Ok(token)),
+            | None => None,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about, color = ColorChoice::Always)]
@@ -108,28 +154,27 @@ pub fn run() -> Result<(), MainError> {
     parse_include_env_var("CPATH", &mut args.system_include);
     parse_include_env_var("C_INCLUDE_PATH", &mut args.system_include);
 
-    let mut context = Context::new();
-
-    let mut preprocessor = Preprocessor::new(
-        &mut context,
+    let mut iterator = PreprocessorIterator::new(
         source_filename,
         input_string,
         args.quote_include.into(),
         args.system_include.into(),
     );
-    while let Some(res) = preprocessor.next() {
+    while let Some(res) = iterator.next() {
         match res {
             | Ok(t) => eprintln!(
                 "{}",
                 match t.kind {
-                    | TokenType::Identifier =>
-                        format!("Identifier: {}", context.string_cache.at(t.contents)),
+                    | TokenType::Identifier => format!(
+                        "Identifier: {}",
+                        iterator.context.string_cache.at(t.contents)
+                    ),
                     | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
                     | TokenType::String(sltt) => format!(
                         "String-like token: {}",
                         match sltt {
                             | StringTokenType::WideString(s) | StringTokenType::String(s) => {
-                                context.string_cache.at(s).to_string()
+                                iterator.context.string_cache.at(s).to_string()
                             },
                         }
                     ),
@@ -148,13 +193,14 @@ pub fn run() -> Result<(), MainError> {
                 .bright_magenta()
             ),
             | Err(e) => {
-                let position = e.position();
+                let source_vectors = e.source_vectors(&mut iterator.context);
+                let file = iterator.preprocessor.source_file_name();
+                let vec = iterator.context.get_source_vectors(source_vectors);
                 eprintln!(
-                    "{}: {e} at {}:{}:{}",
+                    "{}: {e} at {:?}:{:?}",
                     e.severity(),
-                    context.string_cache.at(position.source_file),
-                    position.line.bright_blue(),
-                    position.column.bright_blue()
+                    file,
+                    vec.bright_blue(),
                 );
             },
         }
@@ -166,17 +212,17 @@ pub fn run() -> Result<(), MainError> {
     eprintln!(
         "{}{}",
         "String cache contents: ".bright_yellow(),
-        preprocessor.tokenizer.as_ref().bright_yellow()
+        iterator.context.string_cache.bright_yellow()
     );
     eprintln!(
         "{}{:?}",
         "Hash Hash stack: ".bright_red(),
-        preprocessor.hash_hash_stack.bright_red()
+        iterator.preprocessor.hash_hash_stack.bright_red()
     );
     eprintln!(
         "{}{:?}",
         "Tokenizer stack: ".bright_blue(),
-        preprocessor.tokenizer_stack.bright_blue()
+        iterator.preprocessor.tokenizer_stack.bright_blue()
     );
     Ok(())
 }
@@ -184,14 +230,12 @@ pub fn run() -> Result<(), MainError> {
 #[doc(hidden)]
 pub fn preprocess_hundred_thousand() {
     let million_lines = include_str!(concat!(env!("OUT_DIR"), "/hundred-thousand-lines.c"));
-    let mut string_cache = StringCache::new();
-    let preprocessor = Preprocessor::new(
+    let mut iterator = PreprocessorIterator::new(
+        shared_path_from_str("<input>"),
         million_lines.to_owned().into(),
-        string_cache.intern("<input>"),
-        string_cache,
         SharedVec::default(),
         SharedVec::default(),
     );
-    let count = preprocessor.count();
+    let count = iterator.count();
     eprintln!("{}{}", "Count: ".bright_yellow(), count);
 }

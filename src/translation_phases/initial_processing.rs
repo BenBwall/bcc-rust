@@ -1,13 +1,18 @@
-use std::path::Path;
+use thiserror::Error;
 
 use super::{
     Context,
+    ErrorSeverity,
     GetPosition,
+    GetSeverity,
     GetSourceFileName,
+    GetSourceVectors,
     NonZeroExt,
     SetPosition,
     SourceFile,
     SourcePosition,
+    SourceVector,
+    SourceVectors,
     StrExt,
     TranslationPhase,
     ONE,
@@ -23,11 +28,42 @@ enum HandleNewline {
     Other,
 }
 
+#[derive(Debug, Error)]
 pub(crate) enum InitialProcessorError {
-    MissingFinalNewline(SourcePosition),
+    #[error("missing final newline")]
+    MissingFinalNewline(SourceVector),
 }
 
-#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+impl GetPosition for InitialProcessorError {
+    #[inline(always)]
+    fn position(&self, context: &Context) -> SourcePosition {
+        match self {
+            | Self::MissingFinalNewline(vector) => vector.position(context),
+        }
+    }
+}
+
+impl GetSeverity for InitialProcessorError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            | Self::MissingFinalNewline(_) => ErrorSeverity::Warning,
+        }
+    }
+}
+
+impl GetSourceVectors for InitialProcessorError {
+    fn source_vectors(&self, context: &mut Context) -> SourceVectors {
+        match self {
+            | Self::MissingFinalNewline(vector) => context.create_source_vectors(
+                vector.position(context),
+                vector.source_file.clone(),
+                vector.length,
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct InitialProcessor {
     last_was_newline:            bool,
     pub(crate) source_file:      SourceFile,
@@ -36,7 +72,7 @@ pub(crate) struct InitialProcessor {
 
 impl GetPosition for InitialProcessor {
     #[inline(always)]
-    fn position(&self) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
             index:  self.source_file.index,
             column: self.source_file.column,
@@ -47,7 +83,7 @@ impl GetPosition for InitialProcessor {
 
 impl SetPosition for InitialProcessor {
     #[inline(always)]
-    fn set_position(&mut self, position: SourcePosition) {
+    fn set_position(&mut self, _context: &mut Context, position: SourcePosition) {
         let SourcePosition {
             index,
             column,
@@ -61,8 +97,8 @@ impl SetPosition for InitialProcessor {
 
 impl GetSourceFileName for InitialProcessor {
     #[inline(always)]
-    fn source_file_name(&self) -> &Path {
-        &self.source_file.source_name
+    fn source_file_name(&self) -> SharedPath {
+        self.source_file.name.clone()
     }
 }
 
@@ -79,7 +115,7 @@ impl InitialProcessor {
         self.current_char_start_position.clone()
     }
 
-    fn next_char(&mut self, context: &mut Context) -> Option<char> {
+    fn next_char(&mut self, _context: &mut Context) -> Option<char> {
         self.source_file.source.char_at(self.source_file.index)
     }
 
@@ -87,7 +123,7 @@ impl InitialProcessor {
     #[cold]
     fn handle_trigraph_graph(
         &mut self,
-        context: &mut Context,
+        _context: &mut Context,
         to_map: char,
         next_index: usize,
     ) -> char {
@@ -107,7 +143,7 @@ impl InitialProcessor {
             | '/' => '\\',
             | '<' => '{',
             | '-' => '~',
-            | c => {
+            | _ => {
                 self.source_file.index = next_index;
                 self.source_file.column.saturating_add_assign(1);
                 return '?';
@@ -169,10 +205,10 @@ impl InitialProcessor {
         //! net-positive on typical workloads.
         self.source_file.column.saturating_add_assign(2);
         loop {
-            let Some(curr) = self.source_file.next_char(context) else {
+            let Some(curr) = self.next_char(context) else {
                 if !self.last_was_newline {
                     self.last_was_newline = true;
-                    context.missing_final_newline();
+                    self.missing_final_newline(context);
                     return ' ';
                 }
                 return ' ';
@@ -212,7 +248,7 @@ impl InitialProcessor {
     /// Assumes that context.source.index is pointing at next_next.
     fn handle_newline(
         &mut self,
-        context: &mut Context,
+        _context: &mut Context,
         curr: char,
         next: Option<char>,
         next_next: Option<char>,
@@ -229,7 +265,7 @@ impl InitialProcessor {
         }
 
         // Handle Unix- and MacOS-style newlines.
-        if matches!(curr, b'\n' | b'\r') {
+        if matches!(curr, '\n' | '\r') {
             self.source_file.column = ONE;
             self.source_file.line += 1;
             self.source_file.index = next_index;
@@ -258,6 +294,16 @@ impl InitialProcessor {
         }
         HandleNewline::Other
     }
+
+    fn missing_final_newline(&mut self, context: &mut Context) {
+        context.missing_final_newline(SourceVector {
+            index:       self.source_file.index,
+            column:      self.source_file.column,
+            line:        self.source_file.line,
+            source_file: self.source_file.name.clone(),
+            length:      0,
+        });
+    }
 }
 
 impl TranslationPhase for InitialProcessor {
@@ -269,7 +315,6 @@ impl TranslationPhase for InitialProcessor {
         // Translation phases 1 and 2 are handled in the same iterator for performance
         // reasons, because otherwise we would to store characters we don't consume with
         // source positions.
-        let mut start_index = context.source.index;
         loop {
             self.current_char_start_position.index = self.source_file.index;
             self.current_char_start_position.column = self.source_file.column;
@@ -278,7 +323,7 @@ impl TranslationPhase for InitialProcessor {
             let Some(curr) = self.next_char(context) else {
                 if !self.last_was_newline {
                     self.last_was_newline = true;
-                    context.missing_final_newline();
+                    self.missing_final_newline(context);
                     return Some('\n');
                 }
                 return None;
@@ -292,7 +337,7 @@ impl TranslationPhase for InitialProcessor {
                 self.source_file.index += next.len_utf8();
             }
 
-            let next_next_index = self.source_file.index;
+            let _next_next_index = self.source_file.index;
             let next_next = self.next_char(context);
 
             match self.handle_newline(context, curr, next, next_next, next_index) {
@@ -305,7 +350,7 @@ impl TranslationPhase for InitialProcessor {
                 | HandleNewline::Other => (),
             }
 
-            Some(match (curr, next, next_next) {
+            break Some(match (curr, next, next_next) {
                 | ('/', Some('/'), _) => self.handle_line_comment(context),
                 | ('/', Some('*'), _) => self.handle_block_comment(context),
                 | ('?', Some('?'), Some(to_map)) => {
@@ -318,7 +363,7 @@ impl TranslationPhase for InitialProcessor {
                     self.last_was_newline = false;
                     c
                 },
-            })
+            });
         }
     }
 }

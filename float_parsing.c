@@ -4,36 +4,46 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
-size_t long_double_to_string_get_size(long_double_t value, int *error) {
+size_t long_double_to_string_get_size(long_double_t value, int *error)
+{
   long double ld_value;
   memcpy(&ld_value, value.bytes, sizeof(value));
   int err = snprintf(NULL, 0, "%Lf", ld_value);
-  if (err < 0) {
+  if (err < 0)
+  {
     *error = errno;
     return 0;
-  } else {
+  }
+  else
+  {
     *error = 0;
     return err;
   }
 }
 
 size_t long_double_to_string(long_double_t value, char *buffer,
-                             size_t buffer_size, int *error) {
+                             size_t buffer_size, int *error)
+{
   long double ld_value;
   memcpy(&ld_value, value.bytes, sizeof(value));
   int err = snprintf(buffer, buffer_size, "%Lf", ld_value);
-  if (err < 0) {
+  if (err < 0)
+  {
     *error = errno;
     return 0;
-  } else {
+  }
+  else
+  {
     *error = 0;
     return err;
   }
 }
 
 long_double_t string_to_long_double(char const *const s, char **const endptr,
-                                    int *const error) {
+                                    int *const error)
+{
   long double value = strtold(s, endptr);
   *error = errno;
   long_double_t ret;
@@ -42,15 +52,48 @@ long_double_t string_to_long_double(char const *const s, char **const endptr,
 }
 
 double string_to_double(char const *const s, char **const endptr,
-                        int *const error) {
+                        int *const error)
+{
   double value = strtod(s, endptr);
   *error = errno;
   return value;
 }
 
 float string_to_float(char const *const s, char **const endptr,
-                      int *const error) {
+                      int *const error)
+{
   float value = strtof(s, endptr);
   *error = errno;
   return value;
+}
+
+static bool is_integer(long double ld_value)
+{
+  return ld_value == ceill(ld_value);
+}
+
+operand_t long_double_to_operand(long_double_t value, int *error)
+{
+  operand_t ret;
+  long double ld_value;
+  memcpy(&ld_value, value.bytes, sizeof(value));
+  if (!is_integer(ld_value) || ld_value < INT64_MIN || ld_value > UINT64_MAX)
+  {
+    *error = 1;
+  }
+  else
+  {
+    *error = 0;
+  }
+  if (ld_value < 0)
+  {
+    ret.is_unsigned = false;
+    ret.value.signed_value = (int64_t)ld_value;
+  }
+  else
+  {
+    ret.is_unsigned = true;
+    ret.value.unsigned_value = (uint64_t)ld_value;
+  }
+  return ret;
 }

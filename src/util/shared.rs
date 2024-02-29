@@ -34,7 +34,7 @@ where
 {
     fn drop(&mut self) {
         self.ref_cnt().set(self.ref_cnt().get() - 1);
-        if self.ref_count().get() == 0 {
+        if self.ref_cnt().get() == 0 {
             #[cold]
             #[inline(never)]
             fn drop_slow<T: ?Sized>(this: &mut Shared<T>) {
