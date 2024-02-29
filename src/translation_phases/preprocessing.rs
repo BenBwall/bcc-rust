@@ -1933,6 +1933,50 @@ impl Preprocessor {
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
         loop {
+            let start = self.position(context);
+            match self.tokenizer.next_item(context) {
+                | Some(token) => {
+                    if SHOULD_IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
+                        continue;
+                    }
+                    if is_correct_token(self, context, token) {
+                        return Some(token);
+                    }
+                    match on_wrong_token_type(self, context, token) {
+                        | ControlFlow::Continue(()) => continue,
+                        | ControlFlow::Break(e) => {
+                            self.set_position(context, start);
+                            context.preprocessor_error(e);
+                            return None;
+                        },
+                    }
+                },
+                | None => {
+                    self.set_position(context, start);
+                    let source_vectors =
+                        context.create_source_vectors(start, self.source_file_name(), 0);
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
+                        source_vectors,
+                    });
+                    return None;
+                },
+            }
+        }
+    }
+
+    fn expect_token_from_previous_phase<const SHOULD_IGNORE_WHITESPACE: bool>(
+        &mut self,
+        context: &mut Context,
+        mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
+        mut on_wrong_token_type: impl FnMut(
+            &mut Self,
+            &mut Context,
+            PreprocessorToken,
+        ) -> ControlFlow<PreprocessorError>,
+        eof_message: &'static str,
+    ) -> Option<PreprocessorToken> {
+        loop {
             let start = self.save_position(context);
             match self.tokenizer.next_item(context) {
                 | Some(token) => {
