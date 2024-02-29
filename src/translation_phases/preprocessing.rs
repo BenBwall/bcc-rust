@@ -1887,7 +1887,7 @@ impl Preprocessor {
         }
     }
 
-    fn expect_token_from_previous_phase(
+    fn expect_token_from_previous_phase<const IGNORE_WHITESPACE: bool>(
         &mut self,
         context: &mut Context,
         mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
@@ -1902,6 +1902,9 @@ impl Preprocessor {
             let start = self.position(context);
             match self.tokenizer.next_item(context) {
                 | Some(token) => {
+                    if IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
+                        continue;
+                    }
                     if is_correct_token(self, context, token) {
                         return Some(token);
                     }
@@ -2130,8 +2133,6 @@ impl Preprocessor {
 
     fn should_ignore_whitespace(&self, _context: &mut Context) -> bool {
         !self.should_tokenize_whitespace
-            || self.last_preprocessor_token.as_ref().map(|t| t.kind)
-                == Some(PreprocessorTokenType::Whitespace)
     }
 
     #[allow(clippy::redundant_else)]
@@ -2427,12 +2428,12 @@ impl Preprocessor {
                         | None | Some(HashHash::Empty) => None,
                         | Some(HashHash::Lhs(lhs)) => {
                             let lhs = *lhs;
-                            drop(self.hash_hash_stack.pop());
+                            _ = self.hash_hash_stack.pop();
                             self.merge_tokens(context, lhs, token)
                         },
                         | Some(HashHash::Rhs(rhs)) => {
                             let rhs = *rhs;
-                            drop(self.hash_hash_stack.pop());
+                            _ = self.hash_hash_stack.pop();
                             self.merge_tokens(context, token, rhs)
                         },
                     };
@@ -2790,7 +2791,7 @@ impl Preprocessor {
                             }
                             self.tokenizer = tokenizer;
 
-                            self.expect_token(
+                            _ = self.expect_token(
                                 context,
                                 |_, _, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
                                 |_, _, token|
@@ -2830,11 +2831,25 @@ impl Preprocessor {
         ret
     }
 
+    fn next_ignore_whitespace(
+        tokenizer: &mut PreprocessorTokenizer,
+        context: &mut Context,
+    ) -> Option<PreprocessorToken> {
+        loop {
+            match tokenizer.next_item(context) {
+                | Some(t) if t.kind == PreprocessorTokenType::Whitespace => continue,
+                | Some(t) => return Some(t),
+                | None => return None,
+            }
+        }
+    }
+
     fn prepare_pragma_operator_string(
         &self,
         context: &Context,
         string: StringCacheId,
     ) -> SharedString {
+        _ = self;
         let string = context.string_cache.at(string);
         let mut ret = String::new();
         // Skip the leading quote.
@@ -3374,7 +3389,7 @@ impl Preprocessor {
         } else if rhs_is_macro_argument {
             *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs);
         } else {
-            drop(self.hash_hash_stack.pop());
+            _ = self.hash_hash_stack.pop();
             return self.merge_tokens(context, lhs, rhs);
             // drop(self.hash_hash_stack.pop());
         }
@@ -3387,7 +3402,7 @@ impl Preprocessor {
         token: PreprocessorToken,
     ) -> PreprocessorToken {
         let position = self.position(context);
-        let Some(argument_name) = self.expect_token_from_previous_phase(
+        let Some(argument_name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
             |_, _, t| {
@@ -3467,7 +3482,7 @@ impl Preprocessor {
                 source_vectors: token.source_vectors,
             });
         }
-        let Some(directive) = self.tokenizer.next_item(context) else {
+        let Some(directive) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
             return;
         };
         match directive.kind {
@@ -3580,6 +3595,7 @@ impl Preprocessor {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::too_many_lines)]
     fn handle_expression_operator(
         &mut self,
@@ -3908,13 +3924,11 @@ impl Preprocessor {
                     return;
                 };
                 let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let (new, did_overflow) =
-                    (|lhs: PreprocessorExpressionOperand, rhs: PreprocessorExpressionOperand| {
-                        let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
-                        let (new, overflow) =
-                            lhs.as_signed().overflowing_shl(rhs.as_unsigned() as u32);
-                        (new, did_overflow || overflow)
-                    })(lhs, rhs);
+                let (new, did_overflow) = {
+                    let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
+                    let (new, overflow) = lhs.as_signed().overflowing_shl(rhs.as_unsigned() as u32);
+                    (new, did_overflow || overflow)
+                };
                 if did_overflow {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
@@ -3952,13 +3966,11 @@ impl Preprocessor {
                     return;
                 };
                 let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let (new, did_overflow) =
-                    (|lhs: PreprocessorExpressionOperand, rhs: PreprocessorExpressionOperand| {
-                        let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
-                        let (new, overflow) =
-                            lhs.as_signed().overflowing_shr(rhs.as_unsigned() as u32);
-                        (new, did_overflow || overflow)
-                    })(lhs, rhs);
+                let (new, did_overflow) = {
+                    let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
+                    let (new, overflow) = lhs.as_signed().overflowing_shr(rhs.as_unsigned() as u32);
+                    (new, did_overflow || overflow)
+                };
                 if did_overflow {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
@@ -4326,14 +4338,13 @@ impl Preprocessor {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression,
                     source_vectors,
-                },
-            )
+                });
             },
         }
     }
 
     fn parse_defined_operator(&mut self, context: &mut Context) {
-        let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase(context,
+        let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase::<true>(context,
             |_, _, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::OpeningParenthesis),
             |_, _, t|
                 ControlFlow::Break(PreprocessorError {
@@ -4362,7 +4373,7 @@ impl Preprocessor {
             PreprocessorTokenType::OpeningParenthesis,
             "Compiler bug: ident_or_opening_paren should be an opening parenthesis or identifier."
         );
-        let Some(ident) = self.expect_token_from_previous_phase(
+        let Some(ident) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| matches!(t.kind, PreprocessorTokenType::Identifier),
             |_, _, t| {
@@ -4381,7 +4392,7 @@ impl Preprocessor {
             return;
         };
 
-        drop(self.expect_token_from_previous_phase(
+        _ = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| matches!(t.kind, PreprocessorTokenType::ClosingParenthesis),
             |_, _, t| {
@@ -4392,7 +4403,7 @@ impl Preprocessor {
                 })
             },
             "parsing defined operator",
-        ));
+        );
         let is_defined = self.macro_definitions.contains_key(&ident.contents);
         self.expression_parser
             .operand_stack
@@ -4738,7 +4749,10 @@ impl Preprocessor {
                                     },
                                 }
                             }
-                            let directive_name = match self.tokenizer.next_item(context) {
+                            let directive_name = match Self::next_ignore_whitespace(
+                                &mut self.tokenizer,
+                                context,
+                            ) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Identifier =>
                                     token,
                                 | Some(token) => {
@@ -4833,7 +4847,7 @@ impl Preprocessor {
 
     fn parse_ifdef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         self.if_directive_balance += 1;
-        let Some(name) = self.expect_token_from_previous_phase(
+        let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
             |_, _, token| {
@@ -4855,7 +4869,7 @@ impl Preprocessor {
 
     fn parse_ifndef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         self.if_directive_balance += 1;
-        let Some(name) = self.expect_token_from_previous_phase(
+        let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
             |_, _, token| {
@@ -5069,7 +5083,7 @@ impl Preprocessor {
     }
 
     fn parse_define_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        let Some(name) = self.expect_token_from_previous_phase(
+        let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
             |_, _, token| {
@@ -5102,7 +5116,7 @@ impl Preprocessor {
                 },
             },
         };
-        let opening_paren = match self.tokenizer.next_item(context) {
+        let opening_paren = match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
             | Some(
                 token @ PreprocessorToken {
                     kind: PreprocessorTokenType::OpeningParenthesis,
@@ -5139,7 +5153,7 @@ impl Preprocessor {
             let mut argument_names = Vec::new();
             let mut is_variadic = false;
             loop {
-                let Some(name_or_ellipsis) = self.expect_token_from_previous_phase(
+                let Some(name_or_ellipsis) = self.expect_token_from_previous_phase::<true>(
                     context,
                     |_, _, t| {
                         t.kind == PreprocessorTokenType::Identifier
@@ -5175,7 +5189,7 @@ impl Preprocessor {
                 } else if name_or_ellipsis.kind == PreprocessorTokenType::ClosingParenthesis {
                     break;
                 }
-                let Some(comma_or_closing_parent) = self.expect_token_from_previous_phase(
+                let Some(comma_or_closing_parent) = self.expect_token_from_previous_phase::<true>(
                     context,
                     |_, _, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
                     |_, _, token|
@@ -5309,7 +5323,7 @@ impl Preprocessor {
     }
 
     fn parse_undef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        let Some(name) = self.expect_token_from_previous_phase(
+        let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
             |_, _, token| {
@@ -5325,7 +5339,7 @@ impl Preprocessor {
             return;
         };
         drop(self.macro_definitions.remove(&name.contents));
-        drop(self.expect_token_from_previous_phase(
+        _ = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Newline,
             |_, _, token| {
@@ -5337,11 +5351,12 @@ impl Preprocessor {
                 })
             },
             "parsing undef directive",
-        ));
+        );
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn parse_line_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        let Some(token) = self.expect_token_from_previous_phase(
+        let Some(token) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Number,
             |_, _, t| {
@@ -5354,7 +5369,7 @@ impl Preprocessor {
         ) else {
             return;
         };
-        let (value, did_overflow) = (|context: &mut Context, token: PreprocessorToken| {
+        let (value, did_overflow) = {
             let mut value = 0i128;
             let mut did_generate_error = false;
             let mut did_overflow = false;
@@ -5372,16 +5387,16 @@ impl Preprocessor {
                     continue;
                 }
                 value *= 10;
-                if value > i32::MAX as i128 {
+                if value > i128::from(i32::MAX) {
                     did_overflow = true;
                 }
                 value += i128::from(b - b'0');
-                if value > i32::MAX as i128 {
+                if value > i128::from(i32::MAX) {
                     did_overflow = true;
                 }
             }
             (value, did_overflow)
-        })(context, token);
+        };
         if did_overflow {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(value),
@@ -5390,7 +5405,7 @@ impl Preprocessor {
             return;
         };
         self.set_line(context, value as u32);
-        drop(self.expect_token_from_previous_phase(
+        _ = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Newline,
             |_, _, t| {
@@ -5400,7 +5415,7 @@ impl Preprocessor {
                 })
             },
             "parsing line directive",
-        ));
+        );
     }
 
     fn parse_error_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
@@ -5440,22 +5455,19 @@ impl Preprocessor {
     fn parse_pragma_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         let should_tokenize_whitespace = replace(&mut self.should_tokenize_whitespace, false);
         'base: loop {
-            let token = match self.tokenizer.next_item(context) {
-                | Some(token) => token,
-                | None => {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_name(),
-                        0,
-                    );
-                    context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
-                            "parsing pragma directive",
-                        ),
-                        source_vectors,
-                    });
-                    break 'base;
-                },
+            let Some(token) = self.tokenizer.next_item(context) else {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_name(),
+                    0,
+                );
+                context.preprocessor_error(PreprocessorError {
+                    error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                        "parsing pragma directive",
+                    ),
+                    source_vectors,
+                });
+                break 'base;
             };
             match token.kind {
                 | PreprocessorTokenType::Whitespace => continue 'base,
@@ -5470,7 +5482,7 @@ impl Preprocessor {
                                 });
                             }
                             _ = self.once_set.insert(self.source_file_name());
-                            match self.tokenizer.next_item(context) {
+                            match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline =>
                                     break 'base,
                                 | Some(t) => {
@@ -5500,7 +5512,7 @@ impl Preprocessor {
                             }
                         },
                         | "STDC" => {
-                            match self.tokenizer.next_item(context) {
+                            match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument,
@@ -5543,7 +5555,7 @@ impl Preprocessor {
                                 },
                             }
 
-                            match self.tokenizer.next_item(context) {
+                            match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch,
