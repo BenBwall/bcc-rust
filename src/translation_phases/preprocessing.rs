@@ -1965,51 +1965,6 @@ impl Preprocessor {
         }
     }
 
-    fn expect_token_from_previous_phase<const SHOULD_IGNORE_WHITESPACE: bool>(
-        &mut self,
-        context: &mut Context,
-        mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
-        mut on_wrong_token_type: impl FnMut(
-            &mut Self,
-            &mut Context,
-            PreprocessorToken,
-        ) -> ControlFlow<PreprocessorError>,
-        eof_message: &'static str,
-    ) -> Option<PreprocessorToken> {
-        loop {
-            let start = self.save_position(context);
-            match self.tokenizer.next_item(context) {
-                | Some(token) => {
-                    if SHOULD_IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
-                        continue;
-                    }
-                    if is_correct_token(self, context, token) {
-                        return Some(token);
-                    }
-                    match on_wrong_token_type(self, context, token) {
-                        | ControlFlow::Continue(()) => continue,
-                        | ControlFlow::Break(e) => {
-                            self.restore_position(context, start);
-                            context.preprocessor_error(e);
-                            return None;
-                        },
-                    }
-                },
-                | None => {
-                    self.restore_position(context, start);
-                    let pos = start.position(context);
-                    let source_vectors =
-                        context.create_source_vectors(pos, self.source_file_name(), 0);
-                    context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
-                        source_vectors,
-                    });
-                    return None;
-                },
-            }
-        }
-    }
-
     fn merge_token_contents(
         &mut self,
         context: &mut Context,
@@ -2412,7 +2367,7 @@ impl Preprocessor {
             let Some(token) = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context) else {
                 return None;
             };
-            let position = self.save_position(context);
+            let position = self.position(context);
             let hash_hash = if let Some(TokenizerFrame {
                 frame_type:
                     TokenizerFrameType::FunctionLikeMacroInvocation {
@@ -2434,7 +2389,7 @@ impl Preprocessor {
                             ..
                         })
                     ) {
-                        self.restore_position(context, position);
+                        self.set_position(context, position);
                         break 'inner None;
                     }
                     if hash_hash_positions.contains(&self.position(context)) {
@@ -2446,7 +2401,7 @@ impl Preprocessor {
                             },
                         }
                     } else {
-                        self.restore_position(context, position);
+                        self.set_position(context, position);
                         None
                     }
                 }
@@ -2518,7 +2473,7 @@ impl Preprocessor {
                     {
                         let paren_depth = *paren_depth;
                         let argument = argument.clone();
-                        let position = self.save_position(context);
+                        let position = self.position(context);
                         let next_is_end = match self.tokenizer.next_item(context) {
                             | Some(token) => self
                                 .update_macro_argument_paren_depth(
@@ -2530,7 +2485,7 @@ impl Preprocessor {
                                 .is_none(),
                             | None => true,
                         };
-                        self.restore_position(context, position);
+                        self.set_position(context, position);
                         next_is_end
                     } else {
                         false
@@ -2576,7 +2531,7 @@ impl Preprocessor {
                         is_variadic,
                         hash_hash_positions,
                     } => {
-                        let position = self.save_position(context);
+                        let position = self.position(context);
                         let file = self.source_file_name();
                         loop {
                             match self.tokenizer.next_item(context) {
@@ -2590,7 +2545,7 @@ impl Preprocessor {
                                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
                                         source_vectors: token.source_vectors,
                                     });
-                                    self.restore_position(context, position);
+                                    self.set_position(context, position);
                                     break 'base Some(token);
                                 },
                                 | None => {
@@ -2600,7 +2555,7 @@ impl Preprocessor {
                                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
                                         source_vectors,
                                     });
-                                    self.restore_position(context, position);
+                                    self.set_position(context, position);
                                     break 'base Some(token);
                                 },
                             }
@@ -2668,7 +2623,7 @@ impl Preprocessor {
                                                 ),
                                             source_vectors: token.source_vectors,
                                         });
-                                        self.restore_position(context, position);
+                                        self.set_position(context, position);
                                         break 'base Some(token);
                                     },
                                 }
@@ -2724,7 +2679,7 @@ impl Preprocessor {
                                                 ),
                                             source_vectors: token.source_vectors,
                                         });
-                                        self.restore_position(context, position);
+                                        self.set_position(context, position);
                                         break 'base Some(token);
                                     },
                                 }
@@ -3457,7 +3412,7 @@ impl Preprocessor {
         context: &mut Context,
         token: PreprocessorToken,
     ) -> PreprocessorToken {
-        let position = self.save_position(context);
+        let position = self.position(context);
         let Some(argument_name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
@@ -3470,7 +3425,7 @@ impl Preprocessor {
             },
             "parsing '#' operator in function-like macro invocation.",
         ) else {
-            self.restore_position(context, position);
+            self.set_position(context, position);
             return token;
         };
         let (token_tokenizer, argument_id) = match self.tokenizer_stack.last().unwrap() {
@@ -3479,7 +3434,7 @@ impl Preprocessor {
                 ..
             } => match arguments.get(&argument_name.contents) {
                 | None => {
-                    self.restore_position(context, position);
+                    self.set_position(context, position);
                     context.preprocessor_error(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(
