@@ -8,6 +8,8 @@ use super::{
     GetSourceFileName,
     GetSourceVectors,
     NonZeroExt,
+    SaveCurrentPosition,
+    SavedPosition,
     SetPosition,
     SetSourceFileName,
     SourceFile,
@@ -96,6 +98,32 @@ impl SetPosition for InitialProcessor {
         self.source_file.index = index;
         self.source_file.column = column;
         self.source_file.line = line;
+    }
+}
+
+impl SaveCurrentPosition for InitialProcessor {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn save_position(&self, _context: &mut Context) -> SavedPosition {
+        SavedPosition {
+            index: self.source_file.index,
+            column: self.source_file.column,
+            line: self.source_file.line,
+            current_char_start_index: self.current_char_start_position.index,
+            current_char_start_column: self.current_char_start_position.column,
+            current_char_start_line: self.current_char_start_position.line,
+        }
+    }
+
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn restore_position(&mut self, _context: &mut Context, saved: SavedPosition) {
+        self.source_file.index = saved.index;
+        self.source_file.column = saved.column;
+        self.source_file.line = saved.line;
+        self.current_char_start_position.index = saved.current_char_start_index;
+        self.current_char_start_position.column = saved.current_char_start_column;
+        self.current_char_start_position.line = saved.current_char_start_line;
     }
 }
 
@@ -290,6 +318,7 @@ impl InitialProcessor {
                 | (Some('\r'), Some('\n')) => {
                     self.source_file.column = ONE;
                     self.source_file.line += 1;
+                    // Step over `next_next`.
                     self.source_file.index += 1;
                     self.last_was_newline = true;
                     return HandleNewline::EscapedNewline;
@@ -315,12 +344,8 @@ impl InitialProcessor {
             length:      0,
         });
     }
-}
 
-impl TranslationPhase for InitialProcessor {
-    type Item = char;
-
-    fn next_item(&mut self, context: &mut Context) -> Option<char> {
+    fn impl_(&mut self, context: &mut Context) -> Option<char> {
         // We need to look three characters ahead to handle translation phases 1 and 2.
         // If we don't consume all three characters, we backtrack.
         // Translation phases 1 and 2 are handled in the same iterator for performance
@@ -375,5 +400,15 @@ impl TranslationPhase for InitialProcessor {
                 },
             });
         }
+    }
+}
+
+impl TranslationPhase for InitialProcessor {
+    type Item = char;
+
+    fn next_item(&mut self, context: &mut Context) -> Option<char> {
+        let result = self.impl_(context);
+        eprintln!("{:?} at {:?}", result, self.current_char_start_position);
+        result
     }
 }

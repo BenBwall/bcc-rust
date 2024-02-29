@@ -32,6 +32,8 @@ use super::{
     GetSeverity,
     GetSourceFileName,
     GetSourceVectors,
+    SaveCurrentPosition,
+    SavedPosition,
     SetPosition,
     SetSourceFileName,
     SourcePosition,
@@ -123,7 +125,7 @@ pub(crate) struct Preprocessor {
     current_is_newline:         bool,
     last_was_newline:           bool,
     if_directive_balance:       isize,
-
+    pending_token:              Option<PreprocessorToken>,
     generate_placeholders:      bool,
     quote_include_directories:  SharedVec<PathBuf>,
     system_include_directories: SharedVec<PathBuf>,
@@ -157,6 +159,20 @@ impl GetSourceFileName for Preprocessor {
 impl SetSourceFileName for Preprocessor {
     fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath) {
         self.tokenizer.set_source_file_name(context, name);
+    }
+}
+
+impl SaveCurrentPosition for Preprocessor {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn save_position(&self, context: &mut Context) -> SavedPosition {
+        self.tokenizer.save_position(context)
+    }
+
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn restore_position(&mut self, context: &mut Context, saved: SavedPosition) {
+        self.tokenizer.restore_position(context, saved);
     }
 }
 
@@ -1827,6 +1843,7 @@ impl Preprocessor {
             generate_placeholders: false,
             quote_include_directories,
             system_include_directories,
+            pending_token: None,
             expression_parser: PreprocessorExpressionParser::new(),
         }
     }
@@ -1887,7 +1904,7 @@ impl Preprocessor {
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
-    ) -> Option<PreprocessorToken> {
+    ) -> Result<PreprocessorToken, Option<PreprocessorToken>> {
         loop {
             let start = self.position(context);
             match self.next_preprocessor_token::<SHOULD_IGNORE_WHITESPACE>(context) {
@@ -1896,26 +1913,24 @@ impl Preprocessor {
                         continue;
                     }
                     if is_correct_token(self, context, token) {
-                        return Some(token);
+                        return Ok(token);
                     }
                     match on_wrong_token_type(self, context, token) {
                         | ControlFlow::Continue(()) => continue,
                         | ControlFlow::Break(e) => {
-                            self.set_position(context, start);
                             context.preprocessor_error(e);
-                            return None;
+                            return Err(Some(token));
                         },
                     }
                 },
                 | None => {
-                    self.set_position(context, start);
                     let source_vectors =
                         context.create_source_vectors(start, self.source_file_name(), 0);
                     context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
                         source_vectors,
                     });
-                    return None;
+                    return Err(None);
                 },
             }
         }
@@ -2440,9 +2455,10 @@ impl Preprocessor {
         self.last_was_newline = self.current_is_newline;
         let ret = 'base: loop {
             self.generate_placeholders = true;
-            let Some(mut token) =
-                self.handle_hash_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context)
-            else {
+            let Some(mut token) = (match self.pending_token.take() {
+                | Some(v) => Some(v),
+                | None => self.handle_hash_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context),
+            }) else {
                 break 'base None;
             };
             self.generate_placeholders = false;
@@ -2509,7 +2525,6 @@ impl Preprocessor {
             if token.kind != PreprocessorTokenType::Identifier {
                 break 'base Some(token);
             }
-
             if let Some(md) = self.macro_definitions.get(&token.contents).cloned() {
                 match md {
                     | MacroDefinition::ObjectLike {
@@ -2523,7 +2538,7 @@ impl Preprocessor {
                             tokenizer,
                         };
                         self.push_tokenizer_frame(context, frame);
-                        continue;
+                        continue 'base;
                     },
                     | MacroDefinition::FunctionLike {
                         argument_names,
@@ -2694,7 +2709,7 @@ impl Preprocessor {
                             tokenizer,
                         };
                         self.push_tokenizer_frame(context, frame);
-                        continue;
+                        continue 'base;
                     },
                     | MacroDefinition::BuiltIn => match context.string_cache.at(token.contents) {
                         | "__FILE__" => {
@@ -2767,9 +2782,9 @@ impl Preprocessor {
                             });
                         },
                         | "_Pragma" => {
-                            _ = self.expect_token::<true>(
+                            let t = match self.expect_token::<true>(
                                 context,
-                                |_, _, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
+                                |_, _, t| matches!(t.kind, PreprocessorTokenType::OpeningParenthesis | PreprocessorTokenType::String),
                                 |_, _, token|
                                     ControlFlow::Break(PreprocessorError {
                                             error_type:     PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(token.kind),
@@ -2777,9 +2792,18 @@ impl Preprocessor {
                                         },
                                     ),
                                 "parsing pragma operator",
-                            );
+                            ) {
+                                | Ok(t) => t,
+                                | Err(t) => {
+                                    self.pending_token = t;
+                                    continue 'base;
+                                },
+                            };
 
-                            let Some(string_token) = self.expect_token::<true>(
+                            let string_token = match if t.kind == PreprocessorTokenType::String {
+                                Ok(t)
+                            } else {
+                                self.expect_token::<true>(
                                 context,
                                 |_, _, t| t.kind == PreprocessorTokenType::String,
                                 |_, _, token|
@@ -2789,8 +2813,13 @@ impl Preprocessor {
                                         },
                                     ),
                                 "parsing pragma operator",
-                            ) else {
-                                continue 'base;
+                            )
+                            } {
+                                | Ok(t) => t,
+                                | Err(t) => {
+                                    self.pending_token = t;
+                                    continue 'base;
+                                },
                             };
 
                             let input =
@@ -2815,7 +2844,7 @@ impl Preprocessor {
                             }
                             self.tokenizer = tokenizer;
 
-                            _ = self.expect_token::<true>(
+                            if let Err(e) = self.expect_token::<true>(
                                 context,
                                 |_, _, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
                                 |_, _, token|
@@ -2825,7 +2854,9 @@ impl Preprocessor {
                                         },
                                     ),
                                 "parsing pragma operator",
-                            );
+                            ) {
+                                self.pending_token = e;
+                            };
 
                             continue 'base;
                         },
@@ -2855,6 +2886,40 @@ impl Preprocessor {
             match tokenizer.next_item(context) {
                 | Some(t) if t.kind == PreprocessorTokenType::Whitespace => continue,
                 | Some(t) => return Some(t),
+                | None => return None,
+            }
+        }
+    }
+
+    fn next_treat_newlines_as_whitespace(
+        tokenizer: &mut PreprocessorTokenizer,
+        context: &mut Context,
+        last_was_whitespace: &mut bool,
+    ) -> Option<PreprocessorToken> {
+        loop {
+            match tokenizer.next_item(context) {
+                | Some(t) if t.kind == PreprocessorTokenType::Newline => {
+                    if *last_was_whitespace {
+                        continue;
+                    }
+                    *last_was_whitespace = true;
+                    return Some(PreprocessorToken {
+                        kind:           PreprocessorTokenType::Whitespace,
+                        contents:       context.string_cache.intern(" "),
+                        source_vectors: t.source_vectors,
+                    });
+                },
+                | Some(t) if t.kind == PreprocessorTokenType::Whitespace => {
+                    if *last_was_whitespace {
+                        continue;
+                    }
+                    *last_was_whitespace = true;
+                    return Some(t);
+                },
+                | Some(t) => {
+                    *last_was_whitespace = false;
+                    return Some(t);
+                },
                 | None => return None,
             }
         }
@@ -3388,6 +3453,7 @@ impl Preprocessor {
         _hash_hash: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
+        eprintln!("Parsing hash hash operator: {lhs:?} ## {rhs:?}",);
         self.hash_hash_stack.push(HashHash::Empty);
         let rhs_is_macro_argument = if let Some(frame) = self.handle_macro_argument(context, rhs) {
             self.push_tokenizer_frame(context, frame);
@@ -3453,8 +3519,13 @@ impl Preprocessor {
 
         let mut synthetic_contents = String::new();
         let mut paren_depth = 1;
+        let mut last_was_whitespace = true;
         'base: loop {
-            let Some(token) = self.tokenizer.next_item(context) else {
+            let Some(token) = Self::next_treat_newlines_as_whitespace(
+                &mut self.tokenizer,
+                context,
+                &mut last_was_whitespace,
+            ) else {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing '#' operator in function-like macro invocation",
@@ -4972,8 +5043,8 @@ impl Preprocessor {
     #[allow(clippy::cast_possible_truncation)]
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         context.set_is_tokenizing_include_string(true);
-        let Some(include_string) =
-            self.expect_token::<true>(
+        let include_string =
+            match self.expect_token::<true>(
                 context,
                 |_, context, token| match token.kind {
                     | PreprocessorTokenType::AngleBracketString
@@ -4991,10 +5062,15 @@ impl Preprocessor {
                     })
                 },
                 "parsing include directive",
-            )
-        else {
-            return;
-        };
+            ) {
+                | Ok(include_string) => include_string,
+                | Err(e) => {
+                    if e.is_some_and(|e| e.kind != PreprocessorTokenType::Newline) {
+                        self.skip_until_newline(context);
+                    }
+                    return;
+                },
+            };
         context.set_is_tokenizing_include_string(false);
         let header_path = match include_string.kind {
             | PreprocessorTokenType::IncludeString => {
@@ -5353,6 +5429,7 @@ impl Preprocessor {
             },
         ) = self.macro_definitions.get_mut(&name.contents)
         {
+            eprintln!("hash_hash_positions: {hash_hash_positions:?}");
             *Rc::get_mut(hhp).unwrap() = hash_hash_positions;
         }
         self.last_was_newline = true;
@@ -5394,7 +5471,7 @@ impl Preprocessor {
 
     #[allow(clippy::cast_possible_truncation)]
     fn parse_line_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        let Some(token) = self.expect_token::<true>(
+        let token = match self.expect_token::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Number,
             |_, _, t| {
@@ -5404,9 +5481,14 @@ impl Preprocessor {
                 })
             },
             "parsing line directive",
-        ) else {
-            self.skip_and_expand_until_newline(context);
-            return;
+        ) {
+            | Ok(v) => v,
+            | Err(e) => {
+                if e.is_some_and(|t| t.kind != PreprocessorTokenType::Newline) {
+                    self.skip_and_expand_until_newline(context);
+                }
+                return;
+            },
         };
         let (value, did_overflow) = {
             let mut value = 0i128;
@@ -5460,7 +5542,7 @@ impl Preprocessor {
             },
             "parsing line directive",
         );
-        if let Some(
+        if let Ok(
             t @ PreprocessorToken {
                 kind: PreprocessorTokenType::String,
                 ..
@@ -5471,7 +5553,7 @@ impl Preprocessor {
                 context,
                 SharedPath::from_path_buf(PathBuf::from(context.string_cache.at(t.contents))),
             );
-            _ = self.expect_token::<true>(
+            if let Err(e) = self.expect_token::<true>(
                 context,
                 |_, _, t| t.kind == PreprocessorTokenType::Newline,
                 |_, _, t| {
@@ -5483,7 +5565,13 @@ impl Preprocessor {
                     })
                 },
                 "parsing line directive",
-            );
+            ) {
+                self.pending_token = e;
+            };
+        } else if let Err(Some(t)) = name {
+            if t.kind != PreprocessorTokenType::Newline {
+                self.skip_and_expand_until_newline(context);
+            }
         }
     }
 
