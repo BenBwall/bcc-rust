@@ -481,8 +481,8 @@ impl Context {
         self.is_skipping_over_dead_code = value;
     }
 
-    #[cold]
-    #[inline(never)]
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) fn missing_final_newline(&mut self, vector: SourceVector) {
         if !self.is_skipping_over_dead_code() {
             self.pending_errors
