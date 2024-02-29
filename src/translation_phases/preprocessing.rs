@@ -123,7 +123,7 @@ pub(crate) struct Preprocessor {
     last_was_newline:           bool,
     current_preprocessor_token: Option<PreprocessorToken>,
     if_directive_balance:       isize,
-    should_tokenize_whitespace: bool,
+
     generate_placeholders:      bool,
     quote_include_directories:  SharedVec<PathBuf>,
     system_include_directories: SharedVec<PathBuf>,
@@ -1824,7 +1824,6 @@ impl Preprocessor {
             last_was_newline: true,
             current_preprocessor_token: None,
             if_directive_balance: 0,
-            should_tokenize_whitespace: false,
             generate_placeholders: false,
             quote_include_directories,
             system_include_directories,
@@ -1850,7 +1849,7 @@ impl Preprocessor {
     fn skip_and_expand_until_newline(&mut self, context: &mut Context) {
         loop {
             if matches!(
-                self.next_preprocessor_token(context),
+                self.next_preprocessor_token::<false>(context),
                 Some(PreprocessorToken {
                     kind: PreprocessorTokenType::Newline,
                     ..
@@ -1894,7 +1893,7 @@ impl Preprocessor {
     ) -> Option<PreprocessorToken> {
         loop {
             let start = self.position(context);
-            match self.next_preprocessor_token(context) {
+            match self.next_preprocessor_token::<IGNORE_WHITESPACE>(context) {
                 | Some(token) => {
                     if IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
                         continue;
@@ -2171,12 +2170,11 @@ impl Preprocessor {
         }
     }
 
-    fn should_ignore_whitespace(&self, _context: &mut Context) -> bool {
-        !self.should_tokenize_whitespace
-    }
-
     #[allow(clippy::redundant_else)]
-    fn expand_macros(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
+    fn expand_macros<const SHOULD_IGNORE_WHITESPACE: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<PreprocessorToken> {
         let ret = 'base: loop {
             if unlikely(self.tokenizer_stack.is_empty()) {
                 break 'base None;
@@ -2184,7 +2182,7 @@ impl Preprocessor {
             match self.tokenizer.next_item(context) {
                 | Some(token)
                     if token.kind == PreprocessorTokenType::Whitespace
-                        && self.should_ignore_whitespace(context) =>
+                        && SHOULD_IGNORE_WHITESPACE =>
                 {
                     continue 'base;
                 },
@@ -2244,7 +2242,7 @@ impl Preprocessor {
                                 continue 'base;
                             }
                             if token.kind == PreprocessorTokenType::Newline {
-                                if self.should_ignore_whitespace(context) {
+                                if SHOULD_IGNORE_WHITESPACE {
                                     continue 'base;
                                 }
                                 token.kind = PreprocessorTokenType::Whitespace;
@@ -2350,8 +2348,11 @@ impl Preprocessor {
         }
     }
 
-    fn handle_hash_operator(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
-        let Some(token) = self.expand_macros(context) else {
+    fn handle_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<PreprocessorToken> {
+        let Some(token) = self.expand_macros::<SHOULD_IGNORE_WHITESPACE>(context) else {
             return None;
         };
 
@@ -2373,9 +2374,12 @@ impl Preprocessor {
         }
     }
 
-    fn handle_hash_hash_operator(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
+    fn handle_hash_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<PreprocessorToken> {
         loop {
-            let Some(token) = self.handle_hash_operator(context) else {
+            let Some(token) = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context) else {
                 return None;
             };
             let position = self.position(context);
@@ -2420,7 +2424,7 @@ impl Preprocessor {
                 None
             };
             if let Some(h) = hash_hash {
-                let Some(rhs) = self.handle_hash_hash_operator(context) else {
+                let Some(rhs) = self.handle_hash_hash_operator::<true>(context) else {
                     let source_vectors = context.create_source_vectors(
                         self.tokenizer.position(context),
                         self.tokenizer.source_file_name(),
@@ -2444,7 +2448,10 @@ impl Preprocessor {
         }
     }
 
-    fn next_preprocessor_token(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
+    fn next_preprocessor_token<const SHOULD_IGNORE_WHITESPACE: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<PreprocessorToken> {
         // eprintln!("Tokenizer stack: {:#?}", self.tokenizer_stack);
         // eprintln!("Hash hash stack: {:#?}", self.hash_hash_stack);
         eprintln!(
@@ -2457,7 +2464,9 @@ impl Preprocessor {
         };
         let ret = 'base: loop {
             self.generate_placeholders = true;
-            let Some(mut token) = self.handle_hash_hash_operator(context) else {
+            let Some(mut token) =
+                self.handle_hash_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context)
+            else {
                 break 'base None;
             };
             self.generate_placeholders = false;
@@ -3480,7 +3489,6 @@ impl Preprocessor {
         };
         let tokenizer = take(&mut self.tokenizer);
         self.tokenizer = token_tokenizer;
-        self.should_tokenize_whitespace = true;
 
         let mut synthetic_contents = String::new();
         let mut paren_depth = 1;
@@ -3501,7 +3509,6 @@ impl Preprocessor {
             synthetic_contents.push_str(context.string_cache.at(token.contents));
         }
         self.tokenizer = tokenizer;
-        self.should_tokenize_whitespace = false;
         PreprocessorToken {
             kind:           PreprocessorTokenType::GeneratedString,
             contents:       context.string_cache.intern(&synthetic_contents),
@@ -4457,7 +4464,7 @@ impl Preprocessor {
         const BINARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Binary;
         self.expression_parser.reset();
         'main: loop {
-            match self.next_preprocessor_token(context) {
+            match self.next_preprocessor_token::<true>(context) {
                 | None => {
                     let source_vectors = context.create_source_vectors(self.position(context), self.source_file_name(), 0);
                     context.preprocessor_error(
@@ -4504,7 +4511,7 @@ impl Preprocessor {
                         let mut paren_depth = 1;
                         // Step over function call.
                         while paren_depth > 0 {
-                            match self.next_preprocessor_token(context) {
+                            match self.next_preprocessor_token::<true>(context) {
                                 | None => {
                                     let source_vectors = context.create_source_vectors(self.position(context), self.source_file_name(), 0);
                                     context.preprocessor_error(PreprocessorError {
@@ -5100,7 +5107,6 @@ impl Preprocessor {
                 self.find_header_from_path(context, include_string, path, true)
             },
             | _ => {
-                self.should_tokenize_whitespace = true;
                 let mut contents = TokenString::new();
                 contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
                 let start_index = Context::duplicate_source_vectors(
@@ -5108,7 +5114,7 @@ impl Preprocessor {
                     include_string.source_vectors,
                 );
                 loop {
-                    match self.next_preprocessor_token(context) {
+                    match self.next_preprocessor_token::<false>(context) {
                         | Some(token) => {
                             if token.kind == PreprocessorTokenType::Newline {
                                 break;
@@ -5135,7 +5141,6 @@ impl Preprocessor {
                         },
                     }
                 }
-                self.should_tokenize_whitespace = false;
                 let path = Path::new(contents.as_str());
                 let synthetic_token = PreprocessorToken {
                     source_vectors: SourceVectors {
@@ -5543,7 +5548,6 @@ impl Preprocessor {
     }
 
     fn parse_error_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        self.should_tokenize_whitespace = true;
         let mut contents = String::new();
         loop {
             match self.tokenizer.next_item(context) {
@@ -5567,7 +5571,6 @@ impl Preprocessor {
                 },
             }
         }
-        self.should_tokenize_whitespace = false;
         let source_vectors =
             context.create_source_vectors(self.position(context), self.source_file_name(), 0);
         context.preprocessor_error(PreprocessorError {
@@ -5577,9 +5580,8 @@ impl Preprocessor {
     }
 
     fn parse_pragma_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        let should_tokenize_whitespace = replace(&mut self.should_tokenize_whitespace, false);
         'base: loop {
-            let Some(token) = self.tokenizer.next_item(context) else {
+            let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
                 let source_vectors = context.create_source_vectors(
                     self.position(context),
                     self.source_file_name(),
@@ -5729,7 +5731,6 @@ impl Preprocessor {
                 },
             }
         }
-        self.should_tokenize_whitespace = should_tokenize_whitespace;
     }
 
     #[allow(clippy::inline_always)]
@@ -6033,7 +6034,7 @@ impl TranslationPhase for Preprocessor {
 
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
         loop {
-            let Some(token) = self.next_preprocessor_token(context) else {
+            let Some(token) = self.next_preprocessor_token::<true>(context) else {
                 if self.if_directive_balance != 0 {
                     self.if_directive_balance = 0;
                     let source_vectors = context.create_source_vectors(
