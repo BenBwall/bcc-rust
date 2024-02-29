@@ -2549,7 +2549,8 @@ impl Preprocessor {
                                     break 'base Some(token);
                                 },
                                 | None => {
-                                    let source_vectors = context.create_source_vectors(position, file, 1);
+                                    let source_vectors =
+                                        context.create_source_vectors(position, file, 1);
                                     context.preprocessor_error(PreprocessorError {
                                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
                                         source_vectors,
@@ -2854,6 +2855,37 @@ impl Preprocessor {
             match tokenizer.next_item(context) {
                 | Some(t) if t.kind == PreprocessorTokenType::Whitespace => continue,
                 | Some(t) => return Some(t),
+                | None => return None,
+            }
+        }
+    }
+
+    fn next_treat_newlines_as_whitespace(
+        tokenizer: &mut PreprocessorTokenizer,
+        context: &mut Context,
+        last_was_whitespace: &mut bool,
+    ) -> Option<PreprocessorToken> {
+        loop {
+            match tokenizer.next_item(context) {
+                | Some(mut t) => {
+                    match t.kind {
+                        | PreprocessorTokenType::Whitespace => {
+                            if *last_was_whitespace {
+                                continue;
+                            }
+                            *last_was_whitespace = true;
+                        },
+                        | PreprocessorTokenType::Newline => {
+                            if *last_was_whitespace {
+                                continue;
+                            }
+                            *last_was_whitespace = true;
+                            t.contents = context.string_cache.intern(" ");
+                        },
+                        | _ => *last_was_whitespace = false,
+                    }
+                    return Some(t);
+                },
                 | None => return None,
             }
         }
@@ -3447,13 +3479,16 @@ impl Preprocessor {
             },
             | _ => unreachable!(),
         };
-        let tokenizer = take(&mut self.tokenizer);
-        self.tokenizer = token_tokenizer;
-
+        let mut token_tokenizer = token_tokenizer.clone();
+        let mut last_was_whitespace = true;
         let mut synthetic_contents = String::new();
         let mut paren_depth = 1;
         'base: loop {
-            let Some(token) = self.tokenizer.next_item(context) else {
+            let Some(token) = Self::next_treat_newlines_as_whitespace(
+                &mut token_tokenizer,
+                context,
+                &mut last_was_whitespace,
+            ) else {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing '#' operator in function-like macro invocation",
@@ -3468,7 +3503,6 @@ impl Preprocessor {
             }
             synthetic_contents.push_str(context.string_cache.at(token.contents));
         }
-        self.tokenizer = tokenizer;
         PreprocessorToken {
             kind:           PreprocessorTokenType::GeneratedString,
             contents:       context.string_cache.intern(&synthetic_contents),
