@@ -9,6 +9,7 @@ use super::{
     GetSourceFileName,
     GetSourceVectors,
     SetPosition,
+    SetSourceFileName,
     SourcePosition,
     SourceVector,
     SourceVectors,
@@ -46,6 +47,12 @@ impl GetSourceFileName for PreprocessorTokenizer {
     #[inline(always)]
     fn source_file_name(&self) -> SharedPath {
         self.initial_processor.source_file_name()
+    }
+}
+
+impl SetSourceFileName for PreprocessorTokenizer {
+    fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath) {
+        self.initial_processor.set_source_file_name(context, name);
     }
 }
 

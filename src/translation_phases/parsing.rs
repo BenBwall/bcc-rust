@@ -22,6 +22,7 @@ use super::{
     GetSourceFileName,
     GetSourceVectors,
     SetPosition,
+    SetSourceFileName,
     SourcePosition,
     SourceVectors,
     TranslationPhase,
@@ -57,6 +58,12 @@ impl SetPosition for Parser {
 impl GetSourceFileName for Parser {
     fn source_file_name(&self) -> SharedPath {
         self.preprocessor.source_file_name()
+    }
+}
+
+impl SetSourceFileName for Parser {
+    fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath) {
+        self.preprocessor.set_source_file_name(context, name);
     }
 }
 
