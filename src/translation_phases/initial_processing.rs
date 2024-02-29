@@ -36,6 +36,7 @@ pub(crate) enum InitialProcessorError {
 }
 
 impl GetPosition for InitialProcessorError {
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         match self {
@@ -72,6 +73,7 @@ pub(crate) struct InitialProcessor {
 }
 
 impl GetPosition for InitialProcessor {
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
@@ -83,6 +85,7 @@ impl GetPosition for InitialProcessor {
 }
 
 impl SetPosition for InitialProcessor {
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn set_position(&mut self, _context: &mut Context, position: SourcePosition) {
         let SourcePosition {
@@ -97,6 +100,7 @@ impl SetPosition for InitialProcessor {
 }
 
 impl GetSourceFileName for InitialProcessor {
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn source_file_name(&self) -> SharedPath {
         self.source_file.name.clone()
@@ -119,7 +123,7 @@ impl InitialProcessor {
     }
 
     pub(crate) fn current_char_start_position(&self) -> SourcePosition {
-        self.current_char_start_position.clone()
+        self.current_char_start_position
     }
 
     fn next_char(&mut self, _context: &mut Context) -> Option<char> {
@@ -252,7 +256,7 @@ impl InitialProcessor {
         }
     }
 
-    /// Assumes that context.source.index is pointing at next_next.
+    /// Assumes that context.source.index is pointing at `next_next`.
     fn handle_newline(
         &mut self,
         _context: &mut Context,
@@ -344,7 +348,6 @@ impl TranslationPhase for InitialProcessor {
                 self.source_file.index += next.len_utf8();
             }
 
-            let _next_next_index = self.source_file.index;
             let next_next = self.next_char(context);
 
             match self.handle_newline(context, curr, next, next_next, next_index) {

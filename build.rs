@@ -1,4 +1,4 @@
-//! Build script for the BCC C compiler.
+#![allow(missing_docs)]
 
 use std::{
     env::var,

@@ -9,6 +9,7 @@ use std::{
 
 use hashbrown::raw::RawTable;
 
+#[allow(dead_code)]
 pub(crate) struct DedupArena<T, H> {
     indices: RawTable<usize>,
     data:    Vec<T>,
@@ -31,6 +32,7 @@ impl<T, H> DedupArena<T, H> {
         Self::with_hasher(H::default())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn with_capacity_and_hasher(capacity: usize, hasher: H) -> Self {
         Self {
             indices: RawTable::with_capacity(capacity),
@@ -39,6 +41,7 @@ impl<T, H> DedupArena<T, H> {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn with_capacity(capacity: usize) -> Self
     where
         H: Default,
@@ -51,6 +54,7 @@ impl<T, H> DedupArena<T, H> {
     /// returned. The value is not cloned. Value is dropped if it already
     /// exists. Returns `Err` if the value is already in the arena. `Ok`
     /// otherwise.
+    #[allow(dead_code)]
     pub(crate) fn try_intern(&mut self, value: T) -> Result<usize, usize>
     where
         H: BuildHasher,
@@ -81,6 +85,7 @@ impl<T, H> DedupArena<T, H> {
 
     /// SAFETY: The caller must ensure that the values in the arena remain
     /// unique.
+    #[allow(dead_code)]
     pub(crate) unsafe fn as_mut_slice(&mut self) -> &mut [T] {
         self.data.as_mut_slice()
     }
@@ -88,6 +93,7 @@ impl<T, H> DedupArena<T, H> {
     /// Intern a value into the arena, returning the index of the value. Returns
     /// the index of the old value if the value is already in the arena. Value
     /// is dropped if it already exists. Value is not cloned.
+    #[allow(dead_code)]
     pub(crate) fn intern(&mut self, value: T) -> usize
     where
         H: BuildHasher,

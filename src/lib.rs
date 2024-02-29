@@ -1,5 +1,13 @@
 //! BCC C compiler
 
+#[cfg(test)]
+#[doc(hidden)]
+mod shut_up_clippy_about_unused_dev_dependencies {
+    use criterion as _;
+    use pretty_assertions as _;
+    use proptest as _;
+    use rstest as _;
+}
 use std::{
     env::var,
     path::PathBuf,
@@ -230,7 +238,7 @@ pub fn run() -> Result<(), MainError> {
 #[doc(hidden)]
 pub fn preprocess_hundred_thousand() {
     let million_lines = include_str!(concat!(env!("OUT_DIR"), "/hundred-thousand-lines.c"));
-    let mut iterator = PreprocessorIterator::new(
+    let iterator = PreprocessorIterator::new(
         shared_path_from_str("<input>"),
         million_lines.to_owned().into(),
         SharedVec::default(),

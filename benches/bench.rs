@@ -1,3 +1,7 @@
+#![allow(missing_docs)]
+#![allow(unused_crate_dependencies)]
+#![allow(clippy::cargo_common_metadata)]
+
 use criterion::{
     criterion_group,
     criterion_main,
@@ -5,8 +9,8 @@ use criterion::{
 };
 
 fn bench(c: &mut Criterion) {
-    c.bench_function("Preprocess hundred thousand", |b| {
-        b.iter(bcc_rust::preprocess_hundred_thousand)
+    _ = c.bench_function("Preprocess hundred thousand", |b| {
+        b.iter(bcc_rust::preprocess_hundred_thousand);
     });
 }
 
