@@ -8,6 +8,8 @@ use super::{
     GetSourceFileName,
     GetSourceVectors,
     NonZeroExt,
+    SaveCurrentPosition,
+    SavedPosition,
     SetPosition,
     SetSourceFileName,
     SourceFile,
@@ -110,6 +112,32 @@ impl GetSourceFileName for InitialProcessor {
 impl SetSourceFileName for InitialProcessor {
     fn set_source_file_name(&mut self, _context: &mut Context, name: SharedPath) {
         self.source_file.name = name;
+    }
+}
+
+impl SaveCurrentPosition for InitialProcessor {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn save_position(&self, _context: &mut Context) -> SavedPosition {
+        SavedPosition {
+            index: self.source_file.index,
+            column: self.source_file.column,
+            line: self.source_file.line,
+            current_char_start_index: self.current_char_start_position.index,
+            current_char_start_column: self.current_char_start_position.column,
+            current_char_start_line: self.current_char_start_position.line,
+        }
+    }
+
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn restore_position(&mut self, _context: &mut Context, saved: SavedPosition) {
+        self.source_file.index = saved.index;
+        self.source_file.column = saved.column;
+        self.source_file.line = saved.line;
+        self.current_char_start_position.index = saved.current_char_start_index;
+        self.current_char_start_position.column = saved.current_char_start_column;
+        self.current_char_start_position.line = saved.current_char_start_line;
     }
 }
 
