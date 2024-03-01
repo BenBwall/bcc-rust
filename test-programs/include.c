@@ -4,5 +4,4 @@
 
 #if !defined FOO
 �
-
 #endif
