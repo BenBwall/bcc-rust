@@ -2380,7 +2380,8 @@ impl Preprocessor {
                 ..
             }) = self.tokenizer_stack.last()
             {
-                'inner: {
+                {
+                    let hash_hash_positions = hash_hash_positions.clone();
                     let maybe_whitespace = self.tokenizer.next_item(context);
                     if !matches!(
                         maybe_whitespace,
@@ -2390,8 +2391,9 @@ impl Preprocessor {
                         })
                     ) {
                         self.set_position(context, position);
-                        break 'inner None;
                     }
+                    eprintln!("Current position: {:?}", self.position(context));
+                    eprintln!("Hash hash positions: {hash_hash_positions:?}");
                     if hash_hash_positions.contains(&self.position(context)) {
                         match self.tokenizer.next_item(context) {
                             | Some(token) if token.kind == PreprocessorTokenType::HashHash =>
@@ -3510,7 +3512,12 @@ impl Preprocessor {
                 | Some(depth) => paren_depth = depth,
                 | None => break,
             }
-            synthetic_contents.push_str(context.string_cache.at(token.contents));
+            let mut s = context.string_cache.at(token.contents);
+            if token.kind == PreprocessorTokenType::Number {
+                // Remove trailing null byte.
+                s = &s[..s.len() - 1];
+            }
+            synthetic_contents.push_str(s);
         }
         PreprocessorToken {
             kind:           PreprocessorTokenType::GeneratedString,
@@ -5535,7 +5542,12 @@ impl Preprocessor {
             match self.tokenizer.next_item(context) {
                 | Some(token) if token.kind == PreprocessorTokenType::Newline => break,
                 | Some(token) => {
-                    contents.push_str(context.string_cache.at(token.contents));
+                    let mut s = context.string_cache.at(token.contents);
+                    if token.kind == PreprocessorTokenType::Number {
+                        // Remove trailing null byte.
+                        s = &s[..s.len() - 1];
+                    }
+                    contents.push_str(s);
                 },
                 | None => {
                     let source_vectors = context.create_source_vectors(

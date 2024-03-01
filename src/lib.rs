@@ -26,7 +26,6 @@ use owo_colors::OwoColorize;
 use thiserror::Error;
 use translation_phases::{
     preprocessing::Token,
-    TranslationError,
     TranslationPhase,
 };
 
@@ -86,16 +85,10 @@ impl PreprocessorIterator {
 }
 
 impl Iterator for PreprocessorIterator {
-    type Item = Result<Token, TranslationError>;
+    type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(error) = self.context.pop_pending_error() {
-            return Some(Err(error));
-        }
-        match self.preprocessor.next_item(&mut self.context) {
-            | Some(token) => Some(Ok(token)),
-            | None => None,
-        }
+        self.preprocessor.next_item(&mut self.context)
     }
 }
 
@@ -168,51 +161,50 @@ pub fn run() -> Result<(), MainError> {
         args.quote_include.into(),
         args.system_include.into(),
     );
-    while let Some(res) = iterator.next() {
-        match res {
-            | Ok(t) => eprintln!(
-                "{}",
-                match t.kind {
-                    | TokenType::Identifier => format!(
-                        "Identifier: {}",
-                        iterator.context.string_cache.at(t.contents)
-                    ),
-                    | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
-                    | TokenType::String(sltt) => format!(
-                        "String-like token: {}",
-                        match sltt {
-                            | StringTokenType::WideString(s) | StringTokenType::String(s) => {
-                                iterator.context.string_cache.at(s).to_string()
-                            },
-                        }
-                    ),
-                    | TokenType::Character(c) => format!(
-                        "Character: {}",
-                        match c {
-                            | CharacterTokenType::WideChar(c) | CharacterTokenType::Char(c) => {
-                                format!("{c:#?}")
-                            },
-                        }
-                    ),
-                    | TokenType::Keyword(k) => format!("Keyword: {k:#?}"),
-                    | TokenType::Integer(i) => format!("Integer: {i:#?}"),
-                    | TokenType::Float(f) => format!("Float: {f:#?}"),
-                }
-                .bright_magenta()
-            ),
-            | Err(e) => {
-                let source_vectors = e.source_vectors(&mut iterator.context);
-                let file = iterator.preprocessor.source_file_name();
-                let vec = iterator.context.get_source_vectors(source_vectors);
-                eprintln!(
-                    "{}: {e} at {:?}:{:?}",
-                    e.severity(),
-                    file,
-                    vec.bright_blue(),
-                );
-            },
-        }
+    while let Some(token) = iterator.next() {
+        eprintln!(
+            "{}",
+            match token.kind {
+                | TokenType::Identifier => format!(
+                    "Identifier: {}",
+                    iterator.context.string_cache.at(token.contents)
+                ),
+                | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
+                | TokenType::String(sltt) => format!(
+                    "String-like token: {}",
+                    match sltt {
+                        | StringTokenType::WideString(s) | StringTokenType::String(s) => {
+                            iterator.context.string_cache.at(s).to_string()
+                        },
+                    }
+                ),
+                | TokenType::Character(c) => format!(
+                    "Character: {}",
+                    match c {
+                        | CharacterTokenType::WideChar(c) | CharacterTokenType::Char(c) => {
+                            format!("{c:#?}")
+                        },
+                    }
+                ),
+                | TokenType::Keyword(k) => format!("Keyword: {k:#?}"),
+                | TokenType::Integer(i) => format!("Integer: {i:#?}"),
+                | TokenType::Float(f) => format!("Float: {f:#?}"),
+            }
+            .bright_magenta()
+        );
     }
+    while let Some(e) = iterator.context.pop_pending_error() {
+        let source_vectors = e.source_vectors(&mut iterator.context);
+        let file = iterator.preprocessor.source_file_name();
+        let vec = iterator.context.get_source_vectors(source_vectors);
+        eprintln!(
+            "{}: {e} at {:?}:{:?}",
+            e.severity(),
+            file,
+            vec.bright_blue(),
+        );
+    }
+
     eprintln!(
         "{}",
         "Finished printing all generated tokens.".bright_green()
