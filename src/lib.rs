@@ -157,7 +157,7 @@ pub fn run() -> Result<(), MainError> {
 
     let mut iterator = PreprocessorIterator::new(
         source_filename,
-        input_string,
+        input_string.clone(),
         args.quote_include.into(),
         args.system_include.into(),
     );
@@ -224,6 +224,14 @@ pub fn run() -> Result<(), MainError> {
         "Tokenizer stack: ".bright_blue(),
         iterator.preprocessor.tokenizer_stack.bright_blue()
     );
+    eprintln!(
+        "{}{}",
+        "Source vectors: ".bright_green(),
+        iterator.context.source_vectors.bright_green()
+    );
+    eprintln!("Input at index 113: {:?}", input_string.as_bytes()[113] as char);
+    eprintln!("Input at index 114: {:?}", input_string.as_bytes()[114] as char);
+    eprintln!("Input at index 115: {:?}", input_string.as_bytes()[115] as char);
     Ok(())
 }
 
