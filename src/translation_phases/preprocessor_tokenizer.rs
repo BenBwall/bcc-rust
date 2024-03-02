@@ -27,8 +27,8 @@ use crate::util::{
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct PreprocessorTokenizer {
-    initial_processor:   InitialProcessor,
-    current_token_start: SourcePosition,
+    pub(crate) initial_processor: InitialProcessor,
+    current_token_start:          SourcePosition,
 }
 
 impl GetPosition for PreprocessorTokenizer {
@@ -167,7 +167,7 @@ impl TranslationPhase for PreprocessorTokenizer {
     type Item = PreprocessorToken;
 
     fn next_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
-        let start_position = self.save_position(context);
+        let mut start_position = self.save_position(context);
         let ret = loop {
             context.string_cache.undo_str();
             self.current_token_start = self.initial_processor.current_char_start_position();
@@ -229,6 +229,7 @@ impl TranslationPhase for PreprocessorTokenizer {
                 | '=' => self.tokenize_equals(context),
                 | _ => {
                     self.generate_error(context, PreprocessorTokenizerErrorType::UnknownToken);
+                    start_position = self.save_position(context);
                     continue;
                 },
             });
@@ -265,7 +266,7 @@ impl PreprocessorTokenizer {
         context: &mut Context,
         token_type: PreprocessorTokenType,
     ) -> PreprocessorToken {
-        let current_position = self.position(context);
+        let current_position = self.current_token_start;
         let source_vector = context.push_source_vector(
             current_position,
             self.source_file_name().clone(),
@@ -284,25 +285,21 @@ impl PreprocessorTokenizer {
 
     fn tokenize_whitespace(&mut self, context: &mut Context) -> PreprocessorToken {
         let mut current;
-        let mut last_index = self.index(context);
-        let mut last_column = self.column(context);
+        let mut last_position = self.save_position(context);
         loop {
             current = self.initial_processor.next_item(context);
             match current {
                 | None => {
-                    last_index = self.index(context);
-                    last_column = self.column(context);
+                    last_position = self.save_position(context);
                     break;
                 },
                 | Some(i) if i.is_whitespace() && i != '\n' => {
-                    last_index = self.index(context);
-                    last_column = self.column(context);
+                    last_position = self.save_position(context);
                 },
                 | Some(_) => break,
             }
         }
-        self.set_index(context, last_index);
-        self.set_column(context, last_column);
+        self.restore_position(context, last_position);
         context.string_cache.undo_str();
         context.string_cache.push(' ');
         self.generate_token(context, PreprocessorTokenType::Whitespace)

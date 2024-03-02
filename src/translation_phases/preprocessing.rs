@@ -72,12 +72,9 @@ const PREDEFINED_MACRO_NAMES: [&str; 5] =
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenizerFrameType {
     SourceFile,
-    ObjectLikeMacroInvocation {
-        hash_hash_positions: Rc<HashSet<SourcePosition>>,
-    },
+    ObjectLikeMacroInvocation,
     FunctionLikeMacroInvocation {
         arguments:           Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
-        hash_hash_positions: Rc<HashSet<SourcePosition>>,
         is_variadic:         bool,
     },
     FunctionLikeMacroArgument {
@@ -91,13 +88,11 @@ pub(crate) enum TokenizerFrameType {
 pub(crate) enum MacroDefinition {
     ObjectLike {
         tokenizer:           PreprocessorTokenizer,
-        hash_hash_positions: Rc<HashSet<SourcePosition>>,
     },
     FunctionLike {
         argument_names:      Rc<[StringCacheId]>,
         tokenizer:           PreprocessorTokenizer,
         is_variadic:         bool,
-        hash_hash_positions: Rc<HashSet<SourcePosition>>,
     },
     BuiltIn,
 }
@@ -105,7 +100,7 @@ pub(crate) enum MacroDefinition {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TokenizerFrame {
     frame_type: TokenizerFrameType,
-    tokenizer:  PreprocessorTokenizer,
+    pub(crate) tokenizer:  PreprocessorTokenizer,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -2317,7 +2312,6 @@ impl Preprocessor {
         SharedPath,
         PreprocessorTokenizer,
         Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
-        Rc<HashSet<SourcePosition>>,
         bool,
     )> {
         match self.tokenizer_stack.last() {
@@ -2326,14 +2320,12 @@ impl Preprocessor {
                     TokenizerFrameType::FunctionLikeMacroInvocation {
                         arguments,
                         is_variadic,
-                        hash_hash_positions,
                     },
                 tokenizer,
             }) => Some((
                 tokenizer.source_file_name(),
                 tokenizer.clone(),
                 arguments.clone(),
-                hash_hash_positions.clone(),
                 *is_variadic,
             )),
             | _ => None,
@@ -2382,9 +2374,9 @@ impl Preprocessor {
         context: &mut Context,
     ) -> Option<PreprocessorToken> {
         loop {
-            let Some(token) = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context) else {
+            let Some(token) = if let Some(t) = self.pe.take() {Some(t)} else {self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context) else {
                 return None;
-            };
+            }};
             let position = self.save_position(context);
             let hash_hash = if let Some(TokenizerFrame {
                 frame_type:
@@ -2400,15 +2392,15 @@ impl Preprocessor {
             {
                 {
                     let hash_hash_positions = hash_hash_positions.clone();
-                    let maybe_whitespace = self.tokenizer.next_item(context);
-                    if !matches!(
-                        maybe_whitespace,
+                    let mut t = self.tokenizer.next_item(context);
+                    if matches!(
+                        t,
                         Some(PreprocessorToken {
                             kind: PreprocessorTokenType::Whitespace,
                             ..
                         })
                     ) {
-                        self.restore_position(context, position);
+                        t = self.tokenizer.next_item(context);
                     }
                     eprintln!("Current position: {:?}", self.position(context));
                     eprintln!("Hash hash positions: {hash_hash_positions:?}");
@@ -2534,12 +2526,9 @@ impl Preprocessor {
                 match md {
                     | MacroDefinition::ObjectLike {
                         tokenizer,
-                        hash_hash_positions,
                     } => {
                         let frame = TokenizerFrame {
-                            frame_type: TokenizerFrameType::ObjectLikeMacroInvocation {
-                                hash_hash_positions,
-                            },
+                            frame_type: TokenizerFrameType::ObjectLikeMacroInvocation,
                             tokenizer,
                         };
                         self.push_tokenizer_frame(context, frame);
@@ -2549,7 +2538,6 @@ impl Preprocessor {
                         argument_names,
                         tokenizer,
                         is_variadic,
-                        hash_hash_positions,
                     } => {
                         let position = self.save_position(context);
                         let file = self.source_file_name();
@@ -2710,7 +2698,6 @@ impl Preprocessor {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                 arguments: Rc::new(arguments),
                                 is_variadic,
-                                hash_hash_positions: hash_hash_positions.clone(),
                             },
                             tokenizer,
                         };
@@ -5116,7 +5103,7 @@ impl Preprocessor {
                 let mut contents = TokenString::new();
                 contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
                 let start_index = Context::duplicate_source_vectors(
-                    &mut context.source_vectors,
+                    &mut context.source_vectors.0,
                     include_string.source_vectors,
                 );
                 loop {
@@ -5127,7 +5114,7 @@ impl Preprocessor {
                             }
                             let token_contents = context.string_cache.at(token.contents);
                             _ = Context::duplicate_source_vectors(
-                                &mut context.source_vectors,
+                                &mut context.source_vectors.0,
                                 token.source_vectors,
                             );
                             if let Some(idx) = token_contents.find('>') {
@@ -5151,7 +5138,7 @@ impl Preprocessor {
                 let synthetic_token = PreprocessorToken {
                     source_vectors: SourceVectors {
                         start_index,
-                        length: context.source_vectors.len() as u32 - start_index,
+                        length: context.source_vectors.0.len() as u32 - start_index,
                     },
                     contents:       context.string_cache.intern(&contents),
                     kind:           PreprocessorTokenType::AngleBracketString,
@@ -5315,7 +5302,6 @@ impl Preprocessor {
                     tokenizer,
                     argument_names: argument_names.into(),
                     is_variadic,
-                    hash_hash_positions: Rc::new(HashSet::default()),
                 },
             ));
         } else {
@@ -5338,11 +5324,9 @@ impl Preprocessor {
                 name.contents,
                 MacroDefinition::ObjectLike {
                     tokenizer:           tokenizer.clone(),
-                    hash_hash_positions: Rc::new(HashSet::default()),
                 },
             ));
         }
-        let mut hash_hash_positions = HashSet::default();
         let mut last = Option::<PreprocessorToken>::None;
         if let Some(mut old_tokenizer) = old_tokenizer {
             let mut error_has_been_generated = false;
@@ -5355,7 +5339,7 @@ impl Preprocessor {
                         // Hash-hash tokens cannot be created as a result of token pasting, so they
                         // will always have only one source vector.
                         _ = hash_hash_positions.insert(
-                            context.source_vectors[t.source_vectors.start_index as usize]
+                            context.source_vectors.0[t.source_vectors.start_index as usize]
                                 .position(context),
                         );
                         if last.is_none() {
@@ -5400,7 +5384,7 @@ impl Preprocessor {
                 match self.tokenizer.next_item(context) {
                     | Some(token) if token.kind == PreprocessorTokenType::HashHash => {
                         _ = hash_hash_positions.insert(
-                            context.source_vectors[token.source_vectors.start_index as usize]
+                            context.source_vectors.0[token.source_vectors.start_index as usize]
                                 .position(context),
                         );
                     },

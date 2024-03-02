@@ -241,7 +241,7 @@ impl GetPosition for SourceVectors {
     #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
-        let start = &context.source_vectors[self.start_index as usize];
+        let start = &context.source_vectors.0[self.start_index as usize];
         SourcePosition {
             index:  start.index,
             line:   start.line,
@@ -404,8 +404,24 @@ impl GetPosition for SourceFile {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub(crate) struct SourceVectorStack(Vec<SourceVector>);
+
+impl Display for SourceVectorStack {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        for (i, vector) in self.0.iter().enumerate() {
+            writeln!(
+                f,
+                "SourceVector {}: index: {}, line: {}, column: {}",
+                i, vector.index, vector.line, vector.column
+            )?;
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct Context {
-    source_vectors:               Vec<SourceVector>,
+    pub(crate) source_vectors:    SourceVectorStack,
     pub(crate) string_cache:      StringCache,
     is_tokenizing_include_string: bool,
     is_skipping_over_dead_code:   bool,
@@ -415,7 +431,7 @@ pub(crate) struct Context {
 impl Context {
     pub(crate) fn new() -> Self {
         Self {
-            source_vectors:               Vec::new(),
+            source_vectors:               SourceVectorStack(Vec::new()),
             string_cache:                 StringCache::new(),
             is_tokenizing_include_string: false,
             is_skipping_over_dead_code:   false,
@@ -429,8 +445,8 @@ impl Context {
         source_file: SharedPath,
         length: usize,
     ) -> u32 {
-        let index = self.source_vectors.len().try_into().unwrap();
-        self.source_vectors.push(SourceVector {
+        let index = self.source_vectors.0.len().try_into().unwrap();
+        self.source_vectors.0.push(SourceVector {
             index: start_position.index,
             column: start_position.column,
             line: start_position.line,
@@ -472,17 +488,19 @@ impl Context {
 
     #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
-        let start_index = self.source_vectors.len() as u32;
+        let start_index = self.source_vectors.0.len() as u32;
         for i in v1.start_index..v1.start_index + v1.length {
             self.source_vectors
-                .push(self.source_vectors[i as usize].clone());
+                .0
+                .push(self.source_vectors.0[i as usize].clone());
         }
         for i in v2.start_index..v2.start_index + v2.length {
             self.source_vectors
-                .push(self.source_vectors[i as usize].clone());
+                .0
+                .push(self.source_vectors.0[i as usize].clone());
         }
         assert!(
-            u32::try_from(self.source_vectors.len()).is_ok(),
+            u32::try_from(self.source_vectors.0.len()).is_ok(),
             "overflow in merge_vectors"
         );
         let length = v1.length + v2.length;
@@ -553,7 +571,7 @@ impl Context {
     pub(crate) fn get_source_vectors(&self, source_vectors: SourceVectors) -> &[SourceVector] {
         let start_index = source_vectors.start_index as usize;
         let end_index = start_index + source_vectors.length as usize;
-        &self.source_vectors[start_index..end_index]
+        &self.source_vectors.0[start_index..end_index]
     }
 }
 
