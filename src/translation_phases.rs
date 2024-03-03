@@ -37,33 +37,6 @@ pub(crate) enum TranslationError {
     Parsing(ParserError),
 }
 
-pub(crate) trait SaveCurrentPosition {
-    fn save_position(&self, context: &mut Context) -> SavedPosition;
-    fn restore_position(&mut self, context: &mut Context, saved: SavedPosition);
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct SavedPosition {
-    index: usize,
-    column: NonZeroU32,
-    line: u32,
-    current_char_start_index: usize,
-    current_char_start_column: NonZeroU32,
-    current_char_start_line: u32,
-}
-
-impl GetPosition for SavedPosition {
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
-        SourcePosition {
-            index:  self.index,
-            line:   self.line,
-            column: self.column,
-        }
-    }
-}
-
 impl GetSeverity for TranslationError {
     fn severity(&self) -> ErrorSeverity {
         match self {
@@ -412,8 +385,8 @@ impl Display for SourceVectorStack {
         for (i, vector) in self.0.iter().enumerate() {
             writeln!(
                 f,
-                "SourceVector {}: index: {}, line: {}, column: {}",
-                i, vector.index, vector.line, vector.column
+                "SourceVector {}: index: {}, line: {}, column: {}, length: {}",
+                i, vector.index, vector.line, vector.column, vector.length
             )?;
         }
         Ok(())
@@ -576,7 +549,7 @@ impl Context {
 }
 
 pub(crate) trait TranslationPhase:
-    GetPosition + SetPosition + GetSourceFileName + SetSourceFileName + SaveCurrentPosition
+    GetPosition + SetPosition + GetSourceFileName + SetSourceFileName
 {
     type Item;
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
