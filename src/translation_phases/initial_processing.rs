@@ -70,7 +70,7 @@ impl GetSourceVectors for InitialProcessorError {
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct InitialProcessor {
     last_was_newline:            bool,
-    pub(crate) source_file:      SourceFile,
+    source_file:                 SourceFile,
     current_char_start_position: SourcePosition,
 }
 

@@ -27,8 +27,8 @@ use crate::util::{
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct PreprocessorTokenizer {
-    pub(crate) initial_processor: InitialProcessor,
-    current_token_start:          SourcePosition,
+    initial_processor:   InitialProcessor,
+    current_token_start: SourcePosition,
 }
 
 impl GetPosition for PreprocessorTokenizer {
