@@ -8,8 +8,6 @@ use super::{
     GetSourceFileName,
     GetSourceVectors,
     NonZeroExt,
-    SaveCurrentPosition,
-    SavedPosition,
     SetPosition,
     SetSourceFileName,
     SourceFile,
@@ -115,32 +113,6 @@ impl SetSourceFileName for InitialProcessor {
     }
 }
 
-impl SaveCurrentPosition for InitialProcessor {
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    fn save_position(&self, _context: &mut Context) -> SavedPosition {
-        SavedPosition {
-            index: self.source_file.index,
-            column: self.source_file.column,
-            line: self.source_file.line,
-            current_char_start_index: self.current_char_start_position.index,
-            current_char_start_column: self.current_char_start_position.column,
-            current_char_start_line: self.current_char_start_position.line,
-        }
-    }
-
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    fn restore_position(&mut self, _context: &mut Context, saved: SavedPosition) {
-        self.source_file.index = saved.index;
-        self.source_file.column = saved.column;
-        self.source_file.line = saved.line;
-        self.current_char_start_position.index = saved.current_char_start_index;
-        self.current_char_start_position.column = saved.current_char_start_column;
-        self.current_char_start_position.line = saved.current_char_start_line;
-    }
-}
-
 impl InitialProcessor {
     pub(crate) fn new(source_name: SharedPath, source: SharedString) -> Self {
         Self {
@@ -205,8 +177,6 @@ impl InitialProcessor {
         //! net-positive on typical workloads.
         self.source_file.column.saturating_add_assign(2);
         loop {
-            let start_index = self.source_file.index;
-            let start_line = self.source_file.line;
             let Some(curr) = self.next_char(context) else {
                 return ' ';
             };
@@ -218,12 +188,7 @@ impl InitialProcessor {
             }
             let next_next = self.next_char(context);
             match self.handle_newline(context, curr, next, next_next, next_index) {
-                | HandleNewline::Newline => {
-                    self.source_file.index = start_index + 1;
-                    self.source_file.column = ONE;
-                    self.source_file.line = start_line + 1;
-                    return ' ';
-                },
+                | HandleNewline::Newline => return ' ',
                 | HandleNewline::EscapedNewline => (),
                 | HandleNewline::Other => {
                     self.source_file.column.saturating_add_assign(1);
@@ -355,6 +320,9 @@ impl InitialProcessor {
         // Translation phases 1 and 2 are handled in the same iterator for performance
         // reasons, because otherwise we would to store characters we don't consume with
         // source positions.
+
+        // Index should be pointing at the start of the next token at the start of every
+        // loop iteration.
         loop {
             self.current_char_start_position.index = self.source_file.index;
             self.current_char_start_position.column = self.source_file.column;
@@ -411,12 +379,13 @@ impl TranslationPhase for InitialProcessor {
     type Item = char;
 
     fn next_item(&mut self, context: &mut Context) -> Option<char> {
-        let ret = self.impl_(context);
-        eprintln!(
-            "{ret:?} from {:?} to {:?}",
-            self.current_char_start_position,
-            self.position(context),
-        );
-        ret
+        // let ret = self.impl_(context);
+        // eprintln!(
+        //     "{ret:?} from {:?} to {:?}",
+        //     self.current_char_start_position,
+        //     self.position(context),
+        // );
+        // ret
+        self.impl_(context)
     }
 }
