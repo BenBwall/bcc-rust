@@ -10,29 +10,11 @@ use std::{
         BuildHasherDefault,
         Hash,
     },
-    num::NonZeroU32,
     path::{
         Path,
         PathBuf,
     },
 };
-
-pub(crate) const ONE: NonZeroU32 = match NonZeroU32::new(1) {
-    | Some(one) => one,
-    | None => unreachable!(),
-};
-
-pub(crate) trait NonZeroU32Ext {
-    fn saturating_add_assign(&mut self, value: u32);
-}
-
-impl NonZeroU32Ext for NonZeroU32 {
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    fn saturating_add_assign(&mut self, value: u32) {
-        *self = self.saturating_add(value);
-    }
-}
 
 use crate::util::{
     dedup_arena::DedupArena,
@@ -65,23 +47,23 @@ impl GetSeverity for TranslationError {
 }
 
 impl GetPosition for TranslationError {
-    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition {
+    fn position(&self, context: &Context) -> SourcePosition {
         match self {
-            | Self::InitialProcessing(error) => error.position(source_vector_stack),
-            | Self::PreprocessorTokenizining(error) => error.position(source_vector_stack),
-            | Self::Preprocessing(error) => error.position(source_vector_stack),
-            | Self::Parsing(error) => error.position(source_vector_stack),
+            | Self::InitialProcessing(error) => error.position(context),
+            | Self::PreprocessorTokenizining(error) => error.position(context),
+            | Self::Preprocessing(error) => error.position(context),
+            | Self::Parsing(error) => error.position(context),
         }
     }
 }
 
 impl GetSourceVectors for TranslationError {
-    fn source_vectors(&self, source_vector_stack: &mut SourceVectorStack) -> SourceVectors {
+    fn source_vectors(&self, context: &mut Context) -> SourceVectors {
         match self {
-            | Self::InitialProcessing(error) => error.source_vectors(source_vector_stack),
-            | Self::PreprocessorTokenizining(error) => error.source_vectors(source_vector_stack),
-            | Self::Preprocessing(error) => error.source_vectors(source_vector_stack),
-            | Self::Parsing(error) => error.source_vectors(source_vector_stack),
+            | Self::InitialProcessing(error) => error.source_vectors(context),
+            | Self::PreprocessorTokenizining(error) => error.source_vectors(context),
+            | Self::Preprocessing(error) => error.source_vectors(context),
+            | Self::Parsing(error) => error.source_vectors(context),
         }
     }
 }
@@ -165,7 +147,7 @@ impl Display for ErrorSeverity {
 pub(crate) struct SourcePosition {
     pub(crate) index:  usize,
     pub(crate) line:   u32,
-    pub(crate) column: NonZeroU32,
+    pub(crate) column: u32,
 }
 
 impl Default for SourcePosition {
@@ -173,26 +155,25 @@ impl Default for SourcePosition {
         Self {
             index:  0,
             line:   1,
-            column: ONE,
+            column: 1,
         }
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
-#[repr(packed)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub(crate) struct SourceVector {
     pub(crate) index:             usize,
-    pub(crate) column:            NonZeroU32,
+    pub(crate) column:            u32,
     pub(crate) line:              u32,
     pub(crate) source_file_index: u32,
-    pub(crate) length:            u32,
+    pub(crate) length:            usize,
 }
 
 impl Default for SourceVector {
     fn default() -> Self {
         Self {
             index:             0,
-            column:            ONE,
+            column:            1,
             line:              1,
             source_file_index: 0,
             length:            0,
@@ -203,7 +184,7 @@ impl Default for SourceVector {
 impl GetPosition for SourceVector {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, _source_vector_stack: &SourceVectorStack) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
             index:  self.index,
             line:   self.line,
@@ -221,8 +202,8 @@ pub(crate) struct SourceVectors {
 impl GetPosition for SourceVectors {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition {
-        let start = &source_vector_stack.0[self.start_index as usize];
+    fn position(&self, context: &Context) -> SourcePosition {
+        let start = &context.source_vectors.0[self.start_index as usize];
         SourcePosition {
             index:  start.index,
             line:   start.line,
@@ -232,7 +213,7 @@ impl GetPosition for SourceVectors {
 }
 
 impl GetSourceVectors for SourceVectors {
-    fn source_vectors(&self, _source_vector_stack: &mut SourceVectorStack) -> SourceVectors {
+    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
         *self
     }
 }
@@ -258,26 +239,26 @@ pub(crate) trait GetSourceFileIndex {
 }
 
 pub(crate) trait GetPosition {
-    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition;
+    fn position(&self, context: &Context) -> SourcePosition;
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn index(&self, source_vector_stack: &SourceVectorStack) -> usize {
-        self.position(source_vector_stack).index
+    fn index(&self, context: &Context) -> usize {
+        self.position(context).index
     }
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn column(&self, source_vector_stack: &SourceVectorStack) -> NonZeroU32 {
-        self.position(source_vector_stack).column
+    fn column(&self, context: &Context) -> u32 {
+        self.position(context).column
     }
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn line(&self, source_vector_stack: &SourceVectorStack) -> u32 {
-        self.position(source_vector_stack).line
+    fn line(&self, context: &Context) -> u32 {
+        self.position(context).line
     }
 }
 
 pub(crate) trait GetSourceVectors {
-    fn source_vectors(&self, source_vector_stack: &mut SourceVectorStack) -> SourceVectors;
+    fn source_vectors(&self, context: &mut Context) -> SourceVectors;
 }
 
 pub(crate) trait SetPosition: GetPosition {
@@ -289,19 +270,19 @@ pub(crate) trait SetPosition: GetPosition {
             context,
             SourcePosition {
                 index,
-                line: self.line(&context.source_vectors),
-                column: self.column(&context.source_vectors),
+                line: self.line(context),
+                column: self.column(context),
             },
         );
     }
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn set_column(&mut self, context: &mut Context, column: NonZeroU32) {
+    fn set_column(&mut self, context: &mut Context, column: u32) {
         self.set_position(
             context,
             SourcePosition {
-                index: self.index(&context.source_vectors),
-                line: self.line(&context.source_vectors),
+                index: self.index(context),
+                line: self.line(context),
                 column,
             },
         );
@@ -312,9 +293,9 @@ pub(crate) trait SetPosition: GetPosition {
         self.set_position(
             context,
             SourcePosition {
-                index: self.index(&context.source_vectors),
+                index: self.index(context),
                 line,
-                column: self.column(&context.source_vectors),
+                column: self.column(context),
             },
         );
     }
@@ -327,7 +308,7 @@ pub(crate) trait SetSourceFileIndex {
 impl GetPosition for SourcePosition {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, _source_vector_stack: &SourceVectorStack) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         *self
     }
 }
@@ -335,7 +316,7 @@ impl GetPosition for SourcePosition {
 impl GetPosition for Infallible {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, _source_vector_stack: &SourceVectorStack) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         match *self {}
     }
 }
@@ -346,7 +327,7 @@ pub(crate) struct SourceFile {
     pub(crate) source_file_index: u32,
     pub(crate) source:            SharedString,
     pub(crate) line:              u32,
-    pub(crate) column:            NonZeroU32,
+    pub(crate) column:            u32,
     pub(crate) index:             usize,
 }
 
@@ -356,7 +337,7 @@ impl Default for SourceFile {
             source_file_index: 0,
             source:            SharedString::default(),
             line:              1,
-            column:            ONE,
+            column:            1,
             index:             0,
         }
     }
@@ -368,7 +349,7 @@ impl SourceFile {
             source_file_index,
             source,
             line: 1,
-            column: ONE,
+            column: 1,
             index: 0,
         }
     }
@@ -377,7 +358,7 @@ impl SourceFile {
 impl GetPosition for SourceFile {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, _source_vector_stack: &SourceVectorStack) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
             index:  self.index,
             line:   self.line,
@@ -392,14 +373,10 @@ pub(crate) struct SourceVectorStack(pub(crate) Vec<SourceVector>);
 impl Display for SourceVectorStack {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         for (i, vector) in self.0.iter().enumerate() {
-            let index = vector.index;
-            let line = vector.line;
-            let column = vector.column;
-            let length = vector.length;
             writeln!(
                 f,
-                "SourceVector {i}: index: {index}, line: {line}, column: {column}, length: \
-                 {length}",
+                "SourceVector {}: index: {}, line: {}, column: {}, length: {}",
+                i, vector.index, vector.line, vector.column, vector.length
             )?;
         }
         Ok(())
@@ -428,13 +405,13 @@ impl Context {
     }
 
     pub(crate) fn push_source_vector(
-        source_vector_stack: &mut SourceVectorStack,
+        &mut self,
         start_position: SourcePosition,
         source_file_index: u32,
-        length: u32,
+        length: usize,
     ) -> u32 {
-        let index = source_vector_stack.0.len().try_into().unwrap();
-        source_vector_stack.0.push(SourceVector {
+        let index = self.source_vectors.0.len().try_into().unwrap();
+        self.source_vectors.0.push(SourceVector {
             index: start_position.index,
             column: start_position.column,
             line: start_position.line,
@@ -446,32 +423,25 @@ impl Context {
 
     #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn duplicate_source_vectors(
-        source_vector_stack: &mut SourceVectorStack,
+        self_source_vectors: &mut Vec<SourceVector>,
         source_vectors: SourceVectors,
     ) -> u32 {
-        _ = u32::try_from(source_vectors.length as usize + source_vector_stack.0.len())
+        _ = u32::try_from(source_vectors.length as usize + self_source_vectors.len())
             .expect("overflow in duplicate_source_vectors");
-        let start_index = source_vector_stack.0.len() as u32;
+        let start_index = self_source_vectors.len() as u32;
         for i in source_vectors.start_index..source_vectors.start_index + source_vectors.length {
-            source_vector_stack
-                .0
-                .push(source_vector_stack.0[i as usize]);
+            self_source_vectors.push(self_source_vectors[i as usize].clone());
         }
         start_index
     }
 
     pub(crate) fn create_source_vectors(
-        source_vector_stack: &mut SourceVectorStack,
+        &mut self,
         start_position: SourcePosition,
         source_file_index: u32,
-        length: u32,
+        length: usize,
     ) -> SourceVectors {
-        let start_index = Self::push_source_vector(
-            source_vector_stack,
-            start_position,
-            source_file_index,
-            length,
-        );
+        let start_index = self.push_source_vector(start_position, source_file_index, length);
         let length = 1;
         SourceVectors {
             start_index,
@@ -485,12 +455,12 @@ impl Context {
         for i in v1.start_index..v1.start_index + v1.length {
             self.source_vectors
                 .0
-                .push(self.source_vectors.0[i as usize]);
+                .push(self.source_vectors.0[i as usize].clone());
         }
         for i in v2.start_index..v2.start_index + v2.length {
             self.source_vectors
                 .0
-                .push(self.source_vectors.0[i as usize]);
+                .push(self.source_vectors.0[i as usize].clone());
         }
         assert!(
             u32::try_from(self.source_vectors.0.len()).is_ok(),

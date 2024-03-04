@@ -7,17 +7,14 @@ use super::{
     GetSeverity,
     GetSourceFileIndex,
     GetSourceVectors,
-    NonZeroU32Ext,
     SetPosition,
     SetSourceFileIndex,
     SourceFile,
     SourcePosition,
     SourceVector,
-    SourceVectorStack,
     SourceVectors,
     StrExt,
     TranslationPhase,
-    ONE,
 };
 use crate::util::shared::SharedString;
 
@@ -36,9 +33,9 @@ pub(crate) enum InitialProcessorError {
 impl GetPosition for InitialProcessorError {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition {
+    fn position(&self, context: &Context) -> SourcePosition {
         match self {
-            | Self::MissingFinalNewline(vector) => vector.position(source_vector_stack),
+            | Self::MissingFinalNewline(vector) => vector.position(context),
         }
     }
 }
@@ -52,11 +49,10 @@ impl GetSeverity for InitialProcessorError {
 }
 
 impl GetSourceVectors for InitialProcessorError {
-    fn source_vectors(&self, source_vector_stack: &mut SourceVectorStack) -> SourceVectors {
+    fn source_vectors(&self, context: &mut Context) -> SourceVectors {
         match self {
-            | Self::MissingFinalNewline(vector) => Context::create_source_vectors(
-                source_vector_stack,
-                vector.position(source_vector_stack),
+            | Self::MissingFinalNewline(vector) => context.create_source_vectors(
+                vector.position(context),
                 vector.source_file_index,
                 vector.length,
             ),
@@ -73,7 +69,7 @@ pub(crate) struct InitialProcessor {
 impl GetPosition for InitialProcessor {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, _source_vector_stack: &SourceVectorStack) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
             index:  self.source_file.index,
             column: self.source_file.column,
@@ -149,13 +145,13 @@ impl InitialProcessor {
             | '-' => '~',
             | _ => {
                 self.source_file.index = next_index;
-                self.source_file.column.saturating_add_assign(1);
+                self.source_file.column += 1;
                 return '?';
             },
         };
         // Step over `next_next`.
         self.source_file.index += 1;
-        self.source_file.column.saturating_add_assign(3);
+        self.source_file.column += 3;
         to_yield
     }
 
@@ -168,7 +164,7 @@ impl InitialProcessor {
         //!
         //! TODO: Benchmark this function to see if the cold attribute is
         //! net-positive on typical workloads.
-        self.source_file.column.saturating_add_assign(2);
+        self.source_file.column += 2;
         loop {
             let Some(curr) = self.next_char(context) else {
                 return ' ';
@@ -184,7 +180,7 @@ impl InitialProcessor {
                 | HandleNewline::Newline => return ' ',
                 | HandleNewline::EscapedNewline => (),
                 | HandleNewline::Other => {
-                    self.source_file.column.saturating_add_assign(1);
+                    self.source_file.column += 1;
                     self.source_file.index = next_index;
                 },
             }
@@ -200,7 +196,7 @@ impl InitialProcessor {
         //!
         //! TODO: Benchmark this function to see if the cold attribute is
         //! net-positive on typical workloads.
-        self.source_file.column.saturating_add_assign(1);
+        self.source_file.column += 1;
         loop {
             let Some(curr) = self.next_char(context) else {
                 if !self.last_was_newline {
@@ -214,30 +210,30 @@ impl InitialProcessor {
             let next = self.next_char(context);
             match (curr, next) {
                 | ('*', Some('/')) => {
-                    self.source_file.column.saturating_add_assign(2);
+                    self.source_file.column += 2;
                     // Step over `next`.
                     self.source_file.index += 1;
                     return ' ';
                 },
                 | ('\r', Some('\n')) => {
                     self.last_was_newline = true;
-                    self.source_file.column = ONE;
+                    self.source_file.column = 1;
                     self.source_file.line += 1;
                     // Step over `next`.
                     self.source_file.index += 1;
                 },
                 | ('\n' | '\r', _) => {
                     self.last_was_newline = true;
-                    self.source_file.column = ONE;
+                    self.source_file.column = 1;
                     self.source_file.line += 1;
                 },
                 | (_, Some(_)) => {
                     self.last_was_newline = false;
-                    self.source_file.column.saturating_add_assign(1);
+                    self.source_file.column += 1;
                 },
                 | (_, None) => {
                     self.last_was_newline = false;
-                    self.source_file.column.saturating_add_assign(1);
+                    self.source_file.column += 1;
                     return ' ';
                 },
             }
@@ -256,7 +252,7 @@ impl InitialProcessor {
         // Canonicalize and track line endings.
         // Handle windows-style newlines.
         if curr == '\r' && next == Some('\n') {
-            self.source_file.column = ONE;
+            self.source_file.column = 1;
             self.source_file.line += 1;
             self.last_was_newline = true;
             // Discard 'next'.
@@ -265,7 +261,7 @@ impl InitialProcessor {
 
         // Handle Unix- and MacOS-style newlines.
         if matches!(curr, '\n' | '\r') {
-            self.source_file.column = ONE;
+            self.source_file.column = 1;
             self.source_file.line += 1;
             self.source_file.index = next_index;
             self.last_was_newline = true;
@@ -276,7 +272,7 @@ impl InitialProcessor {
         if curr == '\\' {
             match (next, next_next) {
                 | (Some('\r'), Some('\n')) => {
-                    self.source_file.column = ONE;
+                    self.source_file.column = 1;
                     self.source_file.line += 1;
                     // Step over `next_next`.
                     self.source_file.index += 1;
@@ -284,7 +280,7 @@ impl InitialProcessor {
                     return HandleNewline::EscapedNewline;
                 },
                 | (Some('\n' | '\r'), _) => {
-                    self.source_file.column = ONE;
+                    self.source_file.column = 1;
                     self.source_file.line += 1;
                     self.last_was_newline = true;
                     return HandleNewline::EscapedNewline;
@@ -359,7 +355,7 @@ impl TranslationPhase for InitialProcessor {
                 },
                 | (c, _, _) => {
                     self.source_file.index = next_index;
-                    self.source_file.column.saturating_add_assign(1);
+                    self.source_file.column += 1;
                     self.last_was_newline = false;
                     c
                 },
