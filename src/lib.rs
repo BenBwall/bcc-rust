@@ -90,6 +90,7 @@ impl Iterator for PreprocessorIterator {
     type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
+        self.context.source_vectors.0.clear();
         self.preprocessor.next_item(&mut self.context)
     }
 }
