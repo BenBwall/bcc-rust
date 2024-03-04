@@ -9,8 +9,8 @@ use criterion::{
 };
 
 fn bench(c: &mut Criterion) {
-    _ = c.bench_function("Preprocess hundred thousand", |b| {
-        b.iter(bcc_rust::preprocess_hundred_thousand);
+    _ = c.bench_function("Preprocess one million", |b| {
+        b.iter(bcc_rust::preprocess_one_million);
     });
 }
 
