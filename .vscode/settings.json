@@ -28,6 +28,7 @@
     "proptest",
     "Rewinded",
     "rstest",
+    "rustflags",
     "savepoint",
     "scopeguard",
     "Shareds",

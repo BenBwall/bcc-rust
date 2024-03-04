@@ -10,7 +10,10 @@ use std::{
         replace,
         take,
     },
-    ops::ControlFlow,
+    ops::{
+        ControlFlow,
+        RangeBounds,
+    },
     path::{
         Path,
         PathBuf,
@@ -600,6 +603,7 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible(..)
             | PreprocessorErrorType::HeaderFileInaccessible(..)
             | PreprocessorErrorType::HashHashUsedOutsideOfMacro
+            | PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
             | PreprocessorErrorType::InvalidEscapeSequence
             | PreprocessorErrorType::UnterminatedEscapeSequence
             | PreprocessorErrorType::InvalidHexEscapeSequence
@@ -813,6 +817,7 @@ pub(crate) enum PreprocessorErrorType {
     CurrentWorkingDirectoryInaccessible(IoError),
     HeaderFileInaccessible(IoError),
     HashHashUsedOutsideOfMacro,
+    CannotUseHashHashAfterFunctionLikeMacroCall,
     InvalidEscapeSequence,
     UnterminatedEscapeSequence,
     InvalidHexEscapeSequence,
@@ -1525,6 +1530,12 @@ impl Display for PreprocessorErrorType {
                      inside a macro definition."
                 )
             },
+            | Self::CannotUseHashHashAfterFunctionLikeMacroCall => {
+                write!(
+                    f,
+                    "Cannot use '##' operator after a function-like macro call!"
+                )
+            },
             | Self::InvalidEscapeSequence => {
                 write!(
                     f,
@@ -1845,7 +1856,7 @@ impl Preprocessor {
     fn skip_and_expand_until_newline(&mut self, context: &mut Context) {
         loop {
             if matches!(
-                self.next_preprocessor_token::<false>(context),
+                self.next_preprocessor_token::<true>(context),
                 Some(PreprocessorToken {
                     kind: PreprocessorTokenType::Newline,
                     ..
@@ -1967,10 +1978,32 @@ impl Preprocessor {
         rhs: PreprocessorToken,
         result_token_type: PreprocessorTokenType,
     ) -> PreprocessorToken {
+        self.merge_token_contents_with_ranges(context, lhs, rhs, .., .., result_token_type)
+    }
+
+    fn merge_token_contents_with_ranges(
+        &mut self,
+        context: &mut Context,
+        lhs: PreprocessorToken,
+        rhs: PreprocessorToken,
+        lhs_range: impl RangeBounds<usize>,
+        rhs_range: impl RangeBounds<usize>,
+        result_token_type: PreprocessorTokenType,
+    ) -> PreprocessorToken {
         _ = self;
         let mut new_contents = TokenString::new();
-        new_contents.push_str(context.string_cache.at(lhs.contents));
-        new_contents.push_str(context.string_cache.at(rhs.contents));
+        new_contents.push_str(
+            &context.string_cache.at(lhs.contents)[(
+                lhs_range.start_bound().cloned(),
+                lhs_range.end_bound().cloned(),
+            )],
+        );
+        new_contents.push_str(
+            &context.string_cache.at(rhs.contents)[(
+                rhs_range.start_bound().cloned(),
+                rhs_range.end_bound().cloned(),
+            )],
+        );
         let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
         PreprocessorToken {
             kind: result_token_type,
@@ -2013,11 +2046,23 @@ impl Preprocessor {
                 | PreprocessorTokenType::Defined
                 | PreprocessorTokenType::Number,
             ) => {
-                if context.string_cache.at(rhs.contents).contains('.') {
+                let rhs_contents = context.string_cache.at(rhs.contents);
+                if rhs_contents.contains('.') {
                     return Some(self.create_merge_error(context, lhs, rhs));
                 }
-                let new =
-                    self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::Identifier);
+                let rhs_range = if rhs.kind == PreprocessorTokenType::Number {
+                    0..rhs_contents.len() - 1
+                } else {
+                    0..rhs_contents.len()
+                };
+                let new = self.merge_token_contents_with_ranges(
+                    context,
+                    lhs,
+                    rhs,
+                    ..,
+                    rhs_range,
+                    PreprocessorTokenType::Identifier,
+                );
                 let kind = if context.string_cache.at(new.contents) == "defined" {
                     PreprocessorTokenType::Defined
                 } else {
@@ -2056,8 +2101,25 @@ impl Preprocessor {
                 PreprocessorTokenType::Period | PreprocessorTokenType::Number,
                 PreprocessorTokenType::Number,
             )
-            | (PreprocessorTokenType::Number, PreprocessorTokenType::Period) =>
-                Some(self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::Number)),
+            | (PreprocessorTokenType::Number, PreprocessorTokenType::Period) => {
+                let lhs_contents = context.string_cache.at(lhs.contents);
+                let lhs_range = if lhs.kind == PreprocessorTokenType::Number {
+                    0..lhs_contents.len() - 1
+                } else {
+                    0..lhs_contents.len()
+                };
+                // We don't remove the trailing null byte from the right-hand side because we're
+                // generating a new number token, and number tokens should always have a
+                // trailing null byte.
+                Some(self.merge_token_contents_with_ranges(
+                    context,
+                    lhs,
+                    rhs,
+                    lhs_range,
+                    ..,
+                    PreprocessorTokenType::Number,
+                ))
+            },
             | (PreprocessorTokenType::Plus, PreprocessorTokenType::Plus) =>
                 Some(self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PlusPlus)),
             | (PreprocessorTokenType::Minus, PreprocessorTokenType::Minus) => Some(
@@ -2355,8 +2417,8 @@ impl Preprocessor {
         &mut self,
         context: &mut Context,
     ) -> Option<PreprocessorToken> {
-        loop {
-            let Some(token) = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context) else {
+        'base: loop {
+            let Some(lhs) = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context) else {
                 return None;
             };
             let hash_hash = if let Some(TokenizerFrame {
@@ -2366,28 +2428,14 @@ impl Preprocessor {
                 ..
             }) = self.tokenizer_stack.last()
             {
-                let position = self.position(context);
-                let current_token_start = self.tokenizer.current_token_start();
-                eprintln!("Position in handle_hash_hash_operator: {position:?}");
-                eprintln!(
-                    "Current token start in handle_hash_hash_operator: {current_token_start:?}"
-                );
-                let mut t = self.tokenizer.next_item(context);
-                if matches!(
-                    t,
-                    Some(PreprocessorToken {
-                        kind: PreprocessorTokenType::Whitespace,
-                        ..
-                    })
-                ) {
-                    t = self.tokenizer.next_item(context);
-                }
-                eprintln!("t: {t:?}");
-                if t.is_some_and(|t| t.kind == PreprocessorTokenType::HashHash) {
-                    t
+                let save = self.position(context);
+                context.set_ignore_tokenizer_errors(true);
+                let hash_hash = Self::next_ignore_whitespace(&mut self.tokenizer, context);
+                context.set_ignore_tokenizer_errors(false);
+                self.set_position(context, save);
+                if hash_hash.is_some_and(|v| v.kind == PreprocessorTokenType::HashHash) {
+                    Self::next_ignore_whitespace(&mut self.tokenizer, context)
                 } else {
-                    self.set_position(context, position);
-                    self.tokenizer.set_current_token_start(current_token_start);
                     None
                 }
             } else {
@@ -2407,14 +2455,14 @@ impl Preprocessor {
                         ),
                         source_vectors,
                     });
-                    return Some(token);
+                    return Some(lhs);
                 };
-                if let Some(r) = self.parse_hash_hash_operator(context, token, h, rhs) {
+                if let Some(r) = self.parse_hash_hash_operator(context, lhs, h, rhs) {
                     return Some(r);
                 }
-            } else {
-                return Some(token);
+                continue 'base;
             }
+            return Some(lhs);
         }
     }
 
@@ -3380,8 +3428,21 @@ impl Preprocessor {
             | PreprocessorTokenType::Ellipsis =>
                 Self::build_operator_token(token, OperatorTokenType::Ellipsis),
             | PreprocessorTokenType::HashHash => {
+                let error_type = if matches!(
+                    self.tokenizer_stack.last(),
+                    Some(TokenizerFrame {
+                        frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                            | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                            | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                        ..
+                    })
+                ) {
+                    PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
+                } else {
+                    PreprocessorErrorType::HashHashUsedOutsideOfMacro
+                };
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::HashHashUsedOutsideOfMacro,
+                    error_type,
                     source_vectors: token.source_vectors,
                 });
                 return None;
@@ -4723,7 +4784,7 @@ impl Preprocessor {
 
     fn skip_over_dead_code(&mut self, context: &mut Context) {
         let start_balance = self.if_directive_balance;
-        context.set_is_skipping_over_dead_code(true);
+        context.set_ignore_tokenizer_errors(true);
         'outer: while start_balance <= self.if_directive_balance {
             match self.tokenizer.next_item(context) {
                 | Some(token) => match token.kind {
@@ -4794,12 +4855,12 @@ impl Preprocessor {
                     | _ => continue,
                 },
                 | None => {
-                    context.set_is_skipping_over_dead_code(false);
+                    context.set_ignore_tokenizer_errors(false);
                     return;
                 },
             }
         }
-        context.set_is_skipping_over_dead_code(false);
+        context.set_ignore_tokenizer_errors(false);
     }
 
     fn parse_if_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {

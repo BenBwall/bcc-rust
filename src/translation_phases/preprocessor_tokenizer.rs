@@ -152,8 +152,7 @@ impl TranslationPhase for PreprocessorTokenizer {
     fn next_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
         loop {
             context.string_cache.undo_str();
-            let start_position = self.position(context);
-            self.current_token_start = self.initial_processor.current_char_start_position();
+            self.current_token_start = self.position(context);
             let Some(input) = self.initial_processor.next_item(context) else {
                 break None;
             };
@@ -187,7 +186,7 @@ impl TranslationPhase for PreprocessorTokenizer {
                         match self.tokenize_angle_bracket_string(context) {
                             | Some(token) => token,
                             | None => {
-                                self.set_position(context, start_position);
+                                self.set_position(context, self.current_token_start);
                                 context.set_is_tokenizing_include_string(false);
                                 context.string_cache.undo_str();
                                 continue;
@@ -246,8 +245,6 @@ impl PreprocessorTokenizer {
         context: &mut Context,
         token_type: PreprocessorTokenType,
     ) -> PreprocessorToken {
-        eprintln!("Position: {:?}", self.position(context));
-        eprintln!("Current token start: {:?}", self.current_token_start);
         let source_vector = context.push_source_vector(
             self.current_token_start,
             self.source_file_name().clone(),
@@ -262,18 +259,6 @@ impl PreprocessorTokenizer {
             kind: token_type,
             contents,
         }
-    }
-
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    pub(crate) fn current_token_start(&self) -> SourcePosition {
-        self.current_token_start
-    }
-
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    pub(crate) fn set_current_token_start(&mut self, position: SourcePosition) {
-        self.current_token_start = position;
     }
 
     fn tokenize_whitespace(&mut self, context: &mut Context) -> PreprocessorToken {
