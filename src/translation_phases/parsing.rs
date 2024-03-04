@@ -24,7 +24,6 @@ use super::{
     SetPosition,
     SetSourceFileIndex,
     SourcePosition,
-    SourceVectorStack,
     SourceVectors,
     TranslationPhase,
 };
@@ -42,8 +41,8 @@ pub(crate) struct Parser {
 }
 
 impl GetPosition for Parser {
-    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition {
-        self.preprocessor.position(source_vector_stack)
+    fn position(&self, context: &Context) -> SourcePosition {
+        self.preprocessor.position(context)
     }
 }
 
@@ -403,13 +402,13 @@ impl GetSeverity for ParserError {
 }
 
 impl GetPosition for ParserError {
-    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition {
-        self.source_vectors.position(source_vector_stack)
+    fn position(&self, context: &Context) -> SourcePosition {
+        self.source_vectors.position(context)
     }
 }
 
 impl GetSourceVectors for ParserError {
-    fn source_vectors(&self, _source_vector_stack: &mut SourceVectorStack) -> SourceVectors {
+    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
         self.source_vectors
     }
 }
