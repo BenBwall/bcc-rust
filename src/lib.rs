@@ -157,7 +157,7 @@ pub fn run() -> Result<(), MainError> {
 
     let mut iterator = PreprocessorIterator::new(
         source_filename,
-        input_string.clone(),
+        input_string,
         args.quote_include.into(),
         args.system_include.into(),
     );
@@ -229,15 +229,12 @@ pub fn run() -> Result<(), MainError> {
         "Source vectors: ".bright_green(),
         iterator.context.source_vectors.bright_green()
     );
-    eprintln!("Input at index 113: {:?}", input_string.as_bytes()[113] as char);
-    eprintln!("Input at index 114: {:?}", input_string.as_bytes()[114] as char);
-    eprintln!("Input at index 115: {:?}", input_string.as_bytes()[115] as char);
     Ok(())
 }
 
 #[doc(hidden)]
-pub fn preprocess_hundred_thousand() {
-    let million_lines = include_str!(concat!(env!("OUT_DIR"), "/hundred-thousand-lines.c"));
+pub fn preprocess_one_million() {
+    let million_lines = include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c"));
     let iterator = PreprocessorIterator::new(
         shared_path_from_str("<input>"),
         million_lines.to_owned().into(),

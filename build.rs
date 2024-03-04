@@ -40,10 +40,9 @@ fn main() {
 
 fn gen_hundred_thousand() {
     let out_dir = out_dir();
-    let mut f = BufWriter::new(
-        std::fs::File::create(format!("{out_dir}/hundred-thousand-lines.c")).unwrap(),
-    );
-    for i in 0..100_000 {
+    let mut f =
+        BufWriter::new(std::fs::File::create(format!("{out_dir}/one-million-lines.c")).unwrap());
+    for i in 0..1_000_000 {
         writeln!(f, "int i = {i}").unwrap();
     }
 }
