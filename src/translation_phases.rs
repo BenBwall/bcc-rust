@@ -7,7 +7,6 @@ use std::{
         Result as FmtResult,
     },
     hash::Hash,
-    num::NonZeroU32,
     path::PathBuf,
 };
 
@@ -17,11 +16,6 @@ use crate::util::{
         SharedString,
     },
     string_cache::StringCache,
-};
-
-const ONE: NonZeroU32 = match NonZeroU32::new(1) {
-    | Some(one) => one,
-    | None => panic!("NonZeroU32::new(1) failed"),
 };
 
 #[allow(dead_code)]
@@ -92,12 +86,6 @@ trait NonZeroExt {
     fn saturating_add_assign(&mut self, num: u32);
 }
 
-impl NonZeroExt for NonZeroU32 {
-    fn saturating_add_assign(&mut self, num: u32) {
-        *self = self.saturating_add(num);
-    }
-}
-
 trait StrExt {
     /// Returns the character at the given index,
     /// or `None` if the index is out of bounds or is in the middle of a
@@ -158,7 +146,7 @@ impl Display for ErrorSeverity {
 pub(crate) struct SourcePosition {
     pub(crate) index:  usize,
     pub(crate) line:   u32,
-    pub(crate) column: NonZeroU32,
+    pub(crate) column: u32,
 }
 
 impl Default for SourcePosition {
@@ -166,7 +154,7 @@ impl Default for SourcePosition {
         Self {
             index:  0,
             line:   1,
-            column: ONE,
+            column: 1,
         }
     }
 }
@@ -174,7 +162,7 @@ impl Default for SourcePosition {
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub(crate) struct SourceVector {
     pub(crate) index:       usize,
-    pub(crate) column:      NonZeroU32,
+    pub(crate) column:      u32,
     pub(crate) line:        u32,
     pub(crate) source_file: SharedPath,
     pub(crate) length:      usize,
@@ -184,7 +172,7 @@ impl Default for SourceVector {
     fn default() -> Self {
         Self {
             index:       0,
-            column:      ONE,
+            column:      1,
             line:        1,
             source_file: SharedPath::from_path_buf(PathBuf::new()),
             length:      0,
@@ -258,7 +246,7 @@ pub(crate) trait GetPosition {
     }
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn column(&self, context: &Context) -> NonZeroU32 {
+    fn column(&self, context: &Context) -> u32 {
         self.position(context).column
     }
     #[allow(clippy::inline_always)]
@@ -288,7 +276,7 @@ pub(crate) trait SetPosition: GetPosition {
     }
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn set_column(&mut self, context: &mut Context, column: NonZeroU32) {
+    fn set_column(&mut self, context: &mut Context, column: u32) {
         self.set_position(
             context,
             SourcePosition {
@@ -337,7 +325,7 @@ pub(crate) struct SourceFile {
     pub(crate) name:   SharedPath,
     pub(crate) source: SharedString,
     pub(crate) line:   u32,
-    pub(crate) column: NonZeroU32,
+    pub(crate) column: u32,
     pub(crate) index:  usize,
 }
 
@@ -347,7 +335,7 @@ impl Default for SourceFile {
             name:   SharedPath::from_path_buf(PathBuf::new()),
             source: SharedString::default(),
             line:   1,
-            column: ONE,
+            column: 1,
             index:  0,
         }
     }
@@ -359,7 +347,7 @@ impl SourceFile {
             name,
             source,
             line: 1,
-            column: ONE,
+            column: 1,
             index: 0,
         }
     }

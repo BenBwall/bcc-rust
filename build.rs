@@ -35,14 +35,14 @@ fn main() {
         .expect("Unable to generate bindings")
         .write_to_file(format!("{out_dir}/bindings.rs"))
         .expect("Couldn't write bindings!");
-    gen_hundred_thousand();
+    gen_one_million();
 }
 
-fn gen_hundred_thousand() {
+fn gen_one_million() {
     let out_dir = out_dir();
     let mut f =
         BufWriter::new(std::fs::File::create(format!("{out_dir}/one-million-lines.c")).unwrap());
     for i in 0..1_000_000 {
-        writeln!(f, "int i = {i}").unwrap();
+        writeln!(f, "int i = {i};").unwrap();
     }
 }
