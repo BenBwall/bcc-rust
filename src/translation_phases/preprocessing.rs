@@ -28,6 +28,7 @@ use super::{
         PreprocessorToken,
         PreprocessorTokenType,
         PreprocessorTokenizer,
+        TokenPosition,
     },
     Context,
     ErrorSeverity,
@@ -38,10 +39,13 @@ use super::{
     SetPosition,
     SetSourceFileIndex,
     SourcePosition,
+    SourceVector,
+    SourceVectorStack,
     SourceVectors,
     StrExt,
     TokenString,
     TranslationPhase,
+    ONE,
 };
 use crate::{
     float_parsing::{
@@ -129,8 +133,8 @@ pub(crate) struct Preprocessor {
 impl GetPosition for Preprocessor {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
-        self.tokenizer.position(context)
+    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition {
+        self.tokenizer.position(source_vector_stack)
     }
 }
 
@@ -373,9 +377,10 @@ pub(crate) enum IntegerSuffix {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[allow(clippy::struct_field_names)]
 pub(crate) struct Token {
     pub(crate) kind:           TokenType,
-    pub(crate) source_vectors: SourceVectors,
+    pub(crate) token_position: TokenPosition,
     pub(crate) contents:       StringCacheId,
 }
 
@@ -555,13 +560,13 @@ impl Display for PreprocessorError {
 impl std::error::Error for PreprocessorError {}
 
 impl GetPosition for PreprocessorError {
-    fn position(&self, context: &Context) -> SourcePosition {
-        self.source_vectors.position(context)
+    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition {
+        self.source_vectors.position(source_vector_stack)
     }
 }
 
 impl GetSourceVectors for PreprocessorError {
-    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, _source_vector_stack: &mut SourceVectorStack) -> SourceVectors {
         self.source_vectors
     }
 }
@@ -1895,7 +1900,7 @@ impl Preprocessor {
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
         loop {
-            let start = self.position(context);
+            let start = self.position(&context.source_vectors);
             match self.next_preprocessor_token::<SHOULD_IGNORE_WHITESPACE>(context) {
                 | Some(token) => {
                     if SHOULD_IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
@@ -1915,8 +1920,12 @@ impl Preprocessor {
                 },
                 | None => {
                     self.set_position(context, start);
-                    let source_vectors =
-                        context.create_source_vectors(start, self.source_file_index(), 0);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start,
+                        self.source_file_index(),
+                        0,
+                    );
                     context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
                         source_vectors,
@@ -1939,7 +1948,7 @@ impl Preprocessor {
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
         loop {
-            let start = self.position(context);
+            let start = self.position(&context.source_vectors);
             match self.tokenizer.next_item(context) {
                 | Some(token) => {
                     if SHOULD_IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
@@ -1959,8 +1968,12 @@ impl Preprocessor {
                 },
                 | None => {
                     self.set_position(context, start);
-                    let source_vectors =
-                        context.create_source_vectors(start, self.source_file_index(), 0);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start,
+                        self.source_file_index(),
+                        0,
+                    );
                     context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
                         source_vectors,
@@ -2004,11 +2017,17 @@ impl Preprocessor {
                 rhs_range.end_bound().cloned(),
             )],
         );
-        let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
+        let v1 = lhs
+            .token_position
+            .source_vectors(&mut context.source_vectors);
+        let v2 = rhs
+            .token_position
+            .source_vectors(&mut context.source_vectors);
+        let source_vectors = context.merge_vectors(v1, v2);
         PreprocessorToken {
-            kind: result_token_type,
-            contents: context.string_cache.intern(&new_contents),
-            source_vectors,
+            kind:           result_token_type,
+            contents:       context.string_cache.intern(&new_contents),
+            token_position: TokenPosition::Many(source_vectors),
         }
     }
 
@@ -2022,7 +2041,13 @@ impl Preprocessor {
         _ = self;
         let lhs_contents = context.string_cache.at(lhs.contents).to_string();
         let rhs_contents = context.string_cache.at(rhs.contents).to_string();
-        let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
+        let v1 = lhs
+            .token_position
+            .source_vectors(&mut context.source_vectors);
+        let v2 = rhs
+            .token_position
+            .source_vectors(&mut context.source_vectors);
+        let source_vectors = context.merge_vectors(v1, v2);
         context.preprocessor_error(PreprocessorError {
             error_type: PreprocessorErrorType::TokenMergingError(lhs_contents, rhs_contents),
             source_vectors,
@@ -2071,7 +2096,7 @@ impl Preprocessor {
                 Some(PreprocessorToken {
                     kind,
                     contents: new.contents,
-                    source_vectors: new.source_vectors,
+                    token_position: new.token_position,
                 })
             },
             | (
@@ -2285,7 +2310,9 @@ impl Preprocessor {
                                     break 'base Some(PreprocessorToken {
                                         kind:           PreprocessorTokenType::Placeholder,
                                         contents:       context.string_cache.intern(""),
-                                        source_vectors: SourceVectors::default(),
+                                        token_position: TokenPosition::Many(
+                                            SourceVectors::default(),
+                                        ),
                                     });
                                 }
                                 continue 'base;
@@ -2428,7 +2455,7 @@ impl Preprocessor {
                 ..
             }) = self.tokenizer_stack.last()
             {
-                let save = self.position(context);
+                let save = self.position(&context.source_vectors);
                 context.set_ignore_tokenizer_errors(true);
                 let hash_hash = Self::next_ignore_whitespace(&mut self.tokenizer, context);
                 context.set_ignore_tokenizer_errors(false);
@@ -2443,9 +2470,11 @@ impl Preprocessor {
             };
             if let Some(h) = hash_hash {
                 let Some(rhs) = self.handle_hash_hash_operator::<true>(context) else {
-                    let source_vectors = context.create_source_vectors(
-                        self.tokenizer.position(context),
-                        self.tokenizer.source_file_index(),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -2506,7 +2535,7 @@ impl Preprocessor {
                     {
                         let paren_depth = *paren_depth;
                         let argument = argument.clone();
-                        let position = self.position(context);
+                        let position = self.position(&context.source_vectors);
                         let next_is_end = match self.tokenizer.next_item(context) {
                             | Some(token) => self
                                 .update_macro_argument_paren_depth(
@@ -2558,7 +2587,7 @@ impl Preprocessor {
                         tokenizer,
                         is_variadic,
                     } => {
-                        let position = self.position(context);
+                        let position = self.position(&context.source_vectors);
                         let file = self.source_file_index();
                         loop {
                             match self.tokenizer.next_item(context) {
@@ -2568,16 +2597,22 @@ impl Preprocessor {
                                     if brace.kind == PreprocessorTokenType::OpeningParenthesis =>
                                     break,
                                 | Some(_) => {
+                                    let source_vectors =
+                                        token.source_vectors(&mut context.source_vectors);
                                     context.preprocessor_error(PreprocessorError {
                                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
-                                        source_vectors: token.source_vectors,
+                                        source_vectors,
                                     });
                                     self.set_position(context, position);
                                     break 'base Some(token);
                                 },
                                 | None => {
-                                    let source_vectors =
-                                        context.create_source_vectors(position, file, 1);
+                                    let source_vectors = Context::create_source_vectors(
+                                        &mut context.source_vectors,
+                                        position,
+                                        file,
+                                        1,
+                                    );
                                     context.preprocessor_error(PreprocessorError {
                                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
                                         source_vectors,
@@ -2643,12 +2678,13 @@ impl Preprocessor {
                                         continue;
                                     },
                                     | None => {
+                                        let source_vectors =
+                                            token.source_vectors(&mut context.source_vectors);
                                         context.preprocessor_error(PreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::UnexpectedEndOfInput(
-                                                    "parsing function-like macro invocation",
-                                                ),
-                                            source_vectors: token.source_vectors,
+                                            error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                                                "parsing function-like macro invocation",
+                                            ),
+                                            source_vectors,
                                         });
                                         self.set_position(context, position);
                                         break 'base Some(token);
@@ -2658,12 +2694,13 @@ impl Preprocessor {
                         }
 
                         if arguments.len() != argument_names.len() && !is_variadic {
+                            let source_vectors = token.source_vectors(&mut context.source_vectors);
                             context.preprocessor_error(PreprocessorError {
                                     error_type:     PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
                                         expected:   argument_names.len(),
                                         found:      arguments.len(),
                                     },
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 },
                             );
                         }
@@ -2699,12 +2736,13 @@ impl Preprocessor {
                                         continue;
                                     },
                                     | None => {
+                                        let source_vectors =
+                                            token.source_vectors(&mut context.source_vectors);
                                         context.preprocessor_error(PreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::UnexpectedEndOfInput(
-                                                    "parsing function-like macro invocation",
-                                                ),
-                                            source_vectors: token.source_vectors,
+                                            error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                                                "parsing function-like macro invocation",
+                                            ),
+                                            source_vectors,
                                         });
                                         self.set_position(context, position);
                                         break 'base Some(token);
@@ -2728,42 +2766,39 @@ impl Preprocessor {
                                 PathBuf::from("__builtin__macros").into_boxed_path(),
                             );
                             let source_file = &context.source_files[self.source_file_index()];
-                            let length = source_file
-                                .as_os_str()
-                                .len();
+                            let length = source_file.as_os_str().len();
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context
                                     .string_cache
                                     .intern(&source_file.to_string_lossy()),
-                                source_vectors: context.create_source_vectors(
-                                    SourcePosition {
-                                        index:  0,
-                                        line:   1,
-                                        column: 1,
-                                    },
-                                    builtin_macros,
-                                    length,
-                                ),
+                                token_position: TokenPosition::One(SourceVector {
+                                    index:             0,
+                                    line:              1,
+                                    column:            ONE,
+                                    source_file_index: builtin_macros,
+                                    length:            length.try_into().expect("usize to u32"),
+                                }),
                             });
                         },
                         | "__LINE__" => {
-                            let string = self.line(context).to_string();
+                            let string = self.line(&context.source_vectors).to_string();
                             let builtin_macros = context.intern_source_file(
                                 PathBuf::from("__builtin__macros").into_boxed_path(),
                             );
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::Number,
                                 contents:       context.string_cache.intern(&string),
-                                source_vectors: context.create_source_vectors(
-                                    SourcePosition {
-                                        index:  0,
-                                        line:   1,
-                                        column: 1,
-                                    },
-                                    builtin_macros,
-                                    string.len(),
-                                ),
+                                token_position: TokenPosition::One(SourceVector {
+                                    index:             0,
+                                    line:              1,
+                                    column:            ONE,
+                                    source_file_index: builtin_macros,
+                                    length:            string
+                                        .len()
+                                        .try_into()
+                                        .expect("usize to u32"),
+                                }),
                             });
                         },
                         | "__TIME__" => {
@@ -2775,15 +2810,16 @@ impl Preprocessor {
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context.string_cache.intern(&string),
-                                source_vectors: context.create_source_vectors(
-                                    SourcePosition {
-                                        index:  0,
-                                        line:   1,
-                                        column: 1,
-                                    },
-                                    builtin_macros,
-                                    string.len(),
-                                ),
+                                token_position: TokenPosition::One(SourceVector {
+                                    index:             0,
+                                    line:              1,
+                                    column:            ONE,
+                                    source_file_index: builtin_macros,
+                                    length:            string
+                                        .len()
+                                        .try_into()
+                                        .expect("usize to u32"),
+                                }),
                             });
                         },
                         | "__DATE__" => {
@@ -2795,25 +2831,26 @@ impl Preprocessor {
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context.string_cache.intern(&string),
-                                source_vectors: context.create_source_vectors(
-                                    SourcePosition {
-                                        index:  0,
-                                        line:   1,
-                                        column: 1,
-                                    },
-                                    builtin_macros,
-                                    string.len(),
-                                ),
+                                token_position: TokenPosition::One(SourceVector {
+                                    index:             0,
+                                    line:              1,
+                                    column:            ONE,
+                                    source_file_index: builtin_macros,
+                                    length:            string
+                                        .len()
+                                        .try_into()
+                                        .expect("usize to u32"),
+                                }),
                             });
                         },
                         | "_Pragma" => {
                             _ = self.expect_token::<true>(
                                 context,
                                 |_, _, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
-                                |_, _, token|
+                                |_, context, token|
                                     ControlFlow::Break(PreprocessorError {
                                             error_type:     PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(token.kind),
-                                            source_vectors: token.source_vectors,
+                                            source_vectors: token.source_vectors(&mut context.source_vectors),
                                         },
                                     ),
                                 "parsing pragma operator",
@@ -2822,10 +2859,10 @@ impl Preprocessor {
                             let Some(string_token) = self.expect_token::<true>(
                                 context,
                                 |_, _, t| t.kind == PreprocessorTokenType::String,
-                                |_, _, token|
+                                |_, context, token|
                                     ControlFlow::Break(PreprocessorError {
                                             error_type:     PreprocessorErrorType::MissingStringLiteralInPragmaOperator(token.kind),
-                                            source_vectors: token.source_vectors,
+                                            source_vectors: token.source_vectors(&mut context.source_vectors),
                                         },
                                     ),
                                 "parsing pragma operator",
@@ -2843,8 +2880,10 @@ impl Preprocessor {
                             self.tokenizer = PreprocessorTokenizer::new(pragma_string, input);
                             self.parse_pragma_directive(context, string_token);
                             if self.tokenizer.next_item(context).is_some() {
-                                let source_vectors = context.create_source_vectors(
-                                    self.position(context),
+                                let start_position = self.position(&context.source_vectors);
+                                let source_vectors = Context::create_source_vectors(
+                                    &mut context.source_vectors,
+                                    start_position,
                                     self.source_file_index(),
                                     0,
                                 );
@@ -2859,10 +2898,10 @@ impl Preprocessor {
                             _ = self.expect_token::<true>(
                                 context,
                                 |_, _, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
-                                |_, _, token|
+                                |_, context, token|
                                     ControlFlow::Break(PreprocessorError {
                                             error_type:     PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(token.kind),
-                                            source_vectors: token.source_vectors,
+                                            source_vectors: token.source_vectors(&mut context.source_vectors),
                                         },
                                     ),
                                 "parsing pragma operator",
@@ -3029,9 +3068,10 @@ impl Preprocessor {
         while let Some(c) = string.char_at(index) {
             if c == '\\' {
                 let Some(c) = string.char_at(index + 1) else {
+                    let source_vectors = token.source_vectors(&mut context.source_vectors);
                     context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnterminatedEscapeSequence,
-                        source_vectors: token.source_vectors,
+                        error_type: PreprocessorErrorType::UnterminatedEscapeSequence,
+                        source_vectors,
                     });
                     return ret;
                 };
@@ -3059,22 +3099,24 @@ impl Preprocessor {
                             Some(code_point)
                         })();
                         let Some(code_point) = code_point else {
+                            let source_vectors = token.source_vectors(&mut context.source_vectors);
                             Context::raw_preprocessor_error(
                                 &mut context.pending_errors,
                                 PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::HexEscapeSequenceTooLarge,
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 },
                             );
                             continue;
                         };
                         let Ok(c) = char::try_from(code_point) else {
+                            let source_vectors = token.source_vectors(&mut context.source_vectors);
                             Context::raw_preprocessor_error(
                                 &mut context.pending_errors,
                                 PreprocessorError {
                                     error_type:     PreprocessorErrorType::InvalidHexEscapeSequence,
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 },
                             );
                             continue;
@@ -3099,24 +3141,26 @@ impl Preprocessor {
                         })();
 
                         let Some(code_point) = code_point else {
+                            let source_vectors = token.source_vectors(&mut context.source_vectors);
                             Context::raw_preprocessor_error(
                                 &mut context.pending_errors,
                                 PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::OctalEscapeSequenceTooLarge,
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 },
                             );
 
                             continue;
                         };
                         let Ok(c) = char::try_from(u32::from(code_point)) else {
+                            let source_vectors = token.source_vectors(&mut context.source_vectors);
                             Context::raw_preprocessor_error(
                                 &mut context.pending_errors,
                                 PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::InvalidOctalEscapeSequence,
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 },
                             );
                             continue;
@@ -3127,10 +3171,11 @@ impl Preprocessor {
                         let mut code_point = 0u32;
                         for _ in 0..4 {
                             let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16)) else {
+                                let source_vectors = token.source_vectors(&mut context.source_vectors);
                                 Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 });
                                 break;
                             };
@@ -3139,10 +3184,11 @@ impl Preprocessor {
                             code_point += d;
                         }
                         let Ok(c) = char::try_from(code_point) else {
+                            let source_vectors = token.source_vectors(&mut context.source_vectors);
                             Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence,
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 },
                             );
                             continue;
@@ -3153,10 +3199,11 @@ impl Preprocessor {
                         let mut code_point = 0u32;
                         for _ in 0..8 {
                             let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16)) else {
+                                let source_vectors = token.source_vectors(&mut context.source_vectors);
                                 Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall,
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 });
                                 break;
                             };
@@ -3165,10 +3212,11 @@ impl Preprocessor {
                             code_point += d;
                         }
                         let Ok(c) = char::try_from(code_point) else {
+                            let source_vectors = token.source_vectors(&mut context.source_vectors);
                             Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
                                     error_type:
                                         PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence,
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 },
                             );
                             continue;
@@ -3176,9 +3224,10 @@ impl Preprocessor {
                         c
                     },
                     | _ => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
                         Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
                                 error_type:     PreprocessorErrorType::InvalidEscapeSequence,
-                                source_vectors: token.source_vectors,
+                                source_vectors,
                             },
                         );
                         continue;
@@ -3199,7 +3248,7 @@ impl Preprocessor {
         Token {
             kind,
             contents: token.contents,
-            source_vectors: token.source_vectors,
+            token_position: token.token_position,
         }
     }
 
@@ -3246,9 +3295,10 @@ impl Preprocessor {
     ) -> CharacterTokenType {
         let contents = self.eval_escape_sequences(context, token);
         if contents.chars().take(2).count() != 1 {
+            let source_vectors = token.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
-                source_vectors: token.source_vectors,
+                error_type: PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
+                source_vectors,
             });
         }
         let char = contents.chars().next().unwrap_or('\0');
@@ -3284,7 +3334,7 @@ impl Preprocessor {
             | PreprocessorTokenType::GeneratedString => Token {
                 kind:           TokenType::String(StringTokenType::String(token.contents)),
                 contents:       token.contents,
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
             },
             | PreprocessorTokenType::WideGeneratedString => {
                 // Discard the L prefix.
@@ -3293,18 +3343,18 @@ impl Preprocessor {
                 Token {
                     kind: TokenType::String(StringTokenType::WideString(contents)),
                     contents,
-                    source_vectors: token.source_vectors,
+                    token_position: token.token_position,
                 }
             },
             | PreprocessorTokenType::String => Token {
                 kind:           TokenType::String(self.parse_string(context, token)),
                 contents:       token.contents,
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
             },
             | PreprocessorTokenType::Character => Token {
                 kind:           TokenType::Character(self.parse_character(context, token)),
                 contents:       token.contents,
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
             },
             | PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined =>
                 Self::build_token(
@@ -3456,9 +3506,10 @@ impl Preprocessor {
                 } else {
                     PreprocessorErrorType::HashHashUsedOutsideOfMacro
                 };
+                let source_vectors = token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
                     error_type,
-                    source_vectors: token.source_vectors,
+                    source_vectors,
                 });
                 return None;
             },
@@ -3498,15 +3549,15 @@ impl Preprocessor {
         context: &mut Context,
         token: PreprocessorToken,
     ) -> PreprocessorToken {
-        let position = self.position(context);
+        let position = self.position(&context.source_vectors);
         let Some(argument_name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
-            |_, _, t| {
+            |_, context, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(t.kind),
-                    source_vectors: t.source_vectors,
+                    source_vectors: t.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing '#' operator in function-like macro invocation.",
@@ -3515,7 +3566,7 @@ impl Preprocessor {
             return PreprocessorToken {
                 kind:           PreprocessorTokenType::GeneratedString,
                 contents:       context.string_cache.intern(""),
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
             };
         };
         let (mut token_tokenizer, argument_id) = match self.tokenizer_stack.last().unwrap() {
@@ -3525,17 +3576,18 @@ impl Preprocessor {
             } => match arguments.get(&argument_name.contents) {
                 | None => {
                     self.set_position(context, position);
+                    let source_vectors = argument_name.source_vectors(&mut context.source_vectors);
                     context.preprocessor_error(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(
                                 context.string_cache.at(argument_name.contents).to_owned(),
                             ),
-                        source_vectors: argument_name.source_vectors,
+                        source_vectors,
                     });
                     return PreprocessorToken {
                         kind:           PreprocessorTokenType::GeneratedString,
                         contents:       context.string_cache.intern(""),
-                        source_vectors: token.source_vectors,
+                        token_position: token.token_position,
                     };
                 },
                 | Some(v) => (v.tokenizer.clone(), v.name),
@@ -3551,11 +3603,12 @@ impl Preprocessor {
                 context,
                 &mut last_was_whitespace,
             ) else {
+                let source_vectors = argument_name.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                    error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing '#' operator in function-like macro invocation",
                     ),
-                    source_vectors: argument_name.source_vectors,
+                    source_vectors,
                 });
                 break 'base;
             };
@@ -3573,15 +3626,16 @@ impl Preprocessor {
         PreprocessorToken {
             kind:           PreprocessorTokenType::GeneratedString,
             contents:       context.string_cache.intern(&synthetic_contents),
-            source_vectors: token.source_vectors,
+            token_position: token.token_position,
         }
     }
 
     fn parse_directive(&mut self, context: &mut Context, token: PreprocessorToken) {
         if !self.last_was_newline {
+            let source_vectors = token.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
-                source_vectors: token.source_vectors,
+                error_type: PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
+                source_vectors,
             });
         }
         let Some(directive) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
@@ -3594,9 +3648,10 @@ impl Preprocessor {
             // If token is defined, it'll be handled when we match on contents.
             | PreprocessorTokenType::Defined | PreprocessorTokenType::Identifier => (),
             | _ => {
+                let source_vectors = directive.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::HashMustBeFollowedByIdentifier,
-                    source_vectors: directive.source_vectors,
+                    error_type: PreprocessorErrorType::HashMustBeFollowedByIdentifier,
+                    source_vectors,
                 });
                 self.skip_until_newline(context);
                 return;
@@ -3616,9 +3671,10 @@ impl Preprocessor {
             | "error" => self.parse_error_directive(context, directive),
             | "pragma" => self.parse_pragma_directive(context, directive),
             | _ => {
+                let source_vectors = directive.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::UnknownDirective,
-                    source_vectors: directive.source_vectors,
+                    error_type: PreprocessorErrorType::UnknownDirective,
+                    source_vectors,
                 });
                 self.skip_until_newline(context);
             },
@@ -3686,8 +3742,10 @@ impl Preprocessor {
         match op {
             | PreprocessorExpressionOperator::UnaryPlus =>
                 if self.expression_parser.operand_stack.is_empty() {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3698,8 +3756,10 @@ impl Preprocessor {
                 },
             | PreprocessorExpressionOperator::UnaryMinus => {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3711,8 +3771,10 @@ impl Preprocessor {
                 };
                 let (new, did_overflow) = operand.as_signed().overflowing_neg();
                 if operand.is_signed() && did_overflow {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3727,8 +3789,10 @@ impl Preprocessor {
             },
             | PreprocessorExpressionOperator::BitwiseNot => {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3744,8 +3808,10 @@ impl Preprocessor {
             },
             | PreprocessorExpressionOperator::LogicalNot => {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3768,8 +3834,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: BinaryPlus operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3783,8 +3851,10 @@ impl Preprocessor {
                 let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
                 let (new, did_overflow) = lhs.as_signed().overflowing_add(rhs.as_signed());
                 if did_overflow && !is_unsigned {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3806,8 +3876,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: BinaryMinus operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3821,8 +3893,10 @@ impl Preprocessor {
                 let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
                 let (new, did_overflow) = lhs.as_signed().overflowing_sub(rhs.as_signed());
                 if did_overflow && !is_unsigned {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3844,8 +3918,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: Multiply operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3859,8 +3935,10 @@ impl Preprocessor {
                 let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
                 let (new, did_overflow) = lhs.as_signed().overflowing_mul(rhs.as_signed());
                 if did_overflow && !is_unsigned {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3882,8 +3960,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: Divide operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3896,8 +3976,10 @@ impl Preprocessor {
                 };
                 let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
                 if rhs.as_signed() == 0 {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3914,8 +3996,10 @@ impl Preprocessor {
                 }
                 let (new, did_overflow) = lhs.as_signed().overflowing_div(rhs.as_signed());
                 if did_overflow && !is_unsigned {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3937,8 +4021,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: Modulo operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3951,8 +4037,10 @@ impl Preprocessor {
                 };
                 let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
                 if rhs.as_signed() == 0 {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3969,8 +4057,10 @@ impl Preprocessor {
                 }
                 let (new, did_overflow) = lhs.as_signed().overflowing_rem(rhs.as_signed());
                 if did_overflow && !is_unsigned {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -3992,8 +4082,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: LeftShift operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4011,8 +4103,10 @@ impl Preprocessor {
                     (new, did_overflow || overflow)
                 };
                 if did_overflow {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4034,8 +4128,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: RightShift operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4053,8 +4149,10 @@ impl Preprocessor {
                     (new, did_overflow || overflow)
                 };
                 if did_overflow {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4076,8 +4174,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: LessThan operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4105,8 +4205,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: LessThanEquals operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4134,8 +4236,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: GreaterThan operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4163,8 +4267,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: GreaterThanEquals operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4192,8 +4298,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: Equals operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4217,8 +4325,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: NotEquals operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4242,8 +4352,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: BitwiseAnd operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4269,8 +4381,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: BitwiseXor operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4296,8 +4410,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: BitwiseOr operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4323,8 +4439,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: LogicalAnd operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4348,8 +4466,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: LogicalOr operator without lhs");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4377,8 +4497,10 @@ impl Preprocessor {
                     .pop()
                     .expect("Compiler bug: Ternary operator without condition");
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4392,8 +4514,10 @@ impl Preprocessor {
                     return;
                 };
                 let Some(condition) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -4411,8 +4535,10 @@ impl Preprocessor {
                     .push(if condition.as_signed() != 0 { lhs } else { rhs });
             },
             | PreprocessorExpressionOperator::OpeningParenthesis => {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
+                let start_position = self.position(&context.source_vectors);
+                let source_vectors = Context::create_source_vectors(
+                    &mut context.source_vectors,
+                    start_position,
                     self.source_file_index(),
                     0,
                 );
@@ -4427,10 +4553,10 @@ impl Preprocessor {
     fn parse_defined_operator(&mut self, context: &mut Context) {
         let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase::<true>(context,
             |_, _, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::OpeningParenthesis),
-            |_, _, t|
+            |_, context, t|
                 ControlFlow::Break(PreprocessorError {
                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(t.kind),
-                        source_vectors: t.source_vectors,
+                        source_vectors: t.source_vectors(&mut context.source_vectors),
                     },
                 )
             ,
@@ -4457,12 +4583,12 @@ impl Preprocessor {
         let Some(ident) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| matches!(t.kind, PreprocessorTokenType::Identifier),
-            |_, _, t| {
+            |_, context, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::MissingIdentifierInDefinedDirective(
                         t.kind,
                     ),
-                    source_vectors: t.source_vectors,
+                    source_vectors: t.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing defined operator",
@@ -4476,11 +4602,11 @@ impl Preprocessor {
         _ = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| matches!(t.kind, PreprocessorTokenType::ClosingParenthesis),
-            |_, _, t| {
+            |_, context, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(t.kind),
-                    source_vectors: t.source_vectors,
+                    source_vectors: t.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing defined operator",
@@ -4523,46 +4649,65 @@ impl Preprocessor {
         'main: loop {
             match self.next_preprocessor_token::<true>(context) {
                 | None => {
-                    let source_vectors = context.create_source_vectors(self.position(context), self.source_file_index(), 0);
-                    context.preprocessor_error(
-                        PreprocessorError {
-                            error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
-                            source_vectors,
-                        });
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
+                        self.source_file_index(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                            "parsing preprocessor expression",
+                        ),
+                        source_vectors,
+                    });
                     break 'main;
                 },
                 | Some(token) => match (token.kind, self.expression_parser.state) {
-                    | (PreprocessorTokenType::Newline, _) =>
-                        break 'main,
-                    (PreprocessorTokenType::Plus, UNARY) =>
-                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::UnaryPlus),
-                    (PreprocessorTokenType::Minus, UNARY) =>
-                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::UnaryMinus),
-                    (PreprocessorTokenType::Tilde, UNARY) =>
-                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::BitwiseNot),
-                    (PreprocessorTokenType::Tilde, BINARY) =>
+                    | (PreprocessorTokenType::Newline, _) => break 'main,
+                    | (PreprocessorTokenType::Plus, UNARY) => self
+                        .expression_parser
+                        .operator_stack
+                        .push(PreprocessorExpressionOperator::UnaryPlus),
+                    | (PreprocessorTokenType::Minus, UNARY) => self
+                        .expression_parser
+                        .operator_stack
+                        .push(PreprocessorExpressionOperator::UnaryMinus),
+                    | (PreprocessorTokenType::Tilde, UNARY) => self
+                        .expression_parser
+                        .operator_stack
+                        .push(PreprocessorExpressionOperator::BitwiseNot),
+                    | (PreprocessorTokenType::Tilde, BINARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
                         context.preprocessor_error(PreprocessorError {
                                 error_type: PreprocessorErrorType::TildeInsteadOfBinaryOperatorInPreprocessorExpression,
-                                source_vectors: token.source_vectors,
+                                source_vectors,
                             },
-                        )
-                ,
-                    (PreprocessorTokenType::ExclamationMark, UNARY) =>
-                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::LogicalNot),
-                    (PreprocessorTokenType::ExclamationMark, BINARY) =>
+                        );
+                    },
+                    | (PreprocessorTokenType::ExclamationMark, UNARY) => self
+                        .expression_parser
+                        .operator_stack
+                        .push(PreprocessorExpressionOperator::LogicalNot),
+                    | (PreprocessorTokenType::ExclamationMark, BINARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
                         context.preprocessor_error(PreprocessorError {
-                                error_type:     PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression,
-                                source_vectors: token.source_vectors,
+                                error_type: PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression,
+                                source_vectors,
                             },
-                        )
-                    ,
-                    (PreprocessorTokenType::OpeningParenthesis, UNARY) => {
-                        self.expression_parser.operator_stack.push(PreprocessorExpressionOperator::OpeningParenthesis);
-                    }
-                    (PreprocessorTokenType::OpeningParenthesis, BINARY) => {
+                        );
+                    },
+                    | (PreprocessorTokenType::OpeningParenthesis, UNARY) => {
+                        self.expression_parser
+                            .operator_stack
+                            .push(PreprocessorExpressionOperator::OpeningParenthesis);
+                    },
+                    | (PreprocessorTokenType::OpeningParenthesis, BINARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
                         context.preprocessor_error(PreprocessorError {
                                 error_type:     PreprocessorErrorType::FunctionCallOperatorNotSupportedInPreprocessorExpression,
-                                source_vectors: token.source_vectors,
+                                source_vectors,
                             },
                         );
                         let mut paren_depth = 1;
@@ -4570,12 +4715,19 @@ impl Preprocessor {
                         while paren_depth > 0 {
                             match self.next_preprocessor_token::<true>(context) {
                                 | None => {
-                                    let source_vectors = context.create_source_vectors(self.position(context), self.source_file_index(), 0);
-                                    context.preprocessor_error(PreprocessorError {
-                                            error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
-                                            source_vectors,
-                                        },
+                                    let start_position = self.position(&context.source_vectors);
+                                    let source_vectors = Context::create_source_vectors(
+                                        &mut context.source_vectors,
+                                        start_position,
+                                        self.source_file_index(),
+                                        0,
                                     );
+                                    context.preprocessor_error(PreprocessorError {
+                                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                                            "parsing preprocessor expression",
+                                        ),
+                                        source_vectors,
+                                    });
                                     break 'main;
                                 },
                                 | Some(token) => match token.kind {
@@ -4585,15 +4737,23 @@ impl Preprocessor {
                                 },
                             }
                         }
-                    }
-                    (PreprocessorTokenType::ClosingParenthesis, _) => {
+                    },
+                    | (PreprocessorTokenType::ClosingParenthesis, _) => {
                         self.expression_parser.state = BINARY;
-                        if !self.expression_parser.operator_stack.last().is_some_and(|op| *op != PreprocessorExpressionOperator::OpeningParenthesis) {
+                        if !self
+                            .expression_parser
+                            .operator_stack
+                            .last()
+                            .is_some_and(|op| {
+                                *op != PreprocessorExpressionOperator::OpeningParenthesis
+                            })
+                        {
+                            let source_vectors = token.source_vectors(&mut context.source_vectors);
                             context.preprocessor_error(PreprocessorError {
-                                    error_type:     PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression,
-                                    source_vectors: token.source_vectors,
-                                },
-                            );
+                                error_type:
+                                    PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression,
+                                source_vectors,
+                            });
                             continue 'main;
                         }
                         while let Some(op) = self.expression_parser.operator_stack.pop() {
@@ -4602,39 +4762,81 @@ impl Preprocessor {
                             }
                             self.handle_expression_operator(context, op);
                         }
-                    }
-                    (PreprocessorTokenType::Defined, UNARY) =>
+                    },
+                    | (PreprocessorTokenType::Defined, UNARY) =>
                         self.parse_defined_operator(context),
-                    (PreprocessorTokenType::Defined, BINARY) => context.preprocessor_error(PreprocessorError {
-                            error_type: PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression,
-                            source_vectors: token.source_vectors,
-                        },
-                    ),
-                    (PreprocessorTokenType::Asterisk, UNARY) => context.preprocessor_error(PreprocessorError {
+                    | (PreprocessorTokenType::Defined, BINARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
+                        context.preprocessor_error(PreprocessorError {
+                                error_type: PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression,
+                                source_vectors,
+                            },
+                        );
+                    },
+                    | (PreprocessorTokenType::Asterisk, UNARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
+                        context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::DereferenceOperatorNotSupportedInPreprocessorExpression,
-                            source_vectors: token.source_vectors,
+                            source_vectors,
                         },
-                    ),
-                    (PreprocessorTokenType::Ampersand, UNARY) => context.preprocessor_error(PreprocessorError {
-                            error_type: PreprocessorErrorType::AddressOfOperatorNotSupportedInPreprocessorExpression,
-                            source_vectors: token.source_vectors,
-                        },
-                    ),
-                    (
-                        | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
-                        PreprocessorTokenType::GreaterThanGreaterThan | PreprocessorTokenType::LessThan | PreprocessorTokenType::LessThanEquals | PreprocessorTokenType::GreaterThan |
-                        PreprocessorTokenType::GreaterThanEquals | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals |
-                        PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
-                        PreprocessorTokenType::Colon, UNARY) => context.preprocessor_error(PreprocessorError {
+                    );
+                    },
+                    | (PreprocessorTokenType::Ampersand, UNARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
+                        context.preprocessor_error(PreprocessorError {
+                                    error_type: PreprocessorErrorType::AddressOfOperatorNotSupportedInPreprocessorExpression,
+                                    source_vectors,
+                                },
+                                                 );
+                    },
+                    | (
+                        PreprocessorTokenType::ForwardSlash
+                        | PreprocessorTokenType::Percent
+                        | PreprocessorTokenType::LessThanLessThan
+                        | PreprocessorTokenType::GreaterThanGreaterThan
+                        | PreprocessorTokenType::LessThan
+                        | PreprocessorTokenType::LessThanEquals
+                        | PreprocessorTokenType::GreaterThan
+                        | PreprocessorTokenType::GreaterThanEquals
+                        | PreprocessorTokenType::EqualsEquals
+                        | PreprocessorTokenType::ExclamationMarkEquals
+                        | PreprocessorTokenType::Caret
+                        | PreprocessorTokenType::Pipe
+                        | PreprocessorTokenType::AmpersandAmpersand
+                        | PreprocessorTokenType::PipePipe
+                        | PreprocessorTokenType::QuestionMark
+                        | PreprocessorTokenType::Colon,
+                        UNARY,
+                    ) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
+                        context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(self.map_operator(context, token)),
-                            source_vectors: token.source_vectors,
-                        }),
-                    | (PreprocessorTokenType::Plus | PreprocessorTokenType::Minus | PreprocessorTokenType::Asterisk
-                    | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
-                    PreprocessorTokenType::GreaterThanGreaterThan | PreprocessorTokenType::LessThan | PreprocessorTokenType::LessThanEquals | PreprocessorTokenType::GreaterThan |
-                    PreprocessorTokenType::GreaterThanEquals | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals | PreprocessorTokenType::Ampersand |
-                    PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
-                    PreprocessorTokenType::Colon, BINARY) => {
+                            source_vectors,
+                        });
+                    },
+                    | (
+                        PreprocessorTokenType::Plus
+                        | PreprocessorTokenType::Minus
+                        | PreprocessorTokenType::Asterisk
+                        | PreprocessorTokenType::ForwardSlash
+                        | PreprocessorTokenType::Percent
+                        | PreprocessorTokenType::LessThanLessThan
+                        | PreprocessorTokenType::GreaterThanGreaterThan
+                        | PreprocessorTokenType::LessThan
+                        | PreprocessorTokenType::LessThanEquals
+                        | PreprocessorTokenType::GreaterThan
+                        | PreprocessorTokenType::GreaterThanEquals
+                        | PreprocessorTokenType::EqualsEquals
+                        | PreprocessorTokenType::ExclamationMarkEquals
+                        | PreprocessorTokenType::Ampersand
+                        | PreprocessorTokenType::Caret
+                        | PreprocessorTokenType::Pipe
+                        | PreprocessorTokenType::AmpersandAmpersand
+                        | PreprocessorTokenType::PipePipe
+                        | PreprocessorTokenType::QuestionMark
+                        | PreprocessorTokenType::Colon,
+                        BINARY,
+                    ) => {
                         let token_op = self.map_operator(context, token);
                         while let Some(op) = self.expression_parser.operator_stack.pop() {
                             if op.has_precedence_over(token_op) {
@@ -4647,109 +4849,179 @@ impl Preprocessor {
                         self.expression_parser.operator_stack.push(token_op);
                         self.expression_parser.state = UNARY;
                     },
-                    (PreprocessorTokenType::Number, UNARY) => {
-                        match self.parse_number(context, token,).kind {
+                    | (PreprocessorTokenType::Number, UNARY) => {
+                        match self.parse_number(context, token).kind {
                             | TokenType::Float(f) => {
+                                let source_vectors =
+                                    token.source_vectors(&mut context.source_vectors);
                                 context.preprocessor_error(PreprocessorError {
                                     error_type: PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression,
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 });
                                 match f {
-                                    FloatTokenType::Float(f) => {
-                                        if f.fract() != 0.0 || !f.is_finite() || f < i32::MIN as f32 || f > u32::MIN as f32 {
+                                    | FloatTokenType::Float(f) => {
+                                        if f.fract() != 0.0
+                                            || !f.is_finite()
+                                            || f < i32::MIN as f32
+                                            || f > u32::MIN as f32
+                                        {
                                             context.preprocessor_error(PreprocessorError {
                                                 error_type: PreprocessorErrorType::FloatCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(f),
-                                                source_vectors: token.source_vectors,
+                                                source_vectors,
                                             });
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                                            self.expression_parser
+                                                .operand_stack
+                                                .push(PreprocessorExpressionOperand::Signed(0));
                                         } else if f.is_sign_negative() {
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(f as i64));
+                                            self.expression_parser.operand_stack.push(
+                                                PreprocessorExpressionOperand::Signed(f as i64),
+                                            );
                                         } else {
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(f as u64));
+                                            self.expression_parser.operand_stack.push(
+                                                PreprocessorExpressionOperand::Unsigned(f as u64),
+                                            );
                                         }
-                                    }
-                                    FloatTokenType::Double(d) => {
-                                        if d.fract() != 0.0 || !d.is_finite() || d < i64::MIN as f64 || d > u64::MIN as f64 {
+                                    },
+                                    | FloatTokenType::Double(d) => {
+                                        if d.fract() != 0.0
+                                            || !d.is_finite()
+                                            || d < i64::MIN as f64
+                                            || d > u64::MIN as f64
+                                        {
                                             context.preprocessor_error(PreprocessorError {
                                                 error_type: PreprocessorErrorType::DoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(d),
-                                                source_vectors: token.source_vectors,
+                                                source_vectors,
                                             });
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                                            self.expression_parser
+                                                .operand_stack
+                                                .push(PreprocessorExpressionOperand::Signed(0));
                                         } else if d.is_sign_negative() {
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(d as i64));
+                                            self.expression_parser.operand_stack.push(
+                                                PreprocessorExpressionOperand::Signed(d as i64),
+                                            );
                                         } else {
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(d as u64));
+                                            self.expression_parser.operand_stack.push(
+                                                PreprocessorExpressionOperand::Unsigned(d as u64),
+                                            );
                                         }
-                                    }
-                                    FloatTokenType::LongDouble(ld) => {
+                                    },
+                                    | FloatTokenType::LongDouble(ld) =>
                                         match long_double_to_operand(ld) {
-                                            Err(e) => {
+                                            | Err(e) => {
                                                 match e {
                                                     1 => context.preprocessor_error(PreprocessorError {
                                                         error_type: PreprocessorErrorType::LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(ld),
-                                                        source_vectors: token.source_vectors,
+                                                        source_vectors,
                                                     }),
                                                     _ => unreachable!("Compiler bug: long_double_to_operand should only return 1 or 0."),
                                                 }
-                                                self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
-                                            }
-                                            Ok(o) => self.expression_parser.operand_stack.push(o),
-                                        }
-                                    }
+                                                self.expression_parser
+                                                    .operand_stack
+                                                    .push(PreprocessorExpressionOperand::Signed(0));
+                                            },
+                                            | Ok(o) => self.expression_parser.operand_stack.push(o),
+                                        },
                                 }
                             },
                             | TokenType::Integer(v) => match v {
-                                | IntegerTokenType::Int(i) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(i64::from(i))),
-                                | IntegerTokenType::Long(l) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(l)),
-                                | IntegerTokenType::LongLong(ll) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(ll)),
-                                | IntegerTokenType::UnsignedInt(ui) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(u64::from(ui))),
-                                | IntegerTokenType::UnsignedLong(ul) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ul)),
-                                | IntegerTokenType::UnsignedLongLong(ull) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ull)),
+                                | IntegerTokenType::Int(i) => self
+                                    .expression_parser
+                                    .operand_stack
+                                    .push(PreprocessorExpressionOperand::Signed(i64::from(i))),
+                                | IntegerTokenType::Long(l) => self
+                                    .expression_parser
+                                    .operand_stack
+                                    .push(PreprocessorExpressionOperand::Signed(l)),
+                                | IntegerTokenType::LongLong(ll) => self
+                                    .expression_parser
+                                    .operand_stack
+                                    .push(PreprocessorExpressionOperand::Signed(ll)),
+                                | IntegerTokenType::UnsignedInt(ui) => self
+                                    .expression_parser
+                                    .operand_stack
+                                    .push(PreprocessorExpressionOperand::Unsigned(u64::from(ui))),
+                                | IntegerTokenType::UnsignedLong(ul) => self
+                                    .expression_parser
+                                    .operand_stack
+                                    .push(PreprocessorExpressionOperand::Unsigned(ul)),
+                                | IntegerTokenType::UnsignedLongLong(ull) => self
+                                    .expression_parser
+                                    .operand_stack
+                                    .push(PreprocessorExpressionOperand::Unsigned(ull)),
                             },
-                            _ => unreachable!("Compiler bug: parse_number should return a number token."),
+                            | _ => unreachable!(
+                                "Compiler bug: parse_number should return a number token."
+                            ),
                         };
                         self.expression_parser.state = BINARY;
                     },
-                    (PreprocessorTokenType::Number, BINARY) => context.preprocessor_error(PreprocessorError {
-                            error_type: PreprocessorErrorType::NumberInsteadOfBinaryOperatorInPreprocessorExpression,
-                            source_vectors: token.source_vectors,
-                        },
-                    ),
-                    (PreprocessorTokenType::Identifier, UNARY) => {
+                    | (PreprocessorTokenType::Number, BINARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
                         context.preprocessor_error(PreprocessorError {
-                                    error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(context.string_cache.at(token.contents).to_owned()),
-                                    source_vectors: token.source_vectors,
-                                },
-                        );
-                        self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                            error_type: PreprocessorErrorType::NumberInsteadOfBinaryOperatorInPreprocessorExpression,
+                            source_vectors,
+                        },
+                    );
+                    },
+                    | (PreprocessorTokenType::Identifier, UNARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
+                        context.preprocessor_error(PreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(
+                                    context.string_cache.at(token.contents).to_owned(),
+                                ),
+                            source_vectors,
+                        });
+                        self.expression_parser
+                            .operand_stack
+                            .push(PreprocessorExpressionOperand::Signed(0));
                         self.expression_parser.state = BINARY;
                     },
-                    (PreprocessorTokenType::Identifier, BINARY) => context.preprocessor_error(PreprocessorError {
+                    | (PreprocessorTokenType::Identifier, BINARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
+                        context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression,
-                            source_vectors: token.source_vectors,
+                            source_vectors,
                         },
-                    ),
-                    (PreprocessorTokenType::Character, UNARY) => {
-                        let value = i64::from(u32::from(char::from(self.parse_character(context, token))));
-                        self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(value));
+                    );
+                    },
+                    | (PreprocessorTokenType::Character, UNARY) => {
+                        let value =
+                            i64::from(u32::from(char::from(self.parse_character(context, token))));
+                        self.expression_parser
+                            .operand_stack
+                            .push(PreprocessorExpressionOperand::Signed(value));
                         self.expression_parser.state = BINARY;
                     },
-                    (PreprocessorTokenType::Character, BINARY) => context.preprocessor_error(PreprocessorError {
+                    | (PreprocessorTokenType::Character, BINARY) => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
+                        context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::CharacterInsteadOfBinaryOperatorInPreprocessorExpression,
-                            source_vectors: token.source_vectors,
+                            source_vectors,
                         },
-                    ),
-                    _ => context.preprocessor_error(PreprocessorError {
-                            error_type: PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(token.kind),
-                            source_vectors: token.source_vectors,
-                        },
-                    ),
+                    );
+                    },
+                    | _ => {
+                        let source_vectors = token.source_vectors(&mut context.source_vectors);
+                        context.preprocessor_error(PreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(
+                                    token.kind,
+                                ),
+                            source_vectors,
+                        });
+                    },
                 },
             }
         }
         if self.expression_parser.state == UNARY {
-            let source_vectors =
-                context.create_source_vectors(self.position(context), self.source_file_index(), 0);
+            let start_position = self.position(&context.source_vectors);
+            let source_vectors = Context::create_source_vectors(
+                &mut context.source_vectors,
+                start_position,
+                self.source_file_index(),
+                0,
+            );
             context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(
                         self.last_binary_operator(),
@@ -4770,8 +5042,10 @@ impl Preprocessor {
                     .as_signed()
                     != 0,
             | 0 => {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
+                let start_position = self.position(&context.source_vectors);
+                let source_vectors = Context::create_source_vectors(
+                    &mut context.source_vectors,
+                    start_position,
                     self.source_file_index(),
                     0,
                 );
@@ -4782,8 +5056,10 @@ impl Preprocessor {
                 true
             },
             | _ => {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
+                let start_position = self.position(&context.source_vectors);
+                let source_vectors = Context::create_source_vectors(
+                    &mut context.source_vectors,
+                    start_position,
                     self.source_file_index(),
                     0,
                 );
@@ -4814,11 +5090,13 @@ impl Preprocessor {
                                     },
                                 | Some(_) => break 'newline,
                                 | None => {
+                                    let source_vectors =
+                                        token.source_vectors(&mut context.source_vectors);
                                     context.preprocessor_error(PreprocessorError {
-                                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                                             "parsing dead code. Expected #endif instead",
                                         ),
-                                        source_vectors: token.source_vectors,
+                                        source_vectors,
                                     });
                                     return;
                                 },
@@ -4831,19 +5109,23 @@ impl Preprocessor {
                             | Some(token) if token.kind == PreprocessorTokenType::Identifier =>
                                 token,
                             | Some(token) => {
+                                let source_vectors =
+                                    token.source_vectors(&mut context.source_vectors);
                                 context.preprocessor_error(PreprocessorError {
                                             error_type: PreprocessorErrorType::ExpectedIdentifierInPreprocessorDirective(token.kind),
-                                            source_vectors: token.source_vectors,
+                                            source_vectors,
                                         },
                                     );
                                 return;
                             },
                             | None => {
+                                let source_vectors =
+                                    token.source_vectors(&mut context.source_vectors);
                                 context.preprocessor_error(PreprocessorError {
-                                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                    error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                                         "parsing dead code. Expected #endif instead.",
                                     ),
-                                    source_vectors: token.source_vectors,
+                                    source_vectors,
                                 });
                                 return;
                             },
@@ -4892,9 +5174,10 @@ impl Preprocessor {
 
     fn parse_elif_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         if self.if_directive_balance <= 0 {
+            let source_vectors = directive.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
-                source_vectors: directive.source_vectors,
+                error_type: PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
+                source_vectors,
             });
         }
         self.skip_until_newline(context);
@@ -4904,9 +5187,10 @@ impl Preprocessor {
 
     fn parse_else_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         if self.if_directive_balance <= 0 {
+            let source_vectors = directive.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
-                source_vectors: directive.source_vectors,
+                error_type: PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
+                source_vectors,
             });
         }
         self.skip_until_newline(context);
@@ -4917,9 +5201,10 @@ impl Preprocessor {
     fn parse_endif_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         self.if_directive_balance -= 1;
         if self.if_directive_balance < 0 {
+            let source_vectors = directive.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
-                source_vectors: directive.source_vectors,
+                error_type: PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
+                source_vectors,
             });
         }
         self.skip_until_newline(context);
@@ -4930,12 +5215,12 @@ impl Preprocessor {
         if let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
-            |_, _, token| {
+            |_, context, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(
                         token.kind,
                     ),
-                    source_vectors: token.source_vectors,
+                    source_vectors: token.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing ifdef directive",
@@ -4949,10 +5234,10 @@ impl Preprocessor {
             .expect_token_from_previous_phase::<true>(
                 context,
                 |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                |_, _, t| {
+                |_, context, t| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:     PreprocessorErrorType::ExtraTokensAfterIfdefDirective,
-                        source_vectors: t.source_vectors,
+                        source_vectors: t.source_vectors(&mut context.source_vectors),
                     })
                 },
                 "parsing ifdef directive.",
@@ -4968,12 +5253,12 @@ impl Preprocessor {
         if let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
-            |_, _, token| {
+            |_, context, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(
                         token.kind,
                     ),
-                    source_vectors: token.source_vectors,
+                    source_vectors: token.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing ifndef directive",
@@ -4987,10 +5272,10 @@ impl Preprocessor {
             .expect_token_from_previous_phase::<true>(
                 context,
                 |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                |_, _, t| {
+                |_, context, t| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:     PreprocessorErrorType::ExtraTokensAfterIfndefDirective,
-                        source_vectors: t.source_vectors,
+                        source_vectors: t.source_vectors(&mut context.source_vectors),
                     })
                 },
                 "parsing ifndef directive.",
@@ -5024,9 +5309,10 @@ impl Preprocessor {
                 if path.exists() {
                     break 'ret path.to_owned();
                 }
+                let source_vectors = include_token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::HeaderNotFound,
-                    source_vectors: include_token.source_vectors,
+                    error_type: PreprocessorErrorType::HeaderNotFound,
+                    source_vectors,
                 });
                 return None;
             }
@@ -5044,9 +5330,10 @@ impl Preprocessor {
             }
 
             let Ok(cwd) = std::env::current_dir().map_err(|e| {
+                let source_vectors = include_token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::CurrentWorkingDirectoryInaccessible(e),
-                    source_vectors: include_token.source_vectors,
+                    error_type: PreprocessorErrorType::CurrentWorkingDirectoryInaccessible(e),
+                    source_vectors,
                 });
             }) else {
                 return None;
@@ -5054,10 +5341,10 @@ impl Preprocessor {
             if let Some(header) = Self::search_for_header_in(path, &[cwd]) {
                 break 'ret header;
             }
-
+            let source_vectors = include_token.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::HeaderNotFound,
-                source_vectors: include_token.source_vectors,
+                error_type: PreprocessorErrorType::HeaderNotFound,
+                source_vectors,
             });
             return None;
         };
@@ -5081,13 +5368,13 @@ impl Preprocessor {
                     | _ if context.string_cache.at(token.contents).starts_with('<') => true,
                     | _ => false,
                 },
-                |_, _, token| {
+                |_, context, token| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(
                                 token.kind,
                             ),
-                        source_vectors: token.source_vectors,
+                        source_vectors: token.source_vectors(&mut context.source_vectors),
                     })
                 },
                 "parsing include directive",
@@ -5105,11 +5392,11 @@ impl Preprocessor {
                     .expect_token_from_previous_phase::<true>(
                         context,
                         |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                        |_, _, t| {
+                        |_, context, t| {
                             ControlFlow::Break(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
-                                source_vectors: t.source_vectors,
+                                source_vectors: t.source_vectors(&mut context.source_vectors),
                             })
                         },
                         "parsing include directive.",
@@ -5129,11 +5416,11 @@ impl Preprocessor {
                     .expect_token_from_previous_phase::<true>(
                         context,
                         |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                        |_, _, t| {
+                        |_, context, t| {
                             ControlFlow::Break(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
-                                source_vectors: t.source_vectors,
+                                source_vectors: t.source_vectors(&mut context.source_vectors),
                             })
                         },
                         "parsing include directive.",
@@ -5147,10 +5434,9 @@ impl Preprocessor {
             | _ => {
                 let mut contents = TokenString::new();
                 contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
-                let start_index = Context::duplicate_source_vectors(
-                    &mut context.source_vectors.0,
-                    include_string.source_vectors,
-                );
+                let source_vectors = include_string.source_vectors(&mut context.source_vectors);
+                let start_index =
+                    Context::duplicate_source_vectors(&mut context.source_vectors, source_vectors);
                 loop {
                     match self.next_preprocessor_token::<false>(context) {
                         | Some(token) => {
@@ -5158,9 +5444,10 @@ impl Preprocessor {
                                 break;
                             }
                             let token_contents = context.string_cache.at(token.contents);
+                            let source_vectors = token.source_vectors(&mut context.source_vectors);
                             _ = Context::duplicate_source_vectors(
-                                &mut context.source_vectors.0,
-                                token.source_vectors,
+                                &mut context.source_vectors,
+                                source_vectors,
                             );
                             if let Some(idx) = token_contents.find('>') {
                                 contents.push_str(&token_contents[..idx]);
@@ -5169,11 +5456,13 @@ impl Preprocessor {
                             contents.push_str(context.string_cache.at(token.contents));
                         },
                         | None => {
+                            let source_vectors =
+                                directive.source_vectors(&mut context.source_vectors);
                             context.preprocessor_error(PreprocessorError {
-                                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                                error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                                     "parsing include directive",
                                 ),
-                                source_vectors: directive.source_vectors,
+                                source_vectors,
                             });
                             break;
                         },
@@ -5181,10 +5470,10 @@ impl Preprocessor {
                 }
                 let path = Path::new(contents.as_str());
                 let synthetic_token = PreprocessorToken {
-                    source_vectors: SourceVectors {
+                    token_position: TokenPosition::Many(SourceVectors {
                         start_index,
                         length: context.source_vectors.0.len() as u32 - start_index,
-                    },
+                    }),
                     contents:       context.string_cache.intern(&contents),
                     kind:           PreprocessorTokenType::AngleBracketString,
                 };
@@ -5196,9 +5485,10 @@ impl Preprocessor {
         };
         let header_path = context.get_source_file(header_source_index);
         let Ok(header_string) = read_to_string_lossy(header_path).map_err(|e| {
+            let source_vectors = directive.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::HeaderFileInaccessible(e),
-                source_vectors: directive.source_vectors,
+                error_type: PreprocessorErrorType::HeaderFileInaccessible(e),
+                source_vectors,
             });
         }) else {
             return;
@@ -5221,12 +5511,12 @@ impl Preprocessor {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
-            |_, _, token| {
+            |_, context, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedIdentifierInDefineDirective(
                         token.kind,
                     ),
-                    source_vectors: token.source_vectors,
+                    source_vectors: token.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing define directive",
@@ -5242,11 +5532,12 @@ impl Preprocessor {
                 | MacroDefinition::FunctionLike { tokenizer, .. }
                 | MacroDefinition::ObjectLike { tokenizer, .. } => Some(tokenizer.clone()),
                 | MacroDefinition::BuiltIn => {
+                    let source_vectors = name.source_vectors(&mut context.source_vectors);
                     context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::RedefinitionOfBuiltInMacro(
+                        error_type: PreprocessorErrorType::RedefinitionOfBuiltInMacro(
                             context.string_cache.at(name.contents).to_owned(),
                         ),
-                        source_vectors: name.source_vectors,
+                        source_vectors,
                     });
                     None
                 },
@@ -5261,11 +5552,12 @@ impl Preprocessor {
             ) => Some(token),
             | Some(_) => None,
             | None => {
+                let source_vectors = name.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                    error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing macro definition",
                     ),
-                    source_vectors: name.source_vectors,
+                    source_vectors,
                 });
                 None
             },
@@ -5278,12 +5570,13 @@ impl Preprocessor {
                     unreachable!("The case where name is a built-in macro is handled above")
                 },
             }) {
+                let source_vectors = name.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(
                             context.string_cache.at(name.contents).to_owned(),
                         ),
-                    source_vectors: name.source_vectors,
+                    source_vectors,
                 });
             }
             let mut argument_names = Vec::new();
@@ -5297,13 +5590,13 @@ impl Preprocessor {
                             || (t.kind == PreprocessorTokenType::ClosingParenthesis
                                 && argument_names.is_empty())
                     },
-                    |_, _, token| {
+                    |_, context, token| {
                         ControlFlow::Break(PreprocessorError {
                             error_type:
                                 PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(
                                     token.kind,
                                 ),
-                            source_vectors: token.source_vectors,
+                            source_vectors: token.source_vectors(&mut context.source_vectors),
                         })
                     },
                     "parsing macro definition",
@@ -5311,11 +5604,12 @@ impl Preprocessor {
                     break;
                 };
                 if is_variadic {
+                    let source_vectors = name.source_vectors(&mut context.source_vectors);
                     context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::VariadicMacroMustBeLastParameter(
+                        error_type: PreprocessorErrorType::VariadicMacroMustBeLastParameter(
                             context.string_cache.at(name.contents).to_owned(),
                         ),
-                        source_vectors: name.source_vectors,
+                        source_vectors,
                     });
                 }
                 if name_or_ellipsis.kind == PreprocessorTokenType::Ellipsis {
@@ -5328,13 +5622,12 @@ impl Preprocessor {
                 let Some(comma_or_closing_parent) = self.expect_token_from_previous_phase::<true>(
                     context,
                     |_, _, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
-                    |_, _, token|
+                    |_, context, token|
                         ControlFlow::Break(PreprocessorError {
                                 error_type:     PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(token.kind),
-                                source_vectors: token.source_vectors,
+                                source_vectors: token.source_vectors(&mut context.source_vectors),
                             },
-                        )
-                    ,
+                        ),
                     "parsing macro definition",
                 ) else {break;};
                 if comma_or_closing_parent.kind == PreprocessorTokenType::ClosingParenthesis {
@@ -5358,12 +5651,13 @@ impl Preprocessor {
                     unreachable!("The case where name is a built-in macro is handled above")
                 },
             }) {
+                let source_vectors = name.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(
                             context.string_cache.at(name.contents).to_owned(),
                         ),
-                    source_vectors: name.source_vectors,
+                    source_vectors,
                 });
             }
             drop(self.macro_definitions.insert(
@@ -5382,20 +5676,21 @@ impl Preprocessor {
                 let new_next = new_tokenizer.next_item(context);
                 if let Some(t) = new_next.as_ref() {
                     if t.kind == PreprocessorTokenType::HashHash && last.is_none() {
+                        let source_vectors = t.source_vectors(&mut context.source_vectors);
                         context.preprocessor_error(PreprocessorError {
                             error_type:
                                 PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator,
-                            source_vectors: t.source_vectors,
+                            source_vectors,
                         });
                     }
                 }
                 if old_next != new_next && !error_has_been_generated {
+                    let source_vectors = name.source_vectors(&mut context.source_vectors);
                     context.preprocessor_error(PreprocessorError {
-                        error_type:
-                            PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
-                                context.string_cache.at(name.contents).to_owned(),
-                            ),
-                        source_vectors: name.source_vectors,
+                        error_type: PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
+                            context.string_cache.at(name.contents).to_owned(),
+                        ),
+                        source_vectors,
                     });
                     error_has_been_generated = true;
                 }
@@ -5407,10 +5702,12 @@ impl Preprocessor {
                         .as_ref()
                         .is_some_and(|t| t.kind == PreprocessorTokenType::HashHash)
                     {
+                        let source_vectors =
+                            last.unwrap().source_vectors(&mut context.source_vectors);
                         context.preprocessor_error(PreprocessorError {
                             error_type:
                                 PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
-                            source_vectors: last.unwrap().source_vectors,
+                            source_vectors,
                         });
                     }
                     break;
@@ -5434,12 +5731,12 @@ impl Preprocessor {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
-            |_, _, token| {
+            |_, context, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedIdentifierInUndefDirective(
                         token.kind,
                     ),
-                    source_vectors: token.source_vectors,
+                    source_vectors: token.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing undef directive",
@@ -5451,12 +5748,12 @@ impl Preprocessor {
         _ = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Newline,
-            |_, _, token| {
+            |_, context, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(
                         token.kind,
                     ),
-                    source_vectors: token.source_vectors,
+                    source_vectors: token.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing undef directive",
@@ -5468,10 +5765,10 @@ impl Preprocessor {
         let Some(token) = self.expect_token::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Number,
-            |_, _, t| {
+            |_, context, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::MissingNumberInLineDirective(t.kind),
-                    source_vectors: t.source_vectors,
+                    source_vectors: t.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing line directive",
@@ -5486,12 +5783,13 @@ impl Preprocessor {
             for b in context.string_cache.at(token.contents).bytes() {
                 if !b.is_ascii_digit() && !did_generate_error {
                     did_generate_error = true;
+                    let source_vectors = token.source_vectors(&mut context.source_vectors);
                     Context::raw_preprocessor_error(
                         &mut context.pending_errors,
                         PreprocessorError {
                             error_type:
                                 PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence,
-                            source_vectors: token.source_vectors,
+                            source_vectors,
                         },
                     );
                     continue;
@@ -5508,9 +5806,10 @@ impl Preprocessor {
             (value, did_overflow)
         };
         if did_overflow {
+            let source_vectors = token.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(value),
-                source_vectors: token.source_vectors,
+                error_type: PreprocessorErrorType::LineDirectiveNumberTooLarge(value),
+                source_vectors,
             });
         } else {
             self.set_line(context, value as u32);
@@ -5523,10 +5822,10 @@ impl Preprocessor {
                     PreprocessorTokenType::String | PreprocessorTokenType::Newline
                 )
             },
-            |_, _, t| {
+            |_, context, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::MissingNewlineAfterLineDirective(t.kind),
-                    source_vectors: t.source_vectors,
+                    source_vectors: t.source_vectors(&mut context.source_vectors),
                 })
             },
             "parsing line directive",
@@ -5544,12 +5843,12 @@ impl Preprocessor {
             _ = self.expect_token::<true>(
                 context,
                 |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                |_, _, t| {
+                |_, context, t| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:     PreprocessorErrorType::MissingNewlineAfterLineDirective(
                             t.kind,
                         ),
-                        source_vectors: t.source_vectors,
+                        source_vectors: t.source_vectors(&mut context.source_vectors),
                     })
                 },
                 "parsing line directive",
@@ -5571,8 +5870,10 @@ impl Preprocessor {
                     contents.push_str(s);
                 },
                 | None => {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
@@ -5586,8 +5887,13 @@ impl Preprocessor {
                 },
             }
         }
-        let source_vectors =
-            context.create_source_vectors(self.position(context), self.source_file_index(), 0);
+        let start_position = self.position(&context.source_vectors);
+        let source_vectors = Context::create_source_vectors(
+            &mut context.source_vectors,
+            start_position,
+            self.source_file_index(),
+            0,
+        );
         context.preprocessor_error(PreprocessorError {
             error_type: PreprocessorErrorType::ErrorDirective(contents),
             source_vectors,
@@ -5597,8 +5903,10 @@ impl Preprocessor {
     fn parse_pragma_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         'base: loop {
             let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
+                let start_position = self.position(&context.source_vectors);
+                let source_vectors = Context::create_source_vectors(
+                    &mut context.source_vectors,
+                    start_position,
                     self.source_file_index(),
                     0,
                 );
@@ -5617,9 +5925,11 @@ impl Preprocessor {
                     match context.string_cache.at(token.contents) {
                         | "once" => {
                             if !self.current_is_header(context) {
+                                let source_vectors =
+                                    token.source_vectors(&mut context.source_vectors);
                                 context.preprocessor_error(PreprocessorError {
-                                    error_type:     PreprocessorErrorType::PragmaOnceInNonHeader,
-                                    source_vectors: token.source_vectors,
+                                    error_type: PreprocessorErrorType::PragmaOnceInNonHeader,
+                                    source_vectors,
                                 });
                             }
                             _ = self.once_set.insert(self.source_file_index());
@@ -5627,18 +5937,22 @@ impl Preprocessor {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline =>
                                     break 'base,
                                 | Some(t) => {
+                                    let source_vectors =
+                                        token.source_vectors(&mut context.source_vectors);
                                     context.preprocessor_error(PreprocessorError {
                                         error_type:
                                             PreprocessorErrorType::ExtraTokensAfterPragmaOnce(
                                                 t.kind,
                                             ),
-                                        source_vectors: token.source_vectors,
+                                        source_vectors,
                                     });
                                     break 'base;
                                 },
                                 | None => {
-                                    let source_vectors = context.create_source_vectors(
-                                        self.position(context),
+                                    let start_position = self.position(&context.source_vectors);
+                                    let source_vectors = Context::create_source_vectors(
+                                        &mut context.source_vectors,
+                                        start_position,
                                         self.source_file_index(),
                                         0,
                                     );
@@ -5655,9 +5969,11 @@ impl Preprocessor {
                         | "STDC" => {
                             match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
+                                    let source_vectors =
+                                        token.source_vectors(&mut context.source_vectors);
                                     context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument,
-                                                source_vectors: token.source_vectors,
+                                                source_vectors,
                                             },
                                         );
                                     break 'base;
@@ -5670,19 +5986,23 @@ impl Preprocessor {
                                             "FP_CONTRACT" | "FENV_ACCESS" | "CX_LIMITED_RANGE"
                                         )
                                     {
+                                        let source_vectors =
+                                            token.source_vectors(&mut context.source_vectors);
                                         context.preprocessor_error(PreprocessorError {
                                             error_type:
                                                 PreprocessorErrorType::UnknownPragmaSTDCArgument(
                                                     s.to_owned(),
                                                 ),
-                                            source_vectors: token.source_vectors,
+                                            source_vectors,
                                         });
                                         break 'base;
                                     }
                                 },
                                 | None => {
-                                    let source_vectors = context.create_source_vectors(
-                                        self.position(context),
+                                    let start_position = self.position(&context.source_vectors);
+                                    let source_vectors = Context::create_source_vectors(
+                                        &mut context.source_vectors,
+                                        start_position,
                                         self.source_file_index(),
                                         0,
                                     );
@@ -5698,9 +6018,11 @@ impl Preprocessor {
 
                             match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
+                                    let source_vectors =
+                                        token.source_vectors(&mut context.source_vectors);
                                     context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch,
-                                                source_vectors: token.source_vectors,
+                                                source_vectors,
                                             },
                                         );
                                     break 'base;
@@ -5710,17 +6032,21 @@ impl Preprocessor {
                                     if token.kind != PreprocessorTokenType::Identifier
                                         || !matches!(s, "ON" | "OFF" | "DEFAULT")
                                     {
+                                        let source_vectors =
+                                            token.source_vectors(&mut context.source_vectors);
                                         context.preprocessor_error(PreprocessorError {
                                                     error_type:     PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(s.to_owned()),
-                                                    source_vectors: token.source_vectors,
+                                                    source_vectors,
                                                 },
                                             );
                                         break 'base;
                                     }
                                 },
                                 | None => {
-                                    let source_vectors = context.create_source_vectors(
-                                        self.position(context),
+                                    let start_position = self.position(&context.source_vectors);
+                                    let source_vectors = Context::create_source_vectors(
+                                        &mut context.source_vectors,
+                                        start_position,
                                         self.source_file_index(),
                                         0,
                                     );
@@ -5738,9 +6064,10 @@ impl Preprocessor {
                     }
                 },
                 | _ => {
+                    let source_vectors = token.source_vectors(&mut context.source_vectors);
                     context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnknownPragmaDirective,
-                        source_vectors: token.source_vectors,
+                        error_type: PreprocessorErrorType::UnknownPragmaDirective,
+                        source_vectors,
                     });
                     break 'base;
                 },
@@ -5780,9 +6107,10 @@ impl Preprocessor {
             (result, did_overflow)
         };
         if did_overflow {
+            let source_vectors = token.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::IntegerLiteralOverflow,
-                source_vectors: token.source_vectors,
+                error_type: PreprocessorErrorType::IntegerLiteralOverflow,
+                source_vectors,
             });
         }
         let contents = context.string_cache.at(token.contents);
@@ -5820,112 +6148,118 @@ impl Preprocessor {
             | _ => None,
         };
         if index != contents.len() - 1 {
+            let source_vectors = token.source_vectors(&mut context.source_vectors);
             context.preprocessor_error(PreprocessorError {
-                error_type:     invalid_integer_literal_error,
-                source_vectors: token.source_vectors,
+                error_type: invalid_integer_literal_error,
+                source_vectors,
             });
         }
         match suffix_type {
             | Some(IntegerSuffix::UnsignedLongLong) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
                 contents:       token.contents,
             },
             | Some(IntegerSuffix::LongLong) if result > i64::MAX as u64 => {
+                let source_vectors = token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
+                    error_type: PreprocessorErrorType::ForcedSignedToUnsignedConversion {
                         from: SignedIntegerLiteralType::LongLong,
                         to:   UnsignedIntegerLiteralType::UnsignedLongLong,
                     },
-                    source_vectors: token.source_vectors,
+                    source_vectors,
                 });
                 Token {
                     kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
-                    source_vectors: token.source_vectors,
+                    token_position: token.token_position,
                     contents:       token.contents,
                 }
             },
             | Some(IntegerSuffix::LongLong) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::LongLong(result as _)),
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
                 contents:       token.contents,
             },
             | Some(IntegerSuffix::UnsignedLong) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
                 contents:       token.contents,
             },
             | Some(IntegerSuffix::Long) if result > i64::MAX as u64 => {
+                let source_vectors = token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
+                    error_type: PreprocessorErrorType::ForcedSignedToUnsignedConversion {
                         from: SignedIntegerLiteralType::Long,
                         to:   UnsignedIntegerLiteralType::UnsignedLong,
                     },
-                    source_vectors: token.source_vectors,
+                    source_vectors,
                 });
                 Token {
                     kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
-                    source_vectors: token.source_vectors,
+                    token_position: token.token_position,
                     contents:       token.contents,
                 }
             },
             | Some(IntegerSuffix::Long) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::Long(result as _)),
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
                 contents:       token.contents,
             },
             | Some(IntegerSuffix::Unsigned) if result > u64::from(u32::MAX) => {
+                let source_vectors = token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedUnsignedPromotion {
+                    error_type: PreprocessorErrorType::ForcedUnsignedPromotion {
                         from: UnsignedIntegerLiteralType::UnsignedInt,
                         to:   UnsignedIntegerLiteralType::UnsignedLong,
                     },
-                    source_vectors: token.source_vectors,
+                    source_vectors,
                 });
                 Token {
                     kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
-                    source_vectors: token.source_vectors,
+                    token_position: token.token_position,
                     contents:       token.contents,
                 }
             },
             #[allow(clippy::cast_possible_truncation)]
             | Some(IntegerSuffix::Unsigned) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::UnsignedInt(result as u32)),
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
                 contents:       token.contents,
             },
             | None if result > i64::MAX as u64 => {
+                let source_vectors = token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
+                    error_type: PreprocessorErrorType::ForcedSignedToUnsignedConversion {
                         from: SignedIntegerLiteralType::Int,
                         to:   UnsignedIntegerLiteralType::UnsignedLong,
                     },
-                    source_vectors: token.source_vectors,
+                    source_vectors,
                 });
                 Token {
                     kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
-                    source_vectors: token.source_vectors,
+                    token_position: token.token_position,
                     contents:       token.contents,
                 }
             },
             | None if result > i32::MAX as u64 => {
+                let source_vectors = token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedSignedPromotion {
+                    error_type: PreprocessorErrorType::ForcedSignedPromotion {
                         from: SignedIntegerLiteralType::Int,
                         to:   SignedIntegerLiteralType::Long,
                     },
-                    source_vectors: token.source_vectors,
+                    source_vectors,
                 });
                 Token {
                     kind:           TokenType::Integer(IntegerTokenType::Long(result as i64)),
-                    source_vectors: token.source_vectors,
+                    token_position: token.token_position,
                     contents:       token.contents,
                 }
             },
             #[allow(clippy::cast_possible_truncation)]
             | None => Token {
                 kind:           TokenType::Integer(IntegerTokenType::Int(result as i32)),
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
                 contents:       token.contents,
             },
         }
@@ -5995,28 +6329,30 @@ impl Preprocessor {
         match res {
             | Ok(kind) => Token {
                 kind:           TokenType::Float(kind),
-                source_vectors: token.source_vectors,
+                token_position: token.token_position,
                 contents:       token.contents,
             },
             | Err(ParseFloatError::Invalid(kind)) => {
+                let source_vectors = token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     invalid_float_literal_error,
-                    source_vectors: token.source_vectors,
+                    error_type: invalid_float_literal_error,
+                    source_vectors,
                 });
                 Token {
                     kind:           TokenType::Float(kind),
-                    source_vectors: token.source_vectors,
+                    token_position: token.token_position,
                     contents:       token.contents,
                 }
             },
             | Err(ParseFloatError::Overflow(kind)) => {
+                let source_vectors = token.source_vectors(&mut context.source_vectors);
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::FloatLiteralOverflow(kind),
-                    source_vectors: token.source_vectors,
+                    error_type: PreprocessorErrorType::FloatLiteralOverflow(kind),
+                    source_vectors,
                 });
                 Token {
                     kind:           TokenType::Float(kind),
-                    source_vectors: token.source_vectors,
+                    token_position: token.token_position,
                     contents:       token.contents,
                 }
             },
@@ -6052,8 +6388,10 @@ impl TranslationPhase for Preprocessor {
             let Some(token) = self.next_preprocessor_token::<true>(context) else {
                 if self.if_directive_balance != 0 {
                     self.if_directive_balance = 0;
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
+                    let start_position = self.position(&context.source_vectors);
+                    let source_vectors = Context::create_source_vectors(
+                        &mut context.source_vectors,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );

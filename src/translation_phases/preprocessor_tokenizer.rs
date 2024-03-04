@@ -12,6 +12,7 @@ use super::{
     SetSourceFileIndex,
     SourcePosition,
     SourceVector,
+    SourceVectorStack,
     SourceVectors,
     TranslationPhase,
 };
@@ -29,8 +30,8 @@ pub(crate) struct PreprocessorTokenizer {
 impl GetPosition for PreprocessorTokenizer {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
-        self.initial_processor.position(context)
+    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition {
+        self.initial_processor.position(source_vector_stack)
     }
 }
 
@@ -106,17 +107,18 @@ impl std::error::Error for PreprocessorTokenizerError {}
 impl GetPosition for PreprocessorTokenizerError {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
-        self.source_vector.position(context)
+    fn position(&self, source_vector_stack: &SourceVectorStack) -> SourcePosition {
+        self.source_vector.position(source_vector_stack)
     }
 }
 
 impl GetSourceVectors for PreprocessorTokenizerError {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn source_vectors(&self, context: &mut Context) -> SourceVectors {
-        context.create_source_vectors(
-            self.source_vector.position(context),
+    fn source_vectors(&self, source_vector_stack: &mut SourceVectorStack) -> SourceVectors {
+        Context::create_source_vectors(
+            source_vector_stack,
+            self.source_vector.position(source_vector_stack),
             self.source_vector.source_file_index,
             self.source_vector.length,
         )
@@ -150,7 +152,7 @@ impl TranslationPhase for PreprocessorTokenizer {
     fn next_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
         loop {
             context.string_cache.undo_str();
-            self.current_token_start = self.position(context);
+            self.current_token_start = self.position(&context.source_vectors);
             let Some(input) = self.initial_processor.next_item(context) else {
                 break None;
             };
@@ -232,7 +234,9 @@ impl PreprocessorTokenizer {
                 column:            position.column,
                 line:              position.line,
                 source_file_index: self.source_file_index(),
-                length:            self.index(context) - position.index,
+                length:            (self.index(&context.source_vectors) - position.index)
+                    .try_into()
+                    .expect("usize to u32"),
             },
             error_type,
         });
@@ -243,17 +247,18 @@ impl PreprocessorTokenizer {
         context: &mut Context,
         token_type: PreprocessorTokenType,
     ) -> PreprocessorToken {
-        let source_vector = context.push_source_vector(
-            self.current_token_start,
-            self.source_file_index(),
-            self.index(context) - self.current_token_start.index,
-        );
         let contents = context.string_cache.end_str();
         PreprocessorToken {
-            source_vectors: SourceVectors {
-                start_index: source_vector,
-                length:      1,
-            },
+            token_position: TokenPosition::One(SourceVector {
+                index:             self.current_token_start.index,
+                column:            self.current_token_start.column,
+                line:              self.current_token_start.line,
+                source_file_index: self.source_file_index(),
+                length:            (self.index(&context.source_vectors)
+                    - self.current_token_start.index)
+                    .try_into()
+                    .expect("usize to u32"),
+            }),
             kind: token_type,
             contents,
         }
@@ -261,16 +266,16 @@ impl PreprocessorTokenizer {
 
     fn tokenize_whitespace(&mut self, context: &mut Context) -> PreprocessorToken {
         let mut current;
-        let mut last_position = self.position(context);
+        let mut last_position = self.position(&context.source_vectors);
         loop {
             current = self.initial_processor.next_item(context);
             match current {
                 | None => {
-                    last_position = self.position(context);
+                    last_position = self.position(&context.source_vectors);
                     break;
                 },
                 | Some(i) if i.is_whitespace() && i != '\n' => {
-                    last_position = self.position(context);
+                    last_position = self.position(&context.source_vectors);
                 },
                 | Some(_) => break,
             }
@@ -282,7 +287,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_forward_slash(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
         let current = self.initial_processor.next_item(context);
         match current {
             | Some('=') => {
@@ -304,7 +309,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_hash(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
         let current = self.initial_processor.next_item(context);
         match current {
             | Some('#') => {
@@ -320,7 +325,7 @@ impl PreprocessorTokenizer {
 
     fn tokenize_identifier(&mut self, context: &mut Context) -> PreprocessorToken {
         loop {
-            let last_position = self.position(context);
+            let last_position = self.position(&context.source_vectors);
             let current = self.initial_processor.next_item(context);
             match current {
                 | Some(c) if c.is_alphanumeric() || c == '_' => context.string_cache.push(c),
@@ -341,7 +346,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_wide_string_or_identifier(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
         let current = self.initial_processor.next_item(context);
         match current {
             | Some('"') => self.tokenize_string(context),
@@ -365,13 +370,13 @@ impl PreprocessorTokenizer {
         newline_error_type: PreprocessorTokenizerErrorType,
     ) -> PreprocessorToken {
         loop {
-            let last_position = self.position(context);
+            let last_position = self.position(&context.source_vectors);
             let Some(current) = self.initial_processor.next_item(context) else {
                 self.generate_error(context, unterminated_error_type);
                 break;
             };
             if !ignore_escapes {
-                let last_position = self.position(context);
+                let last_position = self.position(&context.source_vectors);
                 let next = self.initial_processor.next_item(context);
                 if current == '\\' && next == Some(end_char) {
                     context.string_cache.push('\\');
@@ -449,7 +454,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_period_or_number(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
         match self.initial_processor.next_item(context) {
             | Some('.') => self.tokenize_ellipsis(context, last_position),
             | Some(v) if v.is_ascii_digit() => {
@@ -484,7 +489,7 @@ impl PreprocessorTokenizer {
 
     fn tokenize_number(&mut self, context: &mut Context) -> PreprocessorToken {
         loop {
-            let last_position = self.position(context);
+            let last_position = self.position(&context.source_vectors);
             let Some(current) = self.initial_processor.next_item(context) else {
                 break;
             };
@@ -519,7 +524,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_percent(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
         match self.initial_processor.next_item(context) {
             | Some('=') => {
                 context.string_cache.push('=');
@@ -541,7 +546,7 @@ impl PreprocessorTokenizer {
     #[inline(never)]
     #[cold]
     fn tokenize_hash_digraph(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
         match self.initial_processor.next_item(context) {
             | Some('%') => self.tokenize_double_hash_digraph(context, last_position),
             | None | Some(_) => {
@@ -569,7 +574,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_left_angle_bracket(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some(':') => {
@@ -596,7 +601,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_left_shift(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -611,7 +616,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_right_angle_bracket(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('>') => {
@@ -630,7 +635,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_right_shift(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -645,7 +650,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_colon(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('>') => {
@@ -660,7 +665,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_plus(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('+') => {
@@ -679,7 +684,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_minus(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('-') => {
@@ -702,7 +707,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_asterisk(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -718,7 +723,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_caret(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -734,7 +739,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_ampersand(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('&') => {
@@ -754,7 +759,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_pipe(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('|') => {
@@ -774,7 +779,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_exclamation_mark(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -789,7 +794,7 @@ impl PreprocessorTokenizer {
     }
 
     fn tokenize_equals(&mut self, context: &mut Context) -> PreprocessorToken {
-        let last_position = self.position(context);
+        let last_position = self.position(&context.source_vectors);
 
         match self.initial_processor.next_item(context) {
             | Some('=') => {
@@ -886,18 +891,46 @@ pub(crate) enum PreprocessorTokenType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct PreprocessorToken {
     pub(crate) kind:           PreprocessorTokenType,
-    pub(crate) source_vectors: SourceVectors,
+    pub(crate) token_position: TokenPosition,
     pub(crate) contents:       StringCacheId,
+}
+
+impl GetSourceVectors for PreprocessorToken {
+    fn source_vectors(&self, source_vector_stack: &mut SourceVectorStack) -> SourceVectors {
+        self.token_position.source_vectors(source_vector_stack)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TokenPosition {
+    One(SourceVector),
+    Many(SourceVectors),
+}
+
+impl GetSourceVectors for TokenPosition {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn source_vectors(&self, source_vector_stack: &mut SourceVectorStack) -> SourceVectors {
+        match self {
+            | Self::One(source_vector) => Context::create_source_vectors(
+                source_vector_stack,
+                source_vector.position(source_vector_stack),
+                source_vector.source_file_index,
+                source_vector.length,
+            ),
+            | Self::Many(source_vectors) => *source_vectors,
+        }
+    }
 }
 
 impl Default for PreprocessorToken {
     fn default() -> Self {
         Self {
             kind:           PreprocessorTokenType::WideGeneratedString,
-            source_vectors: SourceVectors {
+            token_position: TokenPosition::Many(SourceVectors {
                 start_index: u32::MAX,
                 length:      u32::MAX,
-            },
+            }),
             contents:       StringCacheId::from_u32(u32::MAX),
         }
     }
