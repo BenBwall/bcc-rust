@@ -2730,9 +2730,7 @@ impl Preprocessor {
                             let source_file = &context.source_files[self.source_file_index()];
                             let length = source_file
                                 .as_os_str()
-                                .len()
-                                .try_into()
-                                .expect("Length overflow");
+                                .len();
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context
@@ -2764,7 +2762,7 @@ impl Preprocessor {
                                         column: 1,
                                     },
                                     builtin_macros,
-                                    string.len().try_into().expect("Length overflow"),
+                                    string.len(),
                                 ),
                             });
                         },
@@ -2784,7 +2782,7 @@ impl Preprocessor {
                                         column: 1,
                                     },
                                     builtin_macros,
-                                    string.len().try_into().expect("Length overflow"),
+                                    string.len(),
                                 ),
                             });
                         },
@@ -2804,7 +2802,7 @@ impl Preprocessor {
                                         column: 1,
                                     },
                                     builtin_macros,
-                                    string.len().try_into().expect("Length overflow"),
+                                    string.len(),
                                 ),
                             });
                         },

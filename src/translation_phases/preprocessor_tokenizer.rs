@@ -232,9 +232,7 @@ impl PreprocessorTokenizer {
                 column:            position.column,
                 line:              position.line,
                 source_file_index: self.source_file_index(),
-                length:            (self.index(context) - position.index)
-                    .try_into()
-                    .expect("Length overflow"),
+                length:            self.index(context) - position.index,
             },
             error_type,
         });
@@ -248,9 +246,7 @@ impl PreprocessorTokenizer {
         let source_vector = context.push_source_vector(
             self.current_token_start,
             self.source_file_index(),
-            (self.index(context) - self.current_token_start.index)
-                .try_into()
-                .expect("Length overflow"),
+            self.index(context) - self.current_token_start.index,
         );
         let contents = context.string_cache.end_str();
         PreprocessorToken {

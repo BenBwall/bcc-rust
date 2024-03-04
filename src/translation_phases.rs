@@ -166,7 +166,7 @@ pub(crate) struct SourceVector {
     pub(crate) column:            u32,
     pub(crate) line:              u32,
     pub(crate) source_file_index: u32,
-    pub(crate) length:            u32,
+    pub(crate) length:            usize,
 }
 
 impl Default for SourceVector {
@@ -408,7 +408,7 @@ impl Context {
         &mut self,
         start_position: SourcePosition,
         source_file_index: u32,
-        length: u32,
+        length: usize,
     ) -> u32 {
         let index = self.source_vectors.0.len().try_into().unwrap();
         self.source_vectors.0.push(SourceVector {
@@ -439,7 +439,7 @@ impl Context {
         &mut self,
         start_position: SourcePosition,
         source_file_index: u32,
-        length: u32,
+        length: usize,
     ) -> SourceVectors {
         let start_index = self.push_source_vector(start_position, source_file_index, length);
         let length = 1;
