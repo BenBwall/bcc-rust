@@ -4,7 +4,7 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
-    sync::Arc,
+    rc::Rc,
 };
 
 use super::{
@@ -140,23 +140,23 @@ pub(crate) enum StatementType {
     Compound(Vec<Statement>),
     Expression(ExpressionIndex),
     If {
-        condition_index: ExpressionIndex,
-        then_index:      StatementIndex,
-        else_index:      Option<StatementIndex>,
+        condition_expression: ExpressionIndex,
+        then_statement:       StatementIndex,
+        else_statement:       Option<StatementIndex>,
     },
     While {
-        condition_index: ExpressionIndex,
-        body_index:      StatementIndex,
+        condition_expression: ExpressionIndex,
+        body_statement:       StatementIndex,
     },
     DoWhile {
-        condition_index: ExpressionIndex,
-        body_index:      StatementIndex,
+        condition_expression: ExpressionIndex,
+        body_statement:       StatementIndex,
     },
     For {
-        initializer_index: Option<StatementIndex>,
-        condition:         Option<ExpressionIndex>,
-        increment:         Option<ExpressionIndex>,
-        body:              StatementIndex,
+        initializer_statement: Option<StatementIndex>,
+        condition_expression:  Option<ExpressionIndex>,
+        post_expression:       Option<ExpressionIndex>,
+        body_statement:        StatementIndex,
     },
     Return(ExpressionIndex),
     Break,
@@ -179,26 +179,26 @@ pub(crate) struct Expression {
 #[allow(dead_code)]
 pub(crate) enum ExpressionType {
     Conditional {
-        condition_index: ExpressionIndex,
-        then_index:      ExpressionIndex,
-        else_index:      ExpressionIndex,
+        condition_expression: ExpressionIndex,
+        then_expression:      ExpressionIndex,
+        else_expression:      ExpressionIndex,
     },
     Binary {
-        op:          BinaryOperator,
-        left_index:  ExpressionIndex,
-        right_index: ExpressionIndex,
+        operator:         BinaryOperator,
+        left_expression:  ExpressionIndex,
+        right_expression: ExpressionIndex,
     },
     Unary {
-        op:            UnaryOperator,
-        operand_index: ExpressionIndex,
+        operator:           UnaryOperator,
+        operand_expression: ExpressionIndex,
     },
     Call {
-        function_index: ExpressionIndex,
-        arguments:      Arc<[ExpressionIndex]>,
+        function_expression: ExpressionIndex,
+        arguments:           Rc<[ExpressionIndex]>,
     },
     CompoundLiteral {
-        type_index: Type,
-        values:     Arc<[ExpressionIndex]>,
+        var_type: Type,
+        values:   Rc<[ExpressionIndex]>,
     },
     Identifier(Identifier),
     Constant(Constant),
@@ -206,8 +206,8 @@ pub(crate) enum ExpressionType {
     SizeofType(Type),
     SizeofExpr(ExpressionIndex),
     Cast {
-        type_index:    Type,
-        operand_index: ExpressionIndex,
+        target_type:        Type,
+        operand_expression: ExpressionIndex,
     },
 }
 
@@ -279,7 +279,7 @@ pub(crate) struct Identifier {
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct Variable {
     pub(crate) name:          Identifier,
-    pub(crate) type_index:    TypeIndex,
+    pub(crate) var_type:      TypeIndex,
     pub(crate) storage_class: StorageClass,
 }
 
@@ -321,8 +321,8 @@ pub(crate) enum PrimitiveType {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct FunctionTypeArgument {
-    pub(crate) type_index: TypeIndex,
-    pub(crate) name:       Option<Identifier>,
+    pub(crate) function_type: TypeIndex,
+    pub(crate) name:          Option<Identifier>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -337,29 +337,29 @@ pub(crate) struct Type {
 pub(crate) enum TypeKind {
     Primitive(PrimitiveType),
     Pointer {
-        pointee_index: usize,
+        pointee_type: TypeIndex,
     },
     Struct {
         name:   Identifier,
-        fields: Arc<[Variable]>,
+        fields: Rc<[Variable]>,
     },
     Union {
         name:   Identifier,
-        fields: Arc<[Variable]>,
+        fields: Rc<[Variable]>,
     },
     Typedef {
-        name:           Identifier,
-        referent_index: usize,
+        name:          Identifier,
+        referent_type: TypeIndex,
     },
     Enum {
         name:   Identifier,
-        values: Arc<[EnumValue]>,
+        values: Rc<[EnumValue]>,
     },
     Function {
-        return_type_index: Option<usize>,
+        return_type: Option<TypeIndex>,
         /// None symbolizes a function with an unspecified number of arguments
         /// (i.e. `int f()`).
-        parameters:        Option<Arc<[FunctionTypeArgument]>>,
+        parameters:  Option<Rc<[FunctionTypeArgument]>>,
     },
 }
 
@@ -372,7 +372,7 @@ pub(crate) struct EnumValue {
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct FunctionDeclaration {
     pub(crate) name:        Identifier,
-    pub(crate) parameters:  Arc<[Variable]>,
+    pub(crate) parameters:  Rc<[Variable]>,
     pub(crate) return_type: Option<Type>,
 }
 
