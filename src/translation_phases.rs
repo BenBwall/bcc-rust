@@ -6,15 +6,19 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
-    hash::Hash,
-    path::PathBuf,
+    hash::{
+        BuildHasherDefault,
+        Hash,
+    },
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
 use crate::util::{
-    shared::{
-        SharedPath,
-        SharedString,
-    },
+    dedup_arena::DedupArena,
+    shared::SharedString,
     string_cache::StringCache,
 };
 
@@ -65,6 +69,7 @@ impl GetSourceVectors for TranslationError {
 }
 
 use owo_colors::OwoColorize;
+use rustc_hash::FxHasher;
 use smallstr::SmallString;
 use thiserror::Error;
 
@@ -81,10 +86,6 @@ pub(crate) mod preprocessing;
 pub(crate) mod preprocessor_tokenizer;
 
 pub(crate) type TokenString = SmallString<[u8; 1024]>;
-
-trait NonZeroExt {
-    fn saturating_add_assign(&mut self, num: u32);
-}
 
 trait StrExt {
     /// Returns the character at the given index,
@@ -161,21 +162,21 @@ impl Default for SourcePosition {
 
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub(crate) struct SourceVector {
-    pub(crate) index:       usize,
-    pub(crate) column:      u32,
-    pub(crate) line:        u32,
-    pub(crate) source_file: SharedPath,
-    pub(crate) length:      usize,
+    pub(crate) index:             usize,
+    pub(crate) column:            u32,
+    pub(crate) line:              u32,
+    pub(crate) source_file_index: u32,
+    pub(crate) length:            u32,
 }
 
 impl Default for SourceVector {
     fn default() -> Self {
         Self {
-            index:       0,
-            column:      1,
-            line:        1,
-            source_file: SharedPath::from_path_buf(PathBuf::new()),
-            length:      0,
+            index:             0,
+            column:            1,
+            line:              1,
+            source_file_index: 0,
+            length:            0,
         }
     }
 }
@@ -233,8 +234,8 @@ impl GetSeverity for Infallible {
     }
 }
 
-pub(crate) trait GetSourceFileName {
-    fn source_file_name(&self) -> SharedPath;
+pub(crate) trait GetSourceFileIndex {
+    fn source_file_index(&self) -> u32;
 }
 
 pub(crate) trait GetPosition {
@@ -300,8 +301,8 @@ pub(crate) trait SetPosition: GetPosition {
     }
 }
 
-pub(crate) trait SetSourceFileName {
-    fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath);
+pub(crate) trait SetSourceFileIndex {
+    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32);
 }
 
 impl GetPosition for SourcePosition {
@@ -321,30 +322,31 @@ impl GetPosition for Infallible {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[allow(clippy::struct_field_names)]
 pub(crate) struct SourceFile {
-    pub(crate) name:   SharedPath,
-    pub(crate) source: SharedString,
-    pub(crate) line:   u32,
-    pub(crate) column: u32,
-    pub(crate) index:  usize,
+    pub(crate) source_file_index: u32,
+    pub(crate) source:            SharedString,
+    pub(crate) line:              u32,
+    pub(crate) column:            u32,
+    pub(crate) index:             usize,
 }
 
 impl Default for SourceFile {
     fn default() -> Self {
         Self {
-            name:   SharedPath::from_path_buf(PathBuf::new()),
-            source: SharedString::default(),
-            line:   1,
-            column: 1,
-            index:  0,
+            source_file_index: 0,
+            source:            SharedString::default(),
+            line:              1,
+            column:            1,
+            index:             0,
         }
     }
 }
 
 impl SourceFile {
-    pub(crate) fn new(name: SharedPath, source: SharedString) -> Self {
+    pub(crate) fn new(source_file_index: u32, source: SharedString) -> Self {
         Self {
-            name,
+            source_file_index,
             source,
             line: 1,
             column: 1,
@@ -366,7 +368,7 @@ impl GetPosition for SourceFile {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct SourceVectorStack(Vec<SourceVector>);
+pub(crate) struct SourceVectorStack(pub(crate) Vec<SourceVector>);
 
 impl Display for SourceVectorStack {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
@@ -385,8 +387,9 @@ pub(crate) struct Context {
     pub(crate) source_vectors:    SourceVectorStack,
     pub(crate) string_cache:      StringCache,
     is_tokenizing_include_string: bool,
-    ignore_tokenizer_errors:   bool,
+    ignore_tokenizer_errors:      bool,
     pending_errors:               Vec<TranslationError>,
+    pub(crate) source_files:      DedupArena<Box<Path>, BuildHasherDefault<FxHasher>>,
 }
 
 impl Context {
@@ -395,23 +398,24 @@ impl Context {
             source_vectors:               SourceVectorStack(Vec::new()),
             string_cache:                 StringCache::new(),
             is_tokenizing_include_string: false,
-            ignore_tokenizer_errors:   false,
+            ignore_tokenizer_errors:      false,
             pending_errors:               Vec::new(),
+            source_files:                 DedupArena::new(),
         }
     }
 
     pub(crate) fn push_source_vector(
         &mut self,
         start_position: SourcePosition,
-        source_file: SharedPath,
-        length: usize,
+        source_file_index: u32,
+        length: u32,
     ) -> u32 {
         let index = self.source_vectors.0.len().try_into().unwrap();
         self.source_vectors.0.push(SourceVector {
             index: start_position.index,
             column: start_position.column,
             line: start_position.line,
-            source_file,
+            source_file_index,
             length,
         });
         index
@@ -422,10 +426,8 @@ impl Context {
         self_source_vectors: &mut Vec<SourceVector>,
         source_vectors: SourceVectors,
     ) -> u32 {
-        assert!(
-            u32::try_from(source_vectors.length as usize + self_source_vectors.len()).is_ok(),
-            "overflow in duplicate_source_vectors"
-        );
+        _ = u32::try_from(source_vectors.length as usize + self_source_vectors.len())
+            .expect("overflow in duplicate_source_vectors");
         let start_index = self_source_vectors.len() as u32;
         for i in source_vectors.start_index..source_vectors.start_index + source_vectors.length {
             self_source_vectors.push(self_source_vectors[i as usize].clone());
@@ -436,10 +438,10 @@ impl Context {
     pub(crate) fn create_source_vectors(
         &mut self,
         start_position: SourcePosition,
-        source_file: SharedPath,
-        length: usize,
+        source_file_index: u32,
+        length: u32,
     ) -> SourceVectors {
-        let start_index = self.push_source_vector(start_position, source_file, length);
+        let start_index = self.push_source_vector(start_position, source_file_index, length);
         let length = 1;
         SourceVectors {
             start_index,
@@ -534,11 +536,23 @@ impl Context {
         let end_index = start_index + source_vectors.length as usize;
         &self.source_vectors.0[start_index..end_index]
     }
+
+    pub(crate) fn intern_source_file(&mut self, path: Box<Path>) -> u32 {
+        self.source_files.intern(path)
+    }
+
+    pub(crate) fn get_source_file(&self, index: u32) -> &Path {
+        &self.source_files[index]
+    }
 }
 
 pub(crate) trait TranslationPhase:
-    GetPosition + SetPosition + GetSourceFileName + SetSourceFileName
+    GetPosition + SetPosition + GetSourceFileIndex + SetSourceFileIndex
 {
     type Item;
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
+}
+
+pub(crate) fn box_path_from_str(s: &str) -> Box<Path> {
+    PathBuf::from(s).into_boxed_path()
 }

@@ -6,20 +6,17 @@ use super::{
     ErrorSeverity,
     GetPosition,
     GetSeverity,
-    GetSourceFileName,
+    GetSourceFileIndex,
     GetSourceVectors,
     SetPosition,
-    SetSourceFileName,
+    SetSourceFileIndex,
     SourcePosition,
     SourceVector,
     SourceVectors,
     TranslationPhase,
 };
 use crate::util::{
-    shared::{
-        SharedPath,
-        SharedString,
-    },
+    shared::SharedString,
     string_cache::StringCacheId,
 };
 
@@ -45,17 +42,18 @@ impl SetPosition for PreprocessorTokenizer {
     }
 }
 
-impl GetSourceFileName for PreprocessorTokenizer {
+impl GetSourceFileIndex for PreprocessorTokenizer {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn source_file_name(&self) -> SharedPath {
-        self.initial_processor.source_file_name()
+    fn source_file_index(&self) -> u32 {
+        self.initial_processor.source_file_index()
     }
 }
 
-impl SetSourceFileName for PreprocessorTokenizer {
-    fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath) {
-        self.initial_processor.set_source_file_name(context, name);
+impl SetSourceFileIndex for PreprocessorTokenizer {
+    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
+        self.initial_processor
+            .set_source_file_index(context, source_file_index);
     }
 }
 
@@ -119,7 +117,7 @@ impl GetSourceVectors for PreprocessorTokenizerError {
     fn source_vectors(&self, context: &mut Context) -> SourceVectors {
         context.create_source_vectors(
             self.source_vector.position(context),
-            self.source_vector.source_file.clone(),
+            self.source_vector.source_file_index,
             self.source_vector.length,
         )
     }
@@ -230,11 +228,13 @@ impl PreprocessorTokenizer {
 
         context.preprocessor_tokenizer_error(PreprocessorTokenizerError {
             source_vector: SourceVector {
-                index:       position.index,
-                column:      position.column,
-                line:        position.line,
-                source_file: self.source_file_name().clone(),
-                length:      self.index(context) - position.index,
+                index:             position.index,
+                column:            position.column,
+                line:              position.line,
+                source_file_index: self.source_file_index(),
+                length:            (self.index(context) - position.index)
+                    .try_into()
+                    .expect("Length overflow"),
             },
             error_type,
         });
@@ -247,8 +247,10 @@ impl PreprocessorTokenizer {
     ) -> PreprocessorToken {
         let source_vector = context.push_source_vector(
             self.current_token_start,
-            self.source_file_name().clone(),
-            self.index(context) - self.current_token_start.index,
+            self.source_file_index(),
+            (self.index(context) - self.current_token_start.index)
+                .try_into()
+                .expect("Length overflow"),
         );
         let contents = context.string_cache.end_str();
         PreprocessorToken {
@@ -298,9 +300,9 @@ impl PreprocessorTokenizer {
         }
     }
 
-    pub(crate) fn new(source_name: SharedPath, source: SharedString) -> Self {
+    pub(crate) fn new(source_file_index: u32, source: SharedString) -> Self {
         Self {
-            initial_processor:   InitialProcessor::new(source_name, source),
+            initial_processor:   InitialProcessor::new(source_file_index, source),
             current_token_start: SourcePosition::default(),
         }
     }

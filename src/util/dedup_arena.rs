@@ -11,7 +11,7 @@ use hashbrown::raw::RawTable;
 
 #[allow(dead_code)]
 pub(crate) struct DedupArena<T, H> {
-    indices: RawTable<usize>,
+    indices: RawTable<u32>,
     data:    Vec<T>,
     hasher:  H,
 }
@@ -55,18 +55,18 @@ impl<T, H> DedupArena<T, H> {
     /// exists. Returns `Err` if the value is already in the arena. `Ok`
     /// otherwise.
     #[allow(dead_code)]
-    pub(crate) fn try_intern(&mut self, value: T) -> Result<usize, usize>
+    pub(crate) fn try_intern(&mut self, value: T) -> Result<u32, u32>
     where
         H: BuildHasher,
         T: Hash + Eq,
     {
         let hash = self.hasher.hash_one(&value);
-        let index = self.data.len();
+        let index = u32::try_from(self.data.len()).expect("DedupArena: Too many values.");
 
         match self.indices.find_or_find_insert_slot(
             hash,
-            |x| self.data[*x] == value,
-            |x| self.hasher.hash_one(&self.data[*x]),
+            |x| self.data[*x as usize] == value,
+            |x| self.hasher.hash_one(&self.data[*x as usize]),
         ) {
             | Ok(bucket) =>
             // SAFETY: The bucket is guaranteed to be valid because it was returned by
@@ -94,7 +94,7 @@ impl<T, H> DedupArena<T, H> {
     /// the index of the old value if the value is already in the arena. Value
     /// is dropped if it already exists. Value is not cloned.
     #[allow(dead_code)]
-    pub(crate) fn intern(&mut self, value: T) -> usize
+    pub(crate) fn intern(&mut self, value: T) -> u32
     where
         H: BuildHasher,
         T: Hash + Eq,
@@ -105,17 +105,17 @@ impl<T, H> DedupArena<T, H> {
     }
 }
 
-impl<T, H> std::ops::Index<usize> for DedupArena<T, H> {
+impl<T, H> std::ops::Index<u32> for DedupArena<T, H> {
     type Output = T;
 
-    fn index(&self, index: usize) -> &T {
-        &self.data[index]
+    fn index(&self, index: u32) -> &T {
+        &self.data[index as usize]
     }
 }
 
-impl<T, H> std::ops::IndexMut<usize> for DedupArena<T, H> {
-    fn index_mut(&mut self, index: usize) -> &mut T {
-        &mut self.data[index]
+impl<T, H> std::ops::IndexMut<u32> for DedupArena<T, H> {
+    fn index_mut(&mut self, index: u32) -> &mut T {
+        &mut self.data[index as usize]
     }
 }
 

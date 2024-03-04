@@ -19,18 +19,15 @@ use super::{
     ErrorSeverity,
     GetPosition,
     GetSeverity,
-    GetSourceFileName,
+    GetSourceFileIndex,
     GetSourceVectors,
     SetPosition,
-    SetSourceFileName,
+    SetSourceFileIndex,
     SourcePosition,
     SourceVectors,
     TranslationPhase,
 };
-use crate::util::{
-    shared::SharedPath,
-    string_cache::StringCacheId,
-};
+use crate::util::string_cache::StringCacheId;
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser {
@@ -55,15 +52,16 @@ impl SetPosition for Parser {
     }
 }
 
-impl GetSourceFileName for Parser {
-    fn source_file_name(&self) -> SharedPath {
-        self.preprocessor.source_file_name()
+impl GetSourceFileIndex for Parser {
+    fn source_file_index(&self) -> u32 {
+        self.preprocessor.source_file_index()
     }
 }
 
-impl SetSourceFileName for Parser {
-    fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath) {
-        self.preprocessor.set_source_file_name(context, name);
+impl SetSourceFileIndex for Parser {
+    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
+        self.preprocessor
+            .set_source_file_index(context, source_file_index);
     }
 }
 

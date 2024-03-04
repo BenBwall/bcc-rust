@@ -5,10 +5,10 @@ use super::{
     ErrorSeverity,
     GetPosition,
     GetSeverity,
-    GetSourceFileName,
+    GetSourceFileIndex,
     GetSourceVectors,
     SetPosition,
-    SetSourceFileName,
+    SetSourceFileIndex,
     SourceFile,
     SourcePosition,
     SourceVector,
@@ -16,10 +16,7 @@ use super::{
     StrExt,
     TranslationPhase,
 };
-use crate::util::shared::{
-    SharedPath,
-    SharedString,
-};
+use crate::util::shared::SharedString;
 
 enum HandleNewline {
     Newline,
@@ -56,7 +53,7 @@ impl GetSourceVectors for InitialProcessorError {
         match self {
             | Self::MissingFinalNewline(vector) => context.create_source_vectors(
                 vector.position(context),
-                vector.source_file.clone(),
+                vector.source_file_index,
                 vector.length,
             ),
         }
@@ -96,25 +93,25 @@ impl SetPosition for InitialProcessor {
     }
 }
 
-impl GetSourceFileName for InitialProcessor {
+impl GetSourceFileIndex for InitialProcessor {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn source_file_name(&self) -> SharedPath {
-        self.source_file.name.clone()
+    fn source_file_index(&self) -> u32 {
+        self.source_file.source_file_index
     }
 }
 
-impl SetSourceFileName for InitialProcessor {
-    fn set_source_file_name(&mut self, _context: &mut Context, name: SharedPath) {
-        self.source_file.name = name;
+impl SetSourceFileIndex for InitialProcessor {
+    fn set_source_file_index(&mut self, _context: &mut Context, source_file_index: u32) {
+        self.source_file.source_file_index = source_file_index;
     }
 }
 
 impl InitialProcessor {
-    pub(crate) fn new(source_name: SharedPath, source: SharedString) -> Self {
+    pub(crate) fn new(source_file_index: u32, source: SharedString) -> Self {
         Self {
             last_was_newline: false,
-            source_file:      SourceFile::new(source_name, source),
+            source_file:      SourceFile::new(source_file_index, source),
         }
     }
 
@@ -298,11 +295,11 @@ impl InitialProcessor {
     #[cold]
     fn missing_final_newline(&mut self, context: &mut Context) {
         context.missing_final_newline(SourceVector {
-            index:       self.source_file.index,
-            column:      self.source_file.column,
-            line:        self.source_file.line,
-            source_file: self.source_file.name.clone(),
-            length:      0,
+            index:             self.source_file.index,
+            column:            self.source_file.column,
+            line:              self.source_file.line,
+            source_file_index: self.source_file.source_file_index,
+            length:            0,
         });
     }
 }
