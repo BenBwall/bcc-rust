@@ -43,6 +43,6 @@ fn gen_one_million() {
     let mut f =
         BufWriter::new(std::fs::File::create(format!("{out_dir}/one-million-lines.c")).unwrap());
     for i in 0..1_000_000 {
-        writeln!(f, "int i = {i};").unwrap();
+        writeln!(f, "int i{i} = {i};").unwrap();
     }
 }
