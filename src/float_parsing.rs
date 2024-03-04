@@ -4,6 +4,7 @@ use std::{
         Display,
         Formatter,
     },
+    num::NonZeroI32,
 };
 
 use crate::{
@@ -36,20 +37,19 @@ impl Display for LongDouble {
     }
 }
 
-fn long_double_to_string_get_size(long_double: LongDouble) -> Result<usize, i32> {
+fn long_double_to_string_get_size(long_double: LongDouble) -> Result<usize, NonZeroI32> {
     let ld = ffi::long_double_t {
         bytes: long_double.value,
     };
     let mut error = 0;
     let bytes = unsafe { ffi::long_double_to_string_get_size(ld, &mut error) };
-    if error == 0 {
-        Ok(bytes)
-    } else {
-        Err(error)
+    match NonZeroI32::new(error) {
+        | Some(error) => Err(error),
+        | None => Ok(bytes),
     }
 }
 
-fn long_double_to_string(long_double: LongDouble) -> Result<String, i32> {
+fn long_double_to_string(long_double: LongDouble) -> Result<String, NonZeroI32> {
     let bytes = long_double_to_string_get_size(long_double)?;
     let mut buffer = Vec::with_capacity(bytes);
     let capacity = buffer.capacity();
@@ -60,7 +60,7 @@ fn long_double_to_string(long_double: LongDouble) -> Result<String, i32> {
     let ptr: *mut u8 = buffer.as_mut_ptr();
     let bytes_written =
         unsafe { ffi::long_double_to_string(ld, ptr.cast::<c_char>(), capacity, &mut error) };
-    if error != 0 {
+    if let Some(error) = NonZeroI32::new(error) {
         return Err(error);
     }
     unsafe {
@@ -71,13 +71,13 @@ fn long_double_to_string(long_double: LongDouble) -> Result<String, i32> {
 
 pub(crate) fn long_double_to_operand(
     long_double: LongDouble,
-) -> Result<PreprocessorExpressionOperand, i32> {
+) -> Result<PreprocessorExpressionOperand, NonZeroI32> {
     let mut error = 0;
     let ld = ffi::long_double_t {
         bytes: long_double.value,
     };
     let operand = unsafe { ffi::long_double_to_operand(ld, &mut error) };
-    if error != 0 {
+    if let Some(error) = NonZeroI32::new(error) {
         return Err(error);
     }
     if operand.is_unsigned {

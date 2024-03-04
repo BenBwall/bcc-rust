@@ -2728,9 +2728,7 @@ impl Preprocessor {
                                 PathBuf::from("__builtin__macros").into_boxed_path(),
                             );
                             let source_file = &context.source_files[self.source_file_index()];
-                            let length = source_file
-                                .as_os_str()
-                                .len();
+                            let length = source_file.as_os_str().len();
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context
@@ -4684,7 +4682,7 @@ impl Preprocessor {
                                     FloatTokenType::LongDouble(ld) => {
                                         match long_double_to_operand(ld) {
                                             Err(e) => {
-                                                match e {
+                                                match e.get() {
                                                     1 => context.preprocessor_error(PreprocessorError {
                                                         error_type: PreprocessorErrorType::LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(ld),
                                                         source_vectors: token.source_vectors,
