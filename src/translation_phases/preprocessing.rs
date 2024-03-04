@@ -33,10 +33,10 @@ use super::{
     ErrorSeverity,
     GetPosition,
     GetSeverity,
-    GetSourceFileName,
+    GetSourceFileIndex,
     GetSourceVectors,
     SetPosition,
-    SetSourceFileName,
+    SetSourceFileIndex,
     SourcePosition,
     SourceVectors,
     StrExt,
@@ -55,7 +55,6 @@ use crate::{
     util::{
         read_to_string_lossy,
         shared::{
-            SharedPath,
             SharedString,
             SharedVec,
         },
@@ -115,7 +114,7 @@ pub(crate) struct Preprocessor {
     pub(crate) tokenizer:       PreprocessorTokenizer,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame>,
     pub(crate) hash_hash_stack: Vec<HashHash>,
-    once_set:                   HashSet<SharedPath>,
+    once_set:                   HashSet<u32>,
     macro_definitions:          HashMap<StringCacheId, MacroDefinition>,
     current_is_newline:         bool,
     last_was_newline:           bool,
@@ -143,17 +142,18 @@ impl SetPosition for Preprocessor {
     }
 }
 
-impl GetSourceFileName for Preprocessor {
+impl GetSourceFileIndex for Preprocessor {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn source_file_name(&self) -> SharedPath {
-        self.tokenizer.source_file_name()
+    fn source_file_index(&self) -> u32 {
+        self.tokenizer.source_file_index()
     }
 }
 
-impl SetSourceFileName for Preprocessor {
-    fn set_source_file_name(&mut self, context: &mut Context, name: SharedPath) {
-        self.tokenizer.set_source_file_name(context, name);
+impl SetSourceFileIndex for Preprocessor {
+    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
+        self.tokenizer
+            .set_source_file_index(context, source_file_index);
     }
 }
 
@@ -1805,7 +1805,7 @@ pub(crate) struct FunctionLikeMacroArgument {
 impl Preprocessor {
     pub(crate) fn new(
         context: &mut Context,
-        source_name: SharedPath,
+        source_name: Box<Path>,
         source: SharedString,
         quote_include_directories: SharedVec<PathBuf>,
         system_include_directories: SharedVec<PathBuf>,
@@ -1816,7 +1816,8 @@ impl Preprocessor {
                 (context.string_cache.intern(s), MacroDefinition::BuiltIn)
             })
             .collect();
-        let tokenizer = PreprocessorTokenizer::new(source_name, source);
+        let source_file_index = context.intern_source_file(source_name);
+        let tokenizer = PreprocessorTokenizer::new(source_file_index, source);
         Self {
             tokenizer_stack: vec![TokenizerFrame {
                 frame_type: TokenizerFrameType::SourceFile,
@@ -1915,7 +1916,7 @@ impl Preprocessor {
                 | None => {
                     self.set_position(context, start);
                     let source_vectors =
-                        context.create_source_vectors(start, self.source_file_name(), 0);
+                        context.create_source_vectors(start, self.source_file_index(), 0);
                     context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
                         source_vectors,
@@ -1959,7 +1960,7 @@ impl Preprocessor {
                 | None => {
                     self.set_position(context, start);
                     let source_vectors =
-                        context.create_source_vectors(start, self.source_file_name(), 0);
+                        context.create_source_vectors(start, self.source_file_index(), 0);
                     context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
                         source_vectors,
@@ -2352,7 +2353,7 @@ impl Preprocessor {
         &self,
         _context: &Context,
     ) -> Option<(
-        SharedPath,
+        u32,
         PreprocessorTokenizer,
         Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
         bool,
@@ -2366,7 +2367,7 @@ impl Preprocessor {
                     },
                 tokenizer,
             }) => Some((
-                tokenizer.source_file_name(),
+                tokenizer.source_file_index(),
                 tokenizer.clone(),
                 arguments.clone(),
                 *is_variadic,
@@ -2444,7 +2445,7 @@ impl Preprocessor {
                 let Some(rhs) = self.handle_hash_hash_operator::<true>(context) else {
                     let source_vectors = context.create_source_vectors(
                         self.tokenizer.position(context),
-                        self.tokenizer.source_file_name(),
+                        self.tokenizer.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -2558,7 +2559,7 @@ impl Preprocessor {
                         is_variadic,
                     } => {
                         let position = self.position(context);
-                        let file = self.source_file_name();
+                        let file = self.source_file_index();
                         loop {
                             match self.tokenizer.next_item(context) {
                                 | Some(brace) if brace.kind == PreprocessorTokenType::Whitespace =>
@@ -2723,8 +2724,15 @@ impl Preprocessor {
                     },
                     | MacroDefinition::BuiltIn => match context.string_cache.at(token.contents) {
                         | "__FILE__" => {
-                            let source_file = self.source_file_name();
-                            let length = source_file.as_os_str().len();
+                            let builtin_macros = context.intern_source_file(
+                                PathBuf::from("__builtin__macros").into_boxed_path(),
+                            );
+                            let source_file = &context.source_files[self.source_file_index()];
+                            let length = source_file
+                                .as_os_str()
+                                .len()
+                                .try_into()
+                                .expect("Length overflow");
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context
@@ -2736,13 +2744,16 @@ impl Preprocessor {
                                         line:   1,
                                         column: 1,
                                     },
-                                    SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
+                                    builtin_macros,
                                     length,
                                 ),
                             });
                         },
                         | "__LINE__" => {
                             let string = self.line(context).to_string();
+                            let builtin_macros = context.intern_source_file(
+                                PathBuf::from("__builtin__macros").into_boxed_path(),
+                            );
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::Number,
                                 contents:       context.string_cache.intern(&string),
@@ -2752,14 +2763,17 @@ impl Preprocessor {
                                         line:   1,
                                         column: 1,
                                     },
-                                    SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
-                                    string.len(),
+                                    builtin_macros,
+                                    string.len().try_into().expect("Length overflow"),
                                 ),
                             });
                         },
                         | "__TIME__" => {
                             let now = Local::now();
                             let string = now.format("%H:%M:%S").to_string();
+                            let builtin_macros = context.intern_source_file(
+                                PathBuf::from("__builtin__macros").into_boxed_path(),
+                            );
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context.string_cache.intern(&string),
@@ -2769,14 +2783,17 @@ impl Preprocessor {
                                         line:   1,
                                         column: 1,
                                     },
-                                    SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
-                                    string.len(),
+                                    builtin_macros,
+                                    string.len().try_into().expect("Length overflow"),
                                 ),
                             });
                         },
                         | "__DATE__" => {
                             let now = Local::now();
                             let string = now.format("%b %e %Y").to_string();
+                            let builtin_macros = context.intern_source_file(
+                                PathBuf::from("__builtin__macros").into_boxed_path(),
+                            );
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context.string_cache.intern(&string),
@@ -2786,8 +2803,8 @@ impl Preprocessor {
                                         line:   1,
                                         column: 1,
                                     },
-                                    SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
-                                    string.len(),
+                                    builtin_macros,
+                                    string.len().try_into().expect("Length overflow"),
                                 ),
                             });
                         },
@@ -2822,14 +2839,15 @@ impl Preprocessor {
                                 self.prepare_pragma_operator_string(context, string_token.contents);
 
                             let tokenizer = take(&mut self.tokenizer);
-                            let pragma_string =
-                                SharedPath::from_path_buf(PathBuf::from("<pragma string>"));
+                            let pragma_string = context.intern_source_file(
+                                PathBuf::from("<pragma string>").into_boxed_path(),
+                            );
                             self.tokenizer = PreprocessorTokenizer::new(pragma_string, input);
                             self.parse_pragma_directive(context, string_token);
                             if self.tokenizer.next_item(context).is_some() {
                                 let source_vectors = context.create_source_vectors(
                                     self.position(context),
-                                    self.source_file_name(),
+                                    self.source_file_index(),
                                     0,
                                 );
                                 context.preprocessor_error(PreprocessorError {
@@ -3672,7 +3690,7 @@ impl Preprocessor {
                 if self.expression_parser.operand_stack.is_empty() {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3684,7 +3702,7 @@ impl Preprocessor {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3697,7 +3715,7 @@ impl Preprocessor {
                 if operand.is_signed() && did_overflow {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3713,7 +3731,7 @@ impl Preprocessor {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3730,7 +3748,7 @@ impl Preprocessor {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3754,7 +3772,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3769,7 +3787,7 @@ impl Preprocessor {
                 if did_overflow && !is_unsigned {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3792,7 +3810,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3807,7 +3825,7 @@ impl Preprocessor {
                 if did_overflow && !is_unsigned {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3830,7 +3848,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3845,7 +3863,7 @@ impl Preprocessor {
                 if did_overflow && !is_unsigned {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3868,7 +3886,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3882,7 +3900,7 @@ impl Preprocessor {
                 if rhs.as_signed() == 0 {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3900,7 +3918,7 @@ impl Preprocessor {
                 if did_overflow && !is_unsigned {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3923,7 +3941,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3937,7 +3955,7 @@ impl Preprocessor {
                 if rhs.as_signed() == 0 {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3955,7 +3973,7 @@ impl Preprocessor {
                 if did_overflow && !is_unsigned {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3978,7 +3996,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -3997,7 +4015,7 @@ impl Preprocessor {
                 if did_overflow {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4020,7 +4038,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4039,7 +4057,7 @@ impl Preprocessor {
                 if did_overflow {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4062,7 +4080,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4091,7 +4109,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4120,7 +4138,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4149,7 +4167,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4178,7 +4196,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4203,7 +4221,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4228,7 +4246,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4255,7 +4273,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4282,7 +4300,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4309,7 +4327,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4334,7 +4352,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4363,7 +4381,7 @@ impl Preprocessor {
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4378,7 +4396,7 @@ impl Preprocessor {
                 let Some(condition) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -4397,7 +4415,7 @@ impl Preprocessor {
             | PreprocessorExpressionOperator::OpeningParenthesis => {
                 let source_vectors = context.create_source_vectors(
                     self.position(context),
-                    self.source_file_name(),
+                    self.source_file_index(),
                     0,
                 );
                 context.preprocessor_error(PreprocessorError {
@@ -4507,7 +4525,7 @@ impl Preprocessor {
         'main: loop {
             match self.next_preprocessor_token::<true>(context) {
                 | None => {
-                    let source_vectors = context.create_source_vectors(self.position(context), self.source_file_name(), 0);
+                    let source_vectors = context.create_source_vectors(self.position(context), self.source_file_index(), 0);
                     context.preprocessor_error(
                         PreprocessorError {
                             error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
@@ -4554,7 +4572,7 @@ impl Preprocessor {
                         while paren_depth > 0 {
                             match self.next_preprocessor_token::<true>(context) {
                                 | None => {
-                                    let source_vectors = context.create_source_vectors(self.position(context), self.source_file_name(), 0);
+                                    let source_vectors = context.create_source_vectors(self.position(context), self.source_file_index(), 0);
                                     context.preprocessor_error(PreprocessorError {
                                             error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
                                             source_vectors,
@@ -4733,7 +4751,7 @@ impl Preprocessor {
         }
         if self.expression_parser.state == UNARY {
             let source_vectors =
-                context.create_source_vectors(self.position(context), self.source_file_name(), 0);
+                context.create_source_vectors(self.position(context), self.source_file_index(), 0);
             context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(
                         self.last_binary_operator(),
@@ -4756,7 +4774,7 @@ impl Preprocessor {
             | 0 => {
                 let source_vectors = context.create_source_vectors(
                     self.position(context),
-                    self.source_file_name(),
+                    self.source_file_index(),
                     0,
                 );
                 context.preprocessor_error(PreprocessorError {
@@ -4768,7 +4786,7 @@ impl Preprocessor {
             | _ => {
                 let source_vectors = context.create_source_vectors(
                     self.position(context),
-                    self.source_file_name(),
+                    self.source_file_index(),
                     0,
                 );
                 context.preprocessor_error(PreprocessorError {
@@ -5002,7 +5020,7 @@ impl Preprocessor {
         include_token: PreprocessorToken,
         path: &Path,
         is_system_header: bool,
-    ) -> Option<SharedPath> {
+    ) -> Option<u32> {
         let header = 'ret: {
             if path.is_absolute() {
                 if path.exists() {
@@ -5045,11 +5063,11 @@ impl Preprocessor {
             });
             return None;
         };
-        let header = SharedPath::from_path_buf(header);
-        if self.once_set.contains(&header) {
+        let source_file_index = context.intern_source_file(header.into_boxed_path());
+        if self.once_set.contains(&source_file_index) {
             None
         } else {
-            Some(header)
+            Some(source_file_index)
         }
     }
 
@@ -5080,7 +5098,7 @@ impl Preprocessor {
             return;
         };
         context.set_is_tokenizing_include_string(false);
-        let header_path = match include_string.kind {
+        let header_source_index = match include_string.kind {
             | PreprocessorTokenType::IncludeString => {
                 let contents = context.string_cache.at(include_string.contents);
                 let contents = &contents[1..contents.len() - 1].to_token_string();
@@ -5175,10 +5193,11 @@ impl Preprocessor {
                 self.find_header_from_path(context, synthetic_token, path, true)
             },
         };
-        let Some(header_path) = header_path else {
+        let Some(header_source_index) = header_source_index else {
             return;
         };
-        let Ok(header_string) = read_to_string_lossy(&header_path).map_err(|e| {
+        let header_path = context.get_source_file(header_source_index);
+        let Ok(header_string) = read_to_string_lossy(header_path).map_err(|e| {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderFileInaccessible(e),
                 source_vectors: directive.source_vectors,
@@ -5191,7 +5210,7 @@ impl Preprocessor {
             TokenizerFrame {
                 frame_type: TokenizerFrameType::SourceFile,
                 tokenizer:  PreprocessorTokenizer::new(
-                    header_path,
+                    header_source_index,
                     SharedString::from(header_string),
                 ),
             },
@@ -5521,10 +5540,9 @@ impl Preprocessor {
             },
         ) = name
         {
-            self.set_source_file_name(
-                context,
-                SharedPath::from_path_buf(PathBuf::from(context.string_cache.at(t.contents))),
-            );
+            let path_box = PathBuf::from(context.string_cache.at(t.contents)).into_boxed_path();
+            let source_file_index = context.intern_source_file(path_box);
+            self.set_source_file_index(context, source_file_index);
             _ = self.expect_token::<true>(
                 context,
                 |_, _, t| t.kind == PreprocessorTokenType::Newline,
@@ -5557,7 +5575,7 @@ impl Preprocessor {
                 | None => {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {
@@ -5571,7 +5589,7 @@ impl Preprocessor {
             }
         }
         let source_vectors =
-            context.create_source_vectors(self.position(context), self.source_file_name(), 0);
+            context.create_source_vectors(self.position(context), self.source_file_index(), 0);
         context.preprocessor_error(PreprocessorError {
             error_type: PreprocessorErrorType::ErrorDirective(contents),
             source_vectors,
@@ -5583,7 +5601,7 @@ impl Preprocessor {
             let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
                 let source_vectors = context.create_source_vectors(
                     self.position(context),
-                    self.source_file_name(),
+                    self.source_file_index(),
                     0,
                 );
                 context.preprocessor_error(PreprocessorError {
@@ -5606,7 +5624,7 @@ impl Preprocessor {
                                     source_vectors: token.source_vectors,
                                 });
                             }
-                            _ = self.once_set.insert(self.source_file_name());
+                            _ = self.once_set.insert(self.source_file_index());
                             match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline =>
                                     break 'base,
@@ -5623,7 +5641,7 @@ impl Preprocessor {
                                 | None => {
                                     let source_vectors = context.create_source_vectors(
                                         self.position(context),
-                                        self.source_file_name(),
+                                        self.source_file_index(),
                                         0,
                                     );
                                     context.preprocessor_error(PreprocessorError {
@@ -5667,7 +5685,7 @@ impl Preprocessor {
                                 | None => {
                                     let source_vectors = context.create_source_vectors(
                                         self.position(context),
-                                        self.source_file_name(),
+                                        self.source_file_index(),
                                         0,
                                     );
                                     context.preprocessor_error(PreprocessorError {
@@ -5705,7 +5723,7 @@ impl Preprocessor {
                                 | None => {
                                     let source_vectors = context.create_source_vectors(
                                         self.position(context),
-                                        self.source_file_name(),
+                                        self.source_file_index(),
                                         0,
                                     );
                                     context.preprocessor_error(PreprocessorError {
@@ -6038,7 +6056,7 @@ impl TranslationPhase for Preprocessor {
                     self.if_directive_balance = 0;
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
-                        self.source_file_name(),
+                        self.source_file_index(),
                         0,
                     );
                     context.preprocessor_error(PreprocessorError {

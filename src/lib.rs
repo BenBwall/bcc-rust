@@ -10,7 +10,10 @@ mod shut_up_clippy_about_unused_dev_dependencies {
 }
 use std::{
     env::var,
-    path::PathBuf,
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
 use clap::{
@@ -31,6 +34,7 @@ use translation_phases::{
 
 use crate::{
     translation_phases::{
+        box_path_from_str,
         preprocessing::{
             CharacterTokenType,
             Preprocessor,
@@ -39,14 +43,12 @@ use crate::{
         },
         Context,
         GetSeverity,
-        GetSourceFileName,
+        GetSourceFileIndex,
         GetSourceVectors,
     },
     util::{
         read_to_string_lossy,
         shared::{
-            shared_path_from_str,
-            SharedPath,
             SharedString,
             SharedVec,
         },
@@ -64,7 +66,7 @@ struct PreprocessorIterator {
 
 impl PreprocessorIterator {
     fn new(
-        source_filename: SharedPath,
+        source_filename: Box<Path>,
         input_string: SharedString,
         quote_include: SharedVec<PathBuf>,
         system_include: SharedVec<PathBuf>,
@@ -149,8 +151,8 @@ pub fn run() -> Result<(), MainError> {
         ParsedInput::File(read_to_string_lossy(args.input.input_file.as_ref().unwrap())?.into())
     };
     let (input_string, source_filename) = match parsed_input {
-        | ParsedInput::String(s) => (s, shared_path_from_str("<input>")),
-        | ParsedInput::File(s) => (s, SharedPath::from_path_buf(args.input.input_file.unwrap())),
+        | ParsedInput::String(s) => (s, PathBuf::from("<input>").into_boxed_path()),
+        | ParsedInput::File(s) => (s, args.input.input_file.unwrap().into_boxed_path()),
     };
     parse_include_env_var("CPATH", &mut args.system_include);
     parse_include_env_var("C_INCLUDE_PATH", &mut args.system_include);
@@ -195,7 +197,7 @@ pub fn run() -> Result<(), MainError> {
     }
     while let Some(e) = iterator.context.pop_pending_error() {
         let source_vectors = e.source_vectors(&mut iterator.context);
-        let file = iterator.preprocessor.source_file_name();
+        let file = iterator.preprocessor.source_file_index();
         let vec = iterator.context.get_source_vectors(source_vectors);
         eprintln!(
             "{}: {e} at {:?}:{:?}",
@@ -236,7 +238,7 @@ pub fn run() -> Result<(), MainError> {
 pub fn preprocess_one_million() {
     let million_lines = include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c"));
     let iterator = PreprocessorIterator::new(
-        shared_path_from_str("<input>"),
+        box_path_from_str("<input>"),
         million_lines.to_owned().into(),
         SharedVec::default(),
         SharedVec::default(),

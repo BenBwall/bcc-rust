@@ -251,10 +251,6 @@ where
     }
 }
 
-pub(crate) fn shared_path_from_str(s: &str) -> SharedPath {
-    SharedPath::from_path_buf(PathBuf::from(String::from(s)))
-}
-
 impl<T> RefUnwindSafe for Shared<T> where T: RefUnwindSafe + ?Sized {}
 
 /// Shared is always Unpin because it is a pointer type.
