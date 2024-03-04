@@ -90,7 +90,7 @@ impl Iterator for PreprocessorIterator {
     type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.context.source_vectors.0.clear();
+        // self.context.source_vectors.0.clear();
         self.preprocessor.next_item(&mut self.context)
     }
 }
@@ -197,7 +197,7 @@ pub fn run() -> Result<(), MainError> {
         );
     }
     while let Some(e) = iterator.context.pop_pending_error() {
-        let source_vectors = e.source_vectors(&mut iterator.context);
+        let source_vectors = e.source_vectors(&mut iterator.context.source_vectors);
         let file = iterator.preprocessor.source_file_index();
         let vec = iterator.context.get_source_vectors(source_vectors);
         eprintln!(
