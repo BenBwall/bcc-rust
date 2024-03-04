@@ -42,7 +42,6 @@ use super::{
     StrExt,
     TokenString,
     TranslationPhase,
-    ONE,
 };
 use crate::{
     float_parsing::{
@@ -2735,7 +2734,7 @@ impl Preprocessor {
                                     SourcePosition {
                                         index:  0,
                                         line:   1,
-                                        column: ONE,
+                                        column: 1,
                                     },
                                     SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
                                     length,
@@ -2751,7 +2750,7 @@ impl Preprocessor {
                                     SourcePosition {
                                         index:  0,
                                         line:   1,
-                                        column: ONE,
+                                        column: 1,
                                     },
                                     SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
                                     string.len(),
@@ -2768,7 +2767,7 @@ impl Preprocessor {
                                     SourcePosition {
                                         index:  0,
                                         line:   1,
-                                        column: ONE,
+                                        column: 1,
                                     },
                                     SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
                                     string.len(),
@@ -2785,7 +2784,7 @@ impl Preprocessor {
                                     SourcePosition {
                                         index:  0,
                                         line:   1,
-                                        column: ONE,
+                                        column: 1,
                                     },
                                     SharedPath::from_path_buf(PathBuf::from("__builtin__macros")),
                                     string.len(),
