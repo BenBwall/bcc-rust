@@ -67,9 +67,8 @@ impl GetSourceVectors for InitialProcessorError {
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct InitialProcessor {
-    last_was_newline:            bool,
-    source_file:                 SourceFile,
-    current_char_start_position: SourcePosition,
+    last_was_newline: bool,
+    source_file:      SourceFile,
 }
 
 impl GetPosition for InitialProcessor {
@@ -116,14 +115,9 @@ impl SetSourceFileName for InitialProcessor {
 impl InitialProcessor {
     pub(crate) fn new(source_name: SharedPath, source: SharedString) -> Self {
         Self {
-            last_was_newline:            false,
-            source_file:                 SourceFile::new(source_name, source),
-            current_char_start_position: SourcePosition::default(),
+            last_was_newline: false,
+            source_file:      SourceFile::new(source_name, source),
         }
-    }
-
-    pub(crate) fn current_char_start_position(&self) -> SourcePosition {
-        self.current_char_start_position
     }
 
     fn next_char(&mut self, _context: &mut Context) -> Option<char> {
@@ -313,8 +307,12 @@ impl InitialProcessor {
             length:      0,
         });
     }
+}
 
-    fn impl_(&mut self, context: &mut Context) -> Option<char> {
+impl TranslationPhase for InitialProcessor {
+    type Item = char;
+
+    fn next_item(&mut self, context: &mut Context) -> Option<char> {
         // We need to look three characters ahead to handle translation phases 1 and 2.
         // If we don't consume all three characters, we backtrack.
         // Translation phases 1 and 2 are handled in the same iterator for performance
@@ -324,10 +322,6 @@ impl InitialProcessor {
         // Index should be pointing at the start of the next token at the start of every
         // loop iteration.
         loop {
-            self.current_char_start_position.index = self.source_file.index;
-            self.current_char_start_position.column = self.source_file.column;
-            self.current_char_start_position.line = self.source_file.line;
-
             let Some(curr) = self.next_char(context) else {
                 if !self.last_was_newline {
                     self.last_was_newline = true;
@@ -372,20 +366,5 @@ impl InitialProcessor {
                 },
             });
         }
-    }
-}
-
-impl TranslationPhase for InitialProcessor {
-    type Item = char;
-
-    fn next_item(&mut self, context: &mut Context) -> Option<char> {
-        // let ret = self.impl_(context);
-        // eprintln!(
-        //     "{ret:?} from {:?} to {:?}",
-        //     self.current_char_start_position,
-        //     self.position(context),
-        // );
-        // ret
-        self.impl_(context)
     }
 }

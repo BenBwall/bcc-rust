@@ -397,7 +397,7 @@ pub(crate) struct Context {
     pub(crate) source_vectors:    SourceVectorStack,
     pub(crate) string_cache:      StringCache,
     is_tokenizing_include_string: bool,
-    is_skipping_over_dead_code:   bool,
+    ignore_tokenizer_errors:   bool,
     pending_errors:               Vec<TranslationError>,
 }
 
@@ -407,7 +407,7 @@ impl Context {
             source_vectors:               SourceVectorStack(Vec::new()),
             string_cache:                 StringCache::new(),
             is_tokenizing_include_string: false,
-            is_skipping_over_dead_code:   false,
+            ignore_tokenizer_errors:   false,
             pending_errors:               Vec::new(),
         }
     }
@@ -491,18 +491,18 @@ impl Context {
         self.is_tokenizing_include_string = value;
     }
 
-    pub(crate) fn is_skipping_over_dead_code(&self) -> bool {
-        self.is_skipping_over_dead_code
+    pub(crate) fn ignore_tokenizer_errors(&self) -> bool {
+        self.ignore_tokenizer_errors
     }
 
-    pub(crate) fn set_is_skipping_over_dead_code(&mut self, value: bool) {
-        self.is_skipping_over_dead_code = value;
+    pub(crate) fn set_ignore_tokenizer_errors(&mut self, value: bool) {
+        self.ignore_tokenizer_errors = value;
     }
 
     #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn missing_final_newline(&mut self, vector: SourceVector) {
-        if !self.is_skipping_over_dead_code() {
+        if !self.ignore_tokenizer_errors() {
             self.pending_errors
                 .push(TranslationError::InitialProcessing(
                     InitialProcessorError::MissingFinalNewline(vector),
@@ -513,7 +513,7 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn preprocessor_tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
-        if !self.is_skipping_over_dead_code() {
+        if !self.ignore_tokenizer_errors() {
             self.pending_errors
                 .push(TranslationError::PreprocessorTokenizining(error));
         }
