@@ -13,7 +13,6 @@ use std::{
         RefUnwindSafe,
         UnwindSafe,
     },
-    path::PathBuf,
     process::abort,
     ptr::NonNull,
 };
@@ -39,6 +38,8 @@ where
             #[inline(never)]
             fn drop_slow<T: ?Sized>(this: &mut Shared<T>) {
                 unsafe {
+                    // SAFETY: This is okay because self.ref_count and self.contents point at valid
+                    // boxes and we only drop them when the ref count is 0.
                     drop(Box::from_raw(this.ref_count.as_ptr()));
                     drop(Box::from_raw(this.contents.as_ptr()));
                 }
@@ -141,7 +142,14 @@ where
         self.ref_cnt().get()
     }
 
+    /// The caller of this function must maintain the invariant that the ref
+    /// count accurately reflects how many references there are to the contents.
+    /// This function is not marked unsafe because it's private to this module.
     fn ref_cnt(&self) -> &Cell<usize> {
+        // SAFETY: self.ref_count always points to a valid instance of Cell<usize>.
+        // This function should arguably be unsafe, but it's not marked as such to avoid
+        // unsafe contamination. It's private to this module to our invariants aren't
+        // broken in external code.
         unsafe { self.ref_count.as_ref() }
     }
 }
@@ -168,17 +176,6 @@ impl<T> SharedVec<T> {
     }
 }
 
-impl SharedPath {
-    #[allow(dead_code)]
-    pub(crate) fn as_path(&self) -> &std::path::Path {
-        self
-    }
-
-    pub(crate) fn from_path_buf(p: PathBuf) -> Self {
-        Self::from_boxed(p.into_boxed_path())
-    }
-}
-
 impl<T> Deref for Shared<T>
 where
     T: ?Sized,
@@ -186,6 +183,7 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
+        // SAFETY: self.contents always points to a valid instance of T.
         unsafe { self.contents.as_ref() }
     }
 }
@@ -235,12 +233,6 @@ impl<T> From<Vec<T>> for SharedVec<T> {
     }
 }
 
-impl From<PathBuf> for SharedPath {
-    fn from(p: PathBuf) -> Self {
-        Self::from_path_buf(p)
-    }
-}
-
 impl<T> Default for Shared<T>
 where
     Box<T>: Default,
@@ -259,4 +251,3 @@ impl<T> UnwindSafe for Shared<T> where T: UnwindSafe + ?Sized {}
 
 pub(crate) type SharedString = Shared<str>;
 pub(crate) type SharedVec<T> = Shared<[T]>;
-pub(crate) type SharedPath = Shared<std::path::Path>;
