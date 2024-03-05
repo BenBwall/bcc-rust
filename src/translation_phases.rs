@@ -1,3 +1,5 @@
+#[cfg(feature = "benchmarking-internals")]
+use std::path::PathBuf;
 use std::{
     convert::Infallible,
     fmt::{
@@ -10,10 +12,7 @@ use std::{
         BuildHasherDefault,
         Hash,
     },
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::Path,
 };
 
 use crate::util::{
@@ -553,6 +552,7 @@ pub(crate) trait TranslationPhase:
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
 }
 
+#[cfg(feature = "benchmarking-internals")]
 pub(crate) fn box_path_from_str(s: &str) -> Box<Path> {
     PathBuf::from(s).into_boxed_path()
 }

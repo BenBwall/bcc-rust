@@ -1,11 +1,13 @@
 #![allow(missing_docs)]
 
+#[cfg(feature = "benchmarking-internals")]
+use std::io::{
+    BufWriter,
+    Write,
+};
+
 use std::{
     env::var,
-    io::{
-        BufWriter,
-        Write,
-    },
     sync::OnceLock,
 };
 
@@ -35,9 +37,13 @@ fn main() {
         .expect("Unable to generate bindings")
         .write_to_file(format!("{out_dir}/bindings.rs"))
         .expect("Couldn't write bindings!");
-    gen_one_million();
+    #[cfg(feature = "benchmarking-internals")]
+    {
+        gen_one_million();
+    }
 }
 
+#[cfg(feature = "benchmarking-internals")]
 fn gen_one_million() {
     let out_dir = out_dir();
     let mut f =

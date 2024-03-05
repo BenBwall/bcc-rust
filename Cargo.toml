@@ -9,6 +9,9 @@ keywords = ["compiler", "C", "C-compiler"]
 categories = ["command-line-utilities", "development-tools", "compilers"]
 repository = "https://www.github.com/bwallker/bcc-rust"
 
+[features]
+benchmarking-internals = []
+
 [profile.release]
 lto = "fat"
 debug = "full"
@@ -78,3 +81,4 @@ cc = "1.0.83"
 [[bench]]
 name = "bench"
 harness = false
+required-features = ["benchmarking-internals"]

@@ -32,9 +32,10 @@ use translation_phases::{
     TranslationPhase,
 };
 
+#[cfg(feature = "benchmarking-internals")]
+use crate::translation_phases::box_path_from_str;
 use crate::{
     translation_phases::{
-        box_path_from_str,
         preprocessing::{
             CharacterTokenType,
             Preprocessor,
@@ -236,6 +237,7 @@ pub fn run() -> Result<(), MainError> {
 }
 
 #[doc(hidden)]
+#[cfg(feature = "benchmarking-internals")]
 pub fn preprocess_one_million() {
     let million_lines = include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c"));
     let iterator = PreprocessorIterator::new(
