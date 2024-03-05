@@ -87,12 +87,12 @@ impl Parser {
     }
 
     #[allow(dead_code)]
-    fn parse_statement(&mut self) -> Statement {
+    fn parse_statement(&mut self, context: &mut Context) -> Statement {
         todo!();
     }
 
     #[allow(dead_code)]
-    fn parse_expression(&mut self) -> Expression {
+    fn parse_expression(&mut self, context: &mut Context) -> Expression {
         todo!();
     }
 
