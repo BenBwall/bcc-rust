@@ -1,10 +1,11 @@
 use std::{
     fmt::{
+        Debug,
         Display,
         Formatter,
         Result as FmtResult,
     },
-    rc::Rc,
+    hash::Hash,
 };
 
 use super::{
@@ -27,17 +28,25 @@ use super::{
     SourceVectors,
     TranslationPhase,
 };
-use crate::util::string_cache::StringCacheId;
+use crate::util::{
+    string_cache::StringCacheId,
+    vector_slice::VectorSlice,
+};
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser {
     pub(crate) preprocessor: Preprocessor,
-    pub(crate) state_stack:  Vec<State>,
     pub(crate) types:        Vec<Type>,
     pub(crate) token_stack:  Vec<Token>,
     pub(crate) expressions:  Vec<Expression>,
     pub(crate) statements:   Vec<Statement>,
-    pub(crate) block_depth:  usize,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) enum TypeParseResult {
+    Definition,
+    Declaration,
 }
 
 impl GetPosition for Parser {
@@ -70,26 +79,38 @@ impl Parser {
     pub(crate) fn new(preprocessor: Preprocessor) -> Self {
         Self {
             preprocessor,
-            state_stack: vec![State::ParsingTopLevelStatement, State::ParsingType],
             types: Vec::new(),
             token_stack: Vec::new(),
             expressions: Vec::new(),
             statements: Vec::new(),
-            block_depth: 0,
         }
     }
-}
 
-impl Parser {
+    #[allow(dead_code)]
     fn parse_statement(&mut self) -> Statement {
         todo!();
     }
 
+    #[allow(dead_code)]
     fn parse_expression(&mut self) -> Expression {
         todo!();
     }
 
-    fn parse_type(&mut self) -> Type {
+    #[allow(dead_code)]
+    fn parse_type(&mut self, context: &mut Context) -> TypeParseResult {
+        todo!();
+    }
+
+    #[allow(dead_code)]
+    fn parse_top_level_statement(&mut self, context: &mut Context) -> Option<TopLevelStatement> {
+        let is_declaration = self.parse_type(context) == TypeParseResult::Declaration;
+        let type_ = *self.types.last().unwrap();
+        if is_declaration {
+            return Some(TopLevelStatement {
+                source_vectors: type_.source_vectors,
+                kind:           TopLevelStatementType::TypeDeclaration(type_),
+            });
+        }
         todo!();
     }
 }
@@ -113,10 +134,9 @@ pub(crate) struct TopLevelStatement {
 #[allow(dead_code)]
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TopLevelStatementType {
-    FunctionDeclaration(FunctionDeclaration),
     FunctionDefinition(FunctionDefinition),
-    VariableDeclaration(Variable),
     VariableDefinition(VariableDefinition),
+    TypeDeclaration(Type),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -194,11 +214,11 @@ pub(crate) enum ExpressionType {
     },
     Call {
         function_expression: ExpressionIndex,
-        arguments:           Rc<[ExpressionIndex]>,
+        arguments:           VectorSlice<Expression>,
     },
     CompoundLiteral {
         var_type: Type,
-        values:   Rc<[ExpressionIndex]>,
+        values:   VectorSlice<Expression>,
     },
     Identifier(Identifier),
     Constant(Constant),
@@ -320,32 +340,33 @@ pub(crate) enum PrimitiveType {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct FunctionTypeArgument {
+pub(crate) struct FunctionDefinitionArgument {
     pub(crate) function_type: TypeIndex,
     pub(crate) name:          Option<Identifier>,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Type {
-    is_const:    bool,
-    is_volatile: bool,
-    kind:        TypeKind,
+    is_const:       bool,
+    is_volatile:    bool,
+    source_vectors: SourceVectors,
+    kind:           TypeKind,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum TypeKind {
     Primitive(PrimitiveType),
     Pointer {
         pointee_type: TypeIndex,
     },
     Struct {
-        name:   Identifier,
-        fields: Rc<[Variable]>,
+        name:   Option<Identifier>,
+        fields: VectorSlice<Variable>,
     },
     Union {
         name:   Identifier,
-        fields: Rc<[Variable]>,
+        fields: VectorSlice<Variable>,
     },
     Typedef {
         name:          Identifier,
@@ -353,13 +374,14 @@ pub(crate) enum TypeKind {
     },
     Enum {
         name:   Identifier,
-        values: Rc<[EnumValue]>,
+        values: VectorSlice<EnumValue>,
     },
     Function {
+        name:        Identifier,
         return_type: Option<TypeIndex>,
         /// None symbolizes a function with an unspecified number of arguments
         /// (i.e. `int f()`).
-        parameters:  Option<Rc<[FunctionTypeArgument]>>,
+        parameters:  Option<VectorSlice<FunctionDefinitionArgument>>,
     },
 }
 
@@ -372,8 +394,10 @@ pub(crate) struct EnumValue {
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) struct FunctionDeclaration {
     pub(crate) name:        Identifier,
-    pub(crate) parameters:  Rc<[Variable]>,
-    pub(crate) return_type: Option<Type>,
+    /// None symbolizes a function with an unspecified number of arguments
+    /// (i.e. `int f()`).
+    pub(crate) parameters:  Option<VectorSlice<FunctionDefinitionArgument>>,
+    pub(crate) return_type: Option<TypeIndex>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -444,39 +468,7 @@ impl Display for ParserErrorType {
 impl TranslationPhase for Parser {
     type Item = TopLevelStatement;
 
-    fn next_item(&mut self, _context: &mut Context) -> Option<Self::Item> {
-        loop {
-            match self.state_stack.pop().unwrap() {
-                | State::ParsingTopLevelStatement => {
-                    let type_ = self.parse_type();
-                    match type_.kind {
-                        | _ => todo!(),
-                    }
-                },
-                | State::ParsingType => {
-                    let type_ = self.parse_type();
-                    self.types.push(type_);
-                },
-                | State::ParsingStatement => {
-                    let statement = self.parse_statement();
-                    self.statements.push(statement);
-                },
-                | State::ParsingExpression => {
-                    let expression = self.parse_expression();
-                    self.expressions.push(expression);
-                },
-            }
-        }
-        // Some(TopLevelStatement {
-        // source_vectors: self.previous_phase.current_position().into(),
-        // kind:
-        // TopLevelStatementType::FunctionDeclaration(FunctionDeclaration {
-        // name:        Identifier {
-        // name: StringCacheId::new(0),
-        // },
-        // parameters:  Arc::new([]),
-        // return_type: None,
-        // }),
-        // })
+    fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
+        self.parse_top_level_statement(context)
     }
 }

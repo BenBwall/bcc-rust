@@ -5179,10 +5179,10 @@ impl Preprocessor {
                 }
                 let path = Path::new(contents.as_str());
                 let synthetic_token = PreprocessorToken {
-                    source_vectors: SourceVectors {
+                    source_vectors: SourceVectors::new(
                         start_index,
-                        length: context.source_vectors.0.len() as u32 - start_index,
-                    },
+                        context.source_vectors.0.len() as u32 - start_index,
+                    ),
                     contents:       context.string_cache.intern(&contents),
                     kind:           PreprocessorTokenType::AngleBracketString,
                 };
