@@ -19,6 +19,7 @@ use crate::util::{
     dedup_arena::DedupArena,
     shared::SharedString,
     string_cache::StringCache,
+    vector_slice::VectorSlice,
 };
 
 #[allow(dead_code)]
@@ -191,12 +192,7 @@ impl GetPosition for SourceVector {
         }
     }
 }
-
-#[derive(PartialEq, Eq, Debug, Clone, Hash, Copy, Default)]
-pub(crate) struct SourceVectors {
-    start_index: u32,
-    length:      u32,
-}
+pub(crate) type SourceVectors = VectorSlice<SourceVector>;
 
 impl GetPosition for SourceVectors {
     #[allow(clippy::inline_always)]
@@ -442,10 +438,7 @@ impl Context {
     ) -> SourceVectors {
         let start_index = self.push_source_vector(start_position, source_file_index, length);
         let length = 1;
-        SourceVectors {
-            start_index,
-            length,
-        }
+        SourceVectors::new(start_index, length)
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -466,10 +459,7 @@ impl Context {
             "overflow in merge_vectors"
         );
         let length = v1.length + v2.length;
-        SourceVectors {
-            start_index,
-            length,
-        }
+        SourceVectors::new(start_index, length)
     }
 
     pub(crate) fn is_tokenizing_include_string(&self) -> bool {

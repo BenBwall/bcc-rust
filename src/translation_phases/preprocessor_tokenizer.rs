@@ -250,10 +250,7 @@ impl PreprocessorTokenizer {
         );
         let contents = context.string_cache.end_str();
         PreprocessorToken {
-            source_vectors: SourceVectors {
-                start_index: source_vector,
-                length:      1,
-            },
+            source_vectors: SourceVectors::new(source_vector, 1),
             kind: token_type,
             contents,
         }
@@ -894,10 +891,7 @@ impl Default for PreprocessorToken {
     fn default() -> Self {
         Self {
             kind:           PreprocessorTokenType::WideGeneratedString,
-            source_vectors: SourceVectors {
-                start_index: u32::MAX,
-                length:      u32::MAX,
-            },
+            source_vectors: SourceVectors::new(u32::MAX, u32::MAX),
             contents:       StringCacheId::from_u32(u32::MAX),
         }
     }
