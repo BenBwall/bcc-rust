@@ -13,6 +13,7 @@ use super::{
         CharacterTokenType,
         FloatTokenType,
         IntegerTokenType,
+        KeywordTokenType,
         Preprocessor,
         Token,
         TokenType,
@@ -112,19 +113,32 @@ impl Parser {
         todo!();
     }
 
+    fn parse_typedef(&mut self, context: &mut Context, typedef: Token) -> Type {
+        todo!();
+    }
+
+    fn parse_variable_declaration(&mut self, context: &mut Context) -> VariableDeclaration {
+        todo!();
+    }
+
     #[allow(dead_code)]
     fn parse_top_level_statement(&mut self, context: &mut Context) -> Option<TopLevelStatement> {
-        if let Some(token) = self.next_token(context) {
-            self.token_stack.push(token);
-        } else {
+        let Some(token) = self.next_token(context) else {
             return None;
+        };
+        if token.kind == TokenType::Keyword(KeywordTokenType::Typedef) {
+            return Some(TopLevelStatement {
+                kind: TopLevelStatementType::TypeDeclaration(
+                    self.parse_typedef(context, token),
+                ),
+            });
         }
+        
         let (type_parse_result, type_) = self.parse_type(context);
         let is_declaration = type_parse_result == TypeParseResult::Declaration;
         if is_declaration {
             return Some(TopLevelStatement {
-                source_vectors: type_.source_vectors,
-                kind:           TopLevelStatementType::TypeDeclaration(type_),
+                kind: TopLevelStatementType::TypeDeclaration(type_),
             });
         }
         match type_.kind {
@@ -159,8 +173,7 @@ impl Parser {
                     .expect("More than u32::MAX statements.");
                 let length = length - statement_start_index;
                 Some(TopLevelStatement {
-                    source_vectors: type_.source_vectors,
-                    kind:           TopLevelStatementType::FunctionDefinition(FunctionDefinition {
+                    kind: TopLevelStatementType::FunctionDefinition(FunctionDefinition {
                         declaration: FunctionDeclaration {
                             name,
                             parameters,
@@ -174,10 +187,10 @@ impl Parser {
                 let expression = self.parse_expression(context);
                 self.expressions.push(expression);
                 Some(TopLevelStatement {
-                    source_vectors: type_.source_vectors,
-                    kind:           TopLevelStatementType::VariableDefinition(VariableDefinition {
-                        variable:    Variable {
-                            name:          type_.,
+                    kind: TopLevelStatementType::VariableDefinition(VariableDefinition {
+                        variable:    VariableDeclaration {
+                            name:          //type_.,
+                            todo!(),
                             var_type:      todo!(),
                             storage_class: todo!(),
                         },
@@ -201,17 +214,24 @@ pub(crate) enum State {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TopLevelStatement {
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) kind:           TopLevelStatementType,
+    pub(crate) kind: TopLevelStatementType,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TopLevelStatementType {
     FunctionDefinition(FunctionDefinition),
-    VariableDefinition(VariableDefinition),
+    VariableDefinition(VariableDeclaration),
+    FunctionDeclaration(FunctionDeclaration),
     TypeDeclaration(Type),
 }
+
+// A top level statement could be:
+// * A function definition.
+// * A global variable definition.
+// * A function declaration.
+// * A global variable declaration.
+// * A type definition.
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct ExpressionIndex(usize);
@@ -224,8 +244,7 @@ pub(crate) struct TypeIndex(usize);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Statement {
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) kind:           StatementType,
+    pub(crate) kind: StatementType,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -264,9 +283,8 @@ pub(crate) enum StatementType {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Expression {
-    pub(crate) result_type:    TypeIndex,
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) kind:           ExpressionType,
+    pub(crate) result_type: TypeIndex,
+    pub(crate) kind:        ExpressionType,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -370,16 +388,17 @@ pub(crate) struct Identifier {
     pub(crate) name: StringCacheId,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct Variable {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct VariableDeclaration {
     pub(crate) name:          Identifier,
     pub(crate) var_type:      TypeIndex,
     pub(crate) storage_class: StorageClass,
+    pub(crate) initializer:   Option<Expression>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct VariableDefinition {
-    pub(crate) variable:    Variable,
+    pub(crate) variable:    VariableDeclaration,
     pub(crate) initializer: Expression,
 }
 
@@ -390,7 +409,6 @@ pub(crate) enum StorageClass {
     Register,
     Static,
     Extern,
-    Typedef,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -421,10 +439,9 @@ pub(crate) struct FunctionDefinitionArgument {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Type {
-    is_const:       bool,
-    is_volatile:    bool,
-    source_vectors: SourceVectors,
-    kind:           TypeKind,
+    is_const:    bool,
+    is_volatile: bool,
+    kind:        TypeKind,
 }
 
 #[allow(dead_code)]
@@ -436,11 +453,11 @@ pub(crate) enum TypeKind {
     },
     Struct {
         name:   Option<Identifier>,
-        fields: VectorSlice<Variable>,
+        fields: VectorSlice<VariableDeclaration>,
     },
     Union {
         name:   Identifier,
-        fields: VectorSlice<Variable>,
+        fields: VectorSlice<VariableDeclaration>,
     },
     Typedef {
         name:          Identifier,
