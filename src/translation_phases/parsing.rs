@@ -47,13 +47,6 @@ pub(crate) struct Parser {
     pub(crate) statements:   Vec<Statement>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-#[allow(dead_code)]
-pub(crate) enum TypeParseResult {
-    Definition,
-    Declaration,
-}
-
 impl GetPosition for Parser {
     fn position(&self, context: &Context) -> SourcePosition {
         self.preprocessor.position(context)
@@ -109,12 +102,74 @@ impl Parser {
     }
 
     #[allow(dead_code)]
-    fn parse_type(&mut self, context: &mut Context) -> (TypeParseResult, Type) {
+    fn parse_type(&mut self, context: &mut Context) -> Type {
         todo!();
     }
 
+    fn parse_identifier(&mut self, context: &mut Context, eof_message: &'static str, on_error: impl FnOnce(Token) -> ParserErrorType) -> Identifier {
+        let Some(token) = self.next_token(context) else {
+            let source_vectors = context.create_source_vectors(
+                self.position(context),
+                self.source_file_index(),
+                0,
+            );
+            context.parser_error(ParserError {
+                error_type: ParserErrorType::UnexpectedEndOfInput(eof_message),
+                source_vectors,
+            });
+            return Identifier { name: context.string_cache.intern("<non-existent-identifier>") };
+        };
+        match token.kind {
+            | TokenType::Identifier => Identifier { name: token.contents },
+            | tt => {
+                context.parser_error(ParserError {
+                    error_type: on_error(token),
+                    source_vectors: token.source_vectors,
+                });
+                self.token_stack.push(token);
+                Identifier { name: context.string_cache.intern("<non-existent-identifier>") }
+            },
+        }
+    }
+
     fn parse_typedef(&mut self, context: &mut Context, typedef: Token) -> Type {
-        todo!();
+        let referent_type = self.parse_type(context);
+        let referent_type_index = self.types.len() - 1;
+        
+        let name = self.parse_identifier(context, "parsing typedef. Expected identifier.",|token| ParserErrorType::ExpectedIdentifierInTypedef(token.kind));
+        match self.next_token(context) {
+            | Some(token)
+                if token.kind
+                    == TokenType::Operator(OperatorTokenType::Semicolon) =>
+                (),
+            | Some(token) => {
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::ExpectedSemicolonAfterTypedef(token.kind),
+                    source_vectors: token.source_vectors,
+                });
+                self.token_stack.push(token);
+            },
+            | None => {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_index(),
+                    0,
+                );
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::UnexpectedEndOfInput(
+                        "parsing typedef. Expected a semicolon.",
+                    ),
+                    source_vectors,
+                });
+            },
+        }
+        let t = Type {
+            is_const: false,
+            is_volatile: false,
+            kind: TypeKind::Typedef { name, referent_type: TypeIndex(referent_type_index) },
+        };
+        self.types.push(t);
+        t
     }
 
     fn parse_variable_declaration(&mut self, context: &mut Context) -> VariableDeclaration {
@@ -133,8 +188,8 @@ impl Parser {
                 ),
             });
         }
-        
-        let (type_parse_result, type_) = self.parse_type(context);
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Struct | KeywordTokenType::Enum))
+        let type_ = self.parse_type(context);
         let is_declaration = type_parse_result == TypeParseResult::Declaration;
         if is_declaration {
             return Some(TopLevelStatement {
@@ -541,17 +596,29 @@ pub(crate) struct SavePoint<PrevSavePoint> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum ParserErrorType {}
+pub(crate) enum ParserErrorType {
+    UnexpectedEndOfInput(&'static str),
+    ExpectedIdentifierInTypedef(TokenType),
+    ExpectedSemicolonAfterTypedef(TokenType),
+}
 
 impl GetSeverity for ParserErrorType {
     fn severity(&self) -> ErrorSeverity {
-        match *self {}
+        match self {
+            | ParserErrorType::UnexpectedEndOfInput(..)
+            | ParserErrorType::ExpectedIdentifierInTypedef(..) => ErrorSeverity::Error,
+            | ParserErrorType::ExpectedSemicolonAfterTypedef(..) => ErrorSeverity::Warning,
+        }
     }
 }
 
 impl Display for ParserErrorType {
-    fn fmt(&self, _f: &mut Formatter<'_>) -> FmtResult {
-        match *self {}
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            | ParserErrorType::UnexpectedEndOfInput(message) => write!(f, "Unexpected end of input while {}!", message),
+            | ParserErrorType::ExpectedIdentifierInTypedef(tt) => write!(f, "Expected an identifier in typedef, found instead {:?}!", tt),
+            | ParserErrorType::ExpectedSemicolonAfterTypedef(tt) => write!(f, "Expected a semicolon after typedef, found instead {:?}!", tt),
+        }
     }
 }
 
