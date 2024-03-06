@@ -4,3 +4,4 @@
 **/.DS_Store
 *.out
 flamegraph.svg
+profile.coz
