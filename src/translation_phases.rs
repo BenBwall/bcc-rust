@@ -516,6 +516,21 @@ impl Context {
 
     #[cold]
     #[inline(never)]
+    pub(crate) fn parser_error(&mut self, error: ParserError) {
+        self.pending_errors.push(TranslationError::Parsing(error));
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn raw_parser_error(
+        self_pending_errors: &mut Vec<TranslationError>,
+        error: ParserError,
+    ) {
+        self_pending_errors.push(TranslationError::Parsing(error));
+    }
+
+    #[cold]
+    #[inline(never)]
     pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError> {
         self.pending_errors.pop()
     }

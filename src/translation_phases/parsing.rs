@@ -13,6 +13,7 @@ use super::{
         CharacterTokenType,
         FloatTokenType,
         IntegerTokenType,
+        KeywordTokenType,
         Preprocessor,
         Token,
         TokenType,
@@ -44,13 +45,6 @@ pub(crate) struct Parser {
     pub(crate) token_stack:  Vec<Token>,
     pub(crate) expressions:  Vec<Expression>,
     pub(crate) statements:   Vec<Statement>,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-#[allow(dead_code)]
-pub(crate) enum TypeParseResult {
-    Definition,
-    Declaration,
 }
 
 impl GetPosition for Parser {
@@ -108,23 +102,98 @@ impl Parser {
     }
 
     #[allow(dead_code)]
-    fn parse_type(&mut self, context: &mut Context) -> (TypeParseResult, Type) {
+    fn parse_type(&mut self, context: &mut Context) -> Type {
+        todo!();
+    }
+
+    fn parse_identifier(&mut self, context: &mut Context, eof_message: &'static str, on_error: impl FnOnce(Token) -> ParserErrorType) -> Identifier {
+        let Some(token) = self.next_token(context) else {
+            let source_vectors = context.create_source_vectors(
+                self.position(context),
+                self.source_file_index(),
+                0,
+            );
+            context.parser_error(ParserError {
+                error_type: ParserErrorType::UnexpectedEndOfInput(eof_message),
+                source_vectors,
+            });
+            return Identifier { name: context.string_cache.intern("<non-existent-identifier>") };
+        };
+        match token.kind {
+            | TokenType::Identifier => Identifier { name: token.contents },
+            | tt => {
+                context.parser_error(ParserError {
+                    error_type: on_error(token),
+                    source_vectors: token.source_vectors,
+                });
+                self.token_stack.push(token);
+                Identifier { name: context.string_cache.intern("<non-existent-identifier>") }
+            },
+        }
+    }
+
+    fn parse_typedef(&mut self, context: &mut Context, typedef: Token) -> Type {
+        let referent_type = self.parse_type(context);
+        let referent_type_index = self.types.len() - 1;
+        
+        let name = self.parse_identifier(context, "parsing typedef. Expected identifier.",|token| ParserErrorType::ExpectedIdentifierInTypedef(token.kind));
+        match self.next_token(context) {
+            | Some(token)
+                if token.kind
+                    == TokenType::Operator(OperatorTokenType::Semicolon) =>
+                (),
+            | Some(token) => {
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::ExpectedSemicolonAfterTypedef(token.kind),
+                    source_vectors: token.source_vectors,
+                });
+                self.token_stack.push(token);
+            },
+            | None => {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_index(),
+                    0,
+                );
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::UnexpectedEndOfInput(
+                        "parsing typedef. Expected a semicolon.",
+                    ),
+                    source_vectors,
+                });
+            },
+        }
+        let t = Type {
+            is_const: false,
+            is_volatile: false,
+            kind: TypeKind::Typedef { name, referent_type: TypeIndex(referent_type_index) },
+        };
+        self.types.push(t);
+        t
+    }
+
+    fn parse_variable_declaration(&mut self, context: &mut Context) -> VariableDeclaration {
         todo!();
     }
 
     #[allow(dead_code)]
     fn parse_top_level_statement(&mut self, context: &mut Context) -> Option<TopLevelStatement> {
-        if let Some(token) = self.next_token(context) {
-            self.token_stack.push(token);
-        } else {
+        let Some(token) = self.next_token(context) else {
             return None;
+        };
+        if token.kind == TokenType::Keyword(KeywordTokenType::Typedef) {
+            return Some(TopLevelStatement {
+                kind: TopLevelStatementType::TypeDeclaration(
+                    self.parse_typedef(context, token),
+                ),
+            });
         }
-        let (type_parse_result, type_) = self.parse_type(context);
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Struct | KeywordTokenType::Enum))
+        let type_ = self.parse_type(context);
         let is_declaration = type_parse_result == TypeParseResult::Declaration;
         if is_declaration {
             return Some(TopLevelStatement {
-                source_vectors: type_.source_vectors,
-                kind:           TopLevelStatementType::TypeDeclaration(type_),
+                kind: TopLevelStatementType::TypeDeclaration(type_),
             });
         }
         match type_.kind {
@@ -159,8 +228,7 @@ impl Parser {
                     .expect("More than u32::MAX statements.");
                 let length = length - statement_start_index;
                 Some(TopLevelStatement {
-                    source_vectors: type_.source_vectors,
-                    kind:           TopLevelStatementType::FunctionDefinition(FunctionDefinition {
+                    kind: TopLevelStatementType::FunctionDefinition(FunctionDefinition {
                         declaration: FunctionDeclaration {
                             name,
                             parameters,
@@ -174,10 +242,10 @@ impl Parser {
                 let expression = self.parse_expression(context);
                 self.expressions.push(expression);
                 Some(TopLevelStatement {
-                    source_vectors: type_.source_vectors,
-                    kind:           TopLevelStatementType::VariableDefinition(VariableDefinition {
-                        variable:    Variable {
-                            name:          type_.,
+                    kind: TopLevelStatementType::VariableDefinition(VariableDefinition {
+                        variable:    VariableDeclaration {
+                            name:          //type_.,
+                            todo!(),
                             var_type:      todo!(),
                             storage_class: todo!(),
                         },
@@ -201,17 +269,24 @@ pub(crate) enum State {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TopLevelStatement {
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) kind:           TopLevelStatementType,
+    pub(crate) kind: TopLevelStatementType,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TopLevelStatementType {
     FunctionDefinition(FunctionDefinition),
-    VariableDefinition(VariableDefinition),
+    VariableDefinition(VariableDeclaration),
+    FunctionDeclaration(FunctionDeclaration),
     TypeDeclaration(Type),
 }
+
+// A top level statement could be:
+// * A function definition.
+// * A global variable definition.
+// * A function declaration.
+// * A global variable declaration.
+// * A type definition.
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct ExpressionIndex(usize);
@@ -224,8 +299,7 @@ pub(crate) struct TypeIndex(usize);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Statement {
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) kind:           StatementType,
+    pub(crate) kind: StatementType,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -264,9 +338,8 @@ pub(crate) enum StatementType {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Expression {
-    pub(crate) result_type:    TypeIndex,
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) kind:           ExpressionType,
+    pub(crate) result_type: TypeIndex,
+    pub(crate) kind:        ExpressionType,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -370,16 +443,17 @@ pub(crate) struct Identifier {
     pub(crate) name: StringCacheId,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct Variable {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct VariableDeclaration {
     pub(crate) name:          Identifier,
     pub(crate) var_type:      TypeIndex,
     pub(crate) storage_class: StorageClass,
+    pub(crate) initializer:   Option<Expression>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct VariableDefinition {
-    pub(crate) variable:    Variable,
+    pub(crate) variable:    VariableDeclaration,
     pub(crate) initializer: Expression,
 }
 
@@ -390,7 +464,6 @@ pub(crate) enum StorageClass {
     Register,
     Static,
     Extern,
-    Typedef,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -421,10 +494,9 @@ pub(crate) struct FunctionDefinitionArgument {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Type {
-    is_const:       bool,
-    is_volatile:    bool,
-    source_vectors: SourceVectors,
-    kind:           TypeKind,
+    is_const:    bool,
+    is_volatile: bool,
+    kind:        TypeKind,
 }
 
 #[allow(dead_code)]
@@ -436,11 +508,11 @@ pub(crate) enum TypeKind {
     },
     Struct {
         name:   Option<Identifier>,
-        fields: VectorSlice<Variable>,
+        fields: VectorSlice<VariableDeclaration>,
     },
     Union {
         name:   Identifier,
-        fields: VectorSlice<Variable>,
+        fields: VectorSlice<VariableDeclaration>,
     },
     Typedef {
         name:          Identifier,
@@ -524,17 +596,29 @@ pub(crate) struct SavePoint<PrevSavePoint> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum ParserErrorType {}
+pub(crate) enum ParserErrorType {
+    UnexpectedEndOfInput(&'static str),
+    ExpectedIdentifierInTypedef(TokenType),
+    ExpectedSemicolonAfterTypedef(TokenType),
+}
 
 impl GetSeverity for ParserErrorType {
     fn severity(&self) -> ErrorSeverity {
-        match *self {}
+        match self {
+            | ParserErrorType::UnexpectedEndOfInput(..)
+            | ParserErrorType::ExpectedIdentifierInTypedef(..) => ErrorSeverity::Error,
+            | ParserErrorType::ExpectedSemicolonAfterTypedef(..) => ErrorSeverity::Warning,
+        }
     }
 }
 
 impl Display for ParserErrorType {
-    fn fmt(&self, _f: &mut Formatter<'_>) -> FmtResult {
-        match *self {}
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            | ParserErrorType::UnexpectedEndOfInput(message) => write!(f, "Unexpected end of input while {}!", message),
+            | ParserErrorType::ExpectedIdentifierInTypedef(tt) => write!(f, "Expected an identifier in typedef, found instead {:?}!", tt),
+            | ParserErrorType::ExpectedSemicolonAfterTypedef(tt) => write!(f, "Expected a semicolon after typedef, found instead {:?}!", tt),
+        }
     }
 }
 
