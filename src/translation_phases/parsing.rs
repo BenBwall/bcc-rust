@@ -15,6 +15,7 @@ use super::{
         IntegerTokenType,
         Preprocessor,
         Token,
+        TokenType,
     },
     Context,
     ErrorSeverity,
@@ -28,9 +29,12 @@ use super::{
     SourceVectors,
     TranslationPhase,
 };
-use crate::util::{
-    string_cache::StringCacheId,
-    vector_slice::VectorSlice,
+use crate::{
+    translation_phases::preprocessing::OperatorTokenType,
+    util::{
+        string_cache::StringCacheId,
+        vector_slice::VectorSlice,
+    },
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -86,6 +90,13 @@ impl Parser {
         }
     }
 
+    fn next_token(&mut self, context: &mut Context) -> Option<Token> {
+        if let Some(token) = self.token_stack.pop() {
+            return Some(token);
+        }
+        self.preprocessor.next_item(context)
+    }
+
     #[allow(dead_code)]
     fn parse_statement(&mut self, context: &mut Context) -> Statement {
         todo!();
@@ -97,21 +108,84 @@ impl Parser {
     }
 
     #[allow(dead_code)]
-    fn parse_type(&mut self, context: &mut Context) -> TypeParseResult {
+    fn parse_type(&mut self, context: &mut Context) -> (TypeParseResult, Type) {
         todo!();
     }
 
     #[allow(dead_code)]
     fn parse_top_level_statement(&mut self, context: &mut Context) -> Option<TopLevelStatement> {
-        let is_declaration = self.parse_type(context) == TypeParseResult::Declaration;
-        let type_ = *self.types.last().unwrap();
+        if let Some(token) = self.next_token(context) {
+            self.token_stack.push(token);
+        } else {
+            return None;
+        }
+        let (type_parse_result, type_) = self.parse_type(context);
+        let is_declaration = type_parse_result == TypeParseResult::Declaration;
         if is_declaration {
             return Some(TopLevelStatement {
                 source_vectors: type_.source_vectors,
                 kind:           TopLevelStatementType::TypeDeclaration(type_),
             });
         }
-        todo!();
+        match type_.kind {
+            | TypeKind::Function {
+                name,
+                parameters,
+                return_type,
+            } => {
+                let statement_start_index: u32 = self
+                    .statements
+                    .len()
+                    .try_into()
+                    .expect("More than u32::MAX statements.");
+                loop {
+                    match self.next_token(context) {
+                        | Some(token)
+                            if token.kind
+                                == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) =>
+                            break,
+                        | None => break,
+                        | Some(token) => {
+                            self.token_stack.push(token);
+                            let statement = self.parse_statement(context);
+                            self.statements.push(statement);
+                        },
+                    }
+                }
+                let length: u32 = self
+                    .statements
+                    .len()
+                    .try_into()
+                    .expect("More than u32::MAX statements.");
+                let length = length - statement_start_index;
+                Some(TopLevelStatement {
+                    source_vectors: type_.source_vectors,
+                    kind:           TopLevelStatementType::FunctionDefinition(FunctionDefinition {
+                        declaration: FunctionDeclaration {
+                            name,
+                            parameters,
+                            return_type,
+                        },
+                        statements:  VectorSlice::new(statement_start_index, length),
+                    }),
+                })
+            },
+            | _ => {
+                let expression = self.parse_expression(context);
+                self.expressions.push(expression);
+                Some(TopLevelStatement {
+                    source_vectors: type_.source_vectors,
+                    kind:           TopLevelStatementType::VariableDefinition(VariableDefinition {
+                        variable:    Variable {
+                            name:          type_.,
+                            var_type:      todo!(),
+                            storage_class: todo!(),
+                        },
+                        initializer: todo!(),
+                    }),
+                })
+            },
+        }
     }
 }
 
@@ -403,8 +477,7 @@ pub(crate) struct FunctionDeclaration {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct FunctionDefinition {
     pub(crate) declaration: FunctionDeclaration,
-    pub(crate) statements:  Vec<Statement>,
-    pub(crate) expressions: Vec<Expression>,
+    pub(crate) statements:  VectorSlice<Statement>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
