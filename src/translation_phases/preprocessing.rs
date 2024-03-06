@@ -379,6 +379,22 @@ pub(crate) struct Token {
     pub(crate) contents:       StringCacheId,
 }
 
+impl GetPosition for Token {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn position(&self, context: &Context) -> SourcePosition {
+        self.source_vectors.position(context)
+    }
+}
+
+impl GetSourceVectors for Token {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+        self.source_vectors
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub(crate) enum IntegerTokenType {
     Int(i32),
@@ -481,7 +497,7 @@ pub(crate) enum OperatorTokenType {
     PipePipe,
     QuestionMark,
     Colon,
-    SemiColon,
+    Semicolon,
     OpeningParenthesis,
     ClosingParenthesis,
     OpeningSquareBracket,
@@ -3389,7 +3405,7 @@ impl Preprocessor {
             | PreprocessorTokenType::Colon =>
                 Self::build_operator_token(token, OperatorTokenType::Colon),
             | PreprocessorTokenType::SemiColon =>
-                Self::build_operator_token(token, OperatorTokenType::SemiColon),
+                Self::build_operator_token(token, OperatorTokenType::Semicolon),
             | PreprocessorTokenType::OpeningParenthesis =>
                 Self::build_operator_token(token, OperatorTokenType::OpeningParenthesis),
             | PreprocessorTokenType::ClosingParenthesis =>
