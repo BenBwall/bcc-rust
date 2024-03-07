@@ -178,9 +178,7 @@ impl Parser {
 
     #[allow(dead_code)]
     fn parse_top_level_statement(&mut self, context: &mut Context) -> Option<TopLevelStatement> {
-        let Some(token) = self.next_token(context) else {
-            return None;
-        };
+        let token = self.next_token(context)?;
         if token.kind == TokenType::Keyword(KeywordTokenType::Typedef) {
             return Some(TopLevelStatement {
                 kind: TopLevelStatementType::TypeDeclaration(
