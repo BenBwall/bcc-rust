@@ -127,7 +127,7 @@ impl StringCache {
     }
 
     /// Interns the given string and returns an ID representing its position in
-    /// the slice cache.
+    /// the string cache.
     pub(crate) fn intern(&mut self, s: impl AsRef<str>) -> StringCacheId {
         fn inner(interner: &mut StringCache, s: &str) -> StringCacheId {
             let hash = interner.hasher.hash_one(s);
