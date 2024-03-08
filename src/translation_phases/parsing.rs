@@ -8,6 +8,8 @@ use std::{
     hash::Hash,
 };
 
+use bitfield::bitfield;
+
 use super::{
     preprocessing::{
         CharacterTokenType,
@@ -72,12 +74,43 @@ impl SetSourceFileIndex for Parser {
     }
 }
 
-pub(crate) struct DeclarationSpecifiers {
-    pub(crate) storage_class: Option<StorageClass>,
-    pub(crate) type_qualifiers: Vec<TypeQualifier>,
-    pub(crate) function_specifiers: Vec<FunctionSpecifier>,
-    pub(crate) alignment_specifier: Option<AlignmentSpecifier>,
+pub(crate) struct TypeQualifiers {
+    pub(crate) is_const:    bool,
+    pub(crate) is_volatile: bool,
+    pub(crate) is_restrict: bool,
+}
 
+mod type_qualifiers {
+    bitfield::bitfield! {
+        pub struct TypeSpecifiers(u16);
+        impl Debug;
+        is_short, set_is_short: 0;
+        is_signed, set_is_signed: 1;
+        is_unsigned, set_is_unsigned: 2;
+        is_int, set_is_int: 3;
+        is_float, set_is_float: 4;
+        is_double, set_is_double: 5;
+        is_void, set_is_void: 6;
+        is_char, set_is_char: 7;
+        is_bool, set_is_bool: 8;
+        is_complex, set_is_complex: 9;
+        is_long, set_is_long: 10;
+        is_long_long, set_is_long_long: 11;
+    }
+}
+
+pub(crate) use type_qualifiers::TypeSpecifiers;
+
+pub(crate) struct FunctionSpecifiers {
+    pub(crate) is_inline: bool,
+}
+
+
+pub(crate) struct DeclarationSpecifiers {
+    pub(crate) storage_class:       StorageClass,
+    pub(crate) type_qualifiers:     TypeQualifiers,
+    pub(crate) type_specifiers:     TypeSpecifiers,
+    pub(crate) function_specifiers: FunctionSpecifiers,
 }
 
 impl Parser {
@@ -291,7 +324,9 @@ impl Parser {
         }
     }
 
-    fn parse_declaration_specifiers(&mut self, context: &mut Context) -> (StorageClass, )
+    fn parse_declaration_specifiers(&mut self, context: &mut Context) -> DeclarationSpecifiers {
+        todo!();
+    }
 
     fn parse_top_level_statement(&mut self, context: &mut Context) -> Option<TopLevelStatement> {
         let token = self.next_token(context)?;
