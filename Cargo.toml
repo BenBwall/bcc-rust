@@ -59,6 +59,7 @@ variant-size-differences = "warn"
 
 
 [dependencies]
+bitfield = "0.14.0"
 chrono = "0.4.31"
 clap = { version = "4.4.11", features = ["derive"] }
 hashbrown = { version = "0.14.3", features = ["raw"] }
