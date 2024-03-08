@@ -8,8 +8,6 @@ use std::{
     hash::Hash,
 };
 
-use bitfield::bitfield;
-
 use super::{
     preprocessing::{
         CharacterTokenType,
@@ -42,11 +40,11 @@ use crate::{
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser {
-    pub(crate) preprocessor: Preprocessor,
-    pub(crate) types:        Vec<Type>,
-    pub(crate) token_stack:  Vec<Token>,
-    pub(crate) expressions:  Vec<Expression>,
-    pub(crate) statements:   Vec<Statement>,
+    pub(crate) preprocessor:  Preprocessor,
+    pub(crate) types:         Vec<Type>,
+    pub(crate) pending_token: Option<Token>,
+    pub(crate) expressions:   Vec<Expression>,
+    pub(crate) statements:    Vec<Statement>,
 }
 
 impl GetPosition for Parser {
@@ -74,38 +72,48 @@ impl SetSourceFileIndex for Parser {
     }
 }
 
-pub(crate) struct TypeQualifiers {
-    pub(crate) is_const:    bool,
-    pub(crate) is_volatile: bool,
-    pub(crate) is_restrict: bool,
-}
-
 mod type_qualifiers {
     bitfield::bitfield! {
-        pub struct TypeSpecifiers(u16);
+        #[derive(PartialEq, Eq, Hash, Clone, Copy, Default)]
+        pub struct TypeQualifiers(u8);
         impl Debug;
-        is_short, set_is_short: 0;
-        is_signed, set_is_signed: 1;
-        is_unsigned, set_is_unsigned: 2;
-        is_int, set_is_int: 3;
-        is_float, set_is_float: 4;
-        is_double, set_is_double: 5;
-        is_void, set_is_void: 6;
-        is_char, set_is_char: 7;
-        is_bool, set_is_bool: 8;
-        is_complex, set_is_complex: 9;
-        is_long, set_is_long: 10;
-        is_long_long, set_is_long_long: 11;
+        pub is_const, set_is_const: 0;
+        pub is_volatile, set_is_volatile: 1;
+        pub is_restrict, set_is_restrict: 2;
     }
 }
 
-pub(crate) use type_qualifiers::TypeSpecifiers;
+pub(crate) use type_qualifiers::TypeQualifiers;
 
+mod type_specifiers {
+    bitfield::bitfield! {
+        #[derive(PartialEq, Eq, Hash, Clone, Copy, Default)]
+        pub struct TypeSpecifiers(u16);
+        impl Debug;
+        pub is_short, set_is_short: 0;
+        pub is_signed, set_is_signed: 1;
+        pub is_unsigned, set_is_unsigned: 2;
+        pub is_int, set_is_int: 3;
+        pub is_float, set_is_float: 4;
+        pub is_double, set_is_double: 5;
+        pub is_void, set_is_void: 6;
+        pub is_char, set_is_char: 7;
+        pub is_bool, set_is_bool: 8;
+        pub is_complex, set_is_complex: 9;
+        pub is_long, set_is_long: 10;
+        pub is_long_long, set_is_long_long: 11;
+        pub is_long_double, set_is_long_double: 12;
+    }
+}
+
+pub(crate) use type_specifiers::TypeSpecifiers;
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub(crate) struct FunctionSpecifiers {
     pub(crate) is_inline: bool,
 }
 
-
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct DeclarationSpecifiers {
     pub(crate) storage_class:       StorageClass,
     pub(crate) type_qualifiers:     TypeQualifiers,
@@ -113,19 +121,36 @@ pub(crate) struct DeclarationSpecifiers {
     pub(crate) function_specifiers: FunctionSpecifiers,
 }
 
+impl Default for DeclarationSpecifiers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DeclarationSpecifiers {
+    const fn new() -> Self {
+        Self {
+            storage_class:       StorageClass::Auto,
+            type_qualifiers:     TypeQualifiers(0),
+            type_specifiers:     TypeSpecifiers(0),
+            function_specifiers: FunctionSpecifiers { is_inline: false },
+        }
+    }
+}
+
 impl Parser {
     pub(crate) fn new(preprocessor: Preprocessor) -> Self {
         Self {
             preprocessor,
             types: Vec::new(),
-            token_stack: Vec::new(),
+            pending_token: None,
             expressions: Vec::new(),
             statements: Vec::new(),
         }
     }
 
     fn next_token(&mut self, context: &mut Context) -> Option<Token> {
-        if let Some(token) = self.token_stack.pop() {
+        if let Some(token) = self.pending_token.take() {
             return Some(token);
         }
         self.preprocessor.next_item(context)
@@ -177,7 +202,7 @@ impl Parser {
                     error_type:     on_error(token),
                     source_vectors: token.source_vectors,
                 });
-                self.token_stack.push(token);
+                self.pending_token = Some(token);
                 Identifier {
                     name: context.string_cache.intern("<non-existent-identifier>"),
                 }
@@ -200,7 +225,7 @@ impl Parser {
                     error_type:     ParserErrorType::ExpectedSemicolonAfterTypedef(token.kind),
                     source_vectors: token.source_vectors,
                 });
-                self.token_stack.push(token);
+                self.pending_token = Some(token);
             },
             | None => {
                 let source_vectors = context.create_source_vectors(
@@ -257,7 +282,7 @@ impl Parser {
                     error_type: ParserErrorType::ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(token.kind),
                     source_vectors: token.source_vectors,
                 });
-                self.token_stack.push(token);
+                self.pending_token = Some(token);
                 return TopLevelStatement {
                     kind: TopLevelStatementType::FunctionDeclaration(FunctionDeclaration {
                         name,
@@ -300,7 +325,7 @@ impl Parser {
                     break,
                 | None => break,
                 | Some(token) => {
-                    self.token_stack.push(token);
+                    self.pending_token = Some(token);
                     let statement = self.parse_statement(context);
                     self.statements.push(statement);
                 },
@@ -324,8 +349,456 @@ impl Parser {
         }
     }
 
+    fn set_storage_class(
+        &mut self,
+        context: &mut Context,
+        last_storage_class: StorageClass,
+        new_storage_class: Token,
+        storage_class_specified: bool,
+    ) -> StorageClass {
+        if storage_class_specified {
+            context.parser_error(ParserError {
+                error_type:     ParserErrorType::StorageClassRedefinition(
+                    last_storage_class,
+                    new_storage_class.kind,
+                ),
+                source_vectors: new_storage_class.source_vectors,
+            });
+        }
+        match new_storage_class.kind {
+            | TokenType::Keyword(KeywordTokenType::Auto) => StorageClass::Auto,
+            | TokenType::Keyword(KeywordTokenType::Register) => StorageClass::Register,
+            | TokenType::Keyword(KeywordTokenType::Static) => StorageClass::Static,
+            | TokenType::Keyword(KeywordTokenType::Extern) => StorageClass::Extern,
+            | TokenType::Keyword(KeywordTokenType::Typedef) => StorageClass::Typedef,
+            | TokenType::Keyword(KeywordTokenType::Auto) => StorageClass::Auto,
+            | _ => unreachable!("set_storage_class called with non-storage class token."),
+        }
+    }
+
+    fn map_type_specifiers(specifier: TypeSpecifiers) -> ConflictingTypeSpecifier {
+        if specifier.is_bool() {
+            return ConflictingTypeSpecifier::Bool;
+        }
+        if specifier.is_char() {
+            return ConflictingTypeSpecifier::Char;
+        }
+        if specifier.is_complex() {
+            return ConflictingTypeSpecifier::Complex;
+        }
+        if specifier.is_double() {
+            return ConflictingTypeSpecifier::Double;
+        }
+        if specifier.is_float() {
+            return ConflictingTypeSpecifier::Float;
+        }
+        if specifier.is_int() {
+            return ConflictingTypeSpecifier::Int;
+        }
+        if specifier.is_short() {
+            return ConflictingTypeSpecifier::Short;
+        }
+        if specifier.is_void() {
+            return ConflictingTypeSpecifier::Void;
+        }
+        if specifier.is_signed() {
+            return ConflictingTypeSpecifier::Signed;
+        }
+        if specifier.is_unsigned() {
+            return ConflictingTypeSpecifier::Unsigned;
+        }
+        if specifier.is_long() {
+            return ConflictingTypeSpecifier::Long;
+        }
+        if specifier.is_long_long() {
+            return ConflictingTypeSpecifier::LongLong;
+        }
+
+        unreachable!("map_type_specifiers called with empty type specifiers.");
+    }
+
+    fn set_type_specifiers(
+        &mut self,
+        context: &mut Context,
+        type_specifiers: &mut TypeSpecifiers,
+        token: Token,
+    ) {
+        let TokenType::Keyword(keyword_token_type) = token.kind else {
+            unreachable!("set_type_specifiers called with non-keyword token.");
+        };
+        match keyword_token_type {
+            | KeywordTokenType::Int => {
+                if type_specifiers.is_int() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_void()
+                    || type_specifiers.is_float()
+                    || type_specifiers.is_double()
+                    || type_specifiers.is_bool()
+                    || type_specifiers.is_complex()
+                    || type_specifiers.is_char()
+                {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                type_specifiers.set_is_int(true);
+            },
+            | KeywordTokenType::Long => {
+                if type_specifiers.is_long_long() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::LongSpecifiedThrice,
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_long_double() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::LongLongDoubleSpecified,
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_void()
+                    || type_specifiers.is_float()
+                    || type_specifiers.is_bool()
+                    || type_specifiers.is_complex()
+                    || type_specifiers.is_char()
+                {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                if type_specifiers.is_double() {
+                    type_specifiers.set_is_long_double(true);
+                }
+                if type_specifiers.is_long() {
+                    type_specifiers.set_is_long_long(true);
+                }
+                type_specifiers.set_is_long(true);
+            },
+            | KeywordTokenType::Short => {
+                if type_specifiers.is_short() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_long()
+                    || type_specifiers.is_void()
+                    || type_specifiers.is_float()
+                    || type_specifiers.is_double()
+                    || type_specifiers.is_bool()
+                    || type_specifiers.is_complex()
+                    || type_specifiers.is_char()
+                {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                type_specifiers.set_is_short(true);
+            },
+            | KeywordTokenType::Signed => {
+                if type_specifiers.is_signed() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_unsigned() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                type_specifiers.set_is_signed(true);
+            },
+            | KeywordTokenType::Unsigned => {
+                if type_specifiers.is_unsigned() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_signed() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                type_specifiers.set_is_unsigned(true);
+            },
+            | KeywordTokenType::Float => {
+                if type_specifiers.is_float() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_void()
+                    || type_specifiers.is_int()
+                    || type_specifiers.is_double()
+                    || type_specifiers.is_bool()
+                    || type_specifiers.is_complex()
+                    || type_specifiers.is_char()
+                    || type_specifiers.is_long()
+                    || type_specifiers.is_signed()
+                    || type_specifiers.is_unsigned()
+                {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                type_specifiers.set_is_float(true);
+            },
+            | KeywordTokenType::Double => {
+                if type_specifiers.is_double() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_long_double() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::LongLongDoubleSpecified,
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_void()
+                    || type_specifiers.is_int()
+                    || type_specifiers.is_float()
+                    || type_specifiers.is_bool()
+                    || type_specifiers.is_complex()
+                    || type_specifiers.is_char()
+                    || type_specifiers.is_long()
+                    || type_specifiers.is_signed()
+                    || type_specifiers.is_unsigned()
+                {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                if type_specifiers.is_long() {
+                    type_specifiers.set_is_long_double(true);
+                }
+                type_specifiers.set_is_double(true);
+            },
+            | KeywordTokenType::Void => {
+                if type_specifiers.is_void() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_int()
+                    || type_specifiers.is_float()
+                    || type_specifiers.is_double()
+                    || type_specifiers.is_bool()
+                    || type_specifiers.is_complex()
+                    || type_specifiers.is_char()
+                    || type_specifiers.is_long()
+                    || type_specifiers.is_signed()
+                    || type_specifiers.is_unsigned()
+                {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                type_specifiers.set_is_void(true);
+            },
+            | KeywordTokenType::Bool => {
+                if type_specifiers.is_bool() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_void()
+                    || type_specifiers.is_int()
+                    || type_specifiers.is_float()
+                    || type_specifiers.is_double()
+                    || type_specifiers.is_complex()
+                    || type_specifiers.is_char()
+                    || type_specifiers.is_long()
+                    || type_specifiers.is_signed()
+                    || type_specifiers.is_unsigned()
+                {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                type_specifiers.set_is_bool(true);
+            },
+            | KeywordTokenType::Complex => {
+                if type_specifiers.is_complex() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_void()
+                    || type_specifiers.is_int()
+                    || type_specifiers.is_float()
+                    || type_specifiers.is_double()
+                    || type_specifiers.is_bool()
+                    || type_specifiers.is_char()
+                    || type_specifiers.is_long()
+                    || type_specifiers.is_signed()
+                    || type_specifiers.is_unsigned()
+                {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                type_specifiers.set_is_complex(true);
+            },
+            | KeywordTokenType::Char => {
+                if type_specifiers.is_char() {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        source_vectors: token.source_vectors,
+                    });
+                } else if type_specifiers.is_void()
+                    || type_specifiers.is_int()
+                    || type_specifiers.is_float()
+                    || type_specifiers.is_double()
+                    || type_specifiers.is_bool()
+                    || type_specifiers.is_complex()
+                    || type_specifiers.is_long()
+                {
+                    context.parser_error(ParserError {
+                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
+                            Self::map_type_specifiers(*type_specifiers),
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    });
+                }
+                type_specifiers.set_is_char(true);
+            },
+            | _ => unreachable!("set_type_specifiers called with non-type-specifier token."),
+        }
+    }
+
     fn parse_declaration_specifiers(&mut self, context: &mut Context) -> DeclarationSpecifiers {
-        todo!();
+        let mut specifiers = DeclarationSpecifiers::default();
+        let mut storage_class_specified = false;
+        loop {
+            let Some(token) = self.next_token(context) else {
+                if specifiers == DeclarationSpecifiers::default() {
+                    return specifiers;
+                }
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_index(),
+                    0,
+                );
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::UnexpectedEndOfInput(
+                        "parsing declaration specifiers. Expected a type specifier.",
+                    ),
+                    source_vectors,
+                });
+                return specifiers;
+            };
+            match token.kind {
+                | TokenType::Keyword(KeywordTokenType::Const) => {
+                    if specifiers.type_qualifiers.is_const() {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::ConstSpecifiedTwice,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    specifiers.type_qualifiers.set_is_const(true);
+                },
+                | TokenType::Keyword(KeywordTokenType::Volatile) => {
+                    if specifiers.type_qualifiers.is_volatile() {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::VolatileSpecifiedTwice,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    specifiers.type_qualifiers.set_is_volatile(true);
+                },
+                | TokenType::Keyword(KeywordTokenType::Restrict) => {
+                    if specifiers.type_qualifiers.is_restrict() {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::RestrictSpecifiedTwice,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    specifiers.type_qualifiers.set_is_restrict(true);
+                },
+                | TokenType::Keyword(KeywordTokenType::Inline) => {
+                    if specifiers.function_specifiers.is_inline {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::InlineSpecifiedTwice,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    specifiers.function_specifiers.is_inline = true;
+                },
+                | TokenType::Keyword(
+                    KeywordTokenType::Static
+                    | KeywordTokenType::Extern
+                    | KeywordTokenType::Typedef
+                    | KeywordTokenType::Auto
+                    | KeywordTokenType::Register,
+                ) => {
+                    specifiers.storage_class = self.set_storage_class(
+                        context,
+                        specifiers.storage_class,
+                        token,
+                        storage_class_specified,
+                    );
+                    storage_class_specified = true;
+                },
+                | TokenType::Keyword(
+                    KeywordTokenType::Int
+                    | KeywordTokenType::Short
+                    | KeywordTokenType::Long
+                    | KeywordTokenType::Char
+                    | KeywordTokenType::Signed
+                    | KeywordTokenType::Unsigned
+                    | KeywordTokenType::Float
+                    | KeywordTokenType::Double
+                    | KeywordTokenType::Void
+                    | KeywordTokenType::Bool
+                    | KeywordTokenType::Complex,
+                ) => self.set_type_specifiers(context, &mut specifiers.type_specifiers, token),
+                | _ => {
+                    self.pending_token = Some(token);
+                    return specifiers;
+                },
+            }
+        }
     }
 
     fn parse_top_level_statement(&mut self, context: &mut Context) -> Option<TopLevelStatement> {
@@ -554,13 +1027,14 @@ pub(crate) struct VariableDefinition {
     pub(crate) variable:    VariableDeclaration,
     pub(crate) initializer: Expression,
 }
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub(crate) enum StorageClass {
+    #[default]
     Auto,
     Register,
     Static,
     Extern,
+    Typedef,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -679,15 +1153,39 @@ impl GetSourceVectors for ParserError {
 
 impl std::error::Error for ParserError {}
 
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct SavePoint<PrevSavePoint> {
-    pub(crate) state_stack:    Vec<State>,
-    pub(crate) types:          Vec<Type>,
-    pub(crate) previous_phase: PrevSavePoint,
-    pub(crate) token_stack:    Vec<Token>,
-    pub(crate) block_depth:    usize,
-    pub(crate) expressions:    Vec<Expression>,
-    pub(crate) statements:     Vec<Statement>,
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ConflictingTypeSpecifier {
+    Short,
+    Signed,
+    Unsigned,
+    Int,
+    Float,
+    Double,
+    Void,
+    Char,
+    Bool,
+    Complex,
+    Long,
+    LongLong,
+}
+
+impl Display for ConflictingTypeSpecifier {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            | ConflictingTypeSpecifier::Short => write!(f, "`short`"),
+            | ConflictingTypeSpecifier::Signed => write!(f, "`signed`"),
+            | ConflictingTypeSpecifier::Unsigned => write!(f, "`unsigned`"),
+            | ConflictingTypeSpecifier::Int => write!(f, "`int`"),
+            | ConflictingTypeSpecifier::Float => write!(f, "`float`"),
+            | ConflictingTypeSpecifier::Double => write!(f, "`double`"),
+            | ConflictingTypeSpecifier::Void => write!(f, "`void`"),
+            | ConflictingTypeSpecifier::Char => write!(f, "`char`"),
+            | ConflictingTypeSpecifier::Bool => write!(f, "`_Bool`"),
+            | ConflictingTypeSpecifier::Complex => write!(f, "`_Complex`"),
+            | ConflictingTypeSpecifier::Long => write!(f, "`long`"),
+            | ConflictingTypeSpecifier::LongLong => write!(f, "`long long`"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -696,6 +1194,15 @@ pub(crate) enum ParserErrorType {
     ExpectedIdentifierInTypedef(TokenType),
     ExpectedSemicolonAfterTypedef(TokenType),
     ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(TokenType),
+    StorageClassRedefinition(StorageClass, TokenType),
+    ConstSpecifiedTwice,
+    VolatileSpecifiedTwice,
+    RestrictSpecifiedTwice,
+    InlineSpecifiedTwice,
+    ConflictingTypeSpecifiers(ConflictingTypeSpecifier, TokenType),
+    TypeSpecifierSpecifiedTwice(TokenType),
+    LongSpecifiedThrice,
+    LongLongDoubleSpecified,
 }
 
 impl GetSeverity for ParserErrorType {
@@ -705,7 +1212,16 @@ impl GetSeverity for ParserErrorType {
             | ParserErrorType::ExpectedIdentifierInTypedef(..)
             | ParserErrorType::ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(..) =>
                 ErrorSeverity::Error,
-            | ParserErrorType::ExpectedSemicolonAfterTypedef(..) => ErrorSeverity::Warning,
+            | ParserErrorType::ExpectedSemicolonAfterTypedef(..)
+            | ParserErrorType::StorageClassRedefinition(..)
+            | ParserErrorType::ConstSpecifiedTwice
+            | ParserErrorType::VolatileSpecifiedTwice
+            | ParserErrorType::RestrictSpecifiedTwice
+            | ParserErrorType::InlineSpecifiedTwice
+            | ParserErrorType::ConflictingTypeSpecifiers(..)
+            | ParserErrorType::TypeSpecifierSpecifiedTwice(..)
+            | ParserErrorType::LongSpecifiedThrice
+            | ParserErrorType::LongLongDoubleSpecified => ErrorSeverity::Warning,
         }
     }
 }
@@ -731,6 +1247,34 @@ impl Display for ParserErrorType {
                 f,
                 "Expected a semicolon after typedef, found instead {:?}!",
                 tt
+            ),
+            | ParserErrorType::StorageClassRedefinition(last, new) => write!(
+                f,
+                "Redefinition of storage class {:?} with {:?}!",
+                last, new
+            ),
+            | ParserErrorType::ConstSpecifiedTwice =>
+                write!(f, "`const` keyword specified twice in type declaration!"),
+            | ParserErrorType::VolatileSpecifiedTwice =>
+                write!(f, "`volatile` keyword specified twice in type declaration!"),
+            | ParserErrorType::RestrictSpecifiedTwice =>
+                write!(f, "`restrict` keyword specified twice in type declaration!"),
+            | ParserErrorType::InlineSpecifiedTwice => write!(
+                f,
+                "`inline` keyword specified twice in function declaration or definition!"
+            ),
+            | ParserErrorType::ConflictingTypeSpecifiers(specifiers, tt) => write!(
+                f,
+                "Conflicting type specifiers {:?} and {:?}!",
+                specifiers, tt
+            ),
+            | ParserErrorType::TypeSpecifierSpecifiedTwice(tt) =>
+                write!(f, "Type specifier {:?} specified twice!", tt),
+            | ParserErrorType::LongSpecifiedThrice =>
+                write!(f, "`long` keyword specified thrice in type declaration!"),
+            | ParserErrorType::LongLongDoubleSpecified => write!(
+                f,
+                "`long long` and `double` keywords specified together in type declaration!"
             ),
         }
     }

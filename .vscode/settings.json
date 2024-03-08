@@ -4,6 +4,7 @@
     "Aqcuire",
     "arrayvec",
     "bigdecimal",
+    "bitfield",
     "canonicalize",
     "chrono",
     "codepoint",
