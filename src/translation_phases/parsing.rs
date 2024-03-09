@@ -138,6 +138,32 @@ impl DeclarationSpecifiers {
     }
 }
 
+pub(crate) struct PointerDeclarator {
+    pub(crate) type_qualifiers_list: VectorSlice<TypeQualifiers>,
+}
+
+pub(crate) struct Declarator {
+    pub(crate) pointer_declarator: PointerDeclarator,
+    pub(crate) kind:               DeclaratorType,
+}
+
+pub(crate) enum DeclaratorType {
+    Identifier(Identifier),
+    Parenthesized(Box<Declarator>),
+    KAndRStyleFunction {
+        parameters: VectorSlice<Identifier>,
+    },
+    Array {
+        type_qualifiers_list:  VectorSlice<TypeQualifiers>,
+        is_static:             bool,
+        assignment_expression: Option<Expression>,
+    },
+    Function {
+        parameter_lists: VectorSlice<ParameterDeclaration>,
+        is_variadic:     bool,
+    },
+}
+
 impl Parser {
     pub(crate) fn new(preprocessor: Preprocessor) -> Self {
         Self {
@@ -799,6 +825,69 @@ impl Parser {
                 },
             }
         }
+    }
+
+    fn parse_declarator(&mut self, context: &mut Context) -> Declarator {}
+
+    fn parse_type_qualifiers(&mut self, context: &mut Context) -> TypeQualifiers {
+        let mut ret = TypeQualifiers(0);
+        loop {
+            let Some(token) = self.next_token(context) else {
+                break;
+            };
+            match token.kind {
+                | TokenType::Keyword(KeywordTokenType::Const) => {
+                    if ret.is_const() {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::ConstSpecifiedTwice,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    ret.set_is_const(true);
+                },
+                | TokenType::Keyword(KeywordTokenType::Volatile) => {
+                    if ret.is_volatile() {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::VolatileSpecifiedTwice,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    ret.set_is_volatile(true);
+                },
+                | TokenType::Keyword(KeywordTokenType::Restrict) => {
+                    if ret.is_restrict() {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::RestrictSpecifiedTwice,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    ret.set_is_restrict(true);
+                },
+                | _ => {
+                    self.pending_token = Some(token);
+                    break;
+                },
+            }
+        }
+        ret
+    }
+
+    fn parse_pointer_declarator(&mut self, context: &mut Context) -> PointerDeclarator {
+        let mut ret = PointerDeclarator {
+            type_qualifiers_list: Vec::new(),
+        };
+        loop {
+            let Some(token) = self.next_token(context) else {
+                break;
+            };
+            if token.kind != TokenType::Operator(OperatorTokenType::Asterisk) {
+                self.pending_token = Some(token);
+                break;
+            }
+            let type_qualifiers = self.parse_type_qualifiers(context);
+            ret.type_qualifiers_list.push(type_qualifiers);
+        }
+        ret
     }
 
     fn parse_top_level_statement(&mut self, context: &mut Context) -> Option<TopLevelStatement> {
