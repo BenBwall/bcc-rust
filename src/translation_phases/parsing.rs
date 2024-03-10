@@ -139,6 +139,8 @@ impl DeclarationSpecifiers {
 }
 
 pub(crate) struct PointerDeclarator {
+    /// Each element represents a level of indirection with the type qualifiers
+    /// for that level.
     pub(crate) type_qualifiers_list: VectorSlice<TypeQualifiers>,
 }
 
@@ -149,14 +151,53 @@ pub(crate) struct Declarator {
 
 pub(crate) enum DeclaratorType {
     Identifier(Identifier),
-    Parenthesized(Box<Declarator>),
+    Parenthesized(DeclaratorIndex),
     KAndRStyleFunction {
         parameters: VectorSlice<Identifier>,
     },
     Array {
         type_qualifiers_list:  VectorSlice<TypeQualifiers>,
         is_static:             bool,
-        assignment_expression: Option<Expression>,
+        is_pointer:            bool,
+        assignment_expression: Option<ExpressionIndex>,
+    },
+    Function {
+        parameter_lists: VectorSlice<ParameterDeclaration>,
+        is_variadic:     bool,
+    },
+}
+
+pub(crate) struct ParameterDeclaration {
+    declaration_specifiers: DeclarationSpecifiers,
+    kind:                   ParameterDeclarationType,
+}
+
+pub(crate) enum ParameterDeclarationType {
+    AbstractDeclarator(AbstractDeclarator),
+    Declarator(Declarator),
+    Anonymous,
+}
+
+pub(crate) struct AbstractDeclarator {
+    kind: AbstractDeclaratorType,
+}
+
+pub(crate) enum AbstractDeclaratorType {
+    Pointer(PointerDeclarator),
+    DirectAbstractDeclarator(DirectAbstractDeclarator),
+    PointerAndDirectAbstractDeclarator {
+        pointer_declarator:         PointerDeclarator,
+        direct_abstract_declarator: DirectAbstractDeclarator,
+    },
+}
+
+pub(crate) enum DirectAbstractDeclarator {
+    Parenthesized(AbstractDeclaratorIndex),
+    Array {
+        type_qualifiers_list:  VectorSlice<TypeQualifiers>,
+        is_static:             bool,
+        is_pointer:            bool,
+        assignment_expression: Option<ExpressionIndex>,
     },
     Function {
         parameter_lists: VectorSlice<ParameterDeclaration>,
@@ -962,6 +1003,12 @@ pub(crate) struct StatementIndex(usize);
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct TypeIndex(usize);
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct DeclaratorIndex(usize);
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct AbstractDeclaratorIndex(usize);
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Statement {
     pub(crate) kind: StatementType,
@@ -969,7 +1016,7 @@ pub(crate) struct Statement {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum StatementType {
-    Compound(Vec<Statement>),
+    Compound(VectorSlice<Statement>),
     Expression(ExpressionIndex),
     If {
         condition_expression: ExpressionIndex,
