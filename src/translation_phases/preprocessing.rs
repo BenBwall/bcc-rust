@@ -5197,7 +5197,7 @@ impl Preprocessor {
                 let synthetic_token = PreprocessorToken {
                     source_vectors: SourceVectors::new(
                         start_index,
-                        context.source_vectors.0.len() as u32 - start_index,
+                        context.source_vectors.0.len() as u32,
                     ),
                     contents:       context.string_cache.intern(&contents),
                     kind:           PreprocessorTokenType::AngleBracketString,

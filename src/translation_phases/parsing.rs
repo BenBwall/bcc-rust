@@ -40,11 +40,12 @@ use crate::{
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser {
-    pub(crate) preprocessor:  Preprocessor,
-    pub(crate) types:         Vec<Type>,
-    pub(crate) pending_token: Option<Token>,
-    pub(crate) expressions:   Vec<Expression>,
-    pub(crate) statements:    Vec<Statement>,
+    pub(crate) preprocessor:    Preprocessor,
+    pub(crate) types:           Vec<Type>,
+    pub(crate) pending_token:   Option<Token>,
+    pub(crate) expressions:     Vec<Expression>,
+    pub(crate) statements:      Vec<Statement>,
+    pub(crate) type_qualifiers: Vec<TypeQualifiers>,
 }
 
 impl GetPosition for Parser {
@@ -398,12 +399,11 @@ impl Parser {
                 },
             }
         }
-        let length: u32 = self
+        let end_index: u32 = self
             .statements
             .len()
             .try_into()
             .expect("More than u32::MAX statements.");
-        let length = length - statement_start_index;
         TopLevelStatement {
             kind: TopLevelStatementType::FunctionDefinition(FunctionDefinition {
                 declaration: FunctionDeclaration {
@@ -411,7 +411,7 @@ impl Parser {
                     parameters,
                     return_type,
                 },
-                statements:  VectorSlice::new(statement_start_index, length),
+                statements:  VectorSlice::new(statement_start_index, end_index),
             }),
         }
     }
@@ -914,9 +914,11 @@ impl Parser {
     }
 
     fn parse_pointer_declarator(&mut self, context: &mut Context) -> PointerDeclarator {
-        let mut ret = PointerDeclarator {
-            type_qualifiers_list: Vec::new(),
-        };
+        let start_index = self
+            .type_qualifiers
+            .len()
+            .try_into()
+            .expect("More than u32::MAX type qualifiers.");
         loop {
             let Some(token) = self.next_token(context) else {
                 break;
@@ -926,9 +928,18 @@ impl Parser {
                 break;
             }
             let type_qualifiers = self.parse_type_qualifiers(context);
-            ret.type_qualifiers_list.push(type_qualifiers);
+            self.type_qualifiers.push(type_qualifiers);
         }
-        ret
+        let type_qualifiers_list = VectorSlice::new(
+            start_index,
+            self.type_qualifiers
+                .len()
+                .try_into()
+                .expect("More than u32::MAX type qualifiers."),
+        );
+        PointerDeclarator {
+            type_qualifiers_list,
+        }
     }
 
     fn parse_top_level_statement(&mut self, context: &mut Context) -> Option<TopLevelStatement> {
