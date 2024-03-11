@@ -250,7 +250,7 @@ impl PreprocessorTokenizer {
         );
         let contents = context.string_cache.end_str();
         PreprocessorToken {
-            source_vectors: SourceVectors::new(source_vector, 1),
+            source_vectors: SourceVectors::new(source_vector, source_vector + 1),
             kind: token_type,
             contents,
         }

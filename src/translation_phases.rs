@@ -437,8 +437,7 @@ impl Context {
         length: usize,
     ) -> SourceVectors {
         let start_index = self.push_source_vector(start_position, source_file_index, length);
-        let length = 1;
-        SourceVectors::new(start_index, length)
+        SourceVectors::new(start_index, start_index + 1)
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -459,7 +458,7 @@ impl Context {
             "overflow in merge_vectors"
         );
         let length = v1.length + v2.length;
-        SourceVectors::new(start_index, length)
+        SourceVectors::new(start_index, start_index + length)
     }
 
     pub(crate) fn is_tokenizing_include_string(&self) -> bool {

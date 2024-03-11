@@ -48,10 +48,10 @@ impl<T> PartialEq for VectorSlice<T> {
 impl<T> Eq for VectorSlice<T> {}
 
 impl<T> VectorSlice<T> {
-    pub(crate) fn new(start_index: u32, length: u32) -> Self {
+    pub(crate) fn new(start_index: u32, end_index: u32) -> Self {
         Self {
             start_index,
-            length,
+            length: end_index - start_index,
             _marker: PhantomData,
         }
     }
