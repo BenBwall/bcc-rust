@@ -214,6 +214,7 @@ impl Parser {
             pending_token: None,
             expressions: Vec::new(),
             statements: Vec::new(),
+            type_qualifiers: Vec::new(),
         }
     }
 
@@ -868,7 +869,37 @@ impl Parser {
         }
     }
 
-    fn parse_declarator(&mut self, context: &mut Context) -> Declarator {}
+    fn parse_declarator(&mut self, context: &mut Context) -> Option<Declarator> {
+        let pointer_declarator = self.parse_pointer_declarator(context);
+        let Some(kind) = self.parse_direct_declarator(context) else {
+            if !pointer_declarator.type_qualifiers_list.length != 0 {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_index(),
+                    0,
+                );
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::TypeQualifiersWithoutDeclarator,
+                    source_vectors,
+                });
+            }
+            return None;
+        };
+        Some(Declarator {
+            pointer_declarator,
+            kind,
+        })
+    }
+
+    fn parse_direct_declarator(&mut self, context: &mut Context) -> Option<DeclaratorType> {
+        let token = self.next_token(context)?;
+        if token.kind == TokenType::Identifier {
+            return Some(DeclaratorType::Identifier(Identifier { name: token.contents }));
+        }
+        
+    }
+
+    fn parse_nested_direct_declarator(&mut self, context: &mut Context) -> DeclaratorType {}
 
     fn parse_type_qualifiers(&mut self, context: &mut Context) -> TypeQualifiers {
         let mut ret = TypeQualifiers(0);
