@@ -894,9 +894,32 @@ impl Parser {
     fn parse_direct_declarator(&mut self, context: &mut Context) -> Option<DeclaratorType> {
         let token = self.next_token(context)?;
         if token.kind == TokenType::Identifier {
-            return Some(DeclaratorType::Identifier(Identifier { name: token.contents }));
+            return Some(DeclaratorType::Identifier(Identifier {
+                name: token.contents,
+            }));
         }
-        
+        if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
+            let declarator = self.parse_declarator(context);
+            let token = self.next_token(context);
+            if !matches!(
+                token,
+                Some(Token {
+                    kind: TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+                    ..
+                })
+            ) {
+                context.parser_error(ParserError {
+                    error_type:
+                        ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(
+                            token.kind,
+                        ),
+                    source_vectors: token.source_vectors,
+                });
+                self.pending_token = token;
+            }
+            return declarator.map(|d| DeclaratorType::Parenthesized(d));
+        }
+        todo!();
     }
 
     fn parse_nested_direct_declarator(&mut self, context: &mut Context) -> DeclaratorType {}
