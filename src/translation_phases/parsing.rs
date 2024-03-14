@@ -34,18 +34,22 @@ use crate::{
     translation_phases::preprocessing::OperatorTokenType,
     util::{
         string_cache::StringCacheId,
-        vector_slice::VectorSlice,
+        vector_slice::{
+            UsizeExt,
+            VectorSlice,
+        },
     },
 };
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser {
-    pub(crate) preprocessor:    Preprocessor,
-    pub(crate) types:           Vec<Type>,
-    pub(crate) pending_token:   Option<Token>,
-    pub(crate) expressions:     Vec<Expression>,
-    pub(crate) statements:      Vec<Statement>,
-    pub(crate) type_qualifiers: Vec<TypeQualifiers>,
+    pub(crate) preprocessor:     Preprocessor,
+    pub(crate) types:            Vec<Type>,
+    pub(crate) pending_token:    Option<Token>,
+    pub(crate) expressions:      Vec<Expression>,
+    pub(crate) statements:       Vec<Statement>,
+    pub(crate) type_qualifiers:  Vec<TypeQualifiers>,
+    pub(crate) declarator_types: Vec<DeclaratorType>,
 }
 
 impl GetPosition for Parser {
@@ -139,20 +143,23 @@ impl DeclarationSpecifiers {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct PointerDeclarator {
     /// Each element represents a level of indirection with the type qualifiers
     /// for that level.
     pub(crate) type_qualifiers_list: VectorSlice<TypeQualifiers>,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Declarator {
     pub(crate) pointer_declarator: PointerDeclarator,
-    pub(crate) kind:               DeclaratorType,
+    pub(crate) kind:               VectorSlice<DeclaratorType>,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum DeclaratorType {
     Identifier(Identifier),
-    Parenthesized(DeclaratorIndex),
+    Parenthesized(Declarator),
     KAndRStyleFunction {
         parameters: VectorSlice<Identifier>,
     },
@@ -206,6 +213,14 @@ pub(crate) enum DirectAbstractDeclarator {
     },
 }
 
+enum NestedDirectDeclaratorResult {
+    Terminal,
+    Nested,
+}
+
+const TERMINAL: NestedDirectDeclaratorResult = NestedDirectDeclaratorResult::Terminal;
+const NESTED: NestedDirectDeclaratorResult = NestedDirectDeclaratorResult::Nested;
+
 impl Parser {
     pub(crate) fn new(preprocessor: Preprocessor) -> Self {
         Self {
@@ -215,6 +230,7 @@ impl Parser {
             expressions: Vec::new(),
             statements: Vec::new(),
             type_qualifiers: Vec::new(),
+            declarator_types: Vec::new(),
         }
     }
 
@@ -382,11 +398,7 @@ impl Parser {
                 };
             },
         }
-        let statement_start_index: u32 = self
-            .statements
-            .len()
-            .try_into()
-            .expect("More than u32::MAX statements.");
+        let statement_start_index: u32 = self.statements.len().to_u32();
         loop {
             match self.next_token(context) {
                 | Some(token)
@@ -400,11 +412,7 @@ impl Parser {
                 },
             }
         }
-        let end_index: u32 = self
-            .statements
-            .len()
-            .try_into()
-            .expect("More than u32::MAX statements.");
+        let end_index: u32 = self.statements.len().to_u32();
         TopLevelStatement {
             kind: TopLevelStatementType::FunctionDefinition(FunctionDefinition {
                 declaration: FunctionDeclaration {
@@ -871,8 +879,9 @@ impl Parser {
 
     fn parse_declarator(&mut self, context: &mut Context) -> Option<Declarator> {
         let pointer_declarator = self.parse_pointer_declarator(context);
-        let Some(kind) = self.parse_direct_declarator(context) else {
-            if !pointer_declarator.type_qualifiers_list.length != 0 {
+        let vector_slice = self.parse_direct_declarator(context);
+        if vector_slice.length == 0 {
+            if pointer_declarator.type_qualifiers_list.length != 0 {
                 let source_vectors = context.create_source_vectors(
                     self.position(context),
                     self.source_file_index(),
@@ -884,19 +893,54 @@ impl Parser {
                 });
             }
             return None;
-        };
+        }
         Some(Declarator {
             pointer_declarator,
-            kind,
+            kind: vector_slice,
         })
     }
 
-    fn parse_direct_declarator(&mut self, context: &mut Context) -> Option<DeclaratorType> {
+    fn parse_direct_declarator(&mut self, context: &mut Context) -> VectorSlice<DeclaratorType> {
+        let start_index = self.declarator_types.len().to_u32();
+        if let Err(token) = self.parse_first_direct_declarator(context) {
+            context.parser_error(ParserError {
+                error_type:
+                    ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
+                        token.kind,
+                    ),
+                source_vectors: token.source_vectors,
+            });
+            self.pending_token = Some(token);
+            return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
+        }
+        loop {
+            if self.parse_nested_direct_declarator(context).is_none() {
+                return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
+            }
+        }
+    }
+
+    fn parse_nested_direct_declarator(
+        &mut self,
+        context: &mut Context,
+    ) -> NestedDirectDeclaratorResult {
+        match self.parse_first_direct_declarator(context) {
+            | Ok(()) => return TERMINAL,
+            | Err(token) => self.pending_token = Some(token),
+        }
+        
+        todo!();
+        NESTED
+    }
+
+    fn parse_first_direct_declarator(&mut self, context: &mut Context) -> Result<(), Token> {
         let token = self.next_token(context)?;
         if token.kind == TokenType::Identifier {
-            return Some(DeclaratorType::Identifier(Identifier {
-                name: token.contents,
-            }));
+            self.declarator_types
+                .push(DeclaratorType::Identifier(Identifier {
+                    name: token.contents,
+                }));
+            return Ok(());
         }
         if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
             let declarator = self.parse_declarator(context);
@@ -930,12 +974,13 @@ impl Parser {
                 });
                 self.pending_token = token;
             }
-            return declarator.map(|d| DeclaratorType::Parenthesized(d));
+            let declarator = declarator?;
+            self.declarator_types
+                .push(DeclaratorType::Parenthesized(declarator));
+            return Ok(());
         }
-        todo!();
+        Err(token)
     }
-
-    fn parse_nested_direct_declarator(&mut self, context: &mut Context) -> DeclaratorType {}
 
     fn parse_type_qualifiers(&mut self, context: &mut Context) -> TypeQualifiers {
         let mut ret = TypeQualifiers(0);
@@ -981,11 +1026,7 @@ impl Parser {
     }
 
     fn parse_pointer_declarator(&mut self, context: &mut Context) -> PointerDeclarator {
-        let start_index = self
-            .type_qualifiers
-            .len()
-            .try_into()
-            .expect("More than u32::MAX type qualifiers.");
+        let start_index = self.type_qualifiers.len().to_u32();
         loop {
             let Some(token) = self.next_token(context) else {
                 break;
@@ -997,13 +1038,8 @@ impl Parser {
             let type_qualifiers = self.parse_type_qualifiers(context);
             self.type_qualifiers.push(type_qualifiers);
         }
-        let type_qualifiers_list = VectorSlice::new(
-            start_index,
-            self.type_qualifiers
-                .len()
-                .try_into()
-                .expect("More than u32::MAX type qualifiers."),
-        );
+        let type_qualifiers_list =
+            VectorSlice::new(start_index, self.type_qualifiers.len().to_u32());
         PointerDeclarator {
             type_qualifiers_list,
         }
@@ -1082,7 +1118,7 @@ pub(crate) struct StatementIndex(usize);
 pub(crate) struct TypeIndex(usize);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct DeclaratorIndex(usize);
+pub(crate) struct DeclaratorTypeIndex(usize);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct AbstractDeclaratorIndex(usize);

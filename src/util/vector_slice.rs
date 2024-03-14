@@ -66,3 +66,13 @@ impl<T> Default for VectorSlice<T> {
         }
     }
 }
+
+pub(crate) trait UsizeExt {
+    fn to_u32(self) -> u32;
+}
+
+impl UsizeExt for usize {
+    fn to_u32(self) -> u32 {
+        self.try_into().expect("VectorSlice length overflowed u32")
+    }
+}

@@ -19,7 +19,10 @@ use crate::util::{
     dedup_arena::DedupArena,
     shared::SharedString,
     string_cache::StringCache,
-    vector_slice::VectorSlice,
+    vector_slice::{
+        UsizeExt,
+        VectorSlice,
+    },
 };
 
 #[allow(dead_code)]
@@ -405,7 +408,7 @@ impl Context {
         source_file_index: u32,
         length: usize,
     ) -> u32 {
-        let index = self.source_vectors.0.len().try_into().unwrap();
+        let index = self.source_vectors.0.len().to_u32();
         self.source_vectors.0.push(SourceVector {
             index: start_position.index,
             column: start_position.column,
