@@ -900,6 +900,12 @@ impl Parser {
         }
         if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
             let declarator = self.parse_declarator(context);
+            if declarator.is_none() {
+                context.parser_error(ParserError {
+                    error_type:     ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator,
+                    source_vectors: token.source_vectors,
+                });
+            }
             let token = self.next_token(context);
             if !matches!(
                 token,
@@ -908,12 +914,19 @@ impl Parser {
                     ..
                 })
             ) {
+                let source_vectors = token.map(|t| t.source_vectors).unwrap_or_else(|| {
+                    context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_index(),
+                        0,
+                    )
+                });
                 context.parser_error(ParserError {
                     error_type:
                         ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(
-                            token.kind,
+                            token.map(|t| t.kind),
                         ),
-                    source_vectors: token.source_vectors,
+                    source_vectors,
                 });
                 self.pending_token = token;
             }
