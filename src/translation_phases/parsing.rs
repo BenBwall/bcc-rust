@@ -914,7 +914,7 @@ impl Parser {
             return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
         }
         loop {
-            if self.parse_nested_direct_declarator(context).is_none() {
+            if matches!(self.parse_nested_direct_declarator(context), TERMINAL) {
                 return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
             }
         }
