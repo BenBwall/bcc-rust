@@ -935,6 +935,16 @@ impl Parser {
         let mut is_pointer = false;
         let mut type_qualifiers = TypeQualifiers(0);
         let mut assignment_expression = None;
+        macro_rules! push {
+            () => {
+                self.declarator_types.push(DeclaratorType::Array {
+                    type_qualifiers,
+                    is_static,
+                    is_pointer,
+                    assignment_expression,
+                });
+            };
+        }
         loop {
             let Some(token) = self.next_token(context) else {
                 context.parser_error(ParserError {
@@ -947,12 +957,7 @@ impl Parser {
                         0,
                     ),
                 });
-                self.declarator_types.push(DeclaratorType::Array {
-                    type_qualifiers,
-                    is_static,
-                    is_pointer,
-                    assignment_expression,
-                });
+                push!();
                 return Some(());
             };
             match token.kind {
@@ -1001,7 +1006,7 @@ impl Parser {
                     }
                     if is_static {
                         context.parser_error(ParserError {
-                            error_type:     ParserErrorType::StaticPointer,
+                            error_type:     ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator,
                             source_vectors: token.source_vectors,
                         });
                     }
@@ -1018,19 +1023,11 @@ impl Parser {
                             source_vectors: token.source_vectors,
                         });
                     }
+                    push!();
+                    return Some(());
                 },
                 | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) => {
-                    let assignment_expression = self.parse_assignment_expression(context);
-                    let type_qualifiers_list = VectorSlice::new(
-                        self.type_qualifiers.len().to_u32(),
-                        type_qualifiers.len().to_u32(),
-                    );
-                    self.declarator_types.push(DeclaratorType::Array {
-                        type_qualifiers_list,
-                        is_static,
-                        is_pointer: false,
-                        assignment_expression,
-                    });
+                    push!();
                     return Some(());
                 },
                 | _ => {
