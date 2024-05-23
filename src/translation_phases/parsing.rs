@@ -917,7 +917,7 @@ impl Parser {
 
     // None indicates a nested direct declarator was not parsed.
     // Parses a nested direct declarator, AKA the part after the initial identifier
-    // or parenthesized declarator in a direct declarator.
+    // or the parenthesized declarator in a direct declarator.
     fn parse_nested_direct_declarator(&mut self, context: &mut Context) -> Option<()> {
         let token = self.next_token(context)?;
         if token.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket) {
@@ -1006,7 +1006,8 @@ impl Parser {
                     }
                     if is_static {
                         context.parser_error(ParserError {
-                            error_type:     ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator,
+                            error_type:
+                                ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator,
                             source_vectors: token.source_vectors,
                         });
                     }
