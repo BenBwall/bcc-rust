@@ -44,8 +44,5 @@
     "Tokenizining",
     "Typee",
     "undefining"
-  ],
-  "rust-analyzer.linkedProjects": [
-    ".\\Cargo.toml",
   ]
 }
