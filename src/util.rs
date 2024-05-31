@@ -16,6 +16,7 @@ pub(crate) mod vector_slice;
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub(crate) type HashSet<K> = hashbrown::HashSet<K, BuildHasherDefault<FxHasher>>;
 
+#[allow(dead_code)]
 pub(crate) trait Captures<U> {}
 
 impl<T: ?Sized, U> Captures<U> for T {}

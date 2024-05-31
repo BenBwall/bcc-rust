@@ -98,6 +98,7 @@ trait StrExt {
 
     /// Returns the character at the given index but in lowercase,
     /// See [`StrExt::char_at`] for more information.
+    #[allow(dead_code)]
     fn char_at_case_insensitive(&self, index: usize) -> Option<char> {
         self.char_at(index).map(|c| c.to_ascii_lowercase())
     }
@@ -263,6 +264,7 @@ pub(crate) trait SetPosition: GetPosition {
     fn set_position(&mut self, context: &mut Context, position: SourcePosition);
     #[allow(clippy::inline_always)]
     #[inline(always)]
+    #[allow(dead_code)]
     fn set_index(&mut self, context: &mut Context, index: usize) {
         self.set_position(
             context,
@@ -275,6 +277,7 @@ pub(crate) trait SetPosition: GetPosition {
     }
     #[allow(clippy::inline_always)]
     #[inline(always)]
+    #[allow(dead_code)]
     fn set_column(&mut self, context: &mut Context, column: u32) {
         self.set_position(
             context,
@@ -524,6 +527,7 @@ impl Context {
 
     #[cold]
     #[inline(never)]
+    #[allow(dead_code)]
     pub(crate) fn raw_parser_error(
         self_pending_errors: &mut Vec<TranslationError>,
         error: ParserError,

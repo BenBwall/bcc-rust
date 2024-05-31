@@ -2407,9 +2407,7 @@ impl Preprocessor {
         &mut self,
         context: &mut Context,
     ) -> Option<PreprocessorToken> {
-        let Some(token) = self.expand_macros::<SHOULD_IGNORE_WHITESPACE>(context) else {
-            return None;
-        };
+        let token = self.expand_macros::<SHOULD_IGNORE_WHITESPACE>(context)?;
 
         match token.kind {
             | PreprocessorTokenType::Hash => {
@@ -2434,9 +2432,7 @@ impl Preprocessor {
         context: &mut Context,
     ) -> Option<PreprocessorToken> {
         'base: loop {
-            let Some(lhs) = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context) else {
-                return None;
-            };
+            let lhs = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context)?;
             let hash_hash = if let Some(TokenizerFrame {
                 frame_type:
                     TokenizerFrameType::FunctionLikeMacroInvocation { .. }
