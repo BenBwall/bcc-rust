@@ -391,7 +391,7 @@ impl Parser {
                 };
             },
         }
-        let statement_start_index: u32 = self.statements.len().to_u32();
+        let statement_start_index = self.statements.len().to_u32();
         loop {
             match self.next_token(context) {
                 | Some(token)
@@ -405,7 +405,7 @@ impl Parser {
                 },
             }
         }
-        let end_index: u32 = self.statements.len().to_u32();
+        let end_index = self.statements.len().to_u32();
         TopLevelStatement {
             kind: TopLevelStatementType::FunctionDefinition(FunctionDefinition {
                 declaration: FunctionDeclaration {
