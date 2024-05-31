@@ -233,23 +233,23 @@ impl Parser {
         self.preprocessor.next_item(context)
     }
 
-    fn parse_statement(&mut self, context: &mut Context) -> Statement {
+    fn parse_statement(&mut self, _context: &mut Context) -> Statement {
         todo!();
     }
 
-    fn parse_expression(&mut self, context: &mut Context) -> Expression {
+    fn parse_expression(&mut self, _context: &mut Context) -> Expression {
         todo!();
     }
 
-    fn parse_struct_declaration(&mut self, context: &mut Context, token: Token) -> Type {
+    fn parse_struct_declaration(&mut self, _context: &mut Context, _token: Token) -> Type {
         todo!();
     }
 
-    fn parse_enum_declaration(&mut self, context: &mut Context, token: Token) -> Type {
+    fn parse_enum_declaration(&mut self, _context: &mut Context, _token: Token) -> Type {
         todo!();
     }
 
-    fn parse_type(&mut self, context: &mut Context) -> Type {
+    fn parse_type(&mut self, _context: &mut Context) -> Type {
         todo!();
     }
 
@@ -274,7 +274,7 @@ impl Parser {
             | TokenType::Identifier => Identifier {
                 name: token.contents,
             },
-            | tt => {
+            | _tt => {
                 context.parser_error(ParserError {
                     error_type:     on_error(token),
                     source_vectors: token.source_vectors,
@@ -287,8 +287,9 @@ impl Parser {
         }
     }
 
-    fn parse_typedef(&mut self, context: &mut Context, typedef: Token) -> Type {
-        let referent_type = self.parse_type(context);
+    fn parse_typedef(&mut self, context: &mut Context, _typedef: Token) -> Type {
+        // TODO: finish implementing this function.
+        let _referent_type = self.parse_type(context);
         let referent_type_index = self.types.len() - 1;
 
         let name =
@@ -330,7 +331,7 @@ impl Parser {
         t
     }
 
-    fn parse_variable_declaration(&mut self, context: &mut Context) -> VariableDeclaration {
+    fn parse_variable_declaration(&mut self, _context: &mut Context) -> VariableDeclaration {
         todo!();
     }
 
@@ -439,7 +440,6 @@ impl Parser {
             | TokenType::Keyword(KeywordTokenType::Static) => StorageClass::Static,
             | TokenType::Keyword(KeywordTokenType::Extern) => StorageClass::Extern,
             | TokenType::Keyword(KeywordTokenType::Typedef) => StorageClass::Typedef,
-            | TokenType::Keyword(KeywordTokenType::Auto) => StorageClass::Auto,
             | _ => unreachable!("set_storage_class called with non-storage class token."),
         }
     }
@@ -934,7 +934,7 @@ impl Parser {
         let mut is_static = false;
         let mut is_pointer = false;
         let mut type_qualifiers = TypeQualifiers(0);
-        let mut assignment_expression = None;
+        let assignment_expression = None;
         macro_rules! push {
             () => {
                 self.declarator_types.push(DeclaratorType::Array {
@@ -947,15 +947,16 @@ impl Parser {
         }
         loop {
             let Some(token) = self.next_token(context) else {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_index(),
+                    0,
+                );
                 context.parser_error(ParserError {
                     error_type:     ParserErrorType::UnexpectedEndOfInput(
                         "parsing array direct declarator. Expected a closing square bracket.",
                     ),
-                    source_vectors: context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    ),
+                    source_vectors,
                 });
                 push!();
                 return Some(());
@@ -1041,6 +1042,10 @@ impl Parser {
                 },
             }
         }
+    }
+
+    fn parse_function_direct_declarator(&mut self, _context: &mut Context) -> Option<()> {
+        todo!();
     }
 
     // Parses the first two rules of direct-declarator.
@@ -1182,17 +1187,7 @@ impl Parser {
             | _ => {
                 let expression = self.parse_expression(context);
                 self.expressions.push(expression);
-                Some(TopLevelStatement {
-                    kind: TopLevelStatementType::VariableDefinition(VariableDefinition {
-                        variable:    VariableDeclaration {
-                            name:          //type_.,
-                            todo!(),
-                            var_type:      todo!(),
-                            storage_class: todo!(),
-                        },
-                        initializer: todo!(),
-                    }),
-                })
+                todo!();
             },
         }
     }
@@ -1573,6 +1568,14 @@ pub(crate) enum ParserErrorType {
     TypeSpecifierSpecifiedTwice(TokenType),
     LongSpecifiedThrice,
     LongLongDoubleSpecified,
+    PointerSpecifiedTwice,
+    TypeQualifiersWithoutDeclarator,
+    ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator,
+    ExpectedClosingParenthesisAfterParenthesizedDeclarator(Option<TokenType>),
+    DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(TokenType),
+    BothStaticAndPointerInArrayDirectDeclarator,
+    ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(TokenType),
+    ExpectedClosingSquareBracket(TokenType),
 }
 
 impl GetSeverity for ParserErrorType {
@@ -1580,8 +1583,12 @@ impl GetSeverity for ParserErrorType {
         match self {
             | ParserErrorType::UnexpectedEndOfInput(..)
             | ParserErrorType::ExpectedIdentifierInTypedef(..)
-            | ParserErrorType::ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(..) =>
-                ErrorSeverity::Error,
+            | ParserErrorType::ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(..)
+            | ParserErrorType::TypeQualifiersWithoutDeclarator
+            | ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator
+            | ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(..)
+            | ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
+            | ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator => ErrorSeverity::Error,
             | ParserErrorType::ExpectedSemicolonAfterTypedef(..)
             | ParserErrorType::StorageClassRedefinition(..)
             | ParserErrorType::ConstSpecifiedTwice
@@ -1592,7 +1599,12 @@ impl GetSeverity for ParserErrorType {
             | ParserErrorType::ConflictingTypeSpecifiers(..)
             | ParserErrorType::TypeSpecifierSpecifiedTwice(..)
             | ParserErrorType::LongSpecifiedThrice
-            | ParserErrorType::LongLongDoubleSpecified => ErrorSeverity::Warning,
+            | ParserErrorType::LongLongDoubleSpecified
+            | ParserErrorType::PointerSpecifiedTwice
+            | ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
+                ..,
+            )
+            | ParserErrorType::ExpectedClosingSquareBracket(..) => ErrorSeverity::Warning,
         }
     }
 }
@@ -1601,29 +1613,23 @@ impl Display for ParserErrorType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             | ParserErrorType::UnexpectedEndOfInput(message) =>
-                write!(f, "Unexpected end of input while {}!", message),
+                write!(f, "Unexpected end of input while {message}!"),
             | ParserErrorType::ExpectedIdentifierInTypedef(tt) => write!(
                 f,
-                "Expected an identifier in typedef, found instead {:?}!",
-                tt
+                "Expected an identifier in typedef, found instead {tt:?}!",
             ),
             | ParserErrorType::ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(tt) =>
                 write!(
                     f,
                     "Expected a semicolon or an opening curly brace after function declaration, \
-                     found instead {:?}!",
-                    tt
+                     found instead {tt:?}!",
                 ),
             | ParserErrorType::ExpectedSemicolonAfterTypedef(tt) => write!(
                 f,
-                "Expected a semicolon after typedef, found instead {:?}!",
-                tt
+                "Expected a semicolon after typedef, found instead {tt:?}!"
             ),
-            | ParserErrorType::StorageClassRedefinition(last, new) => write!(
-                f,
-                "Redefinition of storage class {:?} with {:?}!",
-                last, new
-            ),
+            | ParserErrorType::StorageClassRedefinition(last, new) =>
+                write!(f, "Redefinition of storage class {last:?} with {new:?}!"),
             | ParserErrorType::ConstSpecifiedTwice =>
                 write!(f, "`const` keyword specified twice in type declaration!"),
             | ParserErrorType::VolatileSpecifiedTwice =>
@@ -1638,19 +1644,50 @@ impl Display for ParserErrorType {
                 f,
                 "`static` keyword specified twice in array direct declarator!"
             ),
-            | ParserErrorType::ConflictingTypeSpecifiers(specifiers, tt) => write!(
-                f,
-                "Conflicting type specifiers {:?} and {:?}!",
-                specifiers, tt
-            ),
+            | ParserErrorType::ConflictingTypeSpecifiers(specifiers, tt) =>
+                write!(f, "Conflicting type specifiers {specifiers:?} and {tt:?}!"),
             | ParserErrorType::TypeSpecifierSpecifiedTwice(tt) =>
-                write!(f, "Type specifier {:?} specified twice!", tt),
+                write!(f, "Type specifier {tt:?} specified twice!"),
             | ParserErrorType::LongSpecifiedThrice =>
                 write!(f, "`long` keyword specified thrice in type declaration!"),
             | ParserErrorType::LongLongDoubleSpecified => write!(
                 f,
                 "`long long` and `double` keywords specified together in type declaration!"
             ),
+            | ParserErrorType::PointerSpecifiedTwice =>
+                write!(f, "Pointer specified twice in array direct declarator!"),
+            | ParserErrorType::TypeQualifiersWithoutDeclarator =>
+                write!(f, "Type qualifiers specified without a declarator!"),
+            | ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator =>
+                write!(
+                    f,
+                    "Expected a declarator after opening parenthesis in direct declarator!"
+                ),
+            | ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(tt) =>
+                write!(
+                    f,
+                    "Expected a closing parenthesis after parenthesized declarator! Got instead: \
+                     {tt:?}"
+                ),
+            | ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(tt) =>
+                write!(
+                    f,
+                    "Direct declarator must start with an identifier or an opening parenthesis! \
+                     Got instead: {tt:?}"
+                ),
+            | ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator => write!(
+                f,
+                "Both `static` and pointer specified in array direct declarator!"
+            ),
+            | ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
+                tt,
+            ) => write!(
+                f,
+                "Expected a closing square bracket after pointer in array direct declarator! Got \
+                 instead: {tt:?}"
+            ),
+            | ParserErrorType::ExpectedClosingSquareBracket(tt) =>
+                write!(f, "Expected a closing square bracket! Got instead: {tt:?}"),
         }
     }
 }

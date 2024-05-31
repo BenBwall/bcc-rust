@@ -372,7 +372,7 @@ pub(crate) enum IntegerSuffix {
     UnsignedLongLong,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Token {
     pub(crate) kind:           TokenType,
     pub(crate) source_vectors: SourceVectors,
@@ -395,7 +395,7 @@ impl GetSourceVectors for Token {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum IntegerTokenType {
     Int(i32),
     Long(i64),
@@ -545,7 +545,7 @@ impl From<CharacterTokenType> for char {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum TokenType {
     Integer(IntegerTokenType),
     Float(FloatTokenType),
@@ -3698,7 +3698,7 @@ impl Preprocessor {
         op: PreprocessorExpressionOperator,
     ) {
         match op {
-            | PreprocessorExpressionOperator::UnaryPlus =>
+            | PreprocessorExpressionOperator::UnaryPlus => {
                 if self.expression_parser.operand_stack.is_empty() {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
@@ -3709,7 +3709,8 @@ impl Preprocessor {
                         error_type: PreprocessorErrorType::UnaryPlusWithoutOperand,
                         source_vectors,
                     });
-                },
+                }
+            },
             | PreprocessorExpressionOperator::UnaryMinus => {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
                     let source_vectors = context.create_source_vectors(
