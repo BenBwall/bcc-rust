@@ -420,9 +420,7 @@ impl PreprocessorTokenizer {
         context: &mut Context,
     ) -> Option<PreprocessorToken> {
         loop {
-            let Some(current) = self.initial_processor.next_item(context) else {
-                return None;
-            };
+            let current = self.initial_processor.next_item(context)?;
             context.string_cache.push(current);
             if current == '>' {
                 break;
