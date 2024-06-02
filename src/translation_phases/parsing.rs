@@ -953,7 +953,7 @@ impl Parser {
                     0,
                 );
                 context.parser_error(ParserError {
-                    error_type:     ParserErrorType::UnexpectedEndOfInput(
+                    error_type: ParserErrorType::UnexpectedEndOfInput(
                         "parsing array direct declarator. Expected a closing square bracket.",
                     ),
                     source_vectors,
@@ -1074,13 +1074,16 @@ impl Parser {
                     ..
                 })
             ) {
-                let source_vectors = token.map(|t| t.source_vectors).unwrap_or_else(|| {
-                    context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    )
-                });
+                let source_vectors = token.map_or_else(
+                    || {
+                        context.create_source_vectors(
+                            self.position(context),
+                            self.source_file_index(),
+                            0,
+                        )
+                    },
+                    |t| t.source_vectors,
+                );
                 context.parser_error(ParserError {
                     error_type:
                         ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(
@@ -1183,7 +1186,7 @@ impl Parser {
                 parameters,
                 return_type,
             } =>
-                return Some(self.parse_function_definition(context, name, parameters, return_type)),
+                Some(self.parse_function_definition(context, name, parameters, return_type)),
             | _ => {
                 let expression = self.parse_expression(context);
                 self.expressions.push(expression);
