@@ -934,7 +934,7 @@ impl Parser {
         let mut is_static = false;
         let mut is_pointer = false;
         let mut type_qualifiers = TypeQualifiers(0);
-        let assignment_expression = None;
+        let mut assignment_expression = None;
         macro_rules! push {
             () => {
                 self.declarator_types.push(DeclaratorType::Array {
@@ -1012,6 +1012,12 @@ impl Parser {
                             source_vectors: token.source_vectors,
                         });
                     }
+                    if assignment_expression.is_some() {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::PointerAfterAssignmentExpressionInArrayDirectDeclarator,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
                     is_pointer = true;
                     if !matches!(
                         self.next_token(context),
@@ -1029,6 +1035,18 @@ impl Parser {
                     return Some(());
                 },
                 | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) => {
+                    if assignment_expression.is_none() && is_static {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    if assignment_expression.is_some() && is_pointer {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::AssignmentExpressionAfterPointerInArrayDirectDeclarator,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
                     push!();
                     return Some(());
                 },
