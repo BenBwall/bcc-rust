@@ -1203,8 +1203,7 @@ impl Parser {
                 name,
                 parameters,
                 return_type,
-            } =>
-                Some(self.parse_function_definition(context, name, parameters, return_type)),
+            } => Some(self.parse_function_definition(context, name, parameters, return_type)),
             | _ => {
                 let expression = self.parse_expression(context);
                 self.expressions.push(expression);
@@ -1597,6 +1596,9 @@ pub(crate) enum ParserErrorType {
     BothStaticAndPointerInArrayDirectDeclarator,
     ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(TokenType),
     ExpectedClosingSquareBracket(TokenType),
+    PointerAfterAssignmentExpressionInArrayDirectDeclarator,
+    ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator,
+    AssignmentExpressionAfterPointerInArrayDirectDeclarator,
 }
 
 impl GetSeverity for ParserErrorType {
@@ -1609,7 +1611,9 @@ impl GetSeverity for ParserErrorType {
             | ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator
             | ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(..)
             | ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
-            | ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator => ErrorSeverity::Error,
+            | ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator
+            | ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator =>
+                ErrorSeverity::Error,
             | ParserErrorType::ExpectedSemicolonAfterTypedef(..)
             | ParserErrorType::StorageClassRedefinition(..)
             | ParserErrorType::ConstSpecifiedTwice
@@ -1625,7 +1629,10 @@ impl GetSeverity for ParserErrorType {
             | ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
                 ..,
             )
-            | ParserErrorType::ExpectedClosingSquareBracket(..) => ErrorSeverity::Warning,
+            | ParserErrorType::ExpectedClosingSquareBracket(..)
+            | ParserErrorType::PointerAfterAssignmentExpressionInArrayDirectDeclarator
+            | ParserErrorType::AssignmentExpressionAfterPointerInArrayDirectDeclarator =>
+                ErrorSeverity::Warning,
         }
     }
 }
@@ -1709,6 +1716,20 @@ impl Display for ParserErrorType {
             ),
             | ParserErrorType::ExpectedClosingSquareBracket(tt) =>
                 write!(f, "Expected a closing square bracket! Got instead: {tt:?}"),
+            | ParserErrorType::PointerAfterAssignmentExpressionInArrayDirectDeclarator => write!(
+                f,
+                "Pointer specified after assignment expression in array direct declarator!"
+            ),
+            | ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator =>
+                write!(
+                    f,
+                    "Expected an assignment expression after `static` in array direct declarator!"
+                ),
+            | ParserErrorType::AssignmentExpressionAfterPointerInArrayDirectDeclarator => 
+                write!(
+                    f,
+                    "Assignment expression specified after pointer in array direct declarator!"
+                ),
         }
     }
 }
