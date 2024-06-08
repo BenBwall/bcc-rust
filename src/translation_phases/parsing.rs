@@ -1051,12 +1051,18 @@ impl Parser {
                     return Some(());
                 },
                 | _ => {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ExpectedClosingSquareBracket(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                    self.pending_token = Some(token);
-                    return None;
+                    if assignment_expression.is_none() {
+                        self.pending_token = Some(token);
+                        assignment_expression = Some(self.parse_assignment_expression(context));
+                    } else {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::ExpectedClosingSquareBracket(token.kind),
+                            source_vectors: token.source_vectors,
+                        });
+                        self.pending_token = Some(token);
+                        return None;
+                    }
+                    
                 },
             }
         }
