@@ -1051,7 +1051,7 @@ impl Parser {
                     return Some(());
                 },
                 | _ => {
-                    if assignment_expression.is_none() {
+                    if assignment_expression.is_none() && !is_pointer {
                         self.pending_token = Some(token);
                         assignment_expression = Some(self.parse_assignment_expression(context));
                     } else {
