@@ -1062,7 +1062,6 @@ impl Parser {
                         self.pending_token = Some(token);
                         return None;
                     }
-                    
                 },
             }
         }
