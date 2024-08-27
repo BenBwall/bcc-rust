@@ -1026,6 +1026,7 @@ impl Parser {
                             ..
                         })
                     ) {
+                        // We know '*' can't be used as a unary operator in constant expressions, so we don't have to consider that case.
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(token.kind),
                             source_vectors: token.source_vectors,
