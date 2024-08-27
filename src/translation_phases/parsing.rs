@@ -869,9 +869,12 @@ impl Parser {
         }
     }
 
-    fn parse_declarator(&mut self, context: &mut Context) -> Option<Declarator> {
+    fn parse_declarator<const IS_ABSTRACT: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<Declarator> {
         let pointer_declarator = self.parse_pointer_declarator(context);
-        let vector_slice = self.parse_direct_declarator(context);
+        let vector_slice = self.parse_direct_declarator::<IS_ABSTRACT>(context);
         if vector_slice.length == 0 {
             if pointer_declarator.type_qualifiers_list.length != 0 {
                 let source_vectors = context.create_source_vectors(
@@ -903,13 +906,25 @@ impl Parser {
     //      direct-declarator [ type-qualifier-list? *]
     //      direct-declarator ( parameter-type-list )
     //      direct-declarator ( identifier-list? )
-    fn parse_direct_declarator(&mut self, context: &mut Context) -> VectorSlice<DeclaratorType> {
+    fn parse_direct_declarator<const IS_ABSTRACT: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> VectorSlice<DeclaratorType> {
         let start_index = self.declarator_types.len().to_u32();
-        if self.parse_first_direct_declarator(context).is_none() {
+        // The first part of a declarator is only required to be an identifier or a
+        // parenthesized declarator if it is not abstract.
+        if self
+            .parse_first_direct_declarator::<IS_ABSTRACT>(context)
+            .is_none()
+            && !IS_ABSTRACT
+        {
             return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
         }
         loop {
-            if self.parse_nested_direct_declarator(context).is_none() {
+            if self
+                .parse_nested_direct_declarator::<IS_ABSTRACT>(context)
+                .is_none()
+            {
                 return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
             }
         }
@@ -918,22 +933,29 @@ impl Parser {
     // None indicates a nested direct declarator was not parsed.
     // Parses a nested direct declarator, AKA the part after the initial identifier
     // or the parenthesized declarator in a direct declarator.
-    fn parse_nested_direct_declarator(&mut self, context: &mut Context) -> Option<()> {
+    fn parse_nested_direct_declarator<const IS_ABSTRACT: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<()> {
         let token = self.next_token(context)?;
         if token.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket) {
-            self.parse_array_direct_declarator(context)
+            self.parse_array_direct_declarator::<IS_ABSTRACT>(context)
         } else if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
-            self.parse_function_direct_declarator(context)
+            self.parse_function_direct_declarator::<IS_ABSTRACT>(context)
         } else {
             self.pending_token = Some(token);
             None
         }
     }
 
-    fn parse_array_direct_declarator(&mut self, context: &mut Context) -> Option<()> {
+    fn parse_array_direct_declarator<const IS_ABSTRACT: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<()> {
         let mut is_static = false;
         let mut is_pointer = false;
         let mut type_qualifiers = TypeQualifiers(0);
+        let mut type_qualifiers_before_static = false;
         let mut assignment_expression = None;
         macro_rules! push {
             () => {
@@ -978,6 +1000,15 @@ impl Parser {
                             source_vectors: token.source_vectors,
                         });
                     }
+                    if is_static && type_qualifiers_before_static {
+                        context.parser_error(ParserError {
+                            error_type: ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    if !is_static {
+                        type_qualifiers_before_static = true;
+                    }
                     type_qualifiers.set_is_const(true);
                 },
                 | TokenType::Keyword(KeywordTokenType::Volatile) => {
@@ -987,6 +1018,15 @@ impl Parser {
                             source_vectors: token.source_vectors,
                         });
                     }
+                    if is_static && type_qualifiers_before_static {
+                        context.parser_error(ParserError {
+                            error_type: ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    if !is_static {
+                        type_qualifiers_before_static = true;
+                    }
                     type_qualifiers.set_is_volatile(true);
                 },
                 | TokenType::Keyword(KeywordTokenType::Restrict) => {
@@ -995,6 +1035,15 @@ impl Parser {
                             error_type:     ParserErrorType::RestrictSpecifiedTwice,
                             source_vectors: token.source_vectors,
                         });
+                    }
+                    if is_static && type_qualifiers_before_static {
+                        context.parser_error(ParserError {
+                            error_type: ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    if !is_static {
+                        type_qualifiers_before_static = true;
                     }
                     type_qualifiers.set_is_restrict(true);
                 },
@@ -1018,6 +1067,12 @@ impl Parser {
                             source_vectors: token.source_vectors,
                         });
                     }
+                    if type_qualifiers != TypeQualifiers(0) && IS_ABSTRACT {
+                        context.parser_error(ParserError {
+                            error_type:     ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
                     is_pointer = true;
                     if !matches!(
                         self.next_token(context),
@@ -1026,7 +1081,8 @@ impl Parser {
                             ..
                         })
                     ) {
-                        // We know '*' can't be used as a unary operator in constant expressions, so we don't have to consider that case.
+                        // We know '*' can't be used as a unary operator in constant expressions, so
+                        // we don't have to consider that case.
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(token.kind),
                             source_vectors: token.source_vectors,
@@ -1051,19 +1107,20 @@ impl Parser {
                     push!();
                     return Some(());
                 },
-                | _ => {
+                | _ =>
                     if assignment_expression.is_none() && !is_pointer {
                         self.pending_token = Some(token);
                         assignment_expression = Some(self.parse_assignment_expression(context));
                     } else {
                         context.parser_error(ParserError {
-                            error_type:     ParserErrorType::ExpectedClosingSquareBracket(token.kind),
+                            error_type:     ParserErrorType::ExpectedClosingSquareBracket(
+                                token.kind,
+                            ),
                             source_vectors: token.source_vectors,
                         });
                         self.pending_token = Some(token);
                         return None;
-                    }
-                },
+                    },
             }
         }
     }
@@ -1073,9 +1130,12 @@ impl Parser {
     }
 
     // Parses the first two rules of direct-declarator.
-    fn parse_first_direct_declarator(&mut self, context: &mut Context) -> Option<()> {
+    fn parse_first_direct_declarator<const IS_ABSTRACT: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<()> {
         let token = self.next_token(context)?;
-        if token.kind == TokenType::Identifier {
+        if token.kind == TokenType::Identifier && !IS_ABSTRACT {
             self.declarator_types
                 .push(DeclaratorType::Identifier(Identifier {
                     name: token.contents,
@@ -1083,7 +1143,7 @@ impl Parser {
             return Some(());
         }
         if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
-            let declarator = self.parse_declarator(context);
+            let declarator = self.parse_declarator::<IS_ABSTRACT>(context);
             if declarator.is_none() {
                 context.parser_error(ParserError {
                     error_type:     ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator,
@@ -1122,13 +1182,15 @@ impl Parser {
                 .push(DeclaratorType::Parenthesized(declarator));
             return Some(());
         }
-        context.parser_error(ParserError {
-            error_type:
-                ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
-                    token.kind,
-                ),
-            source_vectors: token.source_vectors,
-        });
+        if !IS_ABSTRACT {
+            context.parser_error(ParserError {
+                error_type:
+                    ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
+                        token.kind,
+                    ),
+                source_vectors: token.source_vectors,
+            });
+        }
         self.pending_token = Some(token);
         None
     }
@@ -1731,11 +1793,10 @@ impl Display for ParserErrorType {
                     f,
                     "Expected an assignment expression after `static` in array direct declarator!"
                 ),
-            | ParserErrorType::AssignmentExpressionAfterPointerInArrayDirectDeclarator => 
-                write!(
-                    f,
-                    "Assignment expression specified after pointer in array direct declarator!"
-                ),
+            | ParserErrorType::AssignmentExpressionAfterPointerInArrayDirectDeclarator => write!(
+                f,
+                "Assignment expression specified after pointer in array direct declarator!"
+            ),
         }
     }
 }
