@@ -9,6 +9,7 @@
     "chrono",
     "codepoint",
     "CPATH",
+    "declarators",
     "Deque",
     "endptr",
     "ERANGE",
