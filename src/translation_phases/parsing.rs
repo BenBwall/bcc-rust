@@ -1125,8 +1125,22 @@ impl Parser {
         }
     }
 
-    fn parse_function_direct_declarator(&mut self, _context: &mut Context) -> Option<()> {
-        todo!();
+    fn parse_k_and_r_function_direct_declarator<const IS_ABSTRACT: bool>(&mut self, _context: &mut Context) -> Result<DeclaratorTypeIndex, VectorSlice<Identifier>> {
+        // K&R declarations are not supported in abstract declarators.
+        if IS_ABSTRACT {
+            return None;
+        }
+
+    }
+
+    fn parse_function_direct_declarator<const IS_ABSTRACT: bool>(&mut self, context: &mut Context) -> Option<()> {
+        if let Some(()) = self.parse_k_and_r_function_direct_declarator::<IS_ABSTRACT>(context) {
+            
+        }
+        let mut all_are_identifiers = true;
+        loop {
+
+        }
     }
 
     // Parses the first two rules of direct-declarator.
