@@ -12,7 +12,7 @@ use std::{
 pub(crate) struct VectorSlice<T> {
     pub(crate) start_index: u32,
     pub(crate) length:      u32,
-    // We use `AtomicPtr` so we're `Send` and `Sync`.
+    // We use `AtomicPtr` so that we're `Send` and `Sync`.
     _marker:                PhantomData<AtomicPtr<T>>,
 }
 
