@@ -30,6 +30,11 @@ use super::{
     SourceVectors,
     TranslationPhase,
 };
+#[allow(unused_imports)]
+use crate::util::{
+    HashMap,
+    HashSet,
+};
 use crate::{
     translation_phases::preprocessing::OperatorTokenType,
     util::{
@@ -50,6 +55,9 @@ pub(crate) struct Parser {
     pub(crate) statements:       Vec<Statement>,
     pub(crate) type_qualifiers:  Vec<TypeQualifiers>,
     pub(crate) declarator_types: Vec<DeclaratorType>,
+    pub(crate) typedef_names:    HashMap<StringCacheId, TypeIndex>,
+    pub(crate) struct_names:     HashMap<StringCacheId, TypeIndex>,
+    pub(crate) enum_names:       HashMap<StringCacheId, TypeIndex>,
 }
 
 impl GetPosition for Parser {
@@ -1125,22 +1133,54 @@ impl Parser {
         }
     }
 
-    fn parse_k_and_r_function_direct_declarator<const IS_ABSTRACT: bool>(&mut self, _context: &mut Context) -> Result<DeclaratorTypeIndex, VectorSlice<Identifier>> {
+    /// Returns number of identifiers parsed on failure.
+    fn parse_k_and_r_function_direct_declarator<const IS_ABSTRACT: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Result<DeclaratorTypeIndex, usize> {
+        let mut identifiers = 0;
         // K&R declarations are not supported in abstract declarators.
         if IS_ABSTRACT {
-            return None;
+            return Err(identifiers);
         }
-
+        loop {
+            let Some(next) = self.next_token(context) else {
+                let position = self.position(context);
+                let source_vectors =
+                    context.create_source_vectors(position, self.source_file_index(), 0);
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::UnexpectedEndOfInput(
+                        "parsing K&R function direct declarator. Expected a closing parenthesis.",
+                    ),
+                    source_vectors,
+                });
+                return Err(identifiers);
+            };
+            // Turns out that this wasn't a K&R-style function declarator. If we haven't
+            // parsed anything yet, we're all good and can just return Err(0).
+            // Otherwise we have to generate an error because the parameter list
+            // is half K&R style and half modern style which is not allowed.
+            // The standard says that if an identifier could be a typedef name, it IS a
+            // typedef name.
+            if next.kind != TokenType::Identifier || self.typedef_names.contains_key(&next.contents)
+            {
+                // We create a parser error here, because the identifiers we previously parsed
+                // are syntax errors since they are declarators with only an identifier, that is
+                // not valid typedef.
+                if identifiers != 0 {}
+                self.pending_token = Some(next);
+                return Err(identifiers);
+            }
+        }
     }
 
-    fn parse_function_direct_declarator<const IS_ABSTRACT: bool>(&mut self, context: &mut Context) -> Option<()> {
-        if let Some(()) = self.parse_k_and_r_function_direct_declarator::<IS_ABSTRACT>(context) {
-            
-        }
+    fn parse_function_direct_declarator<const IS_ABSTRACT: bool>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<()> {
+        if let Some(()) = self.parse_k_and_r_function_direct_declarator::<IS_ABSTRACT>(context) {}
         let mut all_are_identifiers = true;
-        loop {
-
-        }
+        loop {}
     }
 
     // Parses the first two rules of direct-declarator.
