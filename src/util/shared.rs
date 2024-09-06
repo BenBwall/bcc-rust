@@ -137,7 +137,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn strong_reference_count(&self) -> usize {
         self.ref_cnt().get()
     }
@@ -155,7 +154,6 @@ where
 }
 
 impl SharedString {
-    #[allow(dead_code)]
     pub(crate) fn as_str(&self) -> &str {
         self
     }
@@ -166,7 +164,6 @@ impl SharedString {
 }
 
 impl<T> SharedVec<T> {
-    #[allow(dead_code)]
     pub(crate) fn as_slice(&self) -> &[T] {
         self
     }

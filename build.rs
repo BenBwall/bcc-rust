@@ -1,4 +1,7 @@
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "We don't have a doc string here because it's obvious what a build script does."
+)]
 
 #[cfg(feature = "benchmarking-internals")]
 use std::io::{

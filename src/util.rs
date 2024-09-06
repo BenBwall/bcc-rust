@@ -16,7 +16,7 @@ pub(crate) mod vector_slice;
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub(crate) type HashSet<K> = hashbrown::HashSet<K, BuildHasherDefault<FxHasher>>;
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "We aren't using this currently, but it's a very useful trait to have for getting the right variance.")]
 pub(crate) trait Captures<U> {}
 
 impl<T: ?Sized, U> Captures<U> for T {}
@@ -33,12 +33,12 @@ pub(crate) fn read_to_string_lossy(path: impl AsRef<Path>) -> std::io::Result<St
     Ok(vec_to_string_lossy(buf))
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "This might not be currently used, but it's useful for indicating a code path is cold.")]
 #[inline]
 #[cold]
 fn cold() {}
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "This might not be currently used, but it's useful for indicating a code path is likely.")]
 #[inline]
 pub(crate) fn likely(b: bool) -> bool {
     if !b {
@@ -47,7 +47,7 @@ pub(crate) fn likely(b: bool) -> bool {
     b
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "This might not be currently used, but it's useful for indicating a code path is unlikely.")]
 #[inline]
 pub(crate) fn unlikely(b: bool) -> bool {
     if b {

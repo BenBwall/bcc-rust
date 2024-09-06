@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use super::stack_queue::StackQueue;
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "This is currently unused, but I prove useful in the future.")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum SmallQueue<T, const N: usize>
 where
@@ -29,7 +29,6 @@ where
         Self::StackQueue(StackQueue::new())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn clear(&mut self) {
         match self {
             | Self::StackQueue(queue) => queue.clear(),
@@ -37,7 +36,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         match self {
             | Self::StackQueue(queue) => queue.len(),
@@ -45,7 +43,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn is_empty(&self) -> bool {
         match self {
             | Self::StackQueue(queue) => queue.is_empty(),
@@ -53,7 +50,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn push_back(&mut self, value: T) {
         match self {
             | Self::StackQueue(queue) => queue.push_back(value),
@@ -61,7 +57,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn pop_back(&mut self) -> Option<T> {
         match self {
             | Self::StackQueue(queue) => queue.pop_back(),
@@ -69,7 +64,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn push_front(&mut self, value: T) {
         match self {
             | Self::StackQueue(queue) => queue.push_front(value),
@@ -77,7 +71,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn pop_front(&mut self) -> Option<T> {
         match self {
             | Self::StackQueue(queue) => queue.pop_front(),

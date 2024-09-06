@@ -1,6 +1,15 @@
-#![allow(unused_crate_dependencies)]
-#![allow(clippy::cargo_common_metadata)]
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "We don't have a doc string here because it's obvious what our main module does."
+)]
+#![expect(
+    unused_crate_dependencies,
+    reason = "We have a bunch of dependencies that are not used in our main module."
+)]
+#![expect(
+    clippy::cargo_common_metadata,
+    reason = "We don't have any metadata in our main module, because it's not getting published."
+)]
 
 use std::process::ExitCode;
 

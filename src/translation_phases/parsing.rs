@@ -30,7 +30,7 @@ use super::{
     SourceVectors,
     TranslationPhase,
 };
-#[allow(unused_imports)]
+#[expect(unused_imports, reason = "We'll definitely need HashMap and HashSet in the future.")]
 use crate::util::{
     HashMap,
     HashSet,
@@ -1336,7 +1336,7 @@ impl Parser {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names, reason = "Every variant here starts with Parsing because that's our current state. Maybe this is a bit redundant but I think it's fine.")]
 pub(crate) enum State {
     ParsingTopLevelStatement,
     ParsingStatement,

@@ -31,7 +31,6 @@ pub(crate) enum InitialProcessorError {
 }
 
 impl GetPosition for InitialProcessorError {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         match self {
@@ -67,7 +66,6 @@ pub(crate) struct InitialProcessor {
 }
 
 impl GetPosition for InitialProcessor {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
@@ -79,7 +77,6 @@ impl GetPosition for InitialProcessor {
 }
 
 impl SetPosition for InitialProcessor {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn set_position(&mut self, _context: &mut Context, position: SourcePosition) {
         let SourcePosition {
@@ -94,7 +91,6 @@ impl SetPosition for InitialProcessor {
 }
 
 impl GetSourceFileIndex for InitialProcessor {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         self.source_file.source_file_index

@@ -18,7 +18,11 @@ use hashbrown::{
     HashMap,
 };
 use rustc_hash::FxHasher;
-#[allow(clippy::assertions_on_constants)]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "Clippy is giving a false positive here, the value of usize::BITS will vary \
+              depending on which architecture we're targeting."
+)]
 const _: () = assert!(
     usize::BITS >= 32,
     "StringCache: usize must be at least 32 bits."
@@ -85,7 +89,6 @@ impl From<StringCacheId> for u32 {
 }
 
 impl StringCacheId {
-    #[allow(dead_code)]
     pub(crate) const fn from_u32(id: u32) -> Self {
         Self {
             id: match NonZeroU32::new(id) {
@@ -95,7 +98,6 @@ impl StringCacheId {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) const fn to_u32(self) -> u32 {
         self.id.get()
     }
@@ -112,7 +114,10 @@ impl StringCache {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "We're checking that we're inbounds before casting."
+    )]
     fn intern_impl(data: &mut String, ends: &mut Vec<u32>, s: &str) -> StringCacheId {
         let len = s.len();
         let start = data.len();
@@ -159,7 +164,6 @@ impl StringCache {
         inner(self, s.as_ref())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
         fn inner(interner: &StringCache, s: &str) -> Option<StringCacheId> {
             let hash = interner.hasher.hash_one(s);
@@ -193,8 +197,11 @@ impl StringCache {
         inner(self, s.as_ref());
     }
 
-    #[allow(dead_code)]
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "One of our invariants is that self.data.len() will never be greater than \
+                  u32::MAX."
+    )]
     pub(crate) fn pop(&mut self) {
         assert!(
             self.ends.last().copied() != Some(self.data.len() as u32),
@@ -203,8 +210,11 @@ impl StringCache {
         _ = self.data.pop();
     }
 
-    #[allow(dead_code)]
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "One of our invariants is that self.data.len() will never be greater than \
+                  u32::MAX."
+    )]
     pub(crate) fn pop_str(&mut self, len: u32) {
         assert!(
             self.ends.last().copied() < Some(self.data.len() as u32 + len - 1),
@@ -213,7 +223,11 @@ impl StringCache {
         self.data.truncate(self.data.len() - len as usize);
     }
 
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "One of our invariants is that self.data.len() will never be greater than \
+                  u32::MAX."
+    )]
     pub(crate) fn end_str(&mut self) -> StringCacheId {
         self.ends.push(self.data.len() as u32);
         let id = StringCacheId::from_u32(self.ends.len() as u32 - 1);
@@ -272,7 +286,6 @@ impl StringCache {
         inner(self, id.into())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn clear(&mut self) {
         self.ends.truncate(1);
         self.data.clear();
