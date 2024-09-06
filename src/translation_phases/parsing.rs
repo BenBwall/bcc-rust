@@ -30,7 +30,10 @@ use super::{
     SourceVectors,
     TranslationPhase,
 };
-#[expect(unused_imports, reason = "We'll definitely need HashMap and HashSet in the future.")]
+#[expect(
+    unused_imports,
+    reason = "We'll definitely need HashMap and HashSet in the future."
+)]
 use crate::util::{
     HashMap,
     HashSet,
@@ -231,6 +234,9 @@ impl Parser {
             statements: Vec::new(),
             type_qualifiers: Vec::new(),
             declarator_types: Vec::new(),
+            enum_names: HashMap::default(),
+            struct_names: HashMap::default(),
+            typedef_names: HashMap::default(),
         }
     }
 
@@ -1137,11 +1143,11 @@ impl Parser {
     fn parse_k_and_r_function_direct_declarator<const IS_ABSTRACT: bool>(
         &mut self,
         context: &mut Context,
-    ) -> Result<DeclaratorTypeIndex, usize> {
-        let mut identifiers = 0;
+    ) -> Option<Result<DeclaratorTypeIndex, ()>> {
+        let mut has_parsed_identifier = false;
         // K&R declarations are not supported in abstract declarators.
         if IS_ABSTRACT {
-            return Err(identifiers);
+            return None;
         }
         loop {
             let Some(next) = self.next_token(context) else {
@@ -1154,7 +1160,7 @@ impl Parser {
                     ),
                     source_vectors,
                 });
-                return Err(identifiers);
+                return Some(Err(()));
             };
             // Turns out that this wasn't a K&R-style function declarator. If we haven't
             // parsed anything yet, we're all good and can just return Err(0).
@@ -1167,7 +1173,22 @@ impl Parser {
                 // We create a parser error here, because the identifiers we previously parsed
                 // are syntax errors since they are declarators with only an identifier, that is
                 // not valid typedef.
-                if identifiers != 0 {}
+                if has_parsed_identifier {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_index(),
+                        0,
+                    );
+                    context.parser_error(ParserError {
+                        error_type: ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator,
+                        source_vectors,
+                    });
+                    // Skip over tokens until we a closing brace.
+                    loop {
+
+                    }
+                    return Some(Err(()));
+                }
                 self.pending_token = Some(next);
                 return Err(identifiers);
             }
@@ -1336,7 +1357,11 @@ impl Parser {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[expect(clippy::enum_variant_names, reason = "Every variant here starts with Parsing because that's our current state. Maybe this is a bit redundant but I think it's fine.")]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "Every variant here starts with Parsing because that's our current state. Maybe this \
+              is a bit redundant but I think it's fine."
+)]
 pub(crate) enum State {
     ParsingTopLevelStatement,
     ParsingStatement,
@@ -1721,6 +1746,8 @@ pub(crate) enum ParserErrorType {
     PointerAfterAssignmentExpressionInArrayDirectDeclarator,
     ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator,
     AssignmentExpressionAfterPointerInArrayDirectDeclarator,
+    TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
+    TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
 }
 
 impl GetSeverity for ParserErrorType {
@@ -1734,7 +1761,9 @@ impl GetSeverity for ParserErrorType {
             | ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(..)
             | ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
             | ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator
-            | ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator =>
+            | ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator
+            | ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
+            | ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator =>
                 ErrorSeverity::Error,
             | ParserErrorType::ExpectedSemicolonAfterTypedef(..)
             | ParserErrorType::StorageClassRedefinition(..)
@@ -1851,6 +1880,17 @@ impl Display for ParserErrorType {
                 f,
                 "Assignment expression specified after pointer in array direct declarator!"
             ),
+            | ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator =>
+                write!(
+                    f,
+                    "Type qualifiers specified before pointer in array abstract declarator!"
+                ),
+            | ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator =>
+                write!(
+                    f,
+                    "Type qualifiers specified both before and after `static` in array direct \
+                     declarator!"
+                ),
         }
     }
 }
