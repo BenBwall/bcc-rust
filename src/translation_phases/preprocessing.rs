@@ -127,7 +127,6 @@ pub(crate) struct Preprocessor {
 }
 
 impl GetPosition for Preprocessor {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         self.tokenizer.position(context)
@@ -135,7 +134,6 @@ impl GetPosition for Preprocessor {
 }
 
 impl SetPosition for Preprocessor {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
         self.tokenizer.set_position(context, position);
@@ -143,7 +141,6 @@ impl SetPosition for Preprocessor {
 }
 
 impl GetSourceFileIndex for Preprocessor {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         self.tokenizer.source_file_index()
@@ -315,7 +312,7 @@ impl PreprocessorExpressionOperand {
         }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "This is currently unused")]
     fn set_unsigned(self, value: u64) -> Self {
         self.set_signed(value as i64)
     }
@@ -356,7 +353,10 @@ pub(crate) enum SignedIntegerLiteralType {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[allow(clippy::enum_variant_names)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "We are repeating the word 'unsigned' a lot here, but I think it's clearer this way."
+)]
 pub(crate) enum UnsignedIntegerLiteralType {
     UnsignedInt,
     UnsignedLong,
@@ -380,7 +380,6 @@ pub(crate) struct Token {
 }
 
 impl GetPosition for Token {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         self.source_vectors.position(context)
@@ -388,7 +387,6 @@ impl GetPosition for Token {
 }
 
 impl GetSourceVectors for Token {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
         self.source_vectors
@@ -879,7 +877,11 @@ pub(crate) enum PreprocessorErrorType {
 }
 
 impl Display for PreprocessorErrorType {
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This function is longer than our maximum function length, but I thinks that's \
+                  better than arbitrarily splitting it up."
+    )]
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             | Self::WrongNumberOfArgumentsInFunctionLikeMacroInvocation { expected, found } => {
@@ -2028,7 +2030,6 @@ impl Preprocessor {
         }
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     fn create_merge_error(
         &mut self,
         context: &mut Context,
@@ -2235,7 +2236,6 @@ impl Preprocessor {
         }
     }
 
-    #[allow(clippy::redundant_else)]
     fn expand_macros<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         context: &mut Context,
@@ -2363,8 +2363,6 @@ impl Preprocessor {
         false
     }
 
-    #[allow(dead_code)]
-    #[allow(clippy::type_complexity)]
     fn current_function_like_macro(
         &self,
         _context: &Context,
@@ -2392,7 +2390,6 @@ impl Preprocessor {
         }
     }
 
-    #[allow(dead_code)]
     fn current_is_function_like_macro(&self, _context: &Context) -> bool {
         match self.tokenizer_stack.last() {
             | Some(TokenizerFrame {
@@ -3092,7 +3089,7 @@ impl Preprocessor {
                         c
                     },
                     | '0'..='7' => {
-                        #[allow(clippy::cast_possible_truncation)]
+                        #[expect(clippy::cast_possible_truncation, reason = "We are checking that d is range before casting to a u16.")]
                         let code_point = (|| {
                             let mut code_point = c as u16 - '0' as u16;
                             for _ in 0..2 {
@@ -3686,8 +3683,11 @@ impl Preprocessor {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This function is long because it contains the logic for evaluating an operator \
+                  in a constant expression. I don't think splitting it up would anything clearer."
+    )]
     fn handle_expression_operator(
         &mut self,
         context: &mut Context,
@@ -4521,8 +4521,6 @@ impl Preprocessor {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
-    #[allow(clippy::cast_precision_loss)]
     fn eval_preprocessor_expression(
         &mut self,
         context: &mut Context,
@@ -5080,7 +5078,6 @@ impl Preprocessor {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         context.set_is_tokenizing_include_string(true);
         let Some(include_string) =
@@ -5474,7 +5471,6 @@ impl Preprocessor {
         );
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn parse_line_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         let Some(token) = self.expect_token::<true>(
             context,
@@ -5759,7 +5755,6 @@ impl Preprocessor {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn parse_integer_radix(
         &mut self,
@@ -5899,7 +5894,10 @@ impl Preprocessor {
                     contents:       token.contents,
                 }
             },
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "At this point we know that result definitely fits into a u32."
+            )]
             | Some(IntegerSuffix::Unsigned) => Token {
                 kind:           TokenType::Integer(IntegerTokenType::UnsignedInt(result as u32)),
                 source_vectors: token.source_vectors,
@@ -5933,7 +5931,10 @@ impl Preprocessor {
                     contents:       token.contents,
                 }
             },
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "We know result fits into an i32 at this point."
+            )]
             | None => Token {
                 kind:           TokenType::Integer(IntegerTokenType::Int(result as i32)),
                 source_vectors: token.source_vectors,
@@ -5986,8 +5987,6 @@ impl Preprocessor {
         )
     }
 
-    #[allow(clippy::inline_always)]
-    #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     fn parse_float(
         &mut self,

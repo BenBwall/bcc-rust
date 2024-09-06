@@ -27,7 +27,6 @@ pub(crate) struct PreprocessorTokenizer {
 }
 
 impl GetPosition for PreprocessorTokenizer {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         self.initial_processor.position(context)
@@ -35,7 +34,6 @@ impl GetPosition for PreprocessorTokenizer {
 }
 
 impl SetPosition for PreprocessorTokenizer {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
         self.initial_processor.set_position(context, position);
@@ -43,7 +41,6 @@ impl SetPosition for PreprocessorTokenizer {
 }
 
 impl GetSourceFileIndex for PreprocessorTokenizer {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         self.initial_processor.source_file_index()
@@ -104,7 +101,6 @@ pub(crate) struct PreprocessorTokenizerError {
 impl std::error::Error for PreprocessorTokenizerError {}
 
 impl GetPosition for PreprocessorTokenizerError {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         self.source_vector.position(context)
@@ -112,7 +108,6 @@ impl GetPosition for PreprocessorTokenizerError {
 }
 
 impl GetSourceVectors for PreprocessorTokenizerError {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn source_vectors(&self, context: &mut Context) -> SourceVectors {
         context.create_source_vectors(
@@ -350,7 +345,6 @@ impl PreprocessorTokenizer {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn tokenize_string_like(
         &mut self,

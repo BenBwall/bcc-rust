@@ -25,7 +25,6 @@ use crate::util::{
     },
 };
 
-#[allow(dead_code)]
 #[derive(Error, Debug)]
 pub(crate) enum TranslationError {
     #[error(transparent)]
@@ -98,7 +97,10 @@ trait StrExt {
 
     /// Returns the character at the given index but in lowercase,
     /// See [`StrExt::char_at`] for more information.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "We're not currently using this method, it's here for potential future use."
+    )]
     fn char_at_case_insensitive(&self, index: usize) -> Option<char> {
         self.char_at(index).map(|c| c.to_ascii_lowercase())
     }
@@ -129,7 +131,7 @@ macro_rules! bail {
     };
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "We aren't using the Note variant yet")]
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum ErrorSeverity {
     Warning,
@@ -186,7 +188,6 @@ impl Default for SourceVector {
 }
 
 impl GetPosition for SourceVector {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
@@ -199,7 +200,6 @@ impl GetPosition for SourceVector {
 pub(crate) type SourceVectors = VectorSlice<SourceVector>;
 
 impl GetPosition for SourceVectors {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, context: &Context) -> SourcePosition {
         let start = &context.source_vectors.0[self.start_index as usize];
@@ -239,17 +239,14 @@ pub(crate) trait GetSourceFileIndex {
 
 pub(crate) trait GetPosition {
     fn position(&self, context: &Context) -> SourcePosition;
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn index(&self, context: &Context) -> usize {
         self.position(context).index
     }
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn column(&self, context: &Context) -> u32 {
         self.position(context).column
     }
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn line(&self, context: &Context) -> u32 {
         self.position(context).line
@@ -262,9 +259,7 @@ pub(crate) trait GetSourceVectors {
 
 pub(crate) trait SetPosition: GetPosition {
     fn set_position(&mut self, context: &mut Context, position: SourcePosition);
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[allow(dead_code)]
     fn set_index(&mut self, context: &mut Context, index: usize) {
         self.set_position(
             context,
@@ -275,9 +270,7 @@ pub(crate) trait SetPosition: GetPosition {
             },
         );
     }
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[allow(dead_code)]
     fn set_column(&mut self, context: &mut Context, column: u32) {
         self.set_position(
             context,
@@ -288,7 +281,6 @@ pub(crate) trait SetPosition: GetPosition {
             },
         );
     }
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn set_line(&mut self, context: &mut Context, line: u32) {
         self.set_position(
@@ -307,7 +299,6 @@ pub(crate) trait SetSourceFileIndex {
 }
 
 impl GetPosition for SourcePosition {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         *self
@@ -315,7 +306,6 @@ impl GetPosition for SourcePosition {
 }
 
 impl GetPosition for Infallible {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         match *self {}
@@ -323,7 +313,10 @@ impl GetPosition for Infallible {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-#[allow(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "I think using source and source_file_index as member names is fine here."
+)]
 pub(crate) struct SourceFile {
     pub(crate) source_file_index: u32,
     pub(crate) source:            SharedString,
@@ -357,7 +350,6 @@ impl SourceFile {
 }
 
 impl GetPosition for SourceFile {
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
@@ -422,7 +414,7 @@ impl Context {
         index
     }
 
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation, reason = "We already checked that it is in range before casting")]
     pub(crate) fn duplicate_source_vectors(
         self_source_vectors: &mut Vec<SourceVector>,
         source_vectors: SourceVectors,
@@ -446,7 +438,7 @@ impl Context {
         SourceVectors::new(start_index, start_index + 1)
     }
 
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation, reason = "We are performing a overflow here.")]
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
         let start_index = self.source_vectors.0.len() as u32;
         for i in v1.start_index..v1.start_index + v1.length {
@@ -483,7 +475,6 @@ impl Context {
         self.ignore_tokenizer_errors = value;
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn missing_final_newline(&mut self, vector: SourceVector) {
         if !self.ignore_tokenizer_errors() {
@@ -527,7 +518,7 @@ impl Context {
 
     #[cold]
     #[inline(never)]
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "We aren't using this yet, but we will be when the parser is implemented.")]
     pub(crate) fn raw_parser_error(
         self_pending_errors: &mut Vec<TranslationError>,
         error: ParserError,

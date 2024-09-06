@@ -21,10 +21,43 @@ codegen-units = 1
 
 
 [lints.clippy]
+# Enabled lints from the 'Restrictions' group
+# Sadly we cannot used "forbid" here because it breaks clap since its macro expansions include a blanket #[allow(clippy::restriction].
+allow-attributes = "warn"
+allow-attributes-without-reason = "warn"
+assertions-on-result-states = "warn"
+assigning_clones = "warn"
+empty-drop = "warn"
+empty-enum-variants-with-brackets = "warn"
+empty-struct-with-brackets = "warn"
+fn-to-numberic-cast-any = "warn"
+format-push-string = "warn"
+if-then-some-else-none = "warn"
+infinite-loop = "warn"
+large-include-file = "warn"
+missing-assert-message = "warn"
+mod-module-files = "deny"
+multiple-unsafe-ops-per-block = "deny"
+partial-pub-fields = "warn"
+pub-without-shorthand = "warn"
+rc-mutex = "warn"
+redundant-type-annotations = "warn"
+renamed-function-params = "warn"
+same-name-method = "warn"
+semicolon-inside-block = "warn"
+string-lit-chars-any = "warn"
+suspicous-xor-used-as-pow = "warn"
+test-outside-test-module = "warn"
+undocumented-unsafe-blocks = "deny"
+unnecessary-safety-comment = "deny"
+unnecessary-safety-doc = "deny"
+unnecessary-self-imports = "warn"
+
 cargo = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 cast-possible-wrap = "allow"
 cast-sign-loss = "allow"
+inline-always = "allow"
 perf = { level = "warn", priority = -1 }
 
 
