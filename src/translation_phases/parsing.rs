@@ -58,6 +58,7 @@ pub(crate) struct Parser {
     pub(crate) statements:       Vec<Statement>,
     pub(crate) type_qualifiers:  Vec<TypeQualifiers>,
     pub(crate) declarator_types: Vec<DeclaratorType>,
+    pub(crate) identifiers:      Vec<Identifier>,
     pub(crate) typedef_names:    HashMap<StringCacheId, TypeIndex>,
     pub(crate) struct_names:     HashMap<StringCacheId, TypeIndex>,
     pub(crate) enum_names:       HashMap<StringCacheId, TypeIndex>,
@@ -224,6 +225,12 @@ pub(crate) enum DirectAbstractDeclarator {
     },
 }
 
+// FIXME: Change this to an enum when using enums as const generics is
+// supported.
+const IS_ABSTRACT_DECLARATOR: u8 = 0;
+const IS_NOT_ABSTRACT_DECLARATOR: u8 = 1;
+const IS_MAYBE_ABSTRACT_DECLARATOR: u8 = 2;
+
 impl Parser {
     pub(crate) fn new(preprocessor: Preprocessor) -> Self {
         Self {
@@ -233,6 +240,7 @@ impl Parser {
             expressions: Vec::new(),
             statements: Vec::new(),
             type_qualifiers: Vec::new(),
+            identifiers: Vec::new(),
             declarator_types: Vec::new(),
             enum_names: HashMap::default(),
             struct_names: HashMap::default(),
@@ -883,7 +891,7 @@ impl Parser {
         }
     }
 
-    fn parse_declarator<const IS_ABSTRACT: bool>(
+    fn parse_declarator<const IS_ABSTRACT: u8>(
         &mut self,
         context: &mut Context,
     ) -> Option<Declarator> {
@@ -920,7 +928,7 @@ impl Parser {
     //      direct-declarator [ type-qualifier-list? *]
     //      direct-declarator ( parameter-type-list )
     //      direct-declarator ( identifier-list? )
-    fn parse_direct_declarator<const IS_ABSTRACT: bool>(
+    fn parse_direct_declarator<const IS_ABSTRACT: u8>(
         &mut self,
         context: &mut Context,
     ) -> VectorSlice<DeclaratorType> {
@@ -930,7 +938,7 @@ impl Parser {
         if self
             .parse_first_direct_declarator::<IS_ABSTRACT>(context)
             .is_none()
-            && !IS_ABSTRACT
+            && IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR
         {
             return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
         }
@@ -947,7 +955,7 @@ impl Parser {
     // None indicates a nested direct declarator was not parsed.
     // Parses a nested direct declarator, AKA the part after the initial identifier
     // or the parenthesized declarator in a direct declarator.
-    fn parse_nested_direct_declarator<const IS_ABSTRACT: bool>(
+    fn parse_nested_direct_declarator<const IS_ABSTRACT: u8>(
         &mut self,
         context: &mut Context,
     ) -> Option<()> {
@@ -962,7 +970,7 @@ impl Parser {
         }
     }
 
-    fn parse_array_direct_declarator<const IS_ABSTRACT: bool>(
+    fn parse_array_direct_declarator<const IS_ABSTRACT: u8>(
         &mut self,
         context: &mut Context,
     ) -> Option<()> {
@@ -1081,7 +1089,8 @@ impl Parser {
                             source_vectors: token.source_vectors,
                         });
                     }
-                    if type_qualifiers != TypeQualifiers(0) && IS_ABSTRACT {
+                    if type_qualifiers != TypeQualifiers(0) && IS_ABSTRACT == IS_ABSTRACT_DECLARATOR
+                    {
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
                             source_vectors: token.source_vectors,
@@ -1139,29 +1148,72 @@ impl Parser {
         }
     }
 
-    /// Returns number of identifiers parsed on failure.
-    fn parse_k_and_r_function_direct_declarator<const IS_ABSTRACT: bool>(
+    #[inline(never)]
+    #[cold]
+    fn parse_k_and_r_function_direct_declarator_eof_error(
         &mut self,
         context: &mut Context,
-    ) -> Option<Result<DeclaratorTypeIndex, ()>> {
-        let mut has_parsed_identifier = false;
-        // K&R declarations are not supported in abstract declarators.
-        if IS_ABSTRACT {
-            return None;
-        }
+    ) -> Option<Result<(), ()>> {
+        let position = self.position(context);
+        let source_vectors = context.create_source_vectors(position, self.source_file_index(), 0);
+        context.parser_error(ParserError {
+            error_type: ParserErrorType::UnexpectedEndOfInput(
+                "parsing K&R function direct declarator. Expected a closing parenthesis.",
+            ),
+            source_vectors,
+        });
+        Some(Err(()))
+    }
+
+    #[inline(never)]
+    #[cold]
+    fn mixed_k_and_r_and_modern_function_declarator_error(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<Result<(), ()>> {
+        let source_vectors =
+            context.create_source_vectors(self.position(context), self.source_file_index(), 0);
+        context.parser_error(ParserError {
+            error_type: ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator,
+            source_vectors,
+        });
+        // Skip over tokens until we a closing brace.
+        let mut brace_balance = 0isize;
         loop {
             let Some(next) = self.next_token(context) else {
-                let position = self.position(context);
-                let source_vectors =
-                    context.create_source_vectors(position, self.source_file_index(), 0);
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::UnexpectedEndOfInput(
-                        "parsing K&R function direct declarator. Expected a closing parenthesis.",
-                    ),
-                    source_vectors,
-                });
-                return Some(Err(()));
+                return self.parse_k_and_r_function_direct_declarator_eof_error(context);
             };
+            match next.kind {
+                | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => brace_balance += 1,
+                | TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                    if brace_balance == 1 =>
+                    break,
+                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) => brace_balance -= 1,
+                | _ => (),
+            }
+        }
+        Some(Err(()))
+    }
+
+    /// Returns number of identifiers parsed on failure.
+    fn parse_k_and_r_function_direct_declarator<const IS_ABSTRACT: u8>(
+        &mut self,
+        context: &mut Context,
+    ) -> Option<Result<(), ()>> {
+        let mut has_parsed_identifier = false;
+        // K&R declarations are not supported in abstract declarators.
+        if IS_ABSTRACT == IS_ABSTRACT_DECLARATOR {
+            return None;
+        }
+        let start_index = self.identifiers.len().to_u32();
+        loop {
+            let Some(next) = self.next_token(context) else {
+                return self.parse_k_and_r_function_direct_declarator_eof_error(context);
+            };
+            // We reached the end of the parameter list.
+            if next.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis) {
+                break;
+            }
             // Turns out that this wasn't a K&R-style function declarator. If we haven't
             // parsed anything yet, we're all good and can just return Err(0).
             // Otherwise we have to generate an error because the parameter list
@@ -1174,38 +1226,40 @@ impl Parser {
                 // are syntax errors since they are declarators with only an identifier, that is
                 // not valid typedef.
                 if has_parsed_identifier {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    );
-                    context.parser_error(ParserError {
-                        error_type: ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator,
-                        source_vectors,
-                    });
-                    // Skip over tokens until we a closing brace.
-                    loop {
-
-                    }
-                    return Some(Err(()));
+                    return self.mixed_k_and_r_and_modern_function_declarator_error(context);
                 }
+                // This is the first token, and we now know that this isn't a K&R-style function
+                // declarator, so we return None to indicate this.
                 self.pending_token = Some(next);
-                return Err(identifiers);
+                return None;
             }
+            has_parsed_identifier = true;
+            let identifier = Identifier {
+                name: next.contents,
+            };
+            self.identifiers.push(identifier);
         }
+        self.declarator_types
+            .push(DeclaratorType::KAndRStyleFunction {
+                parameters: VectorSlice::new(start_index, self.identifiers.len().to_u32()),
+            });
+        Some(Ok(()))
     }
 
-    fn parse_function_direct_declarator<const IS_ABSTRACT: bool>(
+    fn parse_function_direct_declarator<const IS_ABSTRACT: u8>(
         &mut self,
         context: &mut Context,
     ) -> Option<()> {
-        if let Some(()) = self.parse_k_and_r_function_direct_declarator::<IS_ABSTRACT>(context) {}
-        let mut all_are_identifiers = true;
+        match self.parse_k_and_r_function_direct_declarator::<IS_ABSTRACT>(context) {
+            | None => (),
+            | Some(Ok(())) => return Some(()),
+            | Some(Err(())) => return None,
+        }
         loop {}
     }
 
     // Parses the first two rules of direct-declarator.
-    fn parse_first_direct_declarator<const IS_ABSTRACT: bool>(
+    fn parse_first_direct_declarator<const IS_ABSTRACT: u8>(
         &mut self,
         context: &mut Context,
     ) -> Option<()> {
@@ -1257,7 +1311,7 @@ impl Parser {
                 .push(DeclaratorType::Parenthesized(declarator));
             return Some(());
         }
-        if !IS_ABSTRACT {
+        if IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR {
             context.parser_error(ParserError {
                 error_type:
                     ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
