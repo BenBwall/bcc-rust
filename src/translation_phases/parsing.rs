@@ -6,6 +6,7 @@ use std::{
         Result as FmtResult,
     },
     hash::Hash,
+    num::NonZeroU32,
 };
 
 use super::{
@@ -51,17 +52,20 @@ use crate::{
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser {
-    pub(crate) preprocessor:     Preprocessor,
-    pub(crate) types:            Vec<Type>,
-    pub(crate) pending_token:    Option<Token>,
-    pub(crate) expressions:      Vec<Expression>,
-    pub(crate) statements:       Vec<Statement>,
-    pub(crate) type_qualifiers:  Vec<TypeQualifiers>,
-    pub(crate) declarator_types: Vec<DeclaratorType>,
-    pub(crate) identifiers:      Vec<Identifier>,
-    pub(crate) typedef_names:    HashMap<StringCacheId, TypeIndex>,
-    pub(crate) struct_names:     HashMap<StringCacheId, TypeIndex>,
-    pub(crate) enum_names:       HashMap<StringCacheId, TypeIndex>,
+    pub(crate) preprocessor:           Preprocessor,
+    pub(crate) types:                  Vec<Type>,
+    pub(crate) pending_token:          Option<Token>,
+    pub(crate) expressions:            Vec<Expression>,
+    pub(crate) statements:             Vec<Statement>,
+    pub(crate) type_qualifiers:        Vec<TypeQualifiers>,
+    pub(crate) declarator_types:       Vec<DeclaratorType>,
+    pub(crate) identifiers:            Vec<Identifier>,
+    pub(crate) typedef_names:          HashMap<StringCacheId, TypeIndex>,
+    pub(crate) struct_names:           HashMap<StringCacheId, TypeIndex>,
+    pub(crate) enum_names:             HashMap<StringCacheId, TypeIndex>,
+    pub(crate) parameter_declarations: Vec<ParameterDeclaration>,
+    pub(crate) struct_or_union_specifier: Vec<StructOrUnionSpecifier>,
+    pub(crate) enum_specifier: Vec<EnumSpecifier>,
 }
 
 impl GetPosition for Parser {
@@ -102,28 +106,485 @@ mod type_qualifiers {
 
 pub(crate) use type_qualifiers::TypeQualifiers;
 
-mod type_specifiers {
-    bitfield::bitfield! {
-        #[derive(PartialEq, Eq, Hash, Clone, Copy, Default)]
-        pub struct TypeSpecifiers(u16);
-        impl Debug;
-        pub is_short, set_is_short: 0;
-        pub is_signed, set_is_signed: 1;
-        pub is_unsigned, set_is_unsigned: 2;
-        pub is_int, set_is_int: 3;
-        pub is_float, set_is_float: 4;
-        pub is_double, set_is_double: 5;
-        pub is_void, set_is_void: 6;
-        pub is_char, set_is_char: 7;
-        pub is_bool, set_is_bool: 8;
-        pub is_complex, set_is_complex: 9;
-        pub is_long, set_is_long: 10;
-        pub is_long_long, set_is_long_long: 11;
-        pub is_long_double, set_is_long_double: 12;
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+pub(crate) enum TypeSpecifiers {
+    #[default]
+    Empty,
+    Void,
+    Char,
+    SignedChar,
+    UnsignedChar,
+    Short,
+    SignedShort,
+    UnsignedShort,
+    ShortInt,
+    SignedShortInt,
+    UnsignedShortInt,
+    Int,
+    SignedInt,
+    UnsignedInt,
+    Signed,
+    Unsigned,
+    Long,
+    SignedLong,
+    UnsignedLong,
+    LongInt,
+    SignedLongInt,
+    UnsignedLongInt,
+    LongLong,
+    SignedLongLong,
+    UnsignedLongLong,
+    LongLongInt,
+    SignedLongLongInt,
+    UnsignedLongLongInt,
+    Float,
+    Double,
+    LongDouble,
+    Bool,
+    Complex,
+    ComplexFloat,
+    ComplexDouble,
+    ComplexLong,
+    ComplexLongDouble,
+    Imaginary,
+    ImaginaryFloat,
+    ImaginaryDouble,
+    ImaginaryLong,
+    ImaginaryLongDouble,
+    StructOrUnion(StructOrUnionSpecifierIndex),
+    Enum(EnumSpecifierIndex),
+    TypedefName(Identifier),
+}
+
+impl Display for TypeSpecifiers {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            | TypeSpecifiers::Empty => write!(f, "<no type specifier>"),
+            | TypeSpecifiers::Char => write!(f, "char"),
+            | TypeSpecifiers::SignedChar => write!(f, "signed char"),
+            | TypeSpecifiers::UnsignedChar => write!(f, "unsigned char"),
+            | TypeSpecifiers::Short => write!(f, "short"),
+            | TypeSpecifiers::SignedShort => write!(f, "signed short"),
+            | TypeSpecifiers::UnsignedShort => write!(f, "unsigned short"),
+            | TypeSpecifiers::ShortInt => write!(f, "short int"),
+            | TypeSpecifiers::SignedShortInt => write!(f, "signed short int"),
+            | TypeSpecifiers::UnsignedShortInt => write!(f, "unsigned short int"),
+            | TypeSpecifiers::Int => write!(f, "int"),
+            | TypeSpecifiers::SignedInt => write!(f, "signed int"),
+            | TypeSpecifiers::UnsignedInt => write!(f, "unsigned int"),
+            | TypeSpecifiers::Signed => write!(f, "signed"),
+            | TypeSpecifiers::Unsigned => write!(f, "unsigned"),
+            | TypeSpecifiers::Long => write!(f, "long"),
+            | TypeSpecifiers::SignedLong => write!(f, "signed long"),
+            | TypeSpecifiers::UnsignedLong => write!(f, "unsigned long"),
+            | TypeSpecifiers::LongInt => write!(f, "long int"),
+            | TypeSpecifiers::SignedLongInt => write!(f, "signed long int"),
+            | TypeSpecifiers::UnsignedLongInt => write!(f, "unsigned long int"),
+            | TypeSpecifiers::LongLong => write!(f, "long long"),
+            | TypeSpecifiers::SignedLongLong => write!(f, "signed long long"),
+            | TypeSpecifiers::UnsignedLongLong => write!(f, "unsigned long long"),
+            | TypeSpecifiers::LongLongInt => write!(f, "long long int"),
+            | TypeSpecifiers::SignedLongLongInt => write!(f, "signed long long int"),
+            | TypeSpecifiers::UnsignedLongLongInt => write!(f, "unsigned long long int"),
+            | TypeSpecifiers::Float => write!(f, "float"),
+            | TypeSpecifiers::Double => write!(f, "double"),
+            | TypeSpecifiers::LongDouble => write!(f, "long double"),
+            | TypeSpecifiers::Bool => write!(f, "_Bool"),
+            | TypeSpecifiers::Complex => write!(f, "_Complex"),
+            | TypeSpecifiers::ComplexFloat => write!(f, "_Complex float"),
+            | TypeSpecifiers::ComplexDouble => write!(f, "_Complex double"),
+            | TypeSpecifiers::ComplexLong => write!(f, "_Complex long"),
+            | TypeSpecifiers::ComplexLongDouble => write!(f, "_Complex long double"),
+            | TypeSpecifiers::Imaginary => write!(f, "_Imaginary"),
+            | TypeSpecifiers::ImaginaryFloat => write!(f, "_Imaginary float"),
+            | TypeSpecifiers::ImaginaryDouble => write!(f, "_Imaginary double"),
+            | TypeSpecifiers::ImaginaryLong => write!(f, "_Imaginary long"),
+            | TypeSpecifiers::ImaginaryLongDouble => write!(f, "_Imaginary long double"),
+            | TypeSpecifiers::Void => write!(f, "void"),
+            | TypeSpecifiers::StructOrUnion(_) => write!(f, "<struct-or-union-declarator>"),
+            | TypeSpecifiers::Enum(_) => write!(f, "<enum-declarator>"),
+            |  TypeSpecifiers::TypedefName(_) => write!(f, "<typedef-name>"),
+        }
     }
 }
 
-pub(crate) use type_specifiers::TypeSpecifiers;
+macro_rules! map_fn {
+    ($map_fn_name:ident, $make_fn_name:ident, $is_fn_name:ident, $keyword_token_type:ident, $is_match_pattern:pat $(if $is_guard:expr)?, $($map_match_pattern:pat $(if $map_guard:expr)? => $map_result:expr $(,)?)+) => {
+        fn $is_fn_name(self) -> bool {
+            match self {
+                $is_match_pattern $(if $is_guard)? => true,
+                | _ => false,
+            }
+        }
+
+        fn $map_fn_name(self, parser: &mut Parser, context: &mut Context) -> Self {
+            match self {
+                $($map_match_pattern $(if $map_guard)? => $map_result,)+
+                | type_specifier => {
+                    let source_vectors = context.create_source_vectors(
+                        parser.position(context),
+                        parser.source_file_index(),
+                        0,
+                    );
+                    context.parser_error(ParserError {
+                        error_type: ParserErrorType::ConflictingTypeSpecifiers(
+                            type_specifier,
+                            TokenType::Keyword(KeywordTokenType::$keyword_token_type),
+                        ),
+                        source_vectors,
+                    });
+                    type_specifier
+                },
+            }
+        }
+
+        fn $make_fn_name(&mut self, parser: &mut Parser, context: &mut Context) {
+            *self = self.$map_fn_name(parser, context);
+        }
+    }
+}
+
+impl TypeSpecifiers {
+    map_fn!(map_signed, make_signed, is_signed, Signed,
+        | TypeSpecifiers::SignedChar
+        | TypeSpecifiers::SignedShort
+        | TypeSpecifiers::SignedShortInt
+        | TypeSpecifiers::SignedInt
+        | TypeSpecifiers::Signed
+        | TypeSpecifiers::SignedLong
+        | TypeSpecifiers::SignedLongInt
+        | TypeSpecifiers::SignedLongLong
+        | TypeSpecifiers::SignedLongLongInt,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Signed,
+        | TypeSpecifiers::Char => TypeSpecifiers::SignedChar,
+        | TypeSpecifiers::Short => TypeSpecifiers::SignedShort,
+        | TypeSpecifiers::ShortInt => TypeSpecifiers::SignedShortInt,
+        | TypeSpecifiers::Int => TypeSpecifiers::SignedInt,
+        | TypeSpecifiers::Long => TypeSpecifiers::SignedLong,
+        | TypeSpecifiers::LongInt => TypeSpecifiers::SignedLongInt,
+        | TypeSpecifiers::LongLong => TypeSpecifiers::SignedLongLong,
+        | TypeSpecifiers::LongLongInt => TypeSpecifiers::SignedLongLongInt,);
+
+    map_fn!(map_unsigned, make_unsigned, is_unsigned, Unsigned,
+        | TypeSpecifiers::UnsignedChar
+        | TypeSpecifiers::UnsignedShort
+        | TypeSpecifiers::UnsignedShortInt
+        | TypeSpecifiers::UnsignedInt
+        | TypeSpecifiers::Unsigned
+        | TypeSpecifiers::UnsignedLong
+        | TypeSpecifiers::UnsignedLongInt
+        | TypeSpecifiers::UnsignedLongLong
+        | TypeSpecifiers::UnsignedLongLongInt,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Unsigned,
+        | TypeSpecifiers::Char => TypeSpecifiers::UnsignedChar,
+        | TypeSpecifiers::Short => TypeSpecifiers::UnsignedShort,
+        | TypeSpecifiers::ShortInt => TypeSpecifiers::UnsignedShortInt,
+        | TypeSpecifiers::Int => TypeSpecifiers::UnsignedInt,
+        | TypeSpecifiers::Long => TypeSpecifiers::UnsignedLong,
+        | TypeSpecifiers::LongInt => TypeSpecifiers::UnsignedLongInt,
+        | TypeSpecifiers::LongLong => TypeSpecifiers::UnsignedLongLong,
+        | TypeSpecifiers::LongLongInt => TypeSpecifiers::UnsignedLongLongInt,
+    );
+
+    map_fn!(map_int, make_int, is_int, Int,
+        | TypeSpecifiers::Int
+        | TypeSpecifiers::SignedInt
+        | TypeSpecifiers::UnsignedInt
+        | TypeSpecifiers::ShortInt
+        | TypeSpecifiers::SignedShortInt
+        | TypeSpecifiers::UnsignedShortInt
+        | TypeSpecifiers::LongInt
+        | TypeSpecifiers::SignedLongInt
+        | TypeSpecifiers::UnsignedLongInt
+        | TypeSpecifiers::LongLongInt
+        | TypeSpecifiers::SignedLongLongInt
+        | TypeSpecifiers::UnsignedLongLongInt,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Int,
+        | TypeSpecifiers::Short => TypeSpecifiers::ShortInt,
+        | TypeSpecifiers::Signed => TypeSpecifiers::SignedInt,
+        | TypeSpecifiers::Unsigned => TypeSpecifiers::UnsignedInt,
+        | TypeSpecifiers::Long => TypeSpecifiers::LongInt,
+        | TypeSpecifiers::SignedLong => TypeSpecifiers::SignedLongInt,
+        | TypeSpecifiers::UnsignedLong => TypeSpecifiers::UnsignedLongInt,
+        | TypeSpecifiers::LongLong => TypeSpecifiers::LongLongInt,
+        | TypeSpecifiers::SignedLongLong => TypeSpecifiers::SignedLongLongInt,
+        | TypeSpecifiers::UnsignedLongLong => TypeSpecifiers::UnsignedLongLongInt,
+    );
+
+    map_fn!(map_short, make_short, is_short, Short,
+        | TypeSpecifiers::Short
+        | TypeSpecifiers::SignedShort
+        | TypeSpecifiers::UnsignedShort
+        | TypeSpecifiers::ShortInt
+        | TypeSpecifiers::SignedShortInt
+        | TypeSpecifiers::UnsignedShortInt,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Short,
+        | TypeSpecifiers::Int => TypeSpecifiers::ShortInt,
+        | TypeSpecifiers::Signed => TypeSpecifiers::SignedShort,
+        | TypeSpecifiers::Unsigned => TypeSpecifiers::UnsignedShort,
+    );
+
+    map_fn!(map_long, make_long, is_long, Long,
+        | TypeSpecifiers::Long
+        | TypeSpecifiers::SignedLong
+        | TypeSpecifiers::UnsignedLong
+        | TypeSpecifiers::LongInt
+        | TypeSpecifiers::SignedLongInt
+        | TypeSpecifiers::UnsignedLongInt
+        | TypeSpecifiers::LongLong
+        | TypeSpecifiers::SignedLongLong
+        | TypeSpecifiers::UnsignedLongLong
+        | TypeSpecifiers::LongLongInt
+        | TypeSpecifiers::SignedLongLongInt
+        | TypeSpecifiers::UnsignedLongLongInt
+        | TypeSpecifiers::LongDouble
+        | TypeSpecifiers::ComplexLong
+        | TypeSpecifiers::ComplexLongDouble
+        | TypeSpecifiers::ImaginaryLong
+        | TypeSpecifiers::ImaginaryLongDouble,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Long,
+        | TypeSpecifiers::Int => TypeSpecifiers::LongInt,
+        | TypeSpecifiers::Signed => TypeSpecifiers::SignedLong,
+        | TypeSpecifiers::Unsigned => TypeSpecifiers::UnsignedLong,
+        | TypeSpecifiers::Long => TypeSpecifiers::LongLong,
+        | TypeSpecifiers::SignedLong => TypeSpecifiers::SignedLongLong,
+        | TypeSpecifiers::UnsignedLong => TypeSpecifiers::UnsignedLongLong,
+        | TypeSpecifiers::LongInt => TypeSpecifiers::LongLongInt,
+        | TypeSpecifiers::SignedLongInt => TypeSpecifiers::SignedLongLongInt,
+        | TypeSpecifiers::UnsignedLongInt => TypeSpecifiers::UnsignedLongLongInt,
+        | TypeSpecifiers::Double => TypeSpecifiers::LongDouble,
+        | TypeSpecifiers::Complex => TypeSpecifiers::ComplexLong,
+        | TypeSpecifiers::ComplexDouble => TypeSpecifiers::ComplexLongDouble,
+        | TypeSpecifiers::Imaginary => TypeSpecifiers::ImaginaryLong,
+        | TypeSpecifiers::ImaginaryDouble => TypeSpecifiers::ImaginaryLongDouble,
+    );
+
+    fn is_long_long(self) -> bool {
+        match self {
+            | TypeSpecifiers::LongLong
+            | TypeSpecifiers::SignedLongLong
+            | TypeSpecifiers::UnsignedLongLong
+            | TypeSpecifiers::LongLongInt
+            | TypeSpecifiers::SignedLongLongInt
+            | TypeSpecifiers::UnsignedLongLongInt => true,
+            | _ => false,
+        }
+    }
+
+    fn is_long_double(self) -> bool {
+        match self {
+            | TypeSpecifiers::LongDouble
+            | TypeSpecifiers::ComplexLongDouble
+            | TypeSpecifiers::ImaginaryLongDouble => true,
+            | _ => false,
+        }
+    }
+
+    map_fn!(map_char, make_char, is_char, Char,
+        | TypeSpecifiers::Char
+        | TypeSpecifiers::SignedChar
+        | TypeSpecifiers::UnsignedChar,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Char,
+        | TypeSpecifiers::Signed => TypeSpecifiers::SignedChar,
+        | TypeSpecifiers::Unsigned => TypeSpecifiers::UnsignedChar,
+    );
+
+    map_fn!(map_float, make_float, is_float, Float,
+        | TypeSpecifiers::Float
+        | TypeSpecifiers::ComplexFloat
+        | TypeSpecifiers::ImaginaryFloat,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Float,
+        | TypeSpecifiers::Complex => TypeSpecifiers::ComplexFloat,
+        | TypeSpecifiers::Imaginary => TypeSpecifiers::ImaginaryFloat,
+    );
+
+    map_fn!(map_double, make_double, is_double, Double,
+        | TypeSpecifiers::ComplexDouble
+        | TypeSpecifiers::ComplexLongDouble
+        | TypeSpecifiers::ImaginaryDouble
+        | TypeSpecifiers::ImaginaryLongDouble
+        | TypeSpecifiers::LongDouble,
+
+        | TypeSpecifiers::Empty => TypeSpecifiers::Double,
+        | TypeSpecifiers::Complex => TypeSpecifiers::ComplexDouble,
+        | TypeSpecifiers::ComplexLong => TypeSpecifiers::ComplexLongDouble,
+        | TypeSpecifiers::Imaginary => TypeSpecifiers::ImaginaryDouble,
+        | TypeSpecifiers::ImaginaryLong => TypeSpecifiers::ImaginaryLongDouble,
+        | TypeSpecifiers::Long => TypeSpecifiers::LongDouble
+    );
+
+    map_fn!(map_void, make_void, is_void, Void,
+        | TypeSpecifiers::Void,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Void,
+    );
+
+    map_fn!(map_bool, make_bool, is_bool, Bool,
+        | TypeSpecifiers::Bool,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Bool,
+    );
+
+    map_fn!(map_complex, make_complex, is_complex, Complex,
+        | TypeSpecifiers::Complex
+        | TypeSpecifiers::ComplexFloat
+        | TypeSpecifiers::ComplexDouble
+        | TypeSpecifiers::ComplexLong
+        | TypeSpecifiers::ComplexLongDouble,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Complex,
+        | TypeSpecifiers::Float => TypeSpecifiers::ComplexFloat,
+        | TypeSpecifiers::Double => TypeSpecifiers::ComplexDouble,
+        | TypeSpecifiers::Long => TypeSpecifiers::ComplexLong,
+        | TypeSpecifiers::LongDouble => TypeSpecifiers::ComplexLongDouble,
+    );
+
+    map_fn!(map_imaginary, make_imaginary, is_imaginary, Imaginary,
+        | TypeSpecifiers::Imaginary
+        | TypeSpecifiers::ImaginaryFloat
+        | TypeSpecifiers::ImaginaryDouble
+        | TypeSpecifiers::ImaginaryLong
+        | TypeSpecifiers::ImaginaryLongDouble,
+        
+        | TypeSpecifiers::Empty => TypeSpecifiers::Imaginary,
+        | TypeSpecifiers::Float => TypeSpecifiers::ImaginaryFloat,
+        | TypeSpecifiers::Double => TypeSpecifiers::ImaginaryDouble,
+        | TypeSpecifiers::Long => TypeSpecifiers::ImaginaryLong,
+        | TypeSpecifiers::LongDouble => TypeSpecifiers::ImaginaryLongDouble,
+    );
+
+    fn is_struct_or_union(self) -> bool {
+        match self {
+            | TypeSpecifiers::StructOrUnion(_) => true,
+            | _ => false,
+        }
+    }
+
+    fn map_struct_or_union(self, parser: &mut Parser, context: &mut Context, index: StructOrUnionSpecifierIndex) -> Self {
+        match self {
+            | TypeSpecifiers::Empty => TypeSpecifiers::StructOrUnion(index),
+            | type_specifiers => {
+                let source_vectors = context.create_source_vectors(
+                    parser.position(context),
+                    parser.source_file_index(),
+                    0,
+                );
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::ConflictingTypeSpecifiers(
+                        type_specifiers,
+                        TokenType::Keyword(KeywordTokenType::Struct),
+                    ),
+                    source_vectors,
+                });
+                type_specifiers
+            },
+        }
+    }
+
+    fn make_struct_or_union(&mut self, parser: &mut Parser, context: &mut Context, index: StructOrUnionSpecifierIndex) {
+        *self = self.map_struct_or_union(parser, context, index);
+    }
+
+    fn is_enum(self) -> bool {
+        match self {
+            | TypeSpecifiers::Enum(_) => true,
+            | _ => false,
+        }
+    }
+
+    fn map_enum(self, parser: &mut Parser, context: &mut Context, index: EnumSpecifierIndex) -> Self {
+        match self {
+            | TypeSpecifiers::Empty => TypeSpecifiers::Enum(index),
+            | type_specifiers => {
+                let source_vectors = context.create_source_vectors(
+                    parser.position(context),
+                    parser.source_file_index(),
+                    0,
+                );
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::ConflictingTypeSpecifiers(
+                        type_specifiers,
+                        TokenType::Keyword(KeywordTokenType::Enum),
+                    ),
+                    source_vectors,
+                });
+                type_specifiers
+            },
+        }
+    }
+
+    fn make_enum(&mut self, parser: &mut Parser, context: &mut Context, index: EnumSpecifierIndex) {
+        *self = self.map_enum(parser, context, index);
+    }
+
+    fn is_typedef_name(self) -> bool {
+        match self {
+            | TypeSpecifiers::TypedefName(_) => true,
+            | _ => false,
+        }
+    }
+
+    fn map_typedef_name(self, parser: &mut Parser, context: &mut Context, name: Identifier) -> Self {
+        match self {
+            | TypeSpecifiers::Empty => TypeSpecifiers::TypedefName(name),
+            | type_specifiers => {
+                let source_vectors = context.create_source_vectors(
+                    parser.position(context),
+                    parser.source_file_index(),
+                    0,
+                );
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::ConflictingTypeSpecifiers(
+                        type_specifiers,
+                        TokenType::Identifier,
+                    ),
+                    source_vectors,
+                });
+                type_specifiers
+            },
+        }
+    }
+
+    fn make_typedef_name(&mut self, parser: &mut Parser, context: &mut Context, name: Identifier) {
+        *self = self.map_typedef_name(parser, context, name);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) struct StructOrUnionSpecifier {
+    pub(crate) kind:             StructOrUnionSpecifierType,
+    pub(crate) name:             Option<Identifier>,
+    /// None indicates that the body is missing. An empty vector indicates an
+    /// empty body. `struct Foo;` has no body. `struct Foo {};` has an empty
+    /// body.
+    pub(crate) declaration_list: Option<VectorSlice<StructDeclaration>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum StructOrUnionSpecifierType {
+    Struct,
+    Union,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) struct StructDeclaration {
+    type_qualifiers:    TypeQualifiers,
+    type_specifiers:    TypeSpecifiers,
+    struct_declarators: VectorSlice<StructDeclarator>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) struct StructDeclarator {
+    declarator:     Option<Declarator>,
+    bitfield_width: Option<NonZeroU32>,
+}
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub(crate) struct FunctionSpecifiers {
@@ -149,16 +610,22 @@ impl DeclarationSpecifiers {
         Self {
             storage_class:       StorageClass::Auto,
             type_qualifiers:     TypeQualifiers(0),
-            type_specifiers:     TypeSpecifiers(0),
+            type_specifiers:     TypeSpecifiers::Empty,
             function_specifiers: FunctionSpecifiers { is_inline: false },
         }
     }
 }
 
+/// Implements this rule in the standard:
+/// pointer:
+/// * type-qualifier-list?
+/// * type-qualifier-list? pointer
+/// For instance, this C code: `*const *volatile *` would be parsed as:
+/// `[TypeQualifiers(const), TypeQualifiers(volatile), TypeQualifiers(0)]`
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct PointerDeclarator {
-    /// Each element represents a level of indirection with the type qualifiers
-    /// for that level.
+    /// Each element represents the type qualifiers for one level of
+    /// indirection.
     pub(crate) type_qualifiers_list: VectorSlice<TypeQualifiers>,
 }
 
@@ -187,42 +654,11 @@ pub(crate) enum DeclaratorType {
     },
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct ParameterDeclaration {
     declaration_specifiers: DeclarationSpecifiers,
-    kind:                   ParameterDeclarationType,
-}
-
-pub(crate) enum ParameterDeclarationType {
-    AbstractDeclarator(AbstractDeclarator),
-    Declarator(Declarator),
-    Anonymous,
-}
-
-pub(crate) struct AbstractDeclarator {
-    kind: AbstractDeclaratorType,
-}
-
-pub(crate) enum AbstractDeclaratorType {
-    Pointer(PointerDeclarator),
-    DirectAbstractDeclarator(DirectAbstractDeclarator),
-    PointerAndDirectAbstractDeclarator {
-        pointer_declarator:         PointerDeclarator,
-        direct_abstract_declarator: DirectAbstractDeclarator,
-    },
-}
-
-pub(crate) enum DirectAbstractDeclarator {
-    Parenthesized(AbstractDeclaratorIndex),
-    Array {
-        type_qualifiers_list:  VectorSlice<TypeQualifiers>,
-        is_static:             bool,
-        is_pointer:            bool,
-        assignment_expression: Option<ExpressionIndex>,
-    },
-    Function {
-        parameter_lists: VectorSlice<ParameterDeclaration>,
-        is_variadic:     bool,
-    },
+    /// Could be a declarator or an abstract declarator or neither.
+    declarator:             Option<Declarator>,
 }
 
 // FIXME: Change this to an enum when using enums as const generics is
@@ -245,6 +681,7 @@ impl Parser {
             enum_names: HashMap::default(),
             struct_names: HashMap::default(),
             typedef_names: HashMap::default(),
+            parameter_declarations: Vec::new(),
         }
     }
 
@@ -263,11 +700,75 @@ impl Parser {
         todo!();
     }
 
-    fn parse_struct_declaration(&mut self, _context: &mut Context, _token: Token) -> Type {
+    fn parse_struct_or_union_declaration(&mut self, context: &mut Context, token: Token) -> StructOrUnionSpecifierIndex {
+        assert!(
+            matches!(
+                token.kind,
+                TokenType::Keyword(KeywordTokenType::Struct | KeywordTokenType::Union)
+            ),
+            "parse_struct_or_union_declaration called with non-struct-or-union token."
+        );
+        let start_index = self.struct_or_union_specifier.len().to_u32();
+        let name = self.parse_maybe_identifier(
+            context,
+            "while parsing struct-or-union-declarator",
+            |_| None,
+        );
+        let Some(next) = self.next_token(context) else {
+            let source_vectors = context.create_source_vectors(
+                self.position(context),
+                self.source_file_index(),
+                0,
+            );
+            context.parser_error(ParserError {
+                error_type: ParserErrorType::UnexpectedEndOfInput(
+                    "while parsing struct-or-union-declarator",
+                ),
+                source_vectors,
+            });
+            if let Some(v) = name {
+                self.struct_or_union_specifier.push(StructOrUnionSpecifier {
+                    kind: StructOrUnionSpecifierType::Struct,
+                    name: Some(v),
+                    declaration_list: None,
+                });
+                return StructOrUnionSpecifierIndex(start_index);
+            }
+            return StructOrUnionSpecifierIndex(u32::MAX);
+        };
+        if next.kind != TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) {
+            if let Some(v) = name {
+                self.struct_or_union_specifier.push(StructOrUnionSpecifier {
+                    kind: StructOrUnionSpecifierType::Struct,
+                    name: Some(v),
+                    declaration_list: None,
+                });
+                return StructOrUnionSpecifierIndex(start_index);
+            }
+            return StructOrUnionSpecifierIndex(u32::MAX);
+        }
+        // Parse struct-declaration-list
+        // struct-declaration-list:
+        // - struct-declaration
+        // - struct-declaration-list struct-declaration
+        // struct-declaration:
+        // - specifier-qualifier-list struct-declarator-list ;
+        // specifier-qualifier-list:
+        // - type-specifier specifier-qualifier-list?
+        // - type-qualifier specifier-qualifier-list?
+        // struct-declarator-list:
+        // - struct-declarator
+        // - struct-declarator-list , struct-declarator
+        // struct-declarator:
+        // - declarator
+        // - declarator? : constant-expression
+        loop {
+            
+        }
         todo!();
     }
 
-    fn parse_enum_declaration(&mut self, _context: &mut Context, _token: Token) -> Type {
+    fn parse_enum_declaration(&mut self, _context: &mut Context, _token: Token) -> EnumSpecifierIndex {
         todo!();
     }
 
@@ -281,6 +782,16 @@ impl Parser {
         eof_message: &'static str,
         on_error: impl FnOnce(Token) -> ParserErrorType,
     ) -> Identifier {
+        self.parse_maybe_identifier(context, eof_message, |token| Some(on_error(token)))
+            .expect("parse_maybe_identifier returned None when called with infallible on_error.")
+    }
+
+    fn parse_maybe_identifier(
+        &mut self,
+        context: &mut Context,
+        eof_message: &'static str,
+        on_error: impl FnOnce(Token) -> Option<ParserErrorType>,
+    ) -> Option<Identifier> {
         let Some(token) = self.next_token(context) else {
             let source_vectors =
                 context.create_source_vectors(self.position(context), self.source_file_index(), 0);
@@ -288,69 +799,25 @@ impl Parser {
                 error_type: ParserErrorType::UnexpectedEndOfInput(eof_message),
                 source_vectors,
             });
-            return Identifier {
+            return Some(Identifier {
                 name: context.string_cache.intern("<non-existent-identifier>"),
-            };
+            });
         };
         match token.kind {
-            | TokenType::Identifier => Identifier {
+            | TokenType::Identifier => Some(Identifier {
                 name: token.contents,
-            },
+            }),
             | _tt => {
                 context.parser_error(ParserError {
-                    error_type:     on_error(token),
+                    error_type:     on_error(token)?,
                     source_vectors: token.source_vectors,
                 });
                 self.pending_token = Some(token);
-                Identifier {
+                Some(Identifier {
                     name: context.string_cache.intern("<non-existent-identifier>"),
-                }
+                })
             },
         }
-    }
-
-    fn parse_typedef(&mut self, context: &mut Context, _typedef: Token) -> Type {
-        // TODO: finish implementing this function.
-        let _referent_type = self.parse_type(context);
-        let referent_type_index = self.types.len() - 1;
-
-        let name =
-            self.parse_identifier(context, "parsing typedef. Expected identifier.", |token| {
-                ParserErrorType::ExpectedIdentifierInTypedef(token.kind)
-            });
-        match self.next_token(context) {
-            | Some(token) if token.kind == TokenType::Operator(OperatorTokenType::Semicolon) => (),
-            | Some(token) => {
-                context.parser_error(ParserError {
-                    error_type:     ParserErrorType::ExpectedSemicolonAfterTypedef(token.kind),
-                    source_vectors: token.source_vectors,
-                });
-                self.pending_token = Some(token);
-            },
-            | None => {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::UnexpectedEndOfInput(
-                        "parsing typedef. Expected a semicolon.",
-                    ),
-                    source_vectors,
-                });
-            },
-        }
-        let t = Type {
-            is_const:    false,
-            is_volatile: false,
-            kind:        TypeKind::Typedef {
-                name,
-                referent_type: TypeIndex(referent_type_index),
-            },
-        };
-        self.types.push(t);
-        t
     }
 
     fn parse_variable_declaration(&mut self, _context: &mut Context) -> VariableDeclaration {
@@ -466,47 +933,6 @@ impl Parser {
         }
     }
 
-    fn map_type_specifiers(specifier: TypeSpecifiers) -> ConflictingTypeSpecifier {
-        if specifier.is_bool() {
-            return ConflictingTypeSpecifier::Bool;
-        }
-        if specifier.is_char() {
-            return ConflictingTypeSpecifier::Char;
-        }
-        if specifier.is_complex() {
-            return ConflictingTypeSpecifier::Complex;
-        }
-        if specifier.is_double() {
-            return ConflictingTypeSpecifier::Double;
-        }
-        if specifier.is_float() {
-            return ConflictingTypeSpecifier::Float;
-        }
-        if specifier.is_int() {
-            return ConflictingTypeSpecifier::Int;
-        }
-        if specifier.is_short() {
-            return ConflictingTypeSpecifier::Short;
-        }
-        if specifier.is_void() {
-            return ConflictingTypeSpecifier::Void;
-        }
-        if specifier.is_signed() {
-            return ConflictingTypeSpecifier::Signed;
-        }
-        if specifier.is_unsigned() {
-            return ConflictingTypeSpecifier::Unsigned;
-        }
-        if specifier.is_long() {
-            return ConflictingTypeSpecifier::Long;
-        }
-        if specifier.is_long_long() {
-            return ConflictingTypeSpecifier::LongLong;
-        }
-
-        unreachable!("map_type_specifiers called with empty type specifiers.");
-    }
-
     fn set_type_specifiers(
         &mut self,
         context: &mut Context,
@@ -523,22 +949,9 @@ impl Parser {
                         error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_void()
-                    || type_specifiers.is_float()
-                    || type_specifiers.is_double()
-                    || type_specifiers.is_bool()
-                    || type_specifiers.is_complex()
-                    || type_specifiers.is_char()
-                {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_int(self, context);
                 }
-                type_specifiers.set_is_int(true);
             },
             | KeywordTokenType::Long => {
                 if type_specifiers.is_long_long() {
@@ -551,27 +964,9 @@ impl Parser {
                         error_type:     ParserErrorType::LongLongDoubleSpecified,
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_void()
-                    || type_specifiers.is_float()
-                    || type_specifiers.is_bool()
-                    || type_specifiers.is_complex()
-                    || type_specifiers.is_char()
-                {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_long(self, context);
                 }
-                if type_specifiers.is_double() {
-                    type_specifiers.set_is_long_double(true);
-                }
-                if type_specifiers.is_long() {
-                    type_specifiers.set_is_long_long(true);
-                }
-                type_specifiers.set_is_long(true);
             },
             | KeywordTokenType::Short => {
                 if type_specifiers.is_short() {
@@ -579,23 +974,9 @@ impl Parser {
                         error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_long()
-                    || type_specifiers.is_void()
-                    || type_specifiers.is_float()
-                    || type_specifiers.is_double()
-                    || type_specifiers.is_bool()
-                    || type_specifiers.is_complex()
-                    || type_specifiers.is_char()
-                {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_short(self, context);
                 }
-                type_specifiers.set_is_short(true);
             },
             | KeywordTokenType::Signed => {
                 if type_specifiers.is_signed() {
@@ -603,16 +984,9 @@ impl Parser {
                         error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_unsigned() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_signed(self, context);
                 }
-                type_specifiers.set_is_signed(true);
             },
             | KeywordTokenType::Unsigned => {
                 if type_specifiers.is_unsigned() {
@@ -620,16 +994,9 @@ impl Parser {
                         error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_signed() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_unsigned(self, context);
                 }
-                type_specifiers.set_is_unsigned(true);
             },
             | KeywordTokenType::Float => {
                 if type_specifiers.is_float() {
@@ -637,25 +1004,9 @@ impl Parser {
                         error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_void()
-                    || type_specifiers.is_int()
-                    || type_specifiers.is_double()
-                    || type_specifiers.is_bool()
-                    || type_specifiers.is_complex()
-                    || type_specifiers.is_char()
-                    || type_specifiers.is_long()
-                    || type_specifiers.is_signed()
-                    || type_specifiers.is_unsigned()
-                {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_float(self, context);
                 }
-                type_specifiers.set_is_float(true);
             },
             | KeywordTokenType::Double => {
                 if type_specifiers.is_double() {
@@ -668,28 +1019,9 @@ impl Parser {
                         error_type:     ParserErrorType::LongLongDoubleSpecified,
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_void()
-                    || type_specifiers.is_int()
-                    || type_specifiers.is_float()
-                    || type_specifiers.is_bool()
-                    || type_specifiers.is_complex()
-                    || type_specifiers.is_char()
-                    || type_specifiers.is_long()
-                    || type_specifiers.is_signed()
-                    || type_specifiers.is_unsigned()
-                {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_double(self, context);
                 }
-                if type_specifiers.is_long() {
-                    type_specifiers.set_is_long_double(true);
-                }
-                type_specifiers.set_is_double(true);
             },
             | KeywordTokenType::Void => {
                 if type_specifiers.is_void() {
@@ -697,25 +1029,9 @@ impl Parser {
                         error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_int()
-                    || type_specifiers.is_float()
-                    || type_specifiers.is_double()
-                    || type_specifiers.is_bool()
-                    || type_specifiers.is_complex()
-                    || type_specifiers.is_char()
-                    || type_specifiers.is_long()
-                    || type_specifiers.is_signed()
-                    || type_specifiers.is_unsigned()
-                {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_void(self, context);
                 }
-                type_specifiers.set_is_void(true);
             },
             | KeywordTokenType::Bool => {
                 if type_specifiers.is_bool() {
@@ -723,25 +1039,9 @@ impl Parser {
                         error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_void()
-                    || type_specifiers.is_int()
-                    || type_specifiers.is_float()
-                    || type_specifiers.is_double()
-                    || type_specifiers.is_complex()
-                    || type_specifiers.is_char()
-                    || type_specifiers.is_long()
-                    || type_specifiers.is_signed()
-                    || type_specifiers.is_unsigned()
-                {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_bool(self, context);
                 }
-                type_specifiers.set_is_bool(true);
             },
             | KeywordTokenType::Complex => {
                 if type_specifiers.is_complex() {
@@ -749,25 +1049,19 @@ impl Parser {
                         error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_void()
-                    || type_specifiers.is_int()
-                    || type_specifiers.is_float()
-                    || type_specifiers.is_double()
-                    || type_specifiers.is_bool()
-                    || type_specifiers.is_char()
-                    || type_specifiers.is_long()
-                    || type_specifiers.is_signed()
-                    || type_specifiers.is_unsigned()
-                {
+                } else {
+                    type_specifiers.make_complex(self, context);
+                }
+            },
+            | KeywordTokenType::Imaginary => {
+                if type_specifiers.is_imaginary() {
                     context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
+                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
+                } else {
+                    type_specifiers.make_imaginary(self, context);
                 }
-                type_specifiers.set_is_complex(true);
             },
             | KeywordTokenType::Char => {
                 if type_specifiers.is_char() {
@@ -775,23 +1069,9 @@ impl Parser {
                         error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         source_vectors: token.source_vectors,
                     });
-                } else if type_specifiers.is_void()
-                    || type_specifiers.is_int()
-                    || type_specifiers.is_float()
-                    || type_specifiers.is_double()
-                    || type_specifiers.is_bool()
-                    || type_specifiers.is_complex()
-                    || type_specifiers.is_long()
-                {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConflictingTypeSpecifiers(
-                            Self::map_type_specifiers(*type_specifiers),
-                            token.kind,
-                        ),
-                        source_vectors: token.source_vectors,
-                    });
+                } else {
+                    type_specifiers.make_char(self, context);
                 }
-                type_specifiers.set_is_char(true);
             },
             | _ => unreachable!("set_type_specifiers called with non-type-specifier token."),
         }
@@ -871,7 +1151,7 @@ impl Parser {
                     storage_class_specified = true;
                 },
                 | TokenType::Keyword(
-                    KeywordTokenType::Int
+                    | KeywordTokenType::Int
                     | KeywordTokenType::Short
                     | KeywordTokenType::Long
                     | KeywordTokenType::Char
@@ -881,10 +1161,27 @@ impl Parser {
                     | KeywordTokenType::Double
                     | KeywordTokenType::Void
                     | KeywordTokenType::Bool
-                    | KeywordTokenType::Complex,
+                    | KeywordTokenType::Complex
+                    | KeywordTokenType::Imaginary,
                 ) => self.set_type_specifiers(context, &mut specifiers.type_specifiers, token),
+                | TokenType::Keyword(KeywordTokenType::Struct | KeywordTokenType::Union) =>
+                    specifiers.type_specifiers.make_struct_or_union(self, context, self.parse_struct_or_union_declaration(context, token)),
+                | TokenType::Keyword(KeywordTokenType::Enum) =>
+                specifiers.type_specifiers.make_enum(self, context, self.parse_enum_declaration(context, token)),
+                | TokenType::Identifier if self.typedef_names.contains_key(&token.contents) => specifiers.type_specifiers.make_typedef_name(self, context, token.contents),
                 | _ => {
                     self.pending_token = Some(token);
+                    if specifiers == DeclarationSpecifiers::default() {
+                        let source_vectors = context.create_source_vectors(
+                            self.position(context),
+                            self.source_file_index(),
+                            0,
+                        );
+                        context.parser_error(ParserError {
+                            error_type: ParserErrorType::EmptyDeclarationSpecifiers(token.kind),
+                            source_vectors,
+                        });
+                    }
                     return specifiers;
                 },
             }
@@ -898,7 +1195,10 @@ impl Parser {
         let pointer_declarator = self.parse_pointer_declarator(context);
         let vector_slice = self.parse_direct_declarator::<IS_ABSTRACT>(context);
         if vector_slice.length == 0 {
-            if pointer_declarator.type_qualifiers_list.length != 0 {
+            // Non-abstract declarators must have at least one direct declarator.
+            if IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR
+                && pointer_declarator.type_qualifiers_list.length != 0
+            {
                 let source_vectors = context.create_source_vectors(
                     self.position(context),
                     self.source_file_index(),
@@ -935,10 +1235,10 @@ impl Parser {
         let start_index = self.declarator_types.len().to_u32();
         // The first part of a declarator is only required to be an identifier or a
         // parenthesized declarator if it is not abstract.
-        if self
-            .parse_first_direct_declarator::<IS_ABSTRACT>(context)
-            .is_none()
-            && IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR
+        if IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR
+            && self
+                .parse_first_direct_declarator::<IS_ABSTRACT>(context)
+                .is_none()
         {
             return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
         }
@@ -1255,7 +1555,58 @@ impl Parser {
             | Some(Ok(())) => return Some(()),
             | Some(Err(())) => return None,
         }
-        loop {}
+        let start_index = self.parameter_declarations.len().to_u32();
+        // Parses this rule in the standard:
+        // parameter-type-list:
+        // - parameter-list
+        // - parameter-list , ...
+        // parameter-list:
+        // - parameter-declaration
+        // - parameter-list , parameter-declaration
+        // parameter-declaration:
+        // - declaration-specifiers declarator
+        // - declaration-specifiers abstract-declarator?
+        loop {
+            let declaration_specifiers = self.parse_declaration_specifiers(context);
+            let declarator = self.parse_declarator::<IS_MAYBE_ABSTRACT_DECLARATOR>(context);
+            let parameter_declaration = ParameterDeclaration {
+                declaration_specifiers,
+                declarator,
+            };
+            self.parameter_declarations.push(parameter_declaration);
+            let next = self.next_token(context);
+            if next.is_none() {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_index(),
+                    0,
+                );
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::UnexpectedEndOfInput(
+                        "parsing function direct declarator. Expected a closing parenthesis.",
+                    ),
+                    source_vectors,
+                });
+                return Some(());
+            }
+            let next = next.unwrap();
+            if next.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis) {
+                break;
+            }
+            if next.kind != TokenType::Operator(OperatorTokenType::Comma) {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_index(),
+                    0,
+                );
+                context.parser_error(ParserError {
+                    error_type: ParserErrorType::ExpectedCommaOrClosingParenthesis(next.kind),
+                    source_vectors,
+                });
+                self.pending_token = Some(next);
+                return Some(());
+            }
+        }
     }
 
     // Parses the first two rules of direct-declarator.
@@ -1264,7 +1615,8 @@ impl Parser {
         context: &mut Context,
     ) -> Option<()> {
         let token = self.next_token(context)?;
-        if token.kind == TokenType::Identifier && !IS_ABSTRACT {
+        // Matches this rule: direct-declarator: identifier
+        if token.kind == TokenType::Identifier && IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR {
             self.declarator_types
                 .push(DeclaratorType::Identifier(Identifier {
                     name: token.contents,
@@ -1311,6 +1663,8 @@ impl Parser {
                 .push(DeclaratorType::Parenthesized(declarator));
             return Some(());
         }
+        // Declarators are only required to start with an identifier or a parenthesized
+        // declarator if they're not abstract.
         if IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR {
             context.parser_error(ParserError {
                 error_type:
@@ -1320,6 +1674,11 @@ impl Parser {
                 source_vectors: token.source_vectors,
             });
         }
+        // Returning None here is correct because either we've already parsed the first
+        // part of the declarator, we haven't and we're parsing a non-abstract
+        // declarator so we've reached an unrecoverable error, or we haven't and we're
+        // parsing an abstract declarator so we haven't parsed anything and we should
+        // return None to indicate this.
         self.pending_token = Some(token);
         None
     }
@@ -1444,19 +1803,22 @@ pub(crate) enum TopLevelStatementType {
 // * A type definition.
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct ExpressionIndex(usize);
+pub(crate) struct ExpressionIndex(u32);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct StatementIndex(usize);
+pub(crate) struct StatementIndex(u32);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct TypeIndex(usize);
+pub(crate) struct TypeIndex(u32);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct DeclaratorTypeIndex(usize);
+pub(crate) struct DeclaratorTypeIndex(u32);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct AbstractDeclaratorIndex(usize);
+pub(crate) struct StructOrUnionSpecifierIndex(u32);
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct EnumSpecifierIndex(u32);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Statement {
@@ -1738,41 +2100,6 @@ impl GetSourceVectors for ParserError {
 
 impl std::error::Error for ParserError {}
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum ConflictingTypeSpecifier {
-    Short,
-    Signed,
-    Unsigned,
-    Int,
-    Float,
-    Double,
-    Void,
-    Char,
-    Bool,
-    Complex,
-    Long,
-    LongLong,
-}
-
-impl Display for ConflictingTypeSpecifier {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            | ConflictingTypeSpecifier::Short => write!(f, "`short`"),
-            | ConflictingTypeSpecifier::Signed => write!(f, "`signed`"),
-            | ConflictingTypeSpecifier::Unsigned => write!(f, "`unsigned`"),
-            | ConflictingTypeSpecifier::Int => write!(f, "`int`"),
-            | ConflictingTypeSpecifier::Float => write!(f, "`float`"),
-            | ConflictingTypeSpecifier::Double => write!(f, "`double`"),
-            | ConflictingTypeSpecifier::Void => write!(f, "`void`"),
-            | ConflictingTypeSpecifier::Char => write!(f, "`char`"),
-            | ConflictingTypeSpecifier::Bool => write!(f, "`_Bool`"),
-            | ConflictingTypeSpecifier::Complex => write!(f, "`_Complex`"),
-            | ConflictingTypeSpecifier::Long => write!(f, "`long`"),
-            | ConflictingTypeSpecifier::LongLong => write!(f, "`long long`"),
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum ParserErrorType {
     UnexpectedEndOfInput(&'static str),
@@ -1785,7 +2112,7 @@ pub(crate) enum ParserErrorType {
     RestrictSpecifiedTwice,
     InlineSpecifiedTwice,
     StaticSpecifiedTwice,
-    ConflictingTypeSpecifiers(ConflictingTypeSpecifier, TokenType),
+    ConflictingTypeSpecifiers(TypeSpecifiers, TokenType),
     TypeSpecifierSpecifiedTwice(TokenType),
     LongSpecifiedThrice,
     LongLongDoubleSpecified,
