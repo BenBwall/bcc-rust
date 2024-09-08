@@ -11,9 +11,10 @@ enum
   LONG_DOUBLE_BYTES = sizeof(long double),
 };
 
-typedef struct long_double_t
+typedef union long_double_t
 {
   uint8_t bytes[sizeof(long double)];
+  long double value;
 } long_double_t;
 
 typedef union operand_value_t
@@ -29,13 +30,11 @@ typedef struct operand_t
 } operand_t;
 
 size_t
-long_double_to_string_get_size(long_double_t value, int *error);
+long_double_to_string_get_size(long_double_t value);
 
 size_t long_double_to_string(long_double_t value, char *buffer,
-                             size_t buffer_size, int *error);
-long_double_t string_to_long_double(char const *s, char **endptr, int *error);
+                             size_t buffer_size);
+long_double_t string_to_long_double(char const *s, char **endptr);
 
 operand_t long_double_to_operand(long_double_t value, int *error);
 
-double string_to_double(char const *s, char **endptr, int *error);
-float string_to_float(char const *s, char **endptr, int *error);
