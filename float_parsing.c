@@ -6,65 +6,28 @@
 #include <string.h>
 #include <math.h>
 
-size_t long_double_to_string_get_size(long_double_t value, int *error)
+size_t long_double_to_string_get_size(long_double_t value)
 {
   long double ld_value;
   memcpy(&ld_value, value.bytes, sizeof(value));
   int err = snprintf(NULL, 0, "%Lf", ld_value);
-  if (err < 0)
-  {
-    *error = errno;
-    return 0;
-  }
-  else
-  {
-    *error = 0;
-    return err;
-  }
+  return (size_t) err;
 }
 
 size_t long_double_to_string(long_double_t value, char *buffer,
-                             size_t buffer_size, int *error)
+                             size_t buffer_size)
 {
   long double ld_value;
   memcpy(&ld_value, value.bytes, sizeof(value));
   int err = snprintf(buffer, buffer_size, "%Lf", ld_value);
-  if (err < 0)
-  {
-    *error = errno;
-    return 0;
-  }
-  else
-  {
-    *error = 0;
-    return err;
-  }
+  return (size_t) err;
 }
 
-long_double_t string_to_long_double(char const *const s, char **const endptr,
-                                    int *const error)
+long_double_t string_to_long_double(char const *const s, char **const endptr)
 {
-  long double value = strtold(s, endptr);
-  *error = errno;
   long_double_t ret;
-  memcpy(ret.bytes, &value, sizeof(value));
+  ret.value = strtold(s, endptr);
   return ret;
-}
-
-double string_to_double(char const *const s, char **const endptr,
-                        int *const error)
-{
-  double value = strtod(s, endptr);
-  *error = errno;
-  return value;
-}
-
-float string_to_float(char const *const s, char **const endptr,
-                      int *const error)
-{
-  float value = strtof(s, endptr);
-  *error = errno;
-  return value;
 }
 
 static bool is_integer(long double ld_value)
