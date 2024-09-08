@@ -77,7 +77,6 @@ missing-debug-implementations = "warn"
 missing-docs = "warn"
 # must-not-suspend = "forbid"
 # non-exhaustive-omitted-patterns = "warn"
-pointer-structural-match = "forbid"
 single-use-lifetimes = "warn"
 trivial-casts = "warn"
 trivial-numeric-casts = "warn"
@@ -95,22 +94,22 @@ variant-size-differences = "warn"
 [dependencies]
 bitfield = "0.15.0"
 chrono = "0.4.38"
-clap = { version = "4.5.4", features = ["derive"] }
+clap = { version = "4.5.17", features = ["derive"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 owo-colors = "4.0.0"
 rustc-hash = "1.1.0"
 smallstr = "0.3.0"
-thiserror = "1.0.61"
+thiserror = "1.0.63"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
 pretty_assertions = "1.4.0"
-proptest = "1.4.0"
+proptest = "1.5.0"
 rstest = "0.20.0"
 
 [build-dependencies]
 bindgen = "0.69.4"
-cc = "1.0.98"
+cc = "1.1.18"
 
 [[bench]]
 name = "bench"
