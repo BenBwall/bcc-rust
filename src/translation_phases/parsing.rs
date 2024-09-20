@@ -811,8 +811,9 @@ impl Parser {
                     break 'outer;
                 };
                 if closing_curly_brace.kind != TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) {
+                    let start_position = closing_curly_brace.source_vectors.position(context);
                     let source_vectors = context.create_source_vectors(
-                        closing_curly_brace.source_position,
+                        start_position,
                         self.source_file_index(),
                         0,
                     );
