@@ -95,18 +95,14 @@ impl SetSourceFileIndex for Parser {
     }
 }
 
-mod type_qualifiers {
-    bitfield::bitfield! {
-        #[derive(PartialEq, Eq, Hash, Clone, Copy, Default)]
-        pub struct TypeQualifiers(u8);
-        impl Debug;
-        pub is_const, set_is_const: 0;
-        pub is_volatile, set_is_volatile: 1;
-        pub is_restrict, set_is_restrict: 2;
-    }
+bitfield::bitfield! {
+    #[derive(PartialEq, Eq, Hash, Clone, Copy, Default)]
+    pub(crate) struct TypeQualifiers(u8);
+    impl Debug;
+    pub is_const, set_is_const: 0;
+    pub is_volatile, set_is_volatile: 1;
+    pub is_restrict, set_is_restrict: 2;
 }
-
-pub(crate) use type_qualifiers::TypeQualifiers;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub(crate) enum TypeSpecifiers {
