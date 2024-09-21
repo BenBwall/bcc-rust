@@ -94,7 +94,7 @@ variant-size-differences = "warn"
 [dependencies]
 bitfield = "0.17.0"
 chrono = "0.4.38"
-clap = { version = "4.5.17", features = ["derive"] }
+clap = { version = "4.5.18", features = ["derive"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 owo-colors = "4.1.0"
 rustc-hash = "2.0.0"
