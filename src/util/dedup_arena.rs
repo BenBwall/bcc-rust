@@ -73,10 +73,10 @@ impl<T, H> DedupArena<T, H> {
             // SAFETY: The bucket is guaranteed to be valid because it was returned by
             // `find_or_find_insert_slot`.
             unsafe { Err(*bucket.as_ref()) },
+            // SAFETY:
+            // Based on the implementation of HashMap in hashbrown. Inserting into the slot
+            // is valid because it was returned by `find_or_find_insert_slot`.
             | Err(slot) => unsafe {
-                // SAFETY:
-                // Based on the implementation of HashMap in hashbrown. Inserting into the slot
-                // is valid because it was returned by `find_or_find_insert_slot`.
                 self.data.push(value);
                 _ = self.indices.insert_in_slot(hash, slot, index);
                 Ok(index)

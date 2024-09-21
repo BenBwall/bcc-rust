@@ -231,6 +231,7 @@ impl StringCache {
     pub(crate) fn end_str(&mut self) -> StringCacheId {
         self.ends.push(self.data.len() as u32);
         let id = StringCacheId::from_u32(self.ends.len() as u32 - 1);
+        // SAFETY: We're know that the ID is valid because we just created it.
         let s = unsafe { Self::get_impl(&self.data, &self.ends, id).unwrap_unchecked() };
         let hash = self.hasher.hash_one(s);
         let entry = self.dedup.raw_entry_mut().from_hash(hash, |id| {
