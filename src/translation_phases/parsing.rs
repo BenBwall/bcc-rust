@@ -1073,10 +1073,10 @@ impl Parser {
                 });
                 break 'enumerator_list;
             };
-            if maybe_assignment_operator.kind != TokenType::Operator(OperatorTokenType::Equals) {
-                self.pending_token = Some(maybe_assignment_operator);
-            } else {
+            if maybe_assignment_operator.kind == TokenType::Operator(OperatorTokenType::Equals) {
                 constant_expression = Some(self.parse_expression::<true>(context));
+            } else {
+                self.pending_token = Some(maybe_assignment_operator);
             }
             self.enumerators.push(Enumerator {
                 name:       enumeration_constant.unwrap(),
@@ -2022,19 +2022,18 @@ impl Parser {
                         return None;
                     };
                     if should_be_closing_parenthesis.kind
-                        != TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                        == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                     {
-                        let source_vectors = should_be_closing_parenthesis.source_vectors;
-                        context.parser_error(ParserError {
+                        break;
+                    }
+                    let source_vectors = should_be_closing_parenthesis.source_vectors;
+                    context.parser_error(ParserError {
                             error_type: ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                                 should_be_closing_parenthesis.kind,
                             ),
                             source_vectors,
                         });
-                        self.pending_token = Some(should_be_closing_parenthesis);
-                    } else {
-                        break;
-                    }
+                    self.pending_token = Some(should_be_closing_parenthesis);
                 } else {
                     self.pending_token = Some(maybe_ellipsis);
                 }
@@ -2716,9 +2715,7 @@ impl Display for ParserErrorType {
                 f,
                 "Both `static` and pointer specified in array direct declarator!"
             ),
-            | ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
-                tt,
-            ) => write!(
+            | ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(tt,) => write!(
                 f,
                 "Expected a closing square bracket after pointer in array direct declarator! Got \
                  instead: {tt:?}"
@@ -2754,16 +2751,16 @@ impl Display for ParserErrorType {
                     f,
                     "K&R function declarator mixed with modern declarator in function declarator!"
                 ),
-                | ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(tt) => write!(
-                    f,
-                    "Expected a comma or closing parenthesis in function declarator parameter list! \
-                     Got instead: {tt:?}"
-                ),
-                | ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(tt) => write!(
-                    f,
-                    "Expected a closing parenthesis after ellipsis in function declarator parameter \
-                     list! Got instead: {tt:?}"
-                ),
+            | ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(tt) => write!(
+                f,
+                "Expected a comma or closing parenthesis in function declarator parameter list! \
+                    Got instead: {tt:?}"
+            ),
+            | ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(tt) => write!(
+                f,
+                "Expected a closing parenthesis after ellipsis in function declarator parameter \
+                    list! Got instead: {tt:?}"
+            ),
         }
     }
 }
