@@ -9,7 +9,11 @@ use std::{
 
 use hashbrown::raw::RawTable;
 
-#[expect(dead_code, reason = "We're not currently this, but it's still here because I don't want to have to reimplement it.")]
+#[expect(
+    dead_code,
+    reason = "We're not currently this, but it's still here because I don't want to have to \
+              reimplement it."
+)]
 pub(crate) struct DedupArena<T, H> {
     indices: RawTable<u32>,
     data:    Vec<T>,
