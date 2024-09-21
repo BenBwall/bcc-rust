@@ -37,9 +37,13 @@ where
             #[cold]
             #[inline(never)]
             fn drop_slow<T: ?Sized>(this: &mut Shared<T>) {
+                // SAFETY: This is okay because self.ref_count and self.contents point at valid
+                // boxes and we only drop them when the ref count is 0.
+                #[expect(
+                    clippy::multiple_unsafe_ops_per_block,
+                    reason = "The safety comment explains why both operations are okay."
+                )]
                 unsafe {
-                    // SAFETY: This is okay because self.ref_count and self.contents point at valid
-                    // boxes and we only drop them when the ref count is 0.
                     drop(Box::from_raw(this.ref_count.as_ptr()));
                     drop(Box::from_raw(this.contents.as_ptr()));
                 }

@@ -27,6 +27,8 @@ impl<T: ?Sized, U> Captures<U> for T {}
 
 pub(crate) fn vec_to_string_lossy(vec: Vec<u8>) -> String {
     match String::from_utf8_lossy(&vec) {
+        // SAFETY: If `[String::from_utf8_lossy]` returns `Cow::Borrowed`, then the input was
+        // correct UTF-8.
         | Cow::Borrowed(..) => unsafe { String::from_utf8_unchecked(vec) },
         | Cow::Owned(s) => s,
     }
