@@ -77,8 +77,7 @@ fn long_double_to_string(long_double: LongDouble) -> Result<String, NonZeroI32> 
         bytes: long_double.value,
     };
     let ptr: *mut u8 = buffer.as_mut_ptr();
-    let bytes_written =
-        unsafe { ffi::long_double_to_string(ld, ptr.cast::<c_char>(), capacity) };
+    let bytes_written = unsafe { ffi::long_double_to_string(ld, ptr.cast::<c_char>(), capacity) };
     if let Some(error) = NonZeroI32::new(errno()) {
         return Err(error);
     }
@@ -154,8 +153,7 @@ pub(crate) fn string_to_double(s: &str) -> Result<f64, ParseFloatError> {
         "string_to_double: string must end with null byte. Was: {s:?}"
     );
     let mut endptr = std::ptr::null_mut();
-    let double =
-        unsafe { strtod(s.as_ptr().cast::<c_char>(), &mut endptr) };
+    let double = unsafe { strtod(s.as_ptr().cast::<c_char>(), &mut endptr) };
     let error = errno();
     unsafe {
         if endptr.cast_const().cast() != s.as_ptr().add(s.len() - 1) {
@@ -175,8 +173,7 @@ pub(crate) fn string_to_float(s: &str) -> Result<f32, ParseFloatError> {
         "string_to_float: string must end with null byte. Was: {s:?}"
     );
     let mut endptr = std::ptr::null_mut();
-    let float =
-        unsafe { strtof(s.as_ptr().cast::<c_char>(), &mut endptr) };
+    let float = unsafe { strtof(s.as_ptr().cast::<c_char>(), &mut endptr) };
     let error = errno();
     unsafe {
         if endptr.cast_const().cast() != s.as_ptr().add(s.len() - 2) {

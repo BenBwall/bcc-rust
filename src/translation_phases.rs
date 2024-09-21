@@ -414,7 +414,10 @@ impl Context {
         index
     }
 
-    #[expect(clippy::cast_possible_truncation, reason = "We already checked that it is in range before casting")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "We already checked that it is in range before casting"
+    )]
     pub(crate) fn duplicate_source_vectors(
         self_source_vectors: &mut Vec<SourceVector>,
         source_vectors: SourceVectors,
@@ -438,7 +441,10 @@ impl Context {
         SourceVectors::new(start_index, start_index + 1)
     }
 
-    #[expect(clippy::cast_possible_truncation, reason = "We are performing a overflow here.")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "We are performing a overflow here."
+    )]
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
         let start_index = self.source_vectors.0.len() as u32;
         for i in v1.start_index..v1.start_index + v1.length {
@@ -518,7 +524,10 @@ impl Context {
 
     #[cold]
     #[inline(never)]
-    #[expect(dead_code, reason = "We aren't using this yet, but we will be when the parser is implemented.")]
+    #[expect(
+        dead_code,
+        reason = "We aren't using this yet, but we will be when the parser is implemented."
+    )]
     pub(crate) fn raw_parser_error(
         self_pending_errors: &mut Vec<TranslationError>,
         error: ParserError,
