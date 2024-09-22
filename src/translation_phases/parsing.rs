@@ -51,23 +51,23 @@ use crate::{
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser {
-    pub(crate) preprocessor: Preprocessor,
-    pub(crate) types: Vec<Type>,
-    pub(crate) pending_token: Option<Token>,
-    pub(crate) expressions: Vec<Expression>,
-    pub(crate) statements: Vec<Statement>,
-    pub(crate) type_qualifiers: Vec<TypeQualifiers>,
-    pub(crate) declarator_types: Vec<DeclaratorType>,
-    pub(crate) identifiers: Vec<Identifier>,
-    pub(crate) typedef_names: HashMap<StringCacheId, TypeIndex>,
-    pub(crate) struct_names: HashMap<StringCacheId, TypeIndex>,
-    pub(crate) enum_names: HashMap<StringCacheId, TypeIndex>,
-    pub(crate) parameter_declarations: Vec<ParameterDeclaration>,
+    pub(crate) preprocessor:               Preprocessor,
+    pub(crate) type_names:                 Vec<TypeName>,
+    pub(crate) pending_token:              Option<Token>,
+    pub(crate) expressions:                Vec<Expression>,
+    pub(crate) statements:                 Vec<Statement>,
+    pub(crate) type_qualifiers:            Vec<TypeQualifiers>,
+    pub(crate) declarator_types:           Vec<DirectDeclarator>,
+    pub(crate) identifiers:                Vec<Identifier>,
+    pub(crate) typedef_names:              HashMap<StringCacheId, TypeIndex>,
+    pub(crate) struct_names:               HashMap<StringCacheId, TypeIndex>,
+    pub(crate) enum_names:                 HashMap<StringCacheId, TypeIndex>,
+    pub(crate) parameter_declarations:     Vec<ParameterDeclaration>,
     pub(crate) struct_or_union_specifiers: Vec<StructOrUnionSpecifier>,
-    pub(crate) struct_declarations: Vec<StructDeclaration>,
-    pub(crate) struct_declarators: Vec<StructDeclarator>,
-    pub(crate) enum_specifiers: Vec<EnumSpecifier>,
-    pub(crate) enumerators: Vec<Enumerator>,
+    pub(crate) struct_declarations:        Vec<StructDeclaration>,
+    pub(crate) struct_declarators:         Vec<StructDeclarator>,
+    pub(crate) enum_specifiers:            Vec<EnumSpecifier>,
+    pub(crate) enumerators:                Vec<Enumerator>,
 }
 
 impl GetPosition for Parser {
@@ -95,8 +95,39 @@ impl SetSourceFileIndex for Parser {
     }
 }
 
+/// declaration:
+/// - declaration-specifiers init-declarator-list? ;
+pub(crate) struct Declaration {
+    pub(crate) declaration_specifiers: DeclarationSpecifiers,
+    /// init-declarator-list
+    pub(crate) init_declarators:       VectorSlice<InitDeclarator>,
+}
+
+/// init-declarator:
+/// - declarator
+/// - declarator = initializer
+pub(crate) struct InitDeclarator {
+    pub(crate) declarator:  Declarator,
+    pub(crate) initializer: Option<Initializer>,
+}
+
+/// initializer:
+/// - assignment-expression
+/// - { initializer-list }
+/// - { initializer-list , }
+pub(crate) enum Initializer {
+    AssignmentExpression(ExpressionIndex),
+    InitializerList(VectorSlice<Initializer>),
+}
+
 bitfield::bitfield! {
     #[derive(PartialEq, Eq, Hash, Clone, Copy, Default)]
+    /// type-qualifier:
+    /// - const
+    /// - restrict
+    /// - volatile
+    ///
+    /// Represents all the type-qualifiers in a declaration. For example, the declaration `const volatile int foo;` would be represented as `TypeQualifiers(Const | Volatile)`.
     pub(crate) struct TypeQualifiers(u8);
     impl Debug;
     pub is_const, set_is_const: 0;
@@ -104,6 +135,26 @@ bitfield::bitfield! {
     pub is_restrict, set_is_restrict: 2;
 }
 
+/// type-specifier:
+/// - void
+/// - char
+/// - short
+/// - int
+/// - long
+/// - float
+/// - double
+/// - signed
+/// - unsigned
+/// - _Bool
+/// - _Complex
+/// - _Imaginary
+/// - struct-or-union-specifier
+/// - enum-specifier
+/// - typedef-name
+///
+/// Each variant represents a valid combination of type specifiers. For
+/// example, the declaration `unsigned int foo` would be represented as
+/// `TypeSpecifiers::UnsignedInt`.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub(crate) enum TypeSpecifiers {
     #[default]
@@ -575,52 +626,83 @@ impl TypeSpecifiers {
     }
 }
 
+/// struct-or-union-specifier:
+/// - struct-or-union identifier? { struct-declaration-list }
+/// - struct-or-union identifier
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct StructOrUnionSpecifier {
-    pub(crate) kind:             StructOrUnionSpecifierType,
-    pub(crate) name:             Option<Identifier>,
+    pub(crate) struct_or_union:         StructOrUnion,
+    pub(crate) identifier:              Option<Identifier>,
     /// None indicates that the body is missing. An empty vector indicates an
     /// empty body. `struct Foo;` has no body. `struct Foo {};` has an empty
     /// body.
-    pub(crate) declaration_list: Option<VectorSlice<StructDeclaration>>,
+    pub(crate) struct_declaration_list: Option<VectorSlice<StructDeclaration>>,
 }
 
+/// struct-or-union:
+/// - struct
+/// - union
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum StructOrUnionSpecifierType {
+pub(crate) enum StructOrUnion {
     Struct,
     Union,
 }
 
+/// struct-declaration:
+/// - specifier-qualifier-list struct-declarator-list ;
+///
+/// type_qualifiers and type_specifiers are split into two fields.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct StructDeclaration {
-    type_qualifiers:    TypeQualifiers,
-    type_specifiers:    TypeSpecifiers,
-    struct_declarators: VectorSlice<StructDeclarator>,
+    type_qualifiers:        TypeQualifiers,
+    type_specifiers:        TypeSpecifiers,
+    struct_declarator_list: VectorSlice<StructDeclarator>,
 }
 
+/// struct-declarator:
+/// - declarator
+/// - declarator? : constant-expression
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct StructDeclarator {
     declarator:     Option<Declarator>,
-    bitfield_width: Option<ExpressionIndex>,
+    bitfield_width: Option<ConstantExpressionIndex>,
 }
 
+/// enum-specifier:
+/// - enum identifier? { enumerator-list }
+/// - enum identifier? { enumerator-list , }
+/// - enum identifier
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct EnumSpecifier {
     pub(crate) name:             Option<Identifier>,
     pub(crate) enumeration_list: Option<VectorSlice<Enumerator>>,
 }
 
+/// enumerator:
+/// - enumeration-constant
+/// - enumeration-constant = constant-expression
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Enumerator {
     pub(crate) name:       Identifier,
-    pub(crate) expression: Option<ExpressionIndex>,
+    pub(crate) expression: Option<ConstantExpressionIndex>,
 }
 
+/// function-specifier:
+/// - inline
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub(crate) struct FunctionSpecifiers {
     pub(crate) is_inline: bool,
 }
 
+/// declaration-specifiers:
+/// - storage-class-specifier declaration-specifiers?
+/// - type-specifier declaration-specifiers?
+/// - type-qualifier declaration-specifiers?
+/// - function-specifier declaration-specifiers?
+///
+/// each field in this struct contains all the specifiers of that type. For
+/// example, the type_qualifiers field contains all the type qualifiers in the
+/// declaration.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct DeclarationSpecifiers {
     pub(crate) storage_class:       StorageClass,
@@ -646,12 +728,14 @@ impl DeclarationSpecifiers {
     }
 }
 
-/// Implements this rule in the standard:
 /// pointer:
-/// * type-qualifier-list?
-/// * type-qualifier-list? pointer
-/// For instance, this C code: `*const *volatile *` would be parsed as:
-/// `[TypeQualifiers(const), TypeQualifiers(volatile), TypeQualifiers(0)]`
+/// - type-qualifier-list?
+/// - type-qualifier-list? pointer
+///
+/// Each element in the type_qualifiers_list represents the type qualifiers for
+/// one level of indirection. For example, this declaration: `*const *volatile
+/// *x` would be parsed as: `[TypeQualifiers(const), TypeQualifiers(volatile),
+/// TypeQualifiers(0)]`
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct PointerDeclarator {
     /// Each element represents the type qualifiers for one level of
@@ -659,14 +743,44 @@ pub(crate) struct PointerDeclarator {
     pub(crate) type_qualifiers_list: VectorSlice<TypeQualifiers>,
 }
 
+/// declarator:
+/// - pointer? direct-declarator
+///
+/// abstract-declarator:
+/// - pointer
+/// - pointer? direct-abstract-declarator
+///
+/// Represents both declarators and abstract declarators.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Declarator {
     pub(crate) pointer_declarator: PointerDeclarator,
-    pub(crate) kind:               VectorSlice<DeclaratorType>,
+    pub(crate) kind:               VectorSlice<DirectDeclarator>,
 }
 
+/// direct-declarator:
+/// - identifier
+/// - ( declarator )
+/// - direct-declarator [ type-qualifier-list? assignment-expression? ]
+/// - direct-declarator [ static type-qualifier-list? assignment-expression ]
+/// - direct-declarator [ type-qualifier-list static assignment-expression ]
+/// - direct-declarator [ type-qualifier-list? * ]
+/// - direct-declarator ( parameter-type-list )
+/// - direct-declarator ( identifier-list? )
+///
+/// direct-abstract-declarator:
+/// - ( abstract-declarator )
+/// - direct-abstract-declarator? [ type-qualifier-list? assignment-expression?
+///   ]
+/// - direct-abstract-declarator? [ static type-qualifier-list?
+///   assignment-expression ]
+/// - direct-abstract-declarator? [ type-qualifier-list static
+///   assignment-expression ]
+/// - direct-abstract-declarator? [ * ]
+/// - direct-abstract-declarator? ( parameter-type-list? )
+///
+/// Represents both direct-declarators and direct-abstract-declarators.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum DeclaratorType {
+pub(crate) enum DirectDeclarator {
     Identifier(Identifier),
     Parenthesized(Declarator),
     KAndRStyleFunction {
@@ -684,6 +798,9 @@ pub(crate) enum DeclaratorType {
     },
 }
 
+/// parameter-declaration:
+/// - declaration-specifiers declarator
+/// - declaration-specifiers abstract-declarator?
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct ParameterDeclaration {
     declaration_specifiers: DeclarationSpecifiers,
@@ -697,11 +814,17 @@ const IS_ABSTRACT_DECLARATOR: u8 = 0;
 const IS_NOT_ABSTRACT_DECLARATOR: u8 = 1;
 const IS_MAYBE_ABSTRACT_DECLARATOR: u8 = 2;
 
+// FIXME: Change this to an enum when using enums as const generics is
+// supported.
+const IS_FUNCTION_DEFINITION: u8 = 0;
+const IS_NOT_FUNCTION_DEFINITION: u8 = 1;
+const IS_MAYBE_FUNCTION_DEFINITION: u8 = 2;
+
 impl Parser {
     pub(crate) fn new(preprocessor: Preprocessor) -> Self {
         Self {
             preprocessor,
-            types: Vec::new(),
+            type_names: Vec::new(),
             pending_token: None,
             expressions: Vec::new(),
             statements: Vec::new(),
@@ -772,9 +895,9 @@ impl Parser {
             if let Some(v) = name {
                 self.struct_or_union_specifiers
                     .push(StructOrUnionSpecifier {
-                        kind:             StructOrUnionSpecifierType::Struct,
-                        name:             Some(v),
-                        declaration_list: None,
+                        struct_or_union:         StructOrUnion::Struct,
+                        identifier:              Some(v),
+                        struct_declaration_list: None,
                     });
                 return StructOrUnionSpecifierIndex(start_index);
             }
@@ -784,9 +907,9 @@ impl Parser {
             if let Some(v) = name {
                 self.struct_or_union_specifiers
                     .push(StructOrUnionSpecifier {
-                        kind:             StructOrUnionSpecifierType::Struct,
-                        name:             Some(v),
-                        declaration_list: None,
+                        struct_or_union:         StructOrUnion::Struct,
+                        identifier:              Some(v),
+                        struct_declaration_list: None,
                     });
                 return StructOrUnionSpecifierIndex(start_index);
             }
@@ -950,7 +1073,7 @@ impl Parser {
             self.struct_declarations.push(StructDeclaration {
                 type_qualifiers,
                 type_specifiers,
-                struct_declarators: VectorSlice::new(
+                struct_declarator_list: VectorSlice::new(
                     struct_declarators_start_index,
                     self.struct_declarators.len().to_u32(),
                 ),
@@ -958,9 +1081,9 @@ impl Parser {
         }
         self.struct_or_union_specifiers
             .push(StructOrUnionSpecifier {
-                kind: StructOrUnionSpecifierType::Struct,
-                name,
-                declaration_list: Some(VectorSlice::new(
+                struct_or_union:         StructOrUnion::Struct,
+                identifier:              name,
+                struct_declaration_list: Some(VectorSlice::new(
                     struct_declarations_start_index,
                     self.struct_declarations.len().to_u32(),
                 )),
@@ -1155,66 +1278,11 @@ impl Parser {
         }
     }
 
-    fn parse_variable_declaration(&mut self, _context: &mut Context) -> VariableDeclaration {
-        todo!();
-    }
-
-    fn parse_function_definition(
+    #[inline(always)]
+    fn parse_declaration_or_function_definition<const IS_FUNCTION: u8>(
         &mut self,
         context: &mut Context,
-        name: Identifier,
-        parameters: Option<VectorSlice<FunctionDefinitionArgument>>,
-        return_type: Option<TypeIndex>,
-    ) -> TopLevelStatement {
-        match self.next_token(context) {
-            | Some(token)
-                if token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) =>
-                (),
-            | Some(token) if token.kind == TokenType::Operator(OperatorTokenType::Semicolon) => {
-                return TopLevelStatement {
-                    kind: TopLevelStatementType::FunctionDeclaration(FunctionDeclaration {
-                        name,
-                        parameters,
-                        return_type,
-                    }),
-                };
-            },
-            | Some(token) => {
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(token.kind),
-                    source_vectors: token.source_vectors,
-                });
-                self.pending_token = Some(token);
-                return TopLevelStatement {
-                    kind: TopLevelStatementType::FunctionDeclaration(FunctionDeclaration {
-                        name,
-                        parameters,
-                        return_type,
-                    }),
-                };
-            },
-            | None => {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::UnexpectedEndOfInput(
-                        "parsing function definition. Expected a semicolon or an opening curly \
-                         brace.",
-                    ),
-                    source_vectors,
-                });
-                return TopLevelStatement {
-                    kind: TopLevelStatementType::FunctionDeclaration(FunctionDeclaration {
-                        name,
-                        parameters,
-                        return_type,
-                    }),
-                };
-            },
-        }
+    ) -> ExternalDeclaration {
         let statement_start_index = self.statements.len().to_u32();
         loop {
             match self.next_token(context) {
@@ -1230,15 +1298,23 @@ impl Parser {
             }
         }
         let end_index = self.statements.len().to_u32();
-        TopLevelStatement {
-            kind: TopLevelStatementType::FunctionDefinition(FunctionDefinition {
-                declaration: FunctionDeclaration {
-                    name,
-                    parameters,
-                    return_type,
-                },
-                statements:  VectorSlice::new(statement_start_index, end_index),
-            }),
+        ExternalDeclaration::FunctionDefinition(FunctionDefinition {
+            declaration: FunctionDeclaration {
+                name,
+                parameters,
+                return_type,
+            },
+            statements:  VectorSlice::new(statement_start_index, end_index),
+        })
+    }
+
+    fn parse_declaration(&mut self, context: &mut Context) -> DeclarationIndex {
+        match self.parse_declaration_or_function_definition::<IS_NOT_FUNCTION_DEFINITION>(context) {
+            | ExternalDeclaration::Declaration(declaration) => declaration,
+            | _ => unreachable!(
+                "parse_declaration_or_function_definition returned non-declaration when called \
+                 with IS_NOT_FUNCTION_DEFINITION."
+            ),
         }
     }
 
@@ -1626,7 +1702,7 @@ impl Parser {
     fn parse_direct_declarator<const IS_ABSTRACT: u8>(
         &mut self,
         context: &mut Context,
-    ) -> VectorSlice<DeclaratorType> {
+    ) -> VectorSlice<DirectDeclarator> {
         let start_index = self.declarator_types.len().to_u32();
         // The first part of a declarator is only required to be an identifier or a
         // parenthesized declarator if it is not abstract.
@@ -1935,7 +2011,7 @@ impl Parser {
             self.identifiers.push(identifier);
         }
         self.declarator_types
-            .push(DeclaratorType::KAndRStyleFunction {
+            .push(DirectDeclarator::KAndRStyleFunction {
                 parameters: VectorSlice::new(start_index, self.identifiers.len().to_u32()),
             });
         Some(Ok(()))
@@ -2053,7 +2129,7 @@ impl Parser {
                 return None;
             }
         }
-        self.declarator_types.push(DeclaratorType::Function {
+        self.declarator_types.push(DirectDeclarator::Function {
             parameter_list: VectorSlice::new(
                 start_index,
                 self.parameter_declarations.len().to_u32(),
@@ -2072,7 +2148,7 @@ impl Parser {
         // Matches this rule: direct-declarator: identifier
         if token.kind == TokenType::Identifier && IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR {
             self.declarator_types
-                .push(DeclaratorType::Identifier(Identifier {
+                .push(DirectDeclarator::Identifier(Identifier {
                     name: token.contents,
                 }));
             return Some(());
@@ -2114,7 +2190,7 @@ impl Parser {
             }
             let declarator = declarator?;
             self.declarator_types
-                .push(DeclaratorType::Parenthesized(declarator));
+                .push(DirectDeclarator::Parenthesized(declarator));
             return Some(());
         }
         // Declarators are only required to start with an identifier or a parenthesized
@@ -2200,46 +2276,40 @@ impl Parser {
         }
     }
 
-    fn parse_top_level_statement(&mut self, _context: &mut Context) -> Option<TopLevelStatement> {
-        todo!();
+    /// Parses either a declaration or a function definition.
+    fn parse_external_declaration(&mut self, context: &mut Context) -> Option<ExternalDeclaration> {
+        let token = self.next_token(context)?;
+        self.pending_token = Some(token);
+        Some(self.parse_declaration_or_function_definition::<IS_MAYBE_FUNCTION_DEFINITION>(context))
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[expect(
-    clippy::enum_variant_names,
-    reason = "Every variant here starts with Parsing because that's our current state. Maybe this \
-              is a bit redundant but I think it's fine."
-)]
-pub(crate) enum State {
-    ParsingTopLevelStatement,
-    ParsingStatement,
-    ParsingExpression,
-    ParsingType,
-}
+pub(crate) enum State {}
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct TopLevelStatement {
-    pub(crate) kind: TopLevelStatementType,
+pub(crate) enum ExternalDeclaration {
+    FunctionDefinition(FunctionDefinitionIndex),
+    Declaration(DeclarationIndex),
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum TopLevelStatementType {
-    FunctionDefinition(FunctionDefinition),
-    VariableDefinition(VariableDeclaration),
-    FunctionDeclaration(FunctionDeclaration),
-    TypeDeclaration(Type),
-}
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct FunctionDefinitionIndex(u32);
 
-// A top level statement could be:
-// * A function definition.
-// * A global variable definition.
-// * A function declaration.
-// * A global variable declaration.
-// * A type definition.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct DeclarationIndex(u32);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct ExpressionIndex(u32);
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct ConstantExpressionIndex(u32);
+
+impl From<ConstantExpressionIndex> for ExpressionIndex {
+    fn from(index: ConstantExpressionIndex) -> Self {
+        Self(index.0)
+    }
+}
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct StatementIndex(u32);
@@ -2279,7 +2349,7 @@ pub(crate) enum StatementType {
         body_statement:       StatementIndex,
     },
     For {
-        initializer_statement: Option<StatementIndex>,
+        initializer_statement: Option<ForInitializer>,
         condition_expression:  Option<ExpressionIndex>,
         post_expression:       Option<ExpressionIndex>,
         body_statement:        StatementIndex,
@@ -2289,9 +2359,15 @@ pub(crate) enum StatementType {
     Continue,
     Goto(Identifier),
     Label(Identifier, StatementIndex),
-    Case(i64, StatementIndex),
+    Case(ConstantExpressionIndex, StatementIndex),
     Default(StatementIndex),
     Null,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum ForInitializer {
+    Expression(ExpressionIndex),
+    Declaration(DeclarationIndex),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -2321,16 +2397,16 @@ pub(crate) enum ExpressionType {
         arguments:           VectorSlice<Expression>,
     },
     CompoundLiteral {
-        var_type: Type,
-        values:   VectorSlice<Expression>,
+        struct_type:      TypeName,
+        initializer_list: VectorSlice<Initializer>,
     },
     Identifier(Identifier),
     Constant(Constant),
     StringLiteral(StringCacheId),
-    SizeofType(Type),
+    SizeofType(TypeName),
     SizeofExpr(ExpressionIndex),
     Cast {
-        target_type:        Type,
+        target_type:        TypeName,
         operand_expression: ExpressionIndex,
     },
 }
@@ -2403,19 +2479,12 @@ impl Identifier {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct VariableDeclaration {
-    pub(crate) name:          Identifier,
-    pub(crate) var_type:      TypeIndex,
-    pub(crate) storage_class: StorageClass,
-    pub(crate) initializer:   Option<Expression>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct VariableDefinition {
-    pub(crate) variable:    VariableDeclaration,
-    pub(crate) initializer: Expression,
-}
+/// storage-class-specifier:
+/// typedef
+/// extern
+/// static
+/// auto
+/// register
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub(crate) enum StorageClass {
     #[default]
@@ -2424,90 +2493,6 @@ pub(crate) enum StorageClass {
     Static,
     Extern,
     Typedef,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum PrimitiveType {
-    Char,
-    Short,
-    Int,
-    Long,
-    LongLong,
-    UnsignedChar,
-    UnsignedShort,
-    UnsignedInt,
-    UnsignedLong,
-    UnsignedLongLong,
-    Float,
-    Double,
-    LongDouble,
-    Void,
-    Bool,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct FunctionDefinitionArgument {
-    pub(crate) function_type: TypeIndex,
-    pub(crate) name:          Option<Identifier>,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct Type {
-    is_const:    bool,
-    is_volatile: bool,
-    kind:        TypeKind,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum TypeKind {
-    Primitive(PrimitiveType),
-    Pointer {
-        pointee_type: TypeIndex,
-    },
-    Struct {
-        name:   Option<Identifier>,
-        fields: VectorSlice<VariableDeclaration>,
-    },
-    Union {
-        name:   Identifier,
-        fields: VectorSlice<VariableDeclaration>,
-    },
-    Typedef {
-        name:          Identifier,
-        referent_type: TypeIndex,
-    },
-    Enum {
-        name:   Identifier,
-        values: VectorSlice<EnumValue>,
-    },
-    Function {
-        name:        Identifier,
-        return_type: Option<TypeIndex>,
-        /// None symbolizes a function with an unspecified number of arguments
-        /// (i.e. `int f()`).
-        parameters:  Option<VectorSlice<FunctionDefinitionArgument>>,
-    },
-}
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct EnumValue {
-    pub(crate) name:  Identifier,
-    pub(crate) value: i64,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct FunctionDeclaration {
-    pub(crate) name:        Identifier,
-    /// None symbolizes a function with an unspecified number of arguments
-    /// (i.e. `int f()`).
-    pub(crate) parameters:  Option<VectorSlice<FunctionDefinitionArgument>>,
-    pub(crate) return_type: Option<TypeIndex>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct FunctionDefinition {
-    pub(crate) declaration: FunctionDeclaration,
-    pub(crate) statements:  VectorSlice<Statement>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -2766,9 +2751,9 @@ impl Display for ParserErrorType {
 }
 
 impl TranslationPhase for Parser {
-    type Item = TopLevelStatement;
+    type Item = ExternalDeclaration;
 
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
-        self.parse_top_level_statement(context)
+        self.parse_external_declaration(context)
     }
 }

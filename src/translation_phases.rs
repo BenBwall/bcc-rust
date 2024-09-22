@@ -443,7 +443,7 @@ impl Context {
 
     #[expect(
         clippy::cast_possible_truncation,
-        reason = "We are performing a overflow here."
+        reason = "We are performing a overflow check after we've pushed everything."
     )]
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
         let start_index = self.source_vectors.0.len() as u32;
