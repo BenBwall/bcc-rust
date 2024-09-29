@@ -99,17 +99,17 @@ hashbrown = { version = "0.14.5", features = ["raw"] }
 owo-colors = "4.1.0"
 rustc-hash = "2.0.0"
 smallstr = "0.3.0"
-thiserror = "1.0.63"
+thiserror = "1.0.64"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
 pretty_assertions = "1.4.1"
 proptest = "1.5.0"
-rstest = "0.22.0"
+rstest = "0.23.0"
 
 [build-dependencies]
 bindgen = "0.70.1"
-cc = "1.1.21"
+cc = "1.1.22"
 
 [[bench]]
 name = "bench"
