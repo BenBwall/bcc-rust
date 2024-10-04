@@ -55,6 +55,10 @@ impl<T> VectorSlice<T> {
             _marker: PhantomData,
         }
     }
+
+    pub(crate) fn empty() -> Self {
+        Self::default()
+    }
 }
 
 impl<T> Default for VectorSlice<T> {
