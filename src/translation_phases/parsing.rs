@@ -57,7 +57,7 @@ pub(crate) struct Parser {
     pub(crate) expressions:                Vec<Expression>,
     pub(crate) statements:                 Vec<Statement>,
     pub(crate) type_qualifiers:            Vec<TypeQualifiers>,
-    pub(crate) declarator_types:           Vec<DirectDeclarator>,
+    pub(crate) direct_declarators:         Vec<DirectDeclarator>,
     pub(crate) identifiers:                Vec<Identifier>,
     pub(crate) typedef_names:              HashMap<StringCacheId, TypeIndex>,
     pub(crate) struct_names:               HashMap<StringCacheId, TypeIndex>,
@@ -830,7 +830,7 @@ impl Parser {
             statements: Vec::new(),
             type_qualifiers: Vec::new(),
             identifiers: Vec::new(),
-            declarator_types: Vec::new(),
+            direct_declarators: Vec::new(),
             enum_names: HashMap::default(),
             struct_names: HashMap::default(),
             typedef_names: HashMap::default(),
@@ -1234,6 +1234,34 @@ impl Parser {
         EnumSpecifierIndex(ret)
     }
 
+    fn expect_token(
+        &mut self,
+        context: &mut Context,
+        eof_message: &'static str,
+        expected_token_type: TokenType,
+        on_error: impl FnOnce(&mut Self, &mut Context, Token) -> ParserErrorType,
+    ) -> Option<Token> {
+        let Some(token) = self.next_token(context) else {
+            let source_vectors =
+                context.create_source_vectors(self.position(context), self.source_file_index(), 0);
+            context.parser_error(ParserError {
+                error_type: ParserErrorType::UnexpectedEndOfInput(eof_message),
+                source_vectors,
+            });
+            return None;
+        };
+        if token.kind != expected_token_type {
+            self.pending_token = Some(token);
+            let source_vectors = token.source_vectors;
+            context.parser_error(ParserError {
+                error_type: on_error(token),
+                source_vectors,
+            });
+            return None;
+        }
+        Some(token)
+    }
+
     fn parse_identifier(
         &mut self,
         context: &mut Context,
@@ -1278,40 +1306,43 @@ impl Parser {
         }
     }
 
-    #[inline(always)]
     fn parse_declaration_or_function_definition<const IS_FUNCTION: u8>(
         &mut self,
         context: &mut Context,
-    ) -> ExternalDeclaration {
-        let statement_start_index = self.statements.len().to_u32();
-        loop {
-            match self.next_token(context) {
-                | Some(token)
-                    if token.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) =>
-                    break,
-                | None => break,
-                | Some(token) => {
-                    self.pending_token = Some(token);
-                    let statement = self.parse_statement(context);
-                    self.statements.push(statement);
-                },
-            }
+    ) -> Option<ExternalDeclaration> {
+        let declaration_index = self.declarations.len().to_u32();
+        let function_definition_index = self.function_definitions.len().to_u32();
+        let declaration_specifiers = self.parse_declaration_specifiers(context);
+        let first_declarator = self.parse_declarator::<IS_NOT_ABSTRACT_DECLARATOR>(context);
+        if IS_FUNCTION == IS_FUNCTION_DEFINITION && first_declarator.is_none() {
+            let source_vectors =
+                context.create_source_vectors(self.position(context), self.source_file_index(), 0);
+            context.parser_error(ParserError {
+                error_type: ParserErrorType::ExpectedDeclaratorInFunctionDefinition,
+                source_vectors,
+            });
+            return None;
         }
-        let end_index = self.statements.len().to_u32();
-        ExternalDeclaration::FunctionDefinition(FunctionDefinition {
-            declaration: FunctionDeclaration {
-                name,
-                parameters,
-                return_type,
-            },
-            statements:  VectorSlice::new(statement_start_index, end_index),
-        })
+        if first_declarator.is_none() {
+            _ = self.expect_token(
+                context,
+                "while parsing declaration",
+                TokenType::Operator(OperatorTokenType::Semicolon),
+                |this, context, tt| ParserErrorType::ExpectedSemicolonInDeclaration(tt),
+            );
+            self.declarations.push(Declaration {
+                declaration_specifiers,
+                init_declarators: VectorSlice::empty(),
+            });
+            return Some(ExternalDeclaration::Declaration(DeclarationIndex(declaration_index)));
+        }
     }
 
-    fn parse_declaration(&mut self, context: &mut Context) -> DeclarationIndex {
+    fn parse_declaration(&mut self, context: &mut Context) -> Option<DeclarationIndex> {
         match self.parse_declaration_or_function_definition::<IS_NOT_FUNCTION_DEFINITION>(context) {
-            | ExternalDeclaration::Declaration(declaration) => declaration,
-            | _ => unreachable!(
+            | None => None,
+            | Some(ExternalDeclaration::Declaration(declaration)) => Some(declaration),
+            | Some(ExternalDeclaration::FunctionDefinition(..)) => unreachable!(
                 "parse_declaration_or_function_definition returned non-declaration when called \
                  with IS_NOT_FUNCTION_DEFINITION."
             ),
@@ -1703,7 +1734,7 @@ impl Parser {
         &mut self,
         context: &mut Context,
     ) -> VectorSlice<DirectDeclarator> {
-        let start_index = self.declarator_types.len().to_u32();
+        let start_index = self.direct_declarators.len().to_u32();
         // The first part of a declarator is only required to be an identifier or a
         // parenthesized declarator if it is not abstract.
         if IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR
@@ -1711,14 +1742,14 @@ impl Parser {
                 .parse_first_direct_declarator::<IS_ABSTRACT>(context)
                 .is_none()
         {
-            return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
+            return VectorSlice::new(start_index, self.direct_declarators.len().to_u32());
         }
         loop {
             if self
                 .parse_nested_direct_declarator::<IS_ABSTRACT>(context)
                 .is_none()
             {
-                return VectorSlice::new(start_index, self.declarator_types.len().to_u32());
+                return VectorSlice::new(start_index, self.direct_declarators.len().to_u32());
             }
         }
     }
@@ -1752,7 +1783,7 @@ impl Parser {
         let mut assignment_expression = None;
         macro_rules! push {
             () => {
-                self.declarator_types.push(DeclaratorType::Array {
+                self.direct_declarators.push(DirectDeclarator::Array {
                     type_qualifiers,
                     is_static,
                     is_pointer,
@@ -2010,7 +2041,7 @@ impl Parser {
             };
             self.identifiers.push(identifier);
         }
-        self.declarator_types
+        self.direct_declarators
             .push(DirectDeclarator::KAndRStyleFunction {
                 parameters: VectorSlice::new(start_index, self.identifiers.len().to_u32()),
             });
@@ -2129,7 +2160,7 @@ impl Parser {
                 return None;
             }
         }
-        self.declarator_types.push(DirectDeclarator::Function {
+        self.direct_declarators.push(DirectDeclarator::Function {
             parameter_list: VectorSlice::new(
                 start_index,
                 self.parameter_declarations.len().to_u32(),
@@ -2147,7 +2178,7 @@ impl Parser {
         let token = self.next_token(context)?;
         // Matches this rule: direct-declarator: identifier
         if token.kind == TokenType::Identifier && IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR {
-            self.declarator_types
+            self.direct_declarators
                 .push(DirectDeclarator::Identifier(Identifier {
                     name: token.contents,
                 }));
@@ -2189,7 +2220,7 @@ impl Parser {
                 self.pending_token = token;
             }
             let declarator = declarator?;
-            self.declarator_types
+            self.direct_declarators
                 .push(DirectDeclarator::Parenthesized(declarator));
             return Some(());
         }
