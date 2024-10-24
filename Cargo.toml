@@ -8,7 +8,7 @@ readme = "README.md"
 keywords = ["compiler", "C", "C-compiler"]
 categories = ["command-line-utilities", "development-tools", "compilers"]
 repository = "https://www.github.com/bwallker/bcc-rust"
-rust-version = "1.81.0"
+rust-version = "1.82.0"
 
 [features]
 benchmarking-internals = []
