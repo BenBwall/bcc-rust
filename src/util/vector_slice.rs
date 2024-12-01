@@ -65,7 +65,7 @@ impl<T> Default for VectorSlice<T> {
     fn default() -> Self {
         Self {
             start_index: u32::MAX,
-            length:      u32::MAX,
+            length:      0,
             _marker:     PhantomData,
         }
     }
