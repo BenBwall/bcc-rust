@@ -1334,7 +1334,9 @@ impl Parser {
                 declaration_specifiers,
                 init_declarators: VectorSlice::empty(),
             });
-            return Some(ExternalDeclaration::Declaration(DeclarationIndex(declaration_index)));
+            return Some(ExternalDeclaration::Declaration(DeclarationIndex(
+                declaration_index,
+            )));
         }
     }
 
