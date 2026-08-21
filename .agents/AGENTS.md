@@ -1,26 +1,59 @@
 # Agent Guide
 
-## Workflow
+## Start and finish
 
-- This is a Rust Cargo project. Run commands from the repository root unless a task requires a narrower working directory.
-- Common checks are `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, and `git diff --check`.
-- Preserve generated reports and other unrelated untracked files unless the user explicitly asks to remove them.
+1. Run `git status --short` before editing. Preserve unrelated tracked changes and untracked artifacts; the three root `*-report.html` files are research notes and must remain unless their removal is explicitly requested.
+2. Run commands from the repository root. Use the narrowest relevant checks while working, then run `git diff --check` and inspect the final diff before handoff.
+3. Report commands that fail as current evidence. The parser compile gate is known; a failing baseline is not permission to weaken checks or modify unrelated source.
 
-## Agent skills
+Canonical checks:
 
-### Skill source
+```sh
+cargo test --all-targets
+cargo +nightly fmt --check
+cargo clippy --all-targets -- -D warnings
+git diff --check
+```
 
-Skills vendored from `mattpocock/skills` are exposed through symlinks in both `.agents/skills/<name>` and `.claude/skills/<name>`. Each link points to `vendor/mattpocock-skills/skills/<category>/<name>`; the subtree under `vendor/mattpocock-skills/` is the single source of truth for upstream content.
+`Cargo.toml` requires Rust 1.82.0 or newer. `build.rs` also requires a native C compiler and `libclang`; set `LIBCLANG_PATH` when discovery fails.
 
-Only the promoted `engineering` and `productivity` skills are linked into the agent clients. Experimental, miscellaneous, and deprecated skills remain available in the subtree without being auto-discovered.
+## Context pointers
 
-Pull upstream updates with:
+- **Parser or domain-model work:** read [`../CONTEXT.md`](../CONTEXT.md) before changing terminology, AST boundaries, typedef handling, or the proposed machine protocol. Update that glossary only when a durable domain meaning changes.
+- **Non-recursive parsing or Double-E work:** read [`../double-e-integration-report.html`](../double-e-integration-report.html), then revalidate its dated findings against [`../src/translation_phases/parsing.rs`](../src/translation_phases/parsing.rs) and [`../src/translation_phases/preprocessing.rs`](../src/translation_phases/preprocessing.rs).
+- **Repository orientation or public behavior:** read [`../README.md`](../README.md). Keep human setup/status there instead of copying it into this guide.
+- **Historical parser or project estimates:** consult the root HTML reports as research notes, never as authority over current code or command output.
+
+## Code map and cautions
+
+- `src/translation_phases.rs` owns shared phase, provenance, context, and diagnostic concepts. Its phase modules proceed from `initial_processing.rs` through `preprocessor_tokenizer.rs`, `preprocessing.rs`, and the incomplete `parsing.rs`.
+- `src/lib.rs` currently drives only the preprocessor and prints tokens. There is no parser invocation, semantic-analysis pipeline, or backend/code-generation path.
+- `parsing.rs` does not currently compile. At the 22 August 2026 baseline, `cargo test --all-targets` reports 14 parser errors and executes no tests; re-run it before quoting that count.
+- Existing parser structures are uneven: declaration specifiers and declarators are the most developed paths, while type names, expressions, statements, initializers, function definitions, AST ownership, diagnostics/recovery, and return paths have material gaps. Three direct parser methods still use `todo!()`.
+- The current `typedef_names` map is not a complete scoped symbol model. Declaration-versus-expression and cast-versus-grouping decisions require explicit scope transitions and typedef lookup.
+- Preserve source provenance and structured diagnostics across phase changes. Malformed user input should reduce to diagnostics/error nodes and synchronization, not compiler panics.
+
+## Agreed parser direction
+
+The whole language parser is to use one explicit control stack of specialized, resumable frames—not recursive grammar calls and not one giant operator stack. `ParserMachine`, `ParseFrame`, `ParseAction`, `ParseValue`, and synchronization-set meanings live in [`../CONTEXT.md`](../CONTEXT.md).
+
+Double-E is the precedence reducer inside the expression frame and may inspire a declarator-construction reducer. Declaration, declarator, type-name, initializer, statement, function, and translation-unit frames remain phase/state machines. Frames return small owned actions so the machine can push, reduce, reprocess lookahead, or recover without retaining mutable borrows. The existing preprocessor evaluator is the architectural precedent; extract a dialect-neutral core before sharing it with language-AST parsing, and add nested-conditional regression coverage while doing so.
+
+This is intended architecture, not current behavior. Keep current-status claims and proposed-design claims visibly separate.
+
+## Vendored Matt Pocock skills
+
+`vendor/mattpocock-skills/` is a squashed Git subtree from `https://github.com/mattpocock/skills.git` `main` and the source of truth for upstream skill content. Every vendored directory containing `SKILL.md` is exposed through matching tracked symlinks under both `.agents/skills/<name>` and `.claude/skills/<name>`.
+
+Pull upstream with:
 
 ```sh
 git subtree pull --prefix=vendor/mattpocock-skills https://github.com/mattpocock/skills.git main --squash
 ```
 
-When upstream promotes a new skill, create matching symlinks in both client directories:
+After an update, expose every vendored skill in both client directories and verify that the name sets match and all links resolve. Keep upstream customization outside `vendor/mattpocock-skills/`. `.claude/CLAUDE.md` imports `../.agents/AGENTS.md` with Claude's `@` syntax; edit this file as the single agent-guide source.
+
+For a newly vendored skill, add both links:
 
 ```sh
 ln -s ../../vendor/mattpocock-skills/skills/<category>/<name> .agents/skills/<name>
