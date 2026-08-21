@@ -1,0 +1,14 @@
+#!/bin/sh
+
+root=$(git rev-parse --show-toplevel) || exit $?
+source="$root/.githooks/commit-msg.rs"
+source_hash=$(git hash-object "$source") || exit $?
+hook_dir="${TMPDIR:-/tmp}/bcc-rust-git-hooks/$source_hash"
+hook="$hook_dir/commit-msg"
+
+if [ ! -x "$hook" ]; then
+    mkdir -p "$hook_dir" || exit $?
+    rustc --edition=2021 "$source" -o "$hook" || exit $?
+fi
+
+exec "$hook" "$1"
