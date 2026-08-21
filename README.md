@@ -12,7 +12,8 @@ This is not yet a production-ready or conforming C99 compiler. The strongest wor
 
 ## Prerequisites
 
-- Rust 1.82.0 or newer, as declared in [`Cargo.toml`](Cargo.toml).
+- Rust 1.98.0, pinned in [`rust-toolchain.toml`](rust-toolchain.toml) and declared
+  as the minimum supported version in [`Cargo.toml`](Cargo.toml).
 - Clippy for the default Rust toolchain.
 - A native C toolchain for compiling [`float_parsing.c`](float_parsing.c).
 - `libclang`, used by `bindgen` in [`build.rs`](build.rs). Set `LIBCLANG_PATH` if it is not discoverable automatically.

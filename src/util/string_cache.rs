@@ -14,8 +14,8 @@ use std::{
 };
 
 use hashbrown::{
-    hash_map::RawEntryMut,
     HashMap,
+    hash_map::RawEntryMut,
 };
 use rustc_hash::FxHasher;
 #[expect(

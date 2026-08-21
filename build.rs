@@ -30,9 +30,10 @@ fn main() {
         .header("float_parsing.h")
         .allowlist_file("float_parsing.h")
         .allowlist_item("ERANGE")
+        .rust_edition(bindgen::RustEdition::Edition2024)
         .generate()
         .expect("Unable to generate bindings")
-        .write_to_file(format!("{}/bindings.rs", &*OUT_DIR))
+        .write_to_file(format!("{}/bindings.rs", OUT_DIR.as_str()))
         .expect("Couldn't write bindings!");
     #[cfg(feature = "benchmarking-internals")]
     {
@@ -42,7 +43,7 @@ fn main() {
 
 #[cfg(feature = "benchmarking-internals")]
 fn gen_one_million() {
-    let out_dir = out_dir();
+    let out_dir = &*OUT_DIR;
     let mut f =
         BufWriter::new(std::fs::File::create(format!("{out_dir}/one-million-lines.c")).unwrap());
     for i in 0..1_000_000 {

@@ -17,35 +17,35 @@ use std::{
 };
 
 use clap::{
+    Args,
+    ColorChoice,
+    Parser,
     error::{
         ErrorFormatter,
         RichFormatter,
     },
-    Args,
-    ColorChoice,
-    Parser,
 };
 use owo_colors::OwoColorize;
 use thiserror::Error;
 use translation_phases::{
-    preprocessing::Token,
     TranslationPhase,
+    preprocessing::Token,
 };
 
 #[cfg(feature = "benchmarking-internals")]
 use crate::translation_phases::box_path_from_str;
 use crate::{
     translation_phases::{
+        Context,
+        GetSeverity,
+        GetSourceFileIndex,
+        GetSourceVectors,
         preprocessing::{
             CharacterTokenType,
             Preprocessor,
             StringTokenType,
             TokenType,
         },
-        Context,
-        GetSeverity,
-        GetSourceFileIndex,
-        GetSourceVectors,
     },
     util::{
         read_to_string_lossy,

@@ -8,7 +8,7 @@ hook="$hook_dir/commit-msg"
 
 if [ ! -x "$hook" ]; then
     mkdir -p "$hook_dir" || exit $?
-    rustc --edition=2021 "$source" -o "$hook" || exit $?
+    rustc --edition=2024 "$source" -o "$hook" || exit $?
 fi
 
 exec "$hook" "$1"

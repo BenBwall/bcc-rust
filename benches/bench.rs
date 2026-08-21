@@ -14,9 +14,9 @@
 )]
 
 use criterion::{
+    Criterion,
     criterion_group,
     criterion_main,
-    Criterion,
 };
 
 fn bench(c: &mut Criterion) {
