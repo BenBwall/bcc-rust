@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Current project status report for bcc-rust, generated from repository evidence on 21 August 2026.">
+  <title>bcc-rust — Project Status Report</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f3f0e8;
+      --muted: #a9aca8;
+      --faint: #747976;
+      --canvas: #0b0e0d;
+      --panel: #111513;
+      --panel-2: #171c19;
+      --line: #29302c;
+      --accent: #b7ef56;
+      --accent-soft: rgba(183, 239, 86, .12);
+      --danger: #ff786f;
+      --danger-soft: rgba(255, 120, 111, .12);
+      --warning: #f1c766;
+      --warning-soft: rgba(241, 199, 102, .12);
+      --good: #64d7a2;
+      --good-soft: rgba(100, 215, 162, .12);
+      --info: #77bfff;
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 82% 2%, rgba(183, 239, 86, .07), transparent 28rem),
+        var(--canvas);
+      color: var(--ink);
+      font: 15px/1.6 var(--sans);
+    }
+    a { color: inherit; }
+    button { font: inherit; }
+    code, .mono { font-family: var(--mono); }
+    code {
+      padding: .1rem .34rem;
+      border: 1px solid var(--line);
+      border-radius: .32rem;
+      background: #0b0e0d;
+      color: #dfe7dd;
+      font-size: .9em;
+    }
+
+    .shell { max-width: 1180px; margin: 0 auto; padding: 0 30px 72px; }
+    .topbar {
+      min-height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 11px; font: 650 13px/1 var(--mono); letter-spacing: .02em; }
+    .mark { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 22px var(--accent); }
+    .top-meta { display: flex; align-items: center; gap: 14px; color: var(--muted); font: 12px/1 var(--mono); }
+    .print-button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 13px;
+      background: transparent;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .print-button:hover { border-color: var(--accent); color: var(--accent); }
+
+    .hero { padding: 76px 0 42px; display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 64px; align-items: end; }
+    .eyebrow { margin: 0 0 17px; color: var(--accent); font: 700 12px/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 790px; font-size: clamp(45px, 7vw, 86px); line-height: .95; letter-spacing: -.058em; font-weight: 730; }
+    .lede { max-width: 750px; margin: 27px 0 0; color: #c2c6c2; font-size: 19px; line-height: 1.55; }
+    .status-card { border-left: 1px solid var(--line); padding: 4px 0 4px 24px; }
+    .status-label { color: var(--muted); font: 11px/1.2 var(--mono); text-transform: uppercase; letter-spacing: .12em; }
+    .status-value { margin: 11px 0 8px; color: var(--danger); font-size: 27px; font-weight: 680; letter-spacing: -.02em; }
+    .status-copy { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .section { padding: 43px 0; border-top: 1px solid var(--line); }
+    .section-head { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 30px; margin-bottom: 27px; }
+    .section-index { color: var(--faint); font: 12px/1.5 var(--mono); letter-spacing: .06em; }
+    h2 { margin: 0; font-size: clamp(28px, 4vw, 42px); line-height: 1.08; letter-spacing: -.035em; }
+    h3 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
+    p { margin-top: 0; }
+
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    .metric { min-height: 128px; padding: 22px; background: var(--panel); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .metric:nth-child(4n) { border-right: 0; }
+    .metric:nth-child(n+5) { border-bottom: 0; }
+    .metric-value { display: block; font-size: 28px; line-height: 1; font-weight: 700; letter-spacing: -.035em; }
+    .metric-label { display: block; margin-top: 12px; color: var(--muted); font-size: 12px; }
+    .metric-note { display: block; margin-top: 5px; color: var(--faint); font: 11px/1.35 var(--mono); }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: 1.25fr .75fr;
+      gap: 1px;
+      margin-bottom: 30px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--line);
+    }
+    .verdict-main, .verdict-side { padding: 28px; background: var(--panel); }
+    .verdict-main p { max-width: 710px; margin: 13px 0 0; color: #c2c6c2; font-size: 17px; }
+    .readiness { display: flex; align-items: center; gap: 14px; height: 100%; }
+    .readiness-score { color: var(--danger); font: 700 46px/1 var(--mono); }
+    .readiness-copy { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    .check-table { width: 100%; border-collapse: collapse; }
+    .check-table th, .check-table td { padding: 16px 14px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+    .check-table th { color: var(--muted); font: 600 11px/1.2 var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    .check-table tr:last-child td { border-bottom: 0; }
+    .check-table td:first-child { width: 25%; font-family: var(--mono); font-size: 12px; }
+    .check-table td:nth-child(2) { width: 14%; }
+    .badge { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: 999px; font: 700 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .05em; }
+    .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .fail { color: var(--danger); background: var(--danger-soft); }
+    .pass { color: var(--good); background: var(--good-soft); }
+    .warn { color: var(--warning); background: var(--warning-soft); }
+
+    .pipeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+    .phase { position: relative; min-height: 190px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+    .phase::after { content: "→"; position: absolute; right: -18px; top: 45%; z-index: 2; color: var(--faint); font-family: var(--mono); }
+    .phase:last-child::after { display: none; }
+    .phase-number { color: var(--faint); font: 11px/1 var(--mono); }
+    .phase h3 { margin-top: 30px; }
+    .phase p { margin: 10px 0 17px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .phase-state { position: absolute; left: 20px; bottom: 18px; color: var(--good); font: 700 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .phase.partial { border-color: rgba(241, 199, 102, .45); }
+    .phase.partial .phase-state { color: var(--warning); }
+    .phase.missing { border-style: dashed; background: transparent; }
+    .phase.missing .phase-state { color: var(--danger); }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .card { padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+    .card p { margin: 9px 0 0; color: var(--muted); }
+    .feature-list, .issue-list, .next-list { margin: 18px 0 0; padding: 0; list-style: none; }
+    .feature-list li, .issue-list li { position: relative; padding: 10px 0 10px 25px; border-top: 1px solid var(--line); color: #c8ccc7; }
+    .feature-list li::before { content: "+"; position: absolute; left: 0; color: var(--accent); font-family: var(--mono); }
+    .issue-list li::before { content: "!"; position: absolute; left: 0; color: var(--danger); font-family: var(--mono); font-weight: 700; }
+
+    .error-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 22px; }
+    .error-group { min-height: 135px; padding: 19px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+    .error-count { color: var(--danger); font: 700 25px/1 var(--mono); }
+    .error-name { margin-top: 12px; font-weight: 650; }
+    .error-detail { margin-top: 5px; color: var(--muted); font-size: 12px; }
+
+    .activity { position: relative; margin-left: 7px; padding-left: 31px; border-left: 1px solid var(--line); }
+    .activity-item { position: relative; display: grid; grid-template-columns: 110px 86px minmax(0, 1fr); gap: 16px; padding: 2px 0 23px; }
+    .activity-item::before { content: ""; position: absolute; left: -36px; top: 7px; width: 9px; height: 9px; border: 2px solid var(--canvas); border-radius: 50%; background: var(--faint); }
+    .activity-item:first-child::before { background: var(--accent); }
+    .activity-date, .activity-hash { font: 12px/1.5 var(--mono); }
+    .activity-date { color: var(--muted); }
+    .activity-hash { color: var(--accent); }
+
+    .next-list { counter-reset: action; }
+    .next-list li { counter-increment: action; display: grid; grid-template-columns: 42px 1fr auto; gap: 17px; align-items: start; padding: 21px 0; border-top: 1px solid var(--line); }
+    .next-list li::before { content: counter(action, decimal-leading-zero); color: var(--faint); font: 12px/1.7 var(--mono); }
+    .next-list strong { display: block; font-size: 16px; }
+    .next-list p { margin: 5px 0 0; color: var(--muted); }
+    .effort { color: var(--faint); font: 11px/1.7 var(--mono); text-transform: uppercase; white-space: nowrap; }
+
+    .footnote { display: grid; grid-template-columns: 190px 1fr; gap: 30px; padding-top: 28px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; }
+    .footnote p { margin: 0; }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; gap: 35px; padding-top: 55px; }
+      .status-card { max-width: 520px; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .metric:nth-child(2n) { border-right: 0; }
+      .metric:nth-child(4n) { border-right: 0; }
+      .metric:nth-child(n+5) { border-bottom: 1px solid var(--line); }
+      .metric:nth-child(n+7) { border-bottom: 0; }
+      .pipeline { grid-template-columns: repeat(2, 1fr); }
+      .phase::after { display: none; }
+      .phase:last-child { grid-column: 1 / -1; min-height: 145px; }
+      .verdict, .two-col { grid-template-columns: 1fr; }
+      .error-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 620px) {
+      .shell { padding: 0 18px 48px; }
+      .top-meta > span { display: none; }
+      .hero { padding: 46px 0 34px; }
+      .section { padding: 34px 0; }
+      .section-head, .footnote { grid-template-columns: 1fr; gap: 10px; }
+      .metrics, .pipeline, .error-grid { grid-template-columns: 1fr; }
+      .metric { border-right: 0; border-bottom: 1px solid var(--line) !important; }
+      .metric:last-child { border-bottom: 0 !important; }
+      .phase:last-child { grid-column: auto; }
+      .check-table { display: block; overflow-x: auto; }
+      .activity-item { grid-template-columns: 92px 1fr; gap: 8px; }
+      .activity-item div:last-child { grid-column: 1 / -1; }
+      .next-list li { grid-template-columns: 32px 1fr; }
+      .effort { grid-column: 2; }
+    }
+
+    @media print {
+      :root { color-scheme: light; --ink: #131613; --muted: #505750; --faint: #6d746d; --canvas: #fff; --panel: #fff; --panel-2: #f6f8f4; --line: #d8ddd7; }
+      body { background: #fff; font-size: 11px; }
+      .shell { max-width: none; padding: 0 20px; }
+      .print-button { display: none; }
+      .hero { padding: 35px 0 25px; }
+      .section { padding: 24px 0; break-inside: avoid; }
+      .phase, .card, .metric, .error-group { break-inside: avoid; }
+      h1 { font-size: 54px; }
+      code { background: #f4f5f3; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="topbar">
+      <div class="brand"><span class="mark" aria-hidden="true"></span>bcc-rust / status</div>
+      <div class="top-meta">
+        <span>Snapshot · 2026-08-21</span>
+        <button class="print-button" type="button" onclick="window.print()">Print report</button>
+      </div>
+    </div>
+
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Repository assessment</p>
+        <h1>A capable front end, paused mid-parser.</h1>
+        <p class="lede">bcc-rust is an ambitious Rust implementation of a C99 compiler. Its preprocessing pipeline is the clear center of gravity; parser development is unfinished and currently prevents the project from compiling.</p>
+      </div>
+      <aside class="status-card" aria-label="Overall project status">
+        <div class="status-label">Overall status</div>
+        <div class="status-value">Build blocked</div>
+        <p class="status-copy">Development snapshot, not release-ready. Default tests stop at 14 parser compilation errors.</p>
+      </aside>
+    </header>
+
+    <section class="section" id="snapshot">
+      <div class="section-head">
+        <div class="section-index">01 / SNAPSHOT</div>
+        <h2>What the repository says today</h2>
+      </div>
+      <div class="metrics" role="list" aria-label="Project metrics">
+        <div class="metric" role="listitem"><span class="metric-value">0.1.0</span><span class="metric-label">Declared package version</span><span class="metric-note">C99 compiler · Rust 2021</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">11,654</span><span class="metric-label">Approx. Rust source lines</span><span class="metric-note">src/ only · 18 .rs files tracked</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">232</span><span class="metric-label">Commits on HEAD history</span><span class="metric-note">1 contributor identity / email</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">14</span><span class="metric-label">Sample C fixtures</span><span class="metric-note">No automated test attributes found</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">47</span><span class="metric-label">Tracked files</span><span class="metric-note">164 packages in Cargo.lock</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">2024-12-14</span><span class="metric-label">Latest commit</span><span class="metric-note">4797d18 · “Reformat”</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">0</span><span class="metric-label">Tags / releases</span><span class="metric-note">main tracks origin/main</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">Clean</span><span class="metric-label">Working tree before report</span><span class="metric-note">No pre-existing local changes</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="verdict">
+      <div class="section-head">
+        <div class="section-index">02 / VERDICT</div>
+        <h2>The current build is the gating issue</h2>
+      </div>
+      <div class="verdict">
+        <div class="verdict-main">
+          <h3>Executive assessment</h3>
+          <p>The project demonstrates real compiler-front-end engineering: source tracking, tokenization, macro expansion, conditional preprocessing, diagnostics, parsing data structures, and custom allocation utilities. However, the checked-in parser is internally inconsistent and the public CLI never advances beyond preprocessing. No backend or code generation path is present.</p>
+        </div>
+        <div class="verdict-side">
+          <div class="readiness">
+            <div class="readiness-score">R0</div>
+            <div class="readiness-copy"><strong>Pre-release</strong><br>Cannot build or run<br>from current HEAD</div>
+          </div>
+        </div>
+      </div>
+
+      <table class="check-table">
+        <thead><tr><th>Check</th><th>Result</th><th>Observed outcome</th></tr></thead>
+        <tbody>
+          <tr><td>cargo test --all-targets</td><td><span class="badge fail">Fail</span></td><td>Compilation stops with 14 errors in <code>translation_phases/parsing.rs</code>; no tests execute.</td></tr>
+          <tr><td>cargo clippy --all-targets --all-features -- -D warnings</td><td><span class="badge fail">Fail</span></td><td>The benchmark feature path references a missing <code>out_dir()</code> function in <code>build.rs</code>. Four configured Clippy lint names are also unknown or misspelled.</td></tr>
+          <tr><td>cargo +nightly fmt --all -- --check</td><td><span class="badge pass">Pass</span></td><td>Formatting is clean with nightly Rust 1.98. The config depends on nightly-only rustfmt options.</td></tr>
+          <tr><td>git status --short --branch</td><td><span class="badge pass">Pass</span></td><td><code>main</code> was clean and aligned with <code>origin/main</code> before this report was added.</td></tr>
+          <tr><td>C helper compilation</td><td><span class="badge warn">Warning</span></td><td>The MinGW build emits two <code>%Lf</code> format warnings in <code>float_parsing.c</code> for long-double conversion helpers.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="architecture">
+      <div class="section-head">
+        <div class="section-index">03 / PIPELINE</div>
+        <h2>Implementation coverage by compiler stage</h2>
+      </div>
+      <div class="pipeline" aria-label="Compiler pipeline">
+        <article class="phase">
+          <span class="phase-number">PHASE 01</span>
+          <h3>Initial processing</h3>
+          <p>Source normalization, position tracking, newline and character handling.</p>
+          <span class="phase-state">Implemented</span>
+        </article>
+        <article class="phase">
+          <span class="phase-number">PHASE 02</span>
+          <h3>Tokenization</h3>
+          <p>Preprocessor-token scanning with source-vector diagnostics.</p>
+          <span class="phase-state">Implemented</span>
+        </article>
+        <article class="phase">
+          <span class="phase-number">PHASE 03</span>
+          <h3>Preprocessing</h3>
+          <p>Macros, includes, conditionals, literals, operators, and built-ins.</p>
+          <span class="phase-state">Most developed</span>
+        </article>
+        <article class="phase partial">
+          <span class="phase-number">PHASE 04</span>
+          <h3>Parsing</h3>
+          <p>AST-like arenas and declarations exist, but key routines are placeholders and types disagree.</p>
+          <span class="phase-state">In progress · blocked</span>
+        </article>
+        <article class="phase missing">
+          <span class="phase-number">PHASE 05+</span>
+          <h3>Semantic analysis &amp; backend</h3>
+          <p>No semantic checking, IR, optimization, object emission, assembly, or linking modules are present.</p>
+          <span class="phase-state">Not present</span>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="implemented">
+      <div class="section-head">
+        <div class="section-index">04 / CAPABILITY</div>
+        <h2>What is already there—and what is not</h2>
+      </div>
+      <div class="two-col">
+        <article class="card">
+          <h3>Implemented evidence</h3>
+          <ul class="feature-list">
+            <li>A four-module translation pipeline: initial processing, tokenizer, preprocessor, and parser.</li>
+            <li>Macro expansion support exercised by manual fixtures for define, paste, triple-paste, stringify, variadics, and conditionals.</li>
+            <li>Quoted/system include paths plus <code>CPATH</code> and <code>C_INCLUDE_PATH</code> integration.</li>
+            <li>Structured diagnostics with severity, file indexes, source positions, and source vectors.</li>
+            <li>Token support for identifiers, keywords, operators, strings, characters, integers, and floats.</li>
+            <li>Performance-oriented internals: string cache, deduplicating arena, shared storage, compact queues, and vector slices.</li>
+            <li>A Criterion benchmark concept for preprocessing one million generated declarations.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Material gaps</h3>
+          <ul class="issue-list">
+            <li>The default library does not compile, so the CLI cannot currently run.</li>
+            <li>The CLI is a verbose token dump and does not invoke the parser or produce compiler artifacts.</li>
+            <li>Parser routines for statements, expressions, and assignment expressions remain <code>todo!()</code>.</li>
+            <li>An additional preprocessing branch also contains a runtime <code>todo!()</code>.</li>
+            <li>No unit, integration, or conformance tests are wired into Cargo; the C files are manual fixtures only.</li>
+            <li><code>README.md</code> and <code>LICENSE</code> are empty, and no CI configuration is tracked.</li>
+            <li>No backend or end-to-end C compilation workflow exists in the repository.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="blockers">
+      <div class="section-head">
+        <div class="section-index">05 / BLOCKERS</div>
+        <h2>The 14 compile errors cluster into six repair areas</h2>
+      </div>
+      <p style="max-width:790px;color:var(--muted)">These are compiler diagnostics from <code>cargo test --all-targets</code> on Rust 1.96.0, grouped by likely repair boundary rather than by raw error code.</p>
+      <div class="error-grid">
+        <div class="error-group"><div class="error-count">4</div><div class="error-name">Missing type</div><div class="error-detail"><code>TypeName</code> is referenced but not defined or imported.</div></div>
+        <div class="error-group"><div class="error-count">3</div><div class="error-name">Index type mismatch</div><div class="error-detail"><code>ExpressionIndex</code>, <code>ConstantExpressionIndex</code>, and nested <code>Option</code> results disagree.</div></div>
+        <div class="error-group"><div class="error-count">3</div><div class="error-name">Missing parser storage</div><div class="error-detail"><code>declarations</code> and <code>function_definitions</code> fields are used but absent from <code>Parser</code>.</div></div>
+        <div class="error-group"><div class="error-count">2</div><div class="error-name">Missing error variants</div><div class="error-detail">Declaration/function-definition paths reference nonexistent <code>ParserErrorType</code> variants.</div></div>
+        <div class="error-group"><div class="error-count">1</div><div class="error-name">Callback arity</div><div class="error-detail"><code>on_error</code> expects parser, context, and token but receives only the token.</div></div>
+        <div class="error-group"><div class="error-count">1</div><div class="error-name">Incomplete return path</div><div class="error-detail">A declaration branch returns unit where <code>Option&lt;ExternalDeclaration&gt;</code> is required.</div></div>
+      </div>
+    </section>
+
+    <section class="section" id="activity">
+      <div class="section-head">
+        <div class="section-index">06 / ACTIVITY</div>
+        <h2>Recent work slowed after parser changes</h2>
+      </div>
+      <div class="activity">
+        <div class="activity-item"><div class="activity-date">2024-12-14</div><div class="activity-hash">4797d18</div><div>Reformat <span style="color:var(--faint)">· 1 file, +3/−1</span></div></div>
+        <div class="activity-item"><div class="activity-date">2024-12-01</div><div class="activity-hash">5eda642</div><div>Fix bug in vectorslice <span style="color:var(--faint)">· 1 file, +1/−1</span></div></div>
+        <div class="activity-item"><div class="activity-date">2024-10-24</div><div class="activity-hash">627fed4</div><div>Update configs <span style="color:var(--faint)">· 2 files, +2/−1</span></div></div>
+        <div class="activity-item"><div class="activity-date">2024-10-05</div><div class="activity-hash">2fad004</div><div>DECLARATION <span style="color:var(--faint)">· 2 files, +72/−37</span></div></div>
+        <div class="activity-item"><div class="activity-date">2024-09-23</div><div class="activity-hash">0a0b6a2</div><div>Work on external declaration <span style="color:var(--faint)">· 2 files, +234/−249</span></div></div>
+      </div>
+      <p style="margin:10px 0 0 38px;color:var(--muted)">Repository history begins on 19 December 2023. As of this report, HEAD has been unchanged for roughly 20 months.</p>
+    </section>
+
+    <section class="section" id="next">
+      <div class="section-head">
+        <div class="section-index">07 / NEXT</div>
+        <h2>Recommended recovery sequence</h2>
+      </div>
+      <ol class="next-list">
+        <li><div><strong>Restore a green default build</strong><p>Reconcile parser storage/types, error variants, callback signatures, and return paths. Make <code>cargo check</code> the first non-negotiable gate.</p></div><span class="effort">Immediate</span></li>
+        <li><div><strong>Freeze and test the preprocessor boundary</strong><p>Turn the 14 C fixtures into integration tests with expected token or diagnostic snapshots. Add focused unit tests around macro expansion and source mapping.</p></div><span class="effort">High value</span></li>
+        <li><div><strong>Define the parser’s minimum complete slice</strong><p>Choose a small C subset, implement expressions/statements without placeholders, and expose a parse path from the CLI before widening grammar coverage.</p></div><span class="effort">Core work</span></li>
+        <li><div><strong>Repair engineering gates</strong><p>Fix benchmark feature compilation, lint spellings, MinGW long-double warnings, and add CI for check, test, nightly fmt, and Clippy.</p></div><span class="effort">Short</span></li>
+        <li><div><strong>Make project intent legible</strong><p>Document supported/unsupported C99 features, toolchain requirements, usage, roadmap, fixture semantics, and supply an actual license.</p></div><span class="effort">Short</span></li>
+        <li><div><strong>Decide what “compiler” means for v0.1</strong><p>Set an explicit milestone: front-end/tokenizer, AST-producing parser, or executable-producing compiler. Backend scope is currently absent and will dominate the path to C99 compliance.</p></div><span class="effort">Decision</span></li>
+      </ol>
+    </section>
+
+    <footer class="footnote">
+      <div class="section-index">METHOD</div>
+      <p>Generated from the local repository at commit <code>4797d18</code> on 21 August 2026. Evidence includes tracked source, Cargo metadata and lockfile, Git history/status, source-marker searches, <code>cargo test --all-targets</code>, all-features Clippy, and nightly rustfmt. This is a point-in-time engineering assessment, not a C99 conformance audit.</p>
+    </footer>
+  </main>
+</body>
+</html>
