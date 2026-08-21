@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Detailed implementation status report for the bcc-rust C99 parser, generated 21 August 2026.">
+  <title>bcc-rust Parser — Implementation Status</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1014;
+      --panel: #121820;
+      --panel-2: #171f29;
+      --line: #283543;
+      --line-hot: #42566a;
+      --ink: #edf3f8;
+      --muted: #9ba8b5;
+      --dim: #697886;
+      --cyan: #63d8e8;
+      --cyan-soft: rgba(99, 216, 232, .12);
+      --orange: #ff9f5c;
+      --orange-soft: rgba(255, 159, 92, .12);
+      --red: #ff6f75;
+      --red-soft: rgba(255, 111, 117, .12);
+      --green: #68d6a4;
+      --green-soft: rgba(104, 214, 164, .12);
+      --yellow: #efd06f;
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background-color: var(--bg);
+      background-image:
+        linear-gradient(rgba(99, 216, 232, .025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99, 216, 232, .025) 1px, transparent 1px),
+        radial-gradient(circle at 78% 0%, rgba(99, 216, 232, .08), transparent 30rem);
+      background-size: 32px 32px, 32px 32px, auto;
+      font: 15px/1.62 var(--sans);
+    }
+    a { color: inherit; }
+    code, .mono { font-family: var(--mono); }
+    code {
+      padding: .1rem .34rem;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #0a0f14;
+      color: #d7eaf0;
+      font-size: .89em;
+    }
+    button { font: inherit; }
+
+    .page { width: min(1180px, calc(100% - 52px)); margin: 0 auto; padding-bottom: 72px; }
+    .topbar { height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
+    .identity { display: flex; align-items: center; gap: 11px; font: 650 12px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+    .cursor { width: 9px; height: 16px; background: var(--cyan); animation: blink 1.3s step-end infinite; }
+    @keyframes blink { 50% { opacity: .25; } }
+    .top-meta { display: flex; align-items: center; gap: 15px; color: var(--muted); font: 11px/1 var(--mono); }
+    .print {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 8px 12px;
+      color: var(--ink);
+      background: rgba(18, 24, 32, .7);
+      cursor: pointer;
+    }
+    .print:hover { color: var(--cyan); border-color: var(--cyan); }
+
+    .hero { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, .5fr); gap: 72px; padding: 76px 0 54px; align-items: end; }
+    .kicker { margin: 0 0 18px; color: var(--cyan); font: 700 11px/1.2 var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+    h1 { max-width: 790px; margin: 0; font-size: clamp(44px, 7vw, 78px); line-height: .98; letter-spacing: -.055em; font-weight: 735; }
+    .lead { max-width: 760px; margin: 26px 0 0; color: #c1ccd5; font-size: 19px; line-height: 1.55; }
+    .hero-score { position: relative; padding: 24px 0 8px 28px; border-left: 1px solid var(--line-hot); }
+    .score-label { color: var(--muted); font: 11px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .12em; }
+    .score-range { margin: 13px 0 8px; color: var(--orange); font: 730 clamp(42px, 5vw, 62px)/1 var(--mono); letter-spacing: -.06em; }
+    .score-copy { margin: 0; color: var(--muted); font-size: 13px; }
+    .score-copy strong { color: var(--ink); }
+
+    .section { padding: 45px 0; border-top: 1px solid var(--line); }
+    .section-head { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 30px; margin-bottom: 29px; }
+    .section-id { color: var(--dim); font: 11px/1.5 var(--mono); letter-spacing: .09em; }
+    h2 { max-width: 800px; margin: 0; font-size: clamp(28px, 4vw, 42px); line-height: 1.1; letter-spacing: -.037em; }
+    h3 { margin: 0; font-size: 17px; line-height: 1.35; letter-spacing: -.015em; }
+    p { margin-top: 0; }
+
+    .summary-strip { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--panel); }
+    .summary-item { min-height: 118px; padding: 20px; border-right: 1px solid var(--line); }
+    .summary-item:last-child { border-right: 0; }
+    .summary-number { display: block; font: 720 26px/1 var(--mono); letter-spacing: -.04em; }
+    .summary-label { display: block; margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    .estimate-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(290px, .8fr); gap: 18px; }
+    .card { padding: 26px; border: 1px solid var(--line); border-radius: 9px; background: rgba(18, 24, 32, .92); }
+    .card-intro { margin: 9px 0 0; color: var(--muted); }
+    .gauge { margin-top: 24px; }
+    .gauge-row { display: grid; grid-template-columns: 185px 1fr 58px; gap: 15px; align-items: center; margin: 15px 0; }
+    .gauge-label { color: #c9d3db; font-size: 12px; }
+    .track { height: 8px; overflow: hidden; border-radius: 99px; background: #25303a; }
+    .fill { display: block; width: var(--value); height: 100%; border-radius: inherit; background: var(--cyan); }
+    .fill.partial { background: var(--orange); }
+    .fill.missing { background: var(--red); }
+    .gauge-value { color: var(--muted); text-align: right; font: 11px/1 var(--mono); }
+    .method-note { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--dim); font-size: 11px; }
+
+    .truth-list { margin: 20px 0 0; padding: 0; list-style: none; }
+    .truth-list li { position: relative; padding: 13px 0 13px 27px; border-top: 1px solid var(--line); color: #cbd4dc; }
+    .truth-list li::before { position: absolute; left: 0; font: 700 12px/1.6 var(--mono); }
+    .truth-list .yes::before { content: "+"; color: var(--green); }
+    .truth-list .no::before { content: "−"; color: var(--red); }
+    .truth-list .caution::before { content: "~"; color: var(--orange); }
+
+    .coverage-table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); background: rgba(18, 24, 32, .78); }
+    .coverage-table th, .coverage-table td { padding: 16px 15px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    .coverage-table th { color: var(--muted); font: 650 10px/1.3 var(--mono); letter-spacing: .11em; text-transform: uppercase; background: var(--panel-2); }
+    .coverage-table tr:last-child td { border-bottom: 0; }
+    .coverage-table td:first-child { width: 22%; font-weight: 650; }
+    .coverage-table td:nth-child(2) { width: 14%; }
+    .coverage-table td:last-child { color: var(--muted); }
+    .status { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: 99px; font: 700 10px/1 var(--mono); text-transform: uppercase; white-space: nowrap; }
+    .status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .substantial { color: var(--green); background: var(--green-soft); }
+    .partial { color: var(--orange); background: var(--orange-soft); }
+    .skeletal { color: var(--yellow); background: rgba(239, 208, 111, .1); }
+    .absent { color: var(--red); background: var(--red-soft); }
+
+    .dependency-map { display: grid; grid-template-columns: 1fr 50px 1.25fr; gap: 15px; align-items: center; }
+    .node { padding: 19px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .node small { display: block; margin-bottom: 7px; color: var(--dim); font: 10px/1.2 var(--mono); text-transform: uppercase; }
+    .node strong { font-size: 15px; }
+    .node p { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .node.root { border-color: var(--cyan); box-shadow: inset 3px 0 0 var(--cyan); }
+    .node.good { border-color: rgba(104, 214, 164, .45); }
+    .node.bad { border-color: rgba(255, 111, 117, .55); }
+    .arrow { color: var(--dim); text-align: center; font: 20px/1 var(--mono); }
+    .branches { display: grid; gap: 10px; }
+    .branch-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .callout { margin-top: 20px; padding: 21px 23px; border-left: 3px solid var(--orange); background: var(--orange-soft); color: #d9dfe4; }
+    .callout strong { color: var(--orange); }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .evidence-list { margin: 17px 0 0; padding: 0; list-style: none; }
+    .evidence-list li { padding: 13px 0; border-top: 1px solid var(--line); }
+    .evidence-list strong { display: block; margin-bottom: 4px; color: #d9e3ea; }
+    .evidence-list span { color: var(--muted); font-size: 13px; }
+
+    .error-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
+    .error-box { min-height: 138px; padding: 19px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .error-count { color: var(--red); font: 720 27px/1 var(--mono); }
+    .error-title { margin-top: 13px; font-weight: 670; }
+    .error-copy { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .milestones { counter-reset: step; margin: 0; padding: 0; list-style: none; }
+    .milestones li { counter-increment: step; display: grid; grid-template-columns: 44px minmax(0, 1fr) 120px; gap: 18px; padding: 21px 0; border-top: 1px solid var(--line); }
+    .milestones li::before { content: counter(step, decimal-leading-zero); color: var(--cyan); font: 12px/1.8 var(--mono); }
+    .milestones strong { display: block; font-size: 16px; }
+    .milestones p { margin: 5px 0 0; color: var(--muted); }
+    .exit { color: var(--dim); text-align: right; font: 10px/1.8 var(--mono); text-transform: uppercase; }
+
+    .footer { display: grid; grid-template-columns: 190px 1fr; gap: 30px; padding: 28px 0 0; border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; }
+    .footer p { margin: 0; }
+
+    @media (max-width: 940px) {
+      .hero { grid-template-columns: 1fr; gap: 35px; }
+      .hero-score { max-width: 480px; }
+      .summary-strip { grid-template-columns: repeat(3, 1fr); }
+      .summary-item:nth-child(3n) { border-right: 0; }
+      .summary-item:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+      .estimate-grid, .two-col { grid-template-columns: 1fr; }
+      .error-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 680px) {
+      .page { width: min(100% - 32px, 1180px); padding-bottom: 45px; }
+      .top-meta span { display: none; }
+      .hero { padding: 50px 0 38px; }
+      .section { padding: 35px 0; }
+      .section-head, .footer { grid-template-columns: 1fr; gap: 10px; }
+      .summary-strip { grid-template-columns: repeat(2, 1fr); }
+      .summary-item:nth-child(3n) { border-right: 1px solid var(--line); }
+      .summary-item:nth-child(2n) { border-right: 0; }
+      .summary-item:nth-child(-n+4) { border-bottom: 1px solid var(--line); }
+      .gauge-row { grid-template-columns: 130px 1fr 46px; gap: 10px; }
+      .coverage-table { display: block; overflow-x: auto; }
+      .dependency-map { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); }
+      .branch-pair, .error-grid { grid-template-columns: 1fr; }
+      .milestones li { grid-template-columns: 32px 1fr; }
+      .exit { grid-column: 2; text-align: left; }
+    }
+
+    @media print {
+      :root { color-scheme: light; --bg: #fff; --panel: #fff; --panel-2: #f4f7f8; --ink: #111820; --muted: #4d5963; --dim: #69747c; --line: #d8dfe3; }
+      body { background: #fff; font-size: 11px; }
+      .page { width: auto; padding: 0 18px; }
+      .print { display: none; }
+      .hero { padding: 36px 0 28px; }
+      .section { padding: 25px 0; break-inside: avoid; }
+      .card, .node, .error-box, .summary-item { break-inside: avoid; }
+      h1 { font-size: 52px; }
+      code { background: #f4f6f7; }
+      .cursor { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="topbar">
+      <div class="identity"><span class="cursor" aria-hidden="true"></span>bcc-rust / parser audit</div>
+      <div class="top-meta"><span>HEAD 4797d18 · 2026-08-21</span><button class="print" type="button" onclick="window.print()">Print report</button></div>
+    </div>
+
+    <header class="hero">
+      <div>
+        <p class="kicker">Implementation depth report</p>
+        <h1>The declaration machinery is real. The parser is not yet complete.</h1>
+        <p class="lead">The parser contains substantial C99 type-specifier and declarator logic, plus a broad AST design. But the high-leverage grammar layers—expressions, statements, initializers, function definitions, and a complete external-declaration path—are missing or stop mid-implementation.</p>
+      </div>
+      <aside class="hero-score" aria-label="Estimated parser implementation">
+        <div class="score-label">Estimated source implementation</div>
+        <div class="score-range">25–35%</div>
+        <p class="score-copy"><strong>About one-third of the parser surface.</strong><br>Operationally verified: 0% while the module does not compile.</p>
+      </aside>
+    </header>
+
+    <section class="section" id="inventory">
+      <div class="section-head"><div class="section-id">01 / INVENTORY</div><h2>A large file with a narrow completed center</h2></div>
+      <div class="summary-strip" role="list" aria-label="Parser source metrics">
+        <div class="summary-item" role="listitem"><span class="summary-number">2,792</span><span class="summary-label">Physical lines in <code>parsing.rs</code></span></div>
+        <div class="summary-item" role="listitem"><span class="summary-number">30</span><span class="summary-label">Methods in the main <code>Parser</code> implementation</span></div>
+        <div class="summary-item" role="listitem"><span class="summary-number">3</span><span class="summary-label">Direct parser methods that are only <code>todo!()</code></span></div>
+        <div class="summary-item" role="listitem"><span class="summary-number">40</span><span class="summary-label">Crate-visible data structs and enums</span></div>
+        <div class="summary-item" role="listitem"><span class="summary-number">38</span><span class="summary-label">Declared parser diagnostic variants</span></div>
+        <div class="summary-item" role="listitem"><span class="summary-number">0</span><span class="summary-label">Automated parser tests found</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="estimate">
+      <div class="section-head"><div class="section-id">02 / ESTIMATE</div><h2>Two measurements tell very different stories</h2></div>
+      <div class="estimate-grid">
+        <article class="card">
+          <h3>Estimated implementation by language area</h3>
+          <p class="card-intro">These bars describe executable parsing logic—not whether a matching enum or index type exists.</p>
+          <div class="gauge" aria-label="Estimated parser coverage chart">
+            <div class="gauge-row"><span class="gauge-label">Token bridge &amp; diagnostics</span><span class="track"><span class="fill" style="--value:80%"></span></span><span class="gauge-value">~80%</span></div>
+            <div class="gauge-row"><span class="gauge-label">Declaration specifiers</span><span class="track"><span class="fill" style="--value:75%"></span></span><span class="gauge-value">~75%</span></div>
+            <div class="gauge-row"><span class="gauge-label">Declarators</span><span class="track"><span class="fill partial" style="--value:60%"></span></span><span class="gauge-value">~60%</span></div>
+            <div class="gauge-row"><span class="gauge-label">Struct / union / enum</span><span class="track"><span class="fill partial" style="--value:50%"></span></span><span class="gauge-value">~50%</span></div>
+            <div class="gauge-row"><span class="gauge-label">Declarations / translation unit</span><span class="track"><span class="fill partial" style="--value:10%"></span></span><span class="gauge-value">~10%</span></div>
+            <div class="gauge-row"><span class="gauge-label">Scope &amp; name tracking</span><span class="track"><span class="fill missing" style="--value:5%"></span></span><span class="gauge-value">~5%</span></div>
+            <div class="gauge-row"><span class="gauge-label">Expressions &amp; initializers</span><span class="track"><span class="fill missing" style="--value:1%"></span></span><span class="gauge-value">0%</span></div>
+            <div class="gauge-row"><span class="gauge-label">Statements &amp; function bodies</span><span class="track"><span class="fill missing" style="--value:1%"></span></span><span class="gauge-value">0%</span></div>
+          </div>
+          <div class="method-note">Estimate range is judgment-based: equal-area and dependency-weighted readings land near 25–35%. It is not a C99 conformance score. No tests exist to turn this into a measured pass percentage.</div>
+        </article>
+
+        <article class="card">
+          <h3>Why method count is misleading</h3>
+          <ul class="truth-list">
+            <li class="yes">27 of 30 parser methods contain non-placeholder bodies.</li>
+            <li class="caution">Much of that code serves one difficult but limited area: declaration specifiers and declarators.</li>
+            <li class="no"><code>parse_expression</code> and <code>parse_statement</code> are tiny stubs for enormous grammar subtrees.</li>
+            <li class="no">The core declaration/function-definition routine ends after only the no-declarator case.</li>
+            <li class="no">AST variants describe intended support; they do not consume tokens or produce nodes.</li>
+            <li class="no">The current module has 14 compile errors, so none of the implemented-looking paths are executable at HEAD.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="coverage">
+      <div class="section-head"><div class="section-id">03 / COVERAGE</div><h2>Coverage by C99 parser responsibility</h2></div>
+      <table class="coverage-table">
+        <thead><tr><th>Area</th><th>Status</th><th>What exists</th><th>What prevents completion</th></tr></thead>
+        <tbody>
+          <tr><td>Token flow &amp; source context</td><td><span class="status substantial">Substantial</span></td><td>Preprocessor handoff, one-token pushback, position/file forwarding, and diagnostic source vectors.</td><td>Only one pending token is supported; end-to-end behavior is untested.</td></tr>
+          <tr><td>Declaration specifiers</td><td><span class="status substantial">Substantial</span></td><td>Storage classes, <code>const</code>/<code>volatile</code>/<code>restrict</code>, <code>inline</code>, primitive type combinations, duplicate/conflict diagnostics, and typedef-name recognition.</td><td>Typedef tables are read but never populated; parsed declarations are not completed.</td></tr>
+          <tr><td>Declarators</td><td><span class="status partial">Partial</span></td><td>Pointers, qualifiers per pointer level, parenthesized declarators, arrays, C99 <code>static</code> array forms, function parameters, variadics, abstract forms, and K&amp;R identifier lists.</td><td>Array bounds call a missing expression parser; “maybe abstract” handling is suspect; the whole path is untested and currently unbuildable.</td></tr>
+          <tr><td>Struct / union / enum</td><td><span class="status partial">Partial</span></td><td>Member declaration loops, bitfields, named/anonymous bodies, enumerators, and dedicated diagnostics.</td><td>Bitfield widths and enum values require expressions. Union nodes are currently hard-coded as <code>Struct</code>, and the enum slice starts from the identifier arena rather than the enumerator arena.</td></tr>
+          <tr><td>Ordinary declarations</td><td><span class="status skeletal">Skeletal</span></td><td>Data types for declarations, init-declarators, initializers, and a semicolon-only no-declarator branch.</td><td>No init-declarator list parsing; no initializer parsing; parser storage fields are missing; the central routine ends mid-control-flow.</td></tr>
+          <tr><td>Translation unit</td><td><span class="status skeletal">Skeletal</span></td><td><code>TranslationPhase</code> calls an external-declaration wrapper.</td><td>The wrapper nests an <code>Option</code> incorrectly and its callee cannot produce normal declarations or function definitions.</td></tr>
+          <tr><td>Expressions</td><td><span class="status absent">Model only</span></td><td>Enums describe conditional, binary, unary, call, compound literal, constant, string, <code>sizeof</code>, and cast nodes; operator enums are broad.</td><td><code>parse_expression</code> and <code>parse_assignment_expression</code> are both <code>todo!()</code>. <code>TypeName</code> is undefined.</td></tr>
+          <tr><td>Statements</td><td><span class="status absent">Model only</span></td><td>Enums describe compound, expression, selection, loops, jumps, labels, <code>case</code>, and <code>default</code>.</td><td><code>parse_statement</code> is a <code>todo!()</code>; no statement-producing call sites exist.</td></tr>
+          <tr><td>Function definitions</td><td><span class="status absent">Absent</span></td><td>An index wrapper and an <code>ExternalDeclaration</code> variant.</td><td>No <code>FunctionDefinition</code> node, no backing arena, no parameter declaration-list handling, and no body parsing.</td></tr>
+          <tr><td>Scope &amp; names</td><td><span class="status absent">Scaffolding</span></td><td>Hash maps for typedef, struct, and enum names plus index types.</td><td>No inserts into any name map; no scope stack; no declaration binding or shadowing behavior.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="dependency">
+      <div class="section-head"><div class="section-id">04 / DEPENDENCY MAP</div><h2>The missing methods sit on the critical path</h2></div>
+      <div class="dependency-map" aria-label="Parser dependency map">
+        <div class="node root"><small>Entry point</small><strong>External declaration</strong><p>Must distinguish a declaration from a function definition and return a complete node.</p></div>
+        <div class="arrow" aria-hidden="true">→</div>
+        <div class="branches">
+          <div class="branch-pair">
+            <div class="node good"><small>Built deeply</small><strong>Specifiers</strong><p>Types, qualifiers, storage, inline.</p></div>
+            <div class="node good"><small>Built deeply</small><strong>Declarator</strong><p>Pointers, arrays, functions, abstract forms.</p></div>
+          </div>
+          <div class="branch-pair">
+            <div class="node bad"><small>Missing</small><strong>Initializer → expression</strong><p>Needed for variables, array bounds, enum values, and bitfields.</p></div>
+            <div class="node bad"><small>Missing</small><strong>Body → statement</strong><p>Needed for every function definition and all executable C.</p></div>
+          </div>
+        </div>
+      </div>
+      <div class="callout"><strong>Three TODOs carry most of the remaining grammar.</strong> Expression parsing feeds at least four already-written declaration paths. Statement parsing unlocks function bodies. Their small source footprint dramatically understates their implementation cost.</div>
+    </section>
+
+    <section class="section" id="data-model">
+      <div class="section-head"><div class="section-id">05 / DESIGN VS EXECUTION</div><h2>The intended AST is ahead of the parser</h2></div>
+      <div class="two-col">
+        <article class="card">
+          <h3>Strong design signals</h3>
+          <ul class="evidence-list">
+            <li><strong>Broad type vocabulary</strong><span>Primitive combinations include signedness, short/long/long long, floating, complex, imaginary, structs/unions, enums, and typedef names.</span></li>
+            <li><strong>Compact arena-oriented representation</strong><span>Index wrappers and <code>VectorSlice</code> references suggest deliberate memory locality and stable node references.</span></li>
+            <li><strong>Useful statement taxonomy</strong><span>The model anticipates loops, conditionals, jumps, labels, cases, declarations in <code>for</code>, and null statements.</span></li>
+            <li><strong>Useful expression taxonomy</strong><span>Most common unary, binary, assignment, call, subscript, cast, literal, and <code>sizeof</code> forms have a planned representation.</span></li>
+            <li><strong>Recovery-aware diagnostics</strong><span>Thirty-eight error variants distinguish structural failures and several recoverable duplicate/conflict cases.</span></li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Model gaps that expose unfinished design</h3>
+          <ul class="evidence-list">
+            <li><strong><code>TypeName</code> is referenced but absent</strong><span>This blocks compound literals, casts, <code>sizeof(type)</code>, and the parser’s own storage vector.</span></li>
+            <li><strong>No function-definition node</strong><span>Only <code>FunctionDefinitionIndex</code> exists; there is no structure describing a function’s specifiers, declarator, declarations, or body.</span></li>
+            <li><strong>Declaration arenas are missing</strong><span>Code uses <code>self.declarations</code> and <code>self.function_definitions</code>, but neither field exists on <code>Parser</code>.</span></li>
+            <li><strong>Name maps never change</strong><span>Typedef/struct/enum recognition cannot become correct without binding and scope updates.</span></li>
+            <li><strong>No member-access representation is obvious</strong><span>The expression enums include subscript and call but no explicit <code>.</code> or <code>-&gt;</code> operator/node.</span></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="build-errors">
+      <div class="section-head"><div class="section-id">06 / CURRENT BREAKAGE</div><h2>Fourteen compile errors prevent all parser validation</h2></div>
+      <div class="error-grid">
+        <div class="error-box"><div class="error-count">4</div><div class="error-title">Undefined <code>TypeName</code></div><div class="error-copy">Used by parser storage and expression nodes.</div></div>
+        <div class="error-box"><div class="error-count">3</div><div class="error-title">Index/result mismatches</div><div class="error-copy">Constant-expression indexes and nested options disagree with function signatures.</div></div>
+        <div class="error-box"><div class="error-count">3</div><div class="error-title">Missing parser arenas</div><div class="error-copy">Declaration and function-definition storage is referenced but absent.</div></div>
+        <div class="error-box"><div class="error-count">2</div><div class="error-title">Missing error variants</div><div class="error-copy">The incomplete declaration path expects diagnostics not present in the error enum.</div></div>
+        <div class="error-box"><div class="error-count">1</div><div class="error-title">Callback arity</div><div class="error-copy"><code>expect_token</code> invokes its error callback with one of three declared arguments.</div></div>
+        <div class="error-box"><div class="error-count">1</div><div class="error-title">Incomplete return path</div><div class="error-copy">The central declaration routine falls through with unit instead of an external declaration.</div></div>
+      </div>
+    </section>
+
+    <section class="section" id="history">
+      <div class="section-head"><div class="section-id">07 / HISTORY</div><h2>Most parser code landed during a concentrated 2024 push</h2></div>
+      <div class="two-col">
+        <article class="card">
+          <h3>Change profile</h3>
+          <ul class="evidence-list">
+            <li><strong>57 commits touch <code>parsing.rs</code></strong><span>The work is not a generated or incidental stub; it was a sustained development track.</span></li>
+            <li><strong>1,677 of 2,792 lines trace to September 2024</strong><span>Roughly 60% of current physical lines were last changed in that month.</span></li>
+            <li><strong>Latest parser change: 14 December 2024</strong><span>The final commit only reformatted four lines; substantive external-declaration work stopped earlier.</span></li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Recent parser milestones</h3>
+          <ul class="evidence-list">
+            <li><strong>05 Oct 2024 · “DECLARATION”</strong><span>Latest large declaration-path change.</span></li>
+            <li><strong>23 Sep 2024 · “Work on external declaration”</strong><span>Large rewrite around the currently incomplete entry path.</span></li>
+            <li><strong>21 Sep 2024 · “Finish implementing enum specifiers”</strong><span>Closed out one declaration subgrammar.</span></li>
+            <li><strong>09 Sep 2024 · “Finish implementing struct-or-union-specifier”</strong><span>Built the other aggregate-type subgrammar.</span></li>
+            <li><strong>08 Sep 2024 · function declarator work</strong><span>Expanded type-specifier and function-declarator logic.</span></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="roadmap">
+      <div class="section-head"><div class="section-id">08 / COMPLETION PATH</div><h2>A dependency-first route to a usable parser</h2></div>
+      <ol class="milestones">
+        <li><div><strong>Make the current model compile</strong><p>Define <code>TypeName</code> and function-definition storage, add declaration arenas, reconcile constant-expression indexes, fix callback invocation, and complete every return path.</p></div><span class="exit">cargo check passes</span></li>
+        <li><div><strong>Lock down the completed-looking subgrammar</strong><p>Add token-driven tests for primitive specifier combinations, pointers, arrays, abstract declarators, function parameters, K&amp;R forms, structs, unions, and enums. Fix hard-coded union and arena-index bugs.</p></div><span class="exit">declaration tests green</span></li>
+        <li><div><strong>Implement expressions by precedence layer</strong><p>Primary/postfix → unary/cast → multiplicative through logical → conditional → assignment → comma. Add explicit member access and constant-expression validation.</p></div><span class="exit">expressions produce AST</span></li>
+        <li><div><strong>Finish declarations and initializers</strong><p>Parse init-declarator lists, scalar and braced initializers, typedef bindings, tag names, and scope-aware symbol updates.</p></div><span class="exit">file-scope variables parse</span></li>
+        <li><div><strong>Implement statements and scopes</strong><p>Build compound, selection, iteration, jump, and labeled statement routines with block/function scope management.</p></div><span class="exit">function bodies parse</span></li>
+        <li><div><strong>Complete external declarations</strong><p>Distinguish declarations from definitions, support old-style declaration lists as required, construct function-definition nodes, and iterate an entire translation unit with recovery.</p></div><span class="exit">C fixtures parse end-to-end</span></li>
+      </ol>
+    </section>
+
+    <footer class="footer">
+      <div class="section-id">METHOD</div>
+      <p>Point-in-time source audit of <code>src/translation_phases/parsing.rs</code> at commit <code>4797d18</code>, generated 21 August 2026. Evidence includes physical source structure, call sites, symbol writes, TODO markers, parser-specific Git history, and the 14 diagnostics produced by <code>cargo test --all-targets</code> on Rust 1.96.0. Coverage percentages are reasoned estimates, not test or C99 conformance results.</p>
+    </footer>
+  </main>
+</body>
+</html>

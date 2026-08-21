@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Technical feasibility report for using the Double-E infix parsing method in bcc-rust.">
+  <title>Double-E × bcc-rust — Integration Feasibility Report</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e0b12;
+      --panel: #17121c;
+      --panel-2: #1e1725;
+      --line: #352b3e;
+      --line-2: #4d3c58;
+      --ink: #f4edf6;
+      --muted: #b3a7b7;
+      --dim: #796d7e;
+      --violet: #c29aff;
+      --violet-soft: rgba(194,154,255,.12);
+      --coral: #ff8d75;
+      --coral-soft: rgba(255,141,117,.12);
+      --mint: #72ddb5;
+      --mint-soft: rgba(114,221,181,.12);
+      --yellow: #f0c96b;
+      --yellow-soft: rgba(240,201,107,.12);
+      --red: #ff707e;
+      --red-soft: rgba(255,112,126,.12);
+      --blue: #76c5ff;
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 83% 3%, rgba(194,154,255,.11), transparent 31rem),
+        radial-gradient(circle at 8% 36%, rgba(255,141,117,.055), transparent 26rem),
+        var(--bg);
+      font: 15px/1.62 var(--sans);
+    }
+    a { color: var(--violet); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    a:hover { color: #e0c9ff; }
+    code, .mono { font-family: var(--mono); }
+    code {
+      padding: .1rem .34rem;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #0b0910;
+      color: #e7dcf0;
+      font-size: .89em;
+    }
+    button { font: inherit; }
+
+    .page { width: min(1190px, calc(100% - 54px)); margin: 0 auto; padding-bottom: 72px; }
+    .topbar { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 10px; font: 700 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .brand-mark { position: relative; width: 22px; height: 14px; }
+    .brand-mark::before, .brand-mark::after { content: "E"; position: absolute; top: 0; color: var(--violet); font: 800 14px/1 var(--mono); }
+    .brand-mark::before { left: 0; }
+    .brand-mark::after { left: 8px; color: var(--coral); mix-blend-mode: screen; }
+    .top-meta { display: flex; align-items: center; gap: 15px; color: var(--muted); font: 11px/1 var(--mono); }
+    .print { padding: 8px 12px; border: 1px solid var(--line); border-radius: 99px; color: var(--ink); background: transparent; cursor: pointer; }
+    .print:hover { color: var(--violet); border-color: var(--violet); }
+
+    .hero { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, .5fr); gap: 68px; padding: 78px 0 54px; align-items: end; }
+    .kicker { margin: 0 0 18px; color: var(--violet); font: 700 11px/1.2 var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+    h1 { max-width: 830px; margin: 0; font-size: clamp(45px, 7vw, 80px); line-height: .96; letter-spacing: -.058em; font-weight: 740; }
+    .lead { max-width: 790px; margin: 27px 0 0; color: #cabfce; font-size: 19px; line-height: 1.55; }
+    .decision { padding: 24px 0 5px 27px; border-left: 1px solid var(--line-2); }
+    .decision-label { color: var(--muted); font: 11px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .12em; }
+    .decision-value { margin: 12px 0 8px; color: var(--mint); font-size: 34px; line-height: 1; font-weight: 750; letter-spacing: -.04em; }
+    .decision p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .section { padding: 45px 0; border-top: 1px solid var(--line); }
+    .section-head { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 30px; margin-bottom: 29px; }
+    .section-id { color: var(--dim); font: 11px/1.5 var(--mono); letter-spacing: .09em; }
+    h2 { max-width: 850px; margin: 0; font-size: clamp(29px, 4vw, 43px); line-height: 1.08; letter-spacing: -.038em; }
+    h3 { margin: 0; font-size: 17px; line-height: 1.35; letter-spacing: -.015em; }
+    p { margin-top: 0; }
+
+    .verdict { display: grid; grid-template-columns: 1.35fr .65fr; gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--line); }
+    .verdict-main, .verdict-side { padding: 27px; background: var(--panel); }
+    .verdict-main p { max-width: 760px; margin: 11px 0 0; color: #c8bdcc; font-size: 17px; }
+    .verdict-side { display: grid; align-content: center; gap: 9px; }
+    .verdict-side strong { color: var(--coral); font: 750 26px/1 var(--mono); }
+    .verdict-side span { color: var(--muted); font-size: 12px; }
+
+    .metrics { display: grid; grid-template-columns: repeat(6, 1fr); margin-top: 18px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--panel); }
+    .metric { min-height: 116px; padding: 19px; border-right: 1px solid var(--line); }
+    .metric:last-child { border-right: 0; }
+    .metric-value { display: block; font: 730 25px/1 var(--mono); letter-spacing: -.04em; }
+    .metric-label { display: block; margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    .state-machine { display: grid; grid-template-columns: 1fr 74px 1fr; align-items: stretch; gap: 14px; }
+    .state { position: relative; min-height: 270px; padding: 26px; border: 1px solid var(--line-2); border-radius: 10px; background: rgba(23,18,28,.92); }
+    .state.unary { box-shadow: inset 4px 0 0 var(--violet); }
+    .state.binary { box-shadow: inset 4px 0 0 var(--coral); }
+    .state-code { color: var(--dim); font: 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    .state h3 { margin-top: 24px; font-size: 25px; }
+    .state p { margin: 10px 0 18px; color: var(--muted); }
+    .state ul { margin: 0; padding: 0; list-style: none; }
+    .state li { padding: 8px 0; border-top: 1px solid var(--line); color: #d3c9d7; font-size: 13px; }
+    .switch { display: grid; place-items: center; color: var(--dim); font: 700 11px/1.5 var(--mono); text-align: center; }
+    .switch span { display: block; color: var(--violet); font-size: 24px; line-height: 1; }
+    .stack-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px; }
+    .stack { padding: 21px; border: 1px dashed var(--line-2); border-radius: 8px; background: rgba(11,9,16,.45); }
+    .stack strong { color: var(--mint); font-family: var(--mono); }
+    .stack p { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+
+    .proof-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 18px; }
+    .evidence-path { margin-top: 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 6px; background: #0b0910; color: var(--violet); font: 11px/1.55 var(--mono); overflow-wrap: anywhere; }
+    .frame-stack { display: grid; gap: 8px; margin-top: 19px; }
+    .frame { padding: 13px 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); font: 12px/1.4 var(--mono); }
+    .frame:nth-child(1) { margin-inline: 0; border-color: var(--coral); }
+    .frame:nth-child(2) { margin-inline: 14px; border-color: var(--violet); }
+    .frame:nth-child(3) { margin-inline: 28px; border-color: var(--mint); }
+    .frame:nth-child(4) { margin-inline: 42px; color: var(--muted); }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .card { padding: 25px; border: 1px solid var(--line); border-radius: 9px; background: rgba(23,18,28,.9); }
+    .card p { margin: 9px 0 0; color: var(--muted); }
+    .list { margin: 18px 0 0; padding: 0; list-style: none; }
+    .list li { position: relative; padding: 12px 0 12px 27px; border-top: 1px solid var(--line); color: #d1c7d5; }
+    .list li::before { position: absolute; left: 0; font: 750 12px/1.7 var(--mono); }
+    .list.good li::before { content: "+"; color: var(--mint); }
+    .list.bad li::before { content: "!"; color: var(--red); }
+
+    .reuse-table, .fit-table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); background: rgba(23,18,28,.82); }
+    .reuse-table th, .reuse-table td, .fit-table th, .fit-table td { padding: 15px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+    .reuse-table th, .fit-table th { color: var(--muted); background: var(--panel-2); font: 650 10px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .1em; }
+    .reuse-table tr:last-child td, .fit-table tr:last-child td { border-bottom: 0; }
+    .reuse-table td:first-child { width: 23%; font-family: var(--mono); font-size: 12px; }
+    .reuse-table td:nth-child(2) { width: 15%; }
+    .fit-table td:first-child { width: 23%; font-weight: 670; }
+    .fit-table td:nth-child(2) { width: 16%; }
+    .reuse-table td:last-child, .fit-table td:last-child { color: var(--muted); }
+    .pill { display: inline-block; padding: 5px 9px; border-radius: 99px; font: 750 10px/1 var(--mono); text-transform: uppercase; white-space: nowrap; }
+    .keep { color: var(--mint); background: var(--mint-soft); }
+    .adapt { color: var(--yellow); background: var(--yellow-soft); }
+    .replace { color: var(--red); background: var(--red-soft); }
+    .direct { color: var(--mint); background: var(--mint-soft); }
+    .marker { color: var(--violet); background: var(--violet-soft); }
+    .assisted { color: var(--yellow); background: var(--yellow-soft); }
+    .special { color: var(--coral); background: var(--coral-soft); }
+
+    .architecture { display: grid; grid-template-columns: 1fr 52px 1fr 52px 1fr; gap: 10px; align-items: stretch; }
+    .arch-node { min-height: 188px; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .arch-node.hot { border-color: var(--violet); box-shadow: inset 0 3px 0 var(--violet); }
+    .arch-node small { color: var(--dim); font: 10px/1.2 var(--mono); text-transform: uppercase; }
+    .arch-node h3 { margin-top: 23px; }
+    .arch-node p { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+    .arch-arrow { display: grid; place-items: center; color: var(--dim); font: 21px/1 var(--mono); }
+    .hybrid-note { margin-top: 18px; padding: 20px 22px; border-left: 3px solid var(--mint); background: var(--mint-soft); color: #d8d0db; }
+    .hybrid-note strong { color: var(--mint); }
+
+    pre { margin: 20px 0 0; padding: 20px; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: #0a080e; color: #ded1e7; font: 12px/1.65 var(--mono); }
+    .code-violet { color: var(--violet); }
+    .code-coral { color: var(--coral); }
+    .code-mint { color: var(--mint); }
+
+    .gap-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
+    .gap { min-height: 175px; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .gap-num { color: var(--coral); font: 750 11px/1 var(--mono); letter-spacing: .1em; }
+    .gap h3 { margin-top: 24px; }
+    .gap p { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+
+    .test-results { display: grid; grid-template-columns: repeat(4, 1fr); gap: 11px; margin-bottom: 18px; }
+    .test { padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .test code { display: block; width: fit-content; margin-bottom: 11px; }
+    .test strong { font-size: 13px; }
+    .test p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .test.pass strong { color: var(--mint); }
+    .test.fail strong { color: var(--red); }
+
+    .risk-table { width: 100%; border-collapse: collapse; }
+    .risk-table td { padding: 16px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .risk-table tr:last-child td { border-bottom: 0; }
+    .risk-table td:first-child { width: 18%; font-weight: 680; }
+    .risk-table td:nth-child(2) { width: 12%; }
+    .risk-table td:last-child { color: var(--muted); }
+    .risk { display: inline-block; min-width: 62px; padding: 5px 8px; border-radius: 99px; text-align: center; font: 750 10px/1 var(--mono); text-transform: uppercase; }
+    .high { color: var(--red); background: var(--red-soft); }
+    .medium { color: var(--yellow); background: var(--yellow-soft); }
+    .low { color: var(--mint); background: var(--mint-soft); }
+
+    .plan { counter-reset: phase; margin: 0; padding: 0; list-style: none; }
+    .plan li { counter-increment: phase; display: grid; grid-template-columns: 44px minmax(0,1fr) 110px 115px; gap: 16px; align-items: start; padding: 20px 0; border-top: 1px solid var(--line); }
+    .plan li::before { content: counter(phase, decimal-leading-zero); color: var(--violet); font: 12px/1.8 var(--mono); }
+    .plan strong { display: block; font-size: 16px; }
+    .plan p { margin: 5px 0 0; color: var(--muted); }
+    .duration, .exit { font: 10px/1.8 var(--mono); text-transform: uppercase; }
+    .duration { color: var(--coral); }
+    .exit { color: var(--dim); }
+    .total { display: grid; grid-template-columns: 1fr auto; gap: 20px; margin-top: 17px; padding: 21px 23px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--violet-soft); }
+    .total strong { color: var(--violet); font-size: 17px; }
+    .total span { color: var(--muted); font: 12px/1.5 var(--mono); text-align: right; }
+
+    .acceptance { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .acceptance-item { padding: 17px 19px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
+    .acceptance-item strong { color: #dfd4e4; }
+    .acceptance-item p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+
+    .sources { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .source { padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .source small { color: var(--dim); font: 10px/1.2 var(--mono); text-transform: uppercase; }
+    .source strong { display: block; margin: 14px 0 7px; }
+    .source p { margin: 0; color: var(--muted); font-size: 12px; }
+    .source a { overflow-wrap: anywhere; }
+
+    .footer { display: grid; grid-template-columns: 190px 1fr; gap: 30px; padding: 28px 0 0; border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; }
+    .footer p { margin: 0; }
+
+    @media (max-width: 960px) {
+      .hero { grid-template-columns: 1fr; gap: 35px; }
+      .decision { max-width: 500px; }
+      .proof-grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(3,1fr); }
+      .metric:nth-child(3n) { border-right: 0; }
+      .metric:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+      .architecture { grid-template-columns: 1fr; }
+      .arch-arrow { transform: rotate(90deg); min-height: 30px; }
+      .gap-grid { grid-template-columns: repeat(2,1fr); }
+      .test-results { grid-template-columns: repeat(2,1fr); }
+      .sources { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 700px) {
+      .page { width: min(100% - 32px,1190px); padding-bottom: 46px; }
+      .top-meta span { display: none; }
+      .hero { padding: 50px 0 38px; }
+      .section { padding: 35px 0; }
+      .section-head, .footer { grid-template-columns: 1fr; gap: 10px; }
+      .verdict, .two-col, .proof-grid, .state-machine, .stack-row, .gap-grid, .test-results, .acceptance { grid-template-columns: 1fr; }
+      .switch { min-height: 50px; transform: rotate(90deg); }
+      .metrics { grid-template-columns: repeat(2,1fr); }
+      .metric:nth-child(3n) { border-right: 1px solid var(--line); }
+      .metric:nth-child(2n) { border-right: 0; }
+      .metric:nth-child(-n+4) { border-bottom: 1px solid var(--line); }
+      .reuse-table, .fit-table { display: block; overflow-x: auto; }
+      .plan li { grid-template-columns: 32px 1fr; }
+      .duration, .exit { grid-column: 2; }
+      .total { grid-template-columns: 1fr; }
+      .total span { text-align: left; }
+    }
+
+    @media print {
+      :root { color-scheme: light; --bg:#fff; --panel:#fff; --panel-2:#f7f4f8; --ink:#17121c; --muted:#554d59; --dim:#746a78; --line:#ddd6e0; --line-2:#c9bdce; }
+      body { background:#fff; font-size:11px; }
+      .page { width:auto; padding:0 18px; }
+      .print { display:none; }
+      .hero { padding:36px 0 28px; }
+      .section { padding:25px 0; break-inside:avoid; }
+      .card,.state,.metric,.gap,.test,.source,.arch-node { break-inside:avoid; }
+      h1 { font-size:52px; }
+      code,pre { background:#f5f2f6; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Double-E × bcc-rust</div>
+      <div class="top-meta"><span>Feasibility audit · 2026-08-21</span><button class="print" type="button" onclick="window.print()">Print report</button></div>
+    </div>
+
+    <header class="hero">
+      <div>
+        <p class="kicker">Whole-parser stack-machine integration study</p>
+        <h1>Build the whole parser as an explicit stack machine.</h1>
+        <p class="lead">Double-E should remain the precedence-reduction engine for expressions—and potentially declarators—inside a larger non-recursive pushdown parser. Declarations, statements, initializers, and translation units become resumable grammar frames on a control stack. bcc-rust already contains an integrated Double-E evaluator in its preprocessor, making this an extension of an existing design rather than a foreign architecture.</p>
+      </div>
+      <aside class="decision" aria-label="Recommendation">
+        <div class="decision-label">Recommendation</div>
+        <div class="decision-value">Proceed</div>
+        <p>Use one parser driver, an explicit control stack, specialized grammar frames, and shared Double-E reduction machinery.</p>
+      </aside>
+    </header>
+
+    <section class="section" id="verdict">
+      <div class="section-head"><div class="section-id">01 / VERDICT</div><h2>A unified pushdown machine is feasible—and better aligned with the project</h2></div>
+      <div class="verdict">
+        <div class="verdict-main">
+          <h3>Executive finding</h3>
+          <p>Double-E directly addresses precedence-driven subgrammars. The surrounding C grammar can also avoid recursion, but it needs a second mechanism: an explicit stack of phase-oriented frames. Each frame consumes a token, pushes a child frame, reduces a completed child into its parent, reprocesses lookahead, or enters recovery. The result is one non-recursive parser machine without pretending that every grammar production follows the Unary/Binary expression invariant.</p>
+        </div>
+        <div class="verdict-side"><strong>12–20 weeks</strong><span>Estimated focused effort for a production-quality, non-recursive C99 syntax parser. A first end-to-end subset should be reachable earlier; semantic analysis and code generation are excluded.</span></div>
+      </div>
+      <div class="metrics" role="list" aria-label="Investigation metrics">
+        <div class="metric" role="listitem"><span class="metric-value">1</span><span class="metric-label">Double-E evaluator already in bcc-rust</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">25</span><span class="metric-label">Preprocessor expression operator variants</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">23/23</span><span class="metric-label">Local prototype tests passing</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">2 + 2</span><span class="metric-label">States plus stacks in each Double-E reducer</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">0</span><span class="metric-label">Target recursive parser calls</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">O(n)</span><span class="metric-label">Expected parsing time in consumed tokens</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="algorithm">
+      <div class="section-head"><div class="section-id">02 / ALGORITHM</div><h2>The two-state loop maps cleanly onto C tokens</h2></div>
+      <div class="state-machine" aria-label="Double-E state machine">
+        <article class="state unary">
+          <div class="state-code">State U / expecting operand</div>
+          <h3>Unary state</h3>
+          <p>A token is interpreted as a prefix operator, grouping/type construct, or primary operand.</p>
+          <ul>
+            <li>Push prefix operators: <code>!</code>, <code>~</code>, <code>*</code>, <code>&amp;</code>, unary <code>+</code>/<code>-</code>, <code>++</code>/<code>--</code></li>
+            <li>Push a grouping marker for <code>(</code></li>
+            <li>Create an AST node for literals and identifiers</li>
+            <li>Delegate casts, <code>sizeof</code>, and compound literals to type-aware helpers</li>
+          </ul>
+        </article>
+        <div class="switch"><div><span>⇄</span>operand<br>operator</div></div>
+        <article class="state binary">
+          <div class="state-code">State B / expecting operator</div>
+          <h3>Binary state</h3>
+          <p>A token is interpreted as postfix syntax, an infix operator, a closing delimiter, or an expression terminator.</p>
+          <ul>
+            <li>Reduce by precedence, then push infix/assignment operators</li>
+            <li>Handle calls, subscripts, member access, and postfix <code>++</code>/<code>--</code></li>
+            <li>Match <code>)</code>, <code>]</code>, and the <code>?</code>/<code>:</code> pair</li>
+            <li>Stop before caller-owned tokens such as <code>;</code> or a top-level delimiter</li>
+          </ul>
+        </article>
+      </div>
+      <div class="stack-row">
+        <div class="stack"><strong>operator_stack: Vec&lt;StackOperator&gt;</strong><p>Unbound prefix, postfix, infix, grouping, call, subscript, and conditional markers—with precedence, arity, associativity, and source location.</p></div>
+        <div class="stack"><strong>operand_stack: Vec&lt;ExpressionIndex&gt;</strong><p>References into bcc-rust’s expression arena. Each reduction creates an AST node, stores it, and pushes its index back.</p></div>
+      </div>
+    </section>
+
+    <section class="section" id="in-tree-proof">
+      <div class="section-head"><div class="section-id">03 / IN-TREE PROOF</div><h2>The preprocessor already runs a production-integrated Double-E machine</h2></div>
+      <div class="proof-grid">
+        <article class="card">
+          <h3>This is not just a resemblance</h3>
+          <p>bcc-rust’s <code>PreprocessorExpressionParser</code> contains the defining structure directly: <code>Unary</code>/<code>Binary</code> states, precedence and associativity, separate operator and operand stacks, and a reduction loop over preprocessor tokens.</p>
+          <ul class="list good">
+            <li>Twenty-five operator/marker variants cover unary, arithmetic, shift, relational, equality, bitwise, logical, ternary, and grouping forms.</li>
+            <li>The operand stack preserves signed versus unsigned integer behavior.</li>
+            <li>The evaluator is already connected to <code>Context</code>, source vectors, token conversion, and structured diagnostics.</li>
+            <li>State and stacks are reset and reused between <code>#if</code>/<code>#elif</code> expressions.</li>
+          </ul>
+          <div class="evidence-path">src/translation_phases/preprocessing.rs<br>state: 158 · precedence: 203 · stacks: 267 · evaluator loop: 4524</div>
+        </article>
+        <article class="card">
+          <h3>What should be extracted</h3>
+          <p>The preprocessor implementation is an evaluator embedded in a very large method. Reuse its proven integration points, but extract a small reduction kernel rather than coupling the syntax parser to preprocessor-specific operands and diagnostics.</p>
+          <div class="frame-stack" aria-label="Shared reduction layers">
+            <div class="frame">PrecedenceReducer&lt;Dialect&gt;</div>
+            <div class="frame">PreprocessorExpressionDialect</div>
+            <div class="frame">CExpressionDialect</div>
+            <div class="frame">DeclaratorDialect? · optional</div>
+          </div>
+          <ul class="list bad">
+            <li>The ternary implementation uses same-precedence <code>Ternary</code>/<code>Else</code> operators and appears to share the prototype’s nested-true-branch associativity defect.</li>
+            <li>Several “compiler bug” assertions remain; a shared kernel needs explicit invariant errors and recovery behavior.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="prototype">
+      <div class="section-head"><div class="section-id">04 / PROTOTYPE AUDIT</div><h2>Treat the local repository as an executable sketch</h2></div>
+      <table class="reuse-table">
+        <thead><tr><th>Prototype element</th><th>Disposition</th><th>Reason</th></tr></thead>
+        <tbody>
+          <tr><td>State::{Unary, Binary}</td><td><span class="pill keep">Keep concept</span></td><td>This is the method’s central disambiguation mechanism and maps directly to bcc-rust tokens.</td></tr>
+          <tr><td>operator_stack</td><td><span class="pill adapt">Adapt</span></td><td>Retain the stack/reduction pattern; expand its operator enum, add marker metadata and source vectors.</td></tr>
+          <tr><td>operand_stack: Vec&lt;i128&gt;</td><td><span class="pill replace">Replace</span></td><td>The compiler must build syntax, not evaluate it. Use <code>Vec&lt;ExpressionIndex&gt;</code>.</td></tr>
+          <tr><td>precedence / associativity</td><td><span class="pill keep">Keep concept</span></td><td>The comparison logic is reusable in spirit; build a complete C99 table and test every equal-precedence pair.</td></tr>
+          <tr><td>Tokenizer</td><td><span class="pill replace">Replace</span></td><td>bcc-rust already emits typed, source-mapped, preprocessed <code>Token</code> values.</td></tr>
+          <tr><td>handle_operator evaluator</td><td><span class="pill replace">Replace</span></td><td>Every case must construct an <code>ExpressionType</code> node, merge spans, and return recoverable diagnostics.</td></tr>
+          <tr><td>Function HashMap / closures</td><td><span class="pill replace">Replace</span></td><td>C calls operate on arbitrary callee expressions and argument ASTs; lookup and typing belong to semantic analysis.</td></tr>
+          <tr><td>Parenthesis / call reduction</td><td><span class="pill adapt">Adapt</span></td><td>The marker idea is correct, but it must distinguish grouping, calls, casts, <code>sizeof(type)</code>, and compound literals.</td></tr>
+          <tr><td>Question / colon handling</td><td><span class="pill adapt">Rewrite carefully</span></td><td>The local prototype mishandles at least one nested-ternary shape; separate “question marker” from the final ternary operator.</td></tr>
+          <tr><td>unwrap / assert / panic</td><td><span class="pill replace">Replace</span></td><td>Malformed user input must become <code>ParserError</code> plus recovery, never a compiler crash.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="c99-fit">
+      <div class="section-head"><div class="section-id">05 / C99 FIT</div><h2>Most operators fit directly; four families need parser assistance</h2></div>
+      <table class="fit-table">
+        <thead><tr><th>Operator family</th><th>Integration mode</th><th>Coverage and required treatment</th></tr></thead>
+        <tbody>
+          <tr><td>Arithmetic, shifts, comparisons, equality, bitwise, logical</td><td><span class="pill direct">Direct reduction</span></td><td>Map typed <code>OperatorTokenType</code> values to precedence, associativity, arity, and existing <code>BinaryOperator</code>/<code>UnaryOperator</code> variants.</td></tr>
+          <tr><td>Assignment and compound assignment</td><td><span class="pill direct">Direct reduction</span></td><td>Use right associativity. Lvalue validity is semantic, not a parsing concern.</td></tr>
+          <tr><td>Grouping, calls, subscripts, conditional</td><td><span class="pill marker">Stack markers</span></td><td>Use non-reducible markers that block lower stack reductions until matching <code>)</code>, <code>]</code>, or <code>:</code>.</td></tr>
+          <tr><td>Comma</td><td><span class="pill marker">Context marker</span></td><td>Differentiate the comma operator from a call-argument separator. <code>f(a,b)</code> has two arguments; <code>f((a,b))</code> has one.</td></tr>
+          <tr><td>Member access and postfix increment/decrement</td><td><span class="pill special">Postfix handlers</span></td><td><code>.</code> and <code>-&gt;</code> consume an identifier, not a general right operand. Postfix <code>++</code>/<code>--</code> reduce immediately while remaining in Binary state.</td></tr>
+          <tr><td>Casts and <code>sizeof(type-name)</code></td><td><span class="pill assisted">Type-assisted</span></td><td>At <code>(</code> in Unary state, use declaration-start tokens and the typedef table to distinguish a type name from a grouped expression.</td></tr>
+          <tr><td>Compound literals</td><td><span class="pill assisted">Type + initializer</span></td><td>After <code>(type-name)</code>, an opening <code>{</code> enters the initializer parser and produces a compound-literal operand node.</td></tr>
+          <tr><td>Expression termination</td><td><span class="pill assisted">Caller contract</span></td><td>Stop without consuming caller-owned delimiters. The stop set varies for statements, conditions, arguments, array forms, enumerators, bitfields, and initializers.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="architecture">
+      <div class="section-head"><div class="section-id">06 / TARGET DESIGN</div><h2>One pushdown parser, multiple specialized frame machines</h2></div>
+      <div class="architecture" aria-label="Recommended parser architecture">
+        <div class="arch-node"><small>Input</small><h3>Buffered token cursor</h3><p>Wraps the existing preprocessor, owns lookahead/reprocessing, and exposes typed tokens with source vectors.</p></div>
+        <div class="arch-arrow" aria-hidden="true">→</div>
+        <div class="arch-node hot"><small>Control</small><h3>ParserMachine</h3><p>Runs <code>Vec&lt;ParseFrame&gt;</code>. The top frame consumes, pushes a child, reduces a value, reprocesses lookahead, or recovers.</p></div>
+        <div class="arch-arrow" aria-hidden="true">↔</div>
+        <div class="arch-node"><small>State + output</small><h3>Arenas and scopes</h3><p>Expression, statement, declaration, declarator, list, and error nodes plus a scope-aware typedef/tag/symbol stack.</p></div>
+      </div>
+      <div class="hybrid-note"><strong>“Stack machine for the whole parser” should mean one explicit control stack—not one enormous operator stack.</strong> Expression frames use Double-E’s Unary/Binary reducer. Declarator frames may use a constructor reducer. Keyword-led declarations and statements use phase enums. All of them share the same driver, tokens, values, diagnostics, and recovery protocol.</div>
+
+      <pre><span class="code-violet">enum</span> ParseFrame {
+    TranslationUnit(TranslationUnitFrame),
+    ExternalDeclaration(ExternalDeclarationFrame),
+    Declaration(DeclarationFrame),
+    Declarator(DeclaratorFrame),
+    TypeName(TypeNameFrame),
+    Initializer(InitializerFrame),
+    Statement(StatementFrame),
+    Expression(ExpressionFrame),  <span class="code-mint">// owns Double-E operator + operand stacks</span>
+}
+
+<span class="code-violet">enum</span> ParseAction {
+    Consume,
+    Push(ParseFrame),
+    Reduce(ParseValue),
+    Reprocess,
+    Recover(SynchronizationSet),
+}
+
+<span class="code-violet">while let</span> Some(frame) = machine.frames.last_mut() {
+    <span class="code-violet">match</span> frame.step(machine.tokens.lookahead(), &amp;<span class="code-violet">mut</span> context) {
+        ParseAction::Push(child)   =&gt; machine.frames.push(child),
+        ParseAction::Reduce(value) =&gt; machine.finish_frame(value),
+        action                     =&gt; machine.apply(action),
+    }
+}</pre>
+    </section>
+
+    <section class="section" id="model-work">
+      <div class="section-head"><div class="section-id">07 / BCC-RUST CHANGES</div><h2>The AST and parser contract need repair before the machine lands</h2></div>
+      <div class="gap-grid">
+        <article class="gap"><div class="gap-num">MODEL 01</div><h3>Resolve expression typing later</h3><p><code>Expression.result_type: TypeIndex</code> assumes type information at parse time. Make it optional/unresolved or move types to a semantic side table.</p></article>
+        <article class="gap"><div class="gap-num">MODEL 02</div><h3>Add source spans</h3><p>Store <code>SourceVectors</code> on expression nodes or in a parallel arena. Stack operators need their originating token span for useful errors.</p></article>
+        <article class="gap"><div class="gap-num">MODEL 03</div><h3>Fix argument storage</h3><p><code>Call.arguments: VectorSlice&lt;Expression&gt;</code> cannot safely describe interleaved arena nodes. Add a separate <code>Vec&lt;ExpressionIndex&gt;</code> list arena.</p></article>
+        <article class="gap"><div class="gap-num">MODEL 04</div><h3>Define <code>TypeName</code></h3><p>Casts, compound literals, and <code>sizeof(type)</code> already reference this missing type. Implement a working <code>parse_type_name</code> helper.</p></article>
+        <article class="gap"><div class="gap-num">MODEL 05</div><h3>Add member access</h3><p>The current expression model has no explicit <code>.</code> or <code>-&gt;</code> node/operator. Add member and indirect-member variants with an identifier field.</p></article>
+        <article class="gap"><div class="gap-num">MODEL 06</div><h3>Make typedef lookup real</h3><p>The parser owns a typedef map but never inserts into it. Cast/grouping disambiguation depends on correct scope-aware typedef binding.</p></article>
+        <article class="gap"><div class="gap-num">STACK 07</div><h3>Define the frame protocol</h3><p>Every frame must express consume, push-child, reduce, reprocess, and recover actions without holding invalid borrows across driver iterations.</p></article>
+        <article class="gap"><div class="gap-num">STACK 08</div><h3>Buffer the token cursor</h3><p>Replace ad hoc one-token pending state with explicit lookahead and reprocessing owned by the machine. Frames must never secretly consume caller delimiters.</p></article>
+        <article class="gap"><div class="gap-num">STACK 09</div><h3>Type the reduction values</h3><p><code>ParseValue</code> must carry expression, statement, declaration, declarator, type-name, initializer, and list results back to parent frames safely.</p></article>
+        <article class="gap"><div class="gap-num">RECOVERY 10</div><h3>Add error nodes and sync sets</h3><p>Synthetic nodes plus per-frame delimiter/keyword synchronization let the machine unwind or resume without recursive error propagation.</p></article>
+        <article class="gap"><div class="gap-num">SCOPE 11</div><h3>Make scope transitions explicit</h3><p>Compound/function frames push and pop scopes. Typedef-name lookup must be correct before choosing declaration versus expression frames.</p></article>
+        <article class="gap"><div class="gap-num">BUILD 12</div><h3>Restore the parser build</h3><p>The current module has 14 errors unrelated to the new machine. Repair its missing arenas, result types, diagnostics, and incomplete return paths first.</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="prototype-results">
+      <div class="section-head"><div class="section-id">08 / VALIDATION</div><h2>Two implementations prove the reducer—not the whole-parser frame machine</h2></div>
+      <div class="test-results">
+        <div class="test pass"><code>PreprocessorExpressionParser</code><strong>Integrated</strong><p>Already consumes project tokens and emits structured diagnostics.</p></div>
+        <div class="test fail"><code>Ternary + Else</code><strong>Needs redesign</strong><p>Source structure appears to share the prototype’s nested-ternary defect.</p></div>
+        <div class="test pass"><code>exp(2, 3)</code><strong>Passes → 8</strong><p>Basic call marker and argument counting work.</p></div>
+        <div class="test pass"><code>1 * -2</code><strong>Passes → −2</strong><p>Unary/binary interpretation works in a common mixed case.</p></div>
+        <div class="test fail"><code>1 ? 0 ? 2 : 3 : 4</code><strong>Wrong → 0</strong><p>C right-associative grouping should evaluate to 3.</p></div>
+        <div class="test fail"><code>abs((1, 2))</code><strong>Panics</strong><p>Grouped comma is mistaken for two function arguments.</p></div>
+        <div class="test fail"><code>1 +</code><strong>Panics</strong><p>A missing operand reaches <code>unwrap()</code>.</p></div>
+        <div class="test fail"><code>1 &lt; 2</code><strong>Panics</strong><p>The prototype tokenizer does not cover relational operators.</p></div>
+        <div class="test pass"><code>cargo test</code><strong>23 passed</strong><p>The repository’s intended examples all succeed.</p></div>
+        <div class="test fail"><code>cargo clippy -D warnings</code><strong>1 error</strong><p>A lifetime syntax warning is promoted to an error.</p></div>
+      </div>
+      <div class="two-col">
+        <article class="card"><h3>What the two implementations demonstrate</h3><ul class="list good"><li>A compact two-state control loop in Rust.</li><li>Operator precedence and left/right associativity mechanics.</li><li>Grouping parentheses without recursive expression descent.</li><li>Integration with bcc-rust tokens, source vectors, signedness, and diagnostics.</li><li>Basic conditional, call-marker, and fixed-arity bookkeeping.</li><li>A concrete base for extracting a reusable reduction kernel.</li></ul></article>
+        <article class="card"><h3>What still needs to be demonstrated</h3><ul class="list bad"><li>AST construction and source-range preservation.</li><li>A safe <code>ParseFrame</code> push/reduce/resume protocol.</li><li>Complete C operators, correct nested ternary, and comma/call interactions.</li><li>Non-recursive declarations, declarators, type names, initializers, and statements.</li><li>Scope-aware declaration-versus-expression selection.</li><li>Whole-parser recovery without frame leaks, invalid reductions, or panics.</li></ul></article>
+      </div>
+    </section>
+
+    <section class="section" id="risks">
+      <div class="section-head"><div class="section-id">09 / RISKS</div><h2>The hard parts move from recursion into explicit frame design</h2></div>
+      <table class="risk-table">
+        <tbody>
+          <tr><td>One giant Double-E machine</td><td><span class="risk high">High</span></td><td>Forcing keywords, declarations, and statements into Unary/Binary operator semantics would create opaque special cases. Keep one driver but distinct frame state machines.</td></tr>
+          <tr><td>Frame-state explosion</td><td><span class="risk high">High</span></td><td>Every recursive function becomes phases plus stored partial results. Generate a grammar/frame inventory first and keep phase enums local to each production family.</td></tr>
+          <tr><td>Type-name ambiguity</td><td><span class="risk high">High</span></td><td><code>(T) x</code> is a cast only when <code>T</code> is a type name in the current scope. This requires working typedef binding before expression parsing can be correct.</td></tr>
+          <tr><td>Delimiter/comma context</td><td><span class="risk high">High</span></td><td>Arguments, grouped comma expressions, subscripts, conditional middles, declarations, initializers, and caller stop tokens all reuse punctuation differently.</td></tr>
+          <tr><td>Error recovery</td><td><span class="risk high">High</span></td><td>A frame machine must preserve control-stack invariants while synchronizing. Each frame needs explicit owned delimiters, expected child values, and a legal unwind boundary.</td></tr>
+          <tr><td>AST contract</td><td><span class="risk high">High</span></td><td>The current expression model is incomplete and assumes result types too early. Integrating first would lock in awkward representation choices.</td></tr>
+          <tr><td>Conditional associativity</td><td><span class="risk medium">Medium</span></td><td>The prototype’s nested-ternary failure shows that <code>?</code> must be a blocking marker and <code>:</code> must convert it into a separate right-associative ternary operator.</td></tr>
+          <tr><td>Rust borrowing</td><td><span class="risk medium">Medium</span></td><td>A frame cannot remain mutably borrowed while pushing another frame or mutating arenas. Returning a small owned <code>ParseAction</code> from each step avoids self-referential control flow.</td></tr>
+          <tr><td>Performance</td><td><span class="risk low">Low</span></td><td>The machine remains linear in consumed tokens with heap-backed memory proportional to grammar nesting and operator depth—well aligned with the project’s arenas.</td></tr>
+          <tr><td>Reference-code license</td><td><span class="risk medium">Medium</span></td><td>The author’s fuller Draconum source explicitly grants no permission to use, modify, or share it. Do not copy that code. The local Rust repository also has no license file; clarify provenance before redistribution.</td></tr>
+          <tr><td>Reference completeness</td><td><span class="risk medium">Medium</span></td><td>The article describes broad C support, but the published C# reference still throws <code>NotImplementedException</code> for <code>.</code> and <code>-&gt;</code>. Treat it as guidance, not a complete oracle.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="plan">
+      <div class="section-head"><div class="section-id">10 / DELIVERY PLAN</div><h2>Replace recursion incrementally, with a runnable slice at every phase</h2></div>
+      <ol class="plan">
+        <li><div><strong>Repair the parser model and build</strong><p>Define <code>TypeName</code>, add missing arenas/error variants, reconcile expression indexes, finish current return paths, and decide unresolved-type/source-span representation.</p></div><span class="duration">2–4 days</span><span class="exit">cargo check green</span></li>
+        <li><div><strong>Specify the frame inventory and driver contract</strong><p>Map each grammar entry point to a <code>ParseFrame</code>, define who owns delimiters, and document the <code>Consume</code>, <code>Push</code>, <code>Reduce</code>, <code>Reprocess</code>, and <code>Recover</code> protocol.</p></div><span class="duration">3–5 days</span><span class="exit">frame map reviewed</span></li>
+        <li><div><strong>Extract and harden the shared precedence reducer</strong><p>Turn the preprocessor evaluator’s proven two-stack mechanism into a reusable component with dialect-specific operators and values. Fix nested conditional reduction and add regression tests before sharing it.</p></div><span class="duration">4–7 days</span><span class="exit">PP tests green</span></li>
+        <li><div><strong>Build the non-recursive parser driver</strong><p>Implement the buffered token cursor, explicit control stack, typed return values, arena handles, and recovery skeleton. Exercise nested push/reduce/reprocess transitions without using the Rust call stack.</p></div><span class="duration">5–8 days</span><span class="exit">nested frame demo</span></li>
+        <li><div><strong>Add the AST-producing expression frame</strong><p>Implement the complete C operator table, postfix constructs, calls, comma roles, casts, <code>sizeof</code>, conditional expressions, compound literals, and caller-defined stop sets.</p></div><span class="duration">10–18 days</span><span class="exit">operator matrix green</span></li>
+        <li><div><strong>Convert declarations and declarators to frames</strong><p>Translate the existing declaration logic into explicit phases for specifiers, pointers, direct declarators, suffixes, type names, and initializers. A small Double-E-style constructor reducer may simplify declarators, but keyword-led decisions remain frame states.</p></div><span class="duration">12–20 days</span><span class="exit">file-scope declarations parse</span></li>
+        <li><div><strong>Convert statements, functions, and translation units</strong><p>Add compound, selection, iteration, jump, labeled, and expression-statement frames; then connect function definitions and translation-unit sequencing with explicit scope entry and exit.</p></div><span class="duration">12–20 days</span><span class="exit">functions parse end-to-end</span></li>
+        <li><div><strong>Harden recovery and conformance</strong><p>Add synchronization sets, source-rich diagnostics, error nodes, frame-stack traces, differential/golden tests, deep-nesting stress cases, and fuzz/property tests across both preprocessor and language parsing.</p></div><span class="duration">10–15 days</span><span class="exit">no parser panics</span></li>
+      </ol>
+      <div class="total"><strong>Whole syntax parser: approximately 58–97 focused engineer-days (12–20 weeks)</strong><span>One experienced Rust/compiler developer<br>A useful expression-and-declaration subset should arrive earlier; semantic analysis and backend work are excluded</span></div>
+    </section>
+
+    <section class="section" id="acceptance">
+      <div class="section-head"><div class="section-id">11 / ACCEPTANCE</div><h2>Minimum evidence before calling the stack-machine parser complete</h2></div>
+      <div class="acceptance">
+        <div class="acceptance-item"><strong>The grammar uses no recursive parser calls</strong><p>Every nested construct must be represented by a heap-backed frame. Deeply nested valid and invalid inputs must not overflow the Rust call stack.</p></div>
+        <div class="acceptance-item"><strong>Frame ownership is deterministic</strong><p>Trace tests must show which frame consumes each token, which delimiter ends it, and which typed value it returns to its parent.</p></div>
+        <div class="acceptance-item"><strong>Every C99 operator has a golden AST test</strong><p>Include equal-precedence and right-associative chains, not just isolated operators.</p></div>
+        <div class="acceptance-item"><strong>Nested ternary works in both branches</strong><p>Cover <code>a ? b ? c : d : e</code> and <code>a ? b : c ? d : e</code>.</p></div>
+        <div class="acceptance-item"><strong>Comma roles are distinguishable</strong><p>Prove <code>f(a,b)</code>, <code>f((a,b))</code>, and nested mixtures produce different ASTs/argument counts.</p></div>
+        <div class="acceptance-item"><strong>Postfix chains compose</strong><p>Cover shapes such as <code>(*fp)(x)</code>, <code>a[i].b-&gt;c++</code>, and calls returning callable expressions.</p></div>
+        <div class="acceptance-item"><strong>Declaration/expression ambiguity is scope-correct</strong><p>Test typedef shadowing and multi-token type names in declarations, casts, <code>sizeof</code>, compound literals, and block-item starts.</p></div>
+        <div class="acceptance-item"><strong>Declarations and statements compose end-to-end</strong><p>Parse translation units containing functions, nested blocks, labels, loops, conditionals, initializers, and complex declarators without recursive control flow.</p></div>
+        <div class="acceptance-item"><strong>Caller delimiters remain unconsumed</strong><p>Verify semicolon, closing paren/bracket/brace, colon, and context-sensitive commas at top level and nested levels.</p></div>
+        <div class="acceptance-item"><strong>Malformed input never panics</strong><p>Missing operands/operators/delimiters and invalid frame transitions must emit bounded diagnostics, synchronize, and unwind or reduce to an error node.</p></div>
+        <div class="acceptance-item"><strong>Both expression dialects share tested machinery</strong><p>Preprocessor evaluation and AST expression parsing should use the same precedence-reduction core while retaining their distinct values, diagnostics, and legal operators.</p></div>
+        <div class="acceptance-item"><strong>Memory follows input nesting, not process stack depth</strong><p>Stress tests should confirm bounded, inspectable heap growth proportional to active frames, operators, and operands.</p></div>
+      </div>
+    </section>
+
+    <section class="section" id="sources">
+      <div class="section-head"><div class="section-id">12 / SOURCES</div><h2>Evidence used for this assessment</h2></div>
+      <div class="sources">
+        <article class="source"><small>Primary description</small><strong><a href="https://erikeidt.github.io/The-Double-E-Method.html">The Double-E Infix Expression Parsing Method</a></strong><p>Algorithm states, stacks, reductions, termination contract, function-call/comma behavior, and composition with a statement parser.</p></article>
+        <article class="source"><small>Local implementation</small><strong><code>C:\Users\benbw\Documents\GitRepo\double-e-parsing</code></strong><p>Rust evaluator prototype, source audit, Git history, 23-test run, strict Clippy run, and targeted edge-case executions.</p></article>
+        <article class="source"><small>In-tree implementation</small><strong><code>src/translation_phases/preprocessing.rs</code></strong><p>The preprocessor expression evaluator already uses unary/binary states plus operator and operand stacks. Its operator metadata, reduction loop, source tracking, and error integration provide the strongest starting point for a shared reducer.</p></article>
+        <article class="source"><small>Author reference implementation</small><strong><a href="https://github.com/erikeidt/Draconum/blob/master/src/3.%20Expression%20Parser/Expression%20Parser%20Library/ExpressionParser.cs">Draconum ExpressionParser.cs</a></strong><p>Fuller operator handling, blocking markers, terminator behavior, comma classification, and published implementation/license limitations.</p></article>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div class="section-id">METHOD</div>
+      <p>Generated 21 August 2026 and revised after the whole-parser stack-machine design discussion. Evidence includes bcc-rust at commit <code>4797d18</code>, its in-tree preprocessor expression evaluator, the local double-e-parsing repository at <code>68b7093</code>, the algorithm author’s article, and the author’s reference source. Effort ranges cover a production-oriented, non-recursive C99 syntax parser; they exclude semantic analysis and backend work and are not schedule commitments.</p>
+    </footer>
+  </main>
+</body>
+</html>
