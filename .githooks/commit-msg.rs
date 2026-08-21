@@ -60,7 +60,7 @@ fn refresh_and_run_if_needed(message_path: &std::ffi::OsStr) -> Result<Option<Ex
             .map_err(|error| format!("could not create {}: {error}", hooks_path.display()))?;
         let status = Command::new("rustc.exe")
             .current_dir(&root)
-            .args(["--edition=2021", ".githooks/commit-msg.rs", "-o"])
+            .args(["--edition=2024", ".githooks/commit-msg.rs", "-o"])
             .arg(&hook)
             .status()
             .map_err(|error| format!("could not compile the Windows hook: {error}"))?;

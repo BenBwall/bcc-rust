@@ -24,11 +24,6 @@ use std::{
 use chrono::Local;
 
 use super::{
-    preprocessor_tokenizer::{
-        PreprocessorToken,
-        PreprocessorTokenType,
-        PreprocessorTokenizer,
-    },
     Context,
     ErrorSeverity,
     GetPosition,
@@ -42,26 +37,30 @@ use super::{
     StrExt,
     TokenString,
     TranslationPhase,
+    preprocessor_tokenizer::{
+        PreprocessorToken,
+        PreprocessorTokenType,
+        PreprocessorTokenizer,
+    },
 };
 use crate::{
     float_parsing::{
+        LongDouble,
+        ParseFloatError,
         long_double_to_operand,
         string_to_double,
         string_to_float,
         string_to_long_double,
-        LongDouble,
-        ParseFloatError,
     },
     util::{
+        HashMap,
+        HashSet,
         read_to_string_lossy,
         shared::{
             SharedString,
             SharedVec,
         },
         string_cache::StringCacheId,
-        unlikely,
-        HashMap,
-        HashSet,
     },
 };
 
@@ -2241,7 +2240,8 @@ impl Preprocessor {
         context: &mut Context,
     ) -> Option<PreprocessorToken> {
         'base: loop {
-            if unlikely(self.tokenizer_stack.is_empty()) {
+            if self.tokenizer_stack.is_empty() {
+                std::hint::cold_path();
                 break 'base None;
             }
             match self.tokenizer.next_item(context) {
@@ -2532,11 +2532,11 @@ impl Preprocessor {
                     } else {
                         false
                     };
-                    if next_is_end || token.kind == PreprocessorTokenType::Placeholder {
-                        if let Some(x @ HashHash::Empty) = self.hash_hash_stack.last_mut() {
-                            *x = HashHash::Lhs(if let Some(new) = new { new } else { token });
-                            continue 'base;
-                        }
+                    if (next_is_end || token.kind == PreprocessorTokenType::Placeholder)
+                        && let Some(x @ HashHash::Empty) = self.hash_hash_stack.last_mut()
+                    {
+                        *x = HashHash::Lhs(if let Some(new) = new { new } else { token });
+                        continue 'base;
                     }
                     if let Some(new) = new {
                         token = new;
@@ -3005,18 +3005,18 @@ impl Preprocessor {
         context: &mut Context,
         token: PreprocessorToken,
     ) -> Option<TokenizerFrame> {
-        if let Some(arguments) = self.get_arguments(context) {
-            if let Some(arg) = arguments.get(&token.contents) {
-                let frame = TokenizerFrame {
-                    frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
-                        argument:            Box::new(arg.clone()),
-                        paren_depth:         1,
-                        has_generated_token: false,
-                    },
-                    tokenizer:  arg.tokenizer.clone(),
-                };
-                return Some(frame);
-            }
+        if let Some(arguments) = self.get_arguments(context)
+            && let Some(arg) = arguments.get(&token.contents)
+        {
+            let frame = TokenizerFrame {
+                frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
+                    argument:            Box::new(arg.clone()),
+                    paren_depth:         1,
+                    has_generated_token: false,
+                },
+                tokenizer:  arg.tokenizer.clone(),
+            };
+            return Some(frame);
         }
 
         None
@@ -5040,12 +5040,11 @@ impl Preprocessor {
                 return None;
             }
 
-            if is_system_header {
-                if let Some(header) =
+            if is_system_header
+                && let Some(header) =
                     Self::search_for_header_in(path, &self.system_include_directories)
-                {
-                    break 'ret header;
-                }
+            {
+                break 'ret header;
             }
             if let Some(header) = Self::search_for_header_in(path, &self.quote_include_directories)
             {
@@ -5106,8 +5105,12 @@ impl Preprocessor {
         context.set_is_tokenizing_include_string(false);
         let header_source_index = match include_string.kind {
             | PreprocessorTokenType::IncludeString => {
-                let contents = context.string_cache.at(include_string.contents);
-                let contents = &contents[1..contents.len() - 1].to_token_string();
+                let contents = context
+                    .string_cache
+                    .at(include_string.contents)
+                    .strip_circumfix('"', '"')
+                    .expect("Include strings must be enclosed in double quotes.")
+                    .to_token_string();
                 let path = Path::new(contents.as_str());
                 if self
                     .expect_token_from_previous_phase::<true>(
@@ -5130,8 +5133,12 @@ impl Preprocessor {
                 self.find_header_from_path(context, include_string, path, false)
             },
             | PreprocessorTokenType::AngleBracketString => {
-                let contents = context.string_cache.at(include_string.contents);
-                let contents = &contents[1..contents.len() - 1].to_token_string();
+                let contents = context
+                    .string_cache
+                    .at(include_string.contents)
+                    .strip_circumfix('<', '>')
+                    .expect("Angle-bracket strings must be enclosed in angle brackets.")
+                    .to_token_string();
                 let path = Path::new(contents.as_str());
                 if self
                     .expect_token_from_previous_phase::<true>(
@@ -5388,14 +5395,15 @@ impl Preprocessor {
             loop {
                 let old_next = old_tokenizer.next_item(context);
                 let new_next = new_tokenizer.next_item(context);
-                if let Some(t) = new_next.as_ref() {
-                    if t.kind == PreprocessorTokenType::HashHash && last.is_none() {
-                        context.preprocessor_error(PreprocessorError {
-                            error_type:
-                                PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator,
-                            source_vectors: t.source_vectors,
-                        });
-                    }
+                if let Some(t) = new_next.as_ref()
+                    && t.kind == PreprocessorTokenType::HashHash
+                    && last.is_none()
+                {
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator,
+                        source_vectors: t.source_vectors,
+                    });
                 }
                 if old_next != new_next && !error_has_been_generated {
                     context.preprocessor_error(PreprocessorError {

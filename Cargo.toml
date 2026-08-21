@@ -1,14 +1,14 @@
 [package]
 name = "bcc-rust"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "C99 Compliant C Compiler"
 license-file = "LICENSE"
 readme = "README.md"
 keywords = ["compiler", "C", "C-compiler"]
 categories = ["command-line-utilities", "development-tools", "compilers"]
 repository = "https://www.github.com/bwallker/bcc-rust"
-rust-version = "1.82.0"
+rust-version = "1.98.0"
 
 [features]
 benchmarking-internals = []
@@ -108,7 +108,7 @@ proptest = "1.5.0"
 rstest = "0.23.0"
 
 [build-dependencies]
-bindgen = "0.70.1"
+bindgen = "0.72.1"
 cc = "1.1.22"
 
 [[bench]]

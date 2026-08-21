@@ -20,7 +20,7 @@ $hooksPath = Join-Path $gitCommonDir $relativeHooksPath
 
 New-Item -ItemType Directory -Force -Path $hooksPath | Out-Null
 $hook = Join-Path $hooksPath "commit-msg.exe"
-rustc --edition=2021 $source -o $hook
+rustc --edition=2024 $source -o $hook
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

@@ -1,4 +1,5 @@
 use std::{
+    assert_matches,
     fmt::{
         Debug,
         Display,
@@ -9,15 +10,6 @@ use std::{
 };
 
 use super::{
-    preprocessing::{
-        CharacterTokenType,
-        FloatTokenType,
-        IntegerTokenType,
-        KeywordTokenType,
-        Preprocessor,
-        Token,
-        TokenType,
-    },
     Context,
     ErrorSeverity,
     GetPosition,
@@ -29,6 +21,15 @@ use super::{
     SourcePosition,
     SourceVectors,
     TranslationPhase,
+    preprocessing::{
+        CharacterTokenType,
+        FloatTokenType,
+        IntegerTokenType,
+        KeywordTokenType,
+        Preprocessor,
+        Token,
+        TokenType,
+    },
 };
 #[expect(
     unused_imports,
@@ -903,16 +904,18 @@ impl Parser {
             }
             return StructOrUnionSpecifierIndex(u32::MAX);
         };
+        if next.kind != TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+            && let Some(v) = name
+        {
+            self.struct_or_union_specifiers
+                .push(StructOrUnionSpecifier {
+                    struct_or_union:         StructOrUnion::Struct,
+                    identifier:              Some(v),
+                    struct_declaration_list: None,
+                });
+            return StructOrUnionSpecifierIndex(start_index);
+        }
         if next.kind != TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) {
-            if let Some(v) = name {
-                self.struct_or_union_specifiers
-                    .push(StructOrUnionSpecifier {
-                        struct_or_union:         StructOrUnion::Struct,
-                        identifier:              Some(v),
-                        struct_declaration_list: None,
-                    });
-                return StructOrUnionSpecifierIndex(start_index);
-            }
             return StructOrUnionSpecifierIndex(u32::MAX);
         }
         // Parse struct-declaration-list
@@ -936,8 +939,7 @@ impl Parser {
             let mut type_qualifiers = TypeQualifiers(0);
             let mut type_specifiers = TypeSpecifiers::Empty;
             // Parse specifiers-qualifier-list:
-            #[allow(unused_labels)]
-            'struct_qualifier_list: loop {
+            loop {
                 let Some(token) = self.next_token(context) else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
@@ -997,8 +999,7 @@ impl Parser {
             'struct_declarator_list: loop {
                 let declarator = self.parse_declarator::<IS_NOT_ABSTRACT_DECLARATOR>(context);
                 let mut bitfield_width = None;
-                #[allow(unused_labels)]
-                'bitfield: loop {
+                loop {
                     let Some(maybe_colon_or_comma) = self.next_token(context) else {
                         let source_vectors = context.create_source_vectors(
                             self.position(context),
@@ -1096,10 +1097,7 @@ impl Parser {
         context: &mut Context,
         token: Token,
     ) -> EnumSpecifierIndex {
-        assert!(matches!(
-            token.kind,
-            TokenType::Keyword(KeywordTokenType::Enum)
-        ),);
+        assert_matches!(token.kind, TokenType::Keyword(KeywordTokenType::Enum));
         let maybe_name =
             self.parse_maybe_identifier(context, "while parsing enum-declarator", |_| None);
         let Some(maybe_opening_curly_brace) = self.next_token(context) else {
