@@ -59,6 +59,7 @@ That architecture is agreed direction, not implemented behavior. The in-tree pre
 
 ## Further reading
 
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — commit-message format and hook setup.
 - [`CONTEXT.md`](CONTEXT.md) — canonical compiler-domain vocabulary, including clearly marked proposed parser terms.
 - [`.agents/AGENTS.md`](.agents/AGENTS.md) — compact operational guidance for coding agents; `.claude/CLAUDE.md` imports the same file.
 - [`project-status-report.html`](project-status-report.html) — point-in-time repository assessment.
