@@ -32,7 +32,7 @@ where
     T: ?Sized,
 {
     fn drop(&mut self) {
-        self.ref_cnt().set(self.ref_cnt().get() - 1);
+        self.ref_cnt().update(|count| count - 1);
         if self.ref_cnt().get() == 0 {
             #[cold]
             #[inline(never)]
@@ -65,7 +65,7 @@ where
             abort();
         }
 
-        self.ref_cnt().set(self.ref_cnt().get() + 1);
+        _ = self.ref_cnt().update(|count| count + 1);
 
         Self {
             ref_count: self.ref_count,

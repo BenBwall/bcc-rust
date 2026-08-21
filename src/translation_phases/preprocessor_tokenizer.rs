@@ -1,7 +1,6 @@
 use std::fmt::Display;
 
 use super::{
-    initial_processing::InitialProcessor,
     Context,
     ErrorSeverity,
     GetPosition,
@@ -14,6 +13,7 @@ use super::{
     SourceVector,
     SourceVectors,
     TranslationPhase,
+    initial_processing::InitialProcessor,
 };
 use crate::util::{
     shared::SharedString,

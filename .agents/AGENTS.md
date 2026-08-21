@@ -15,7 +15,9 @@ cargo clippy --all-targets -- -D warnings
 git diff --check
 ```
 
-`Cargo.toml` requires Rust 1.82.0 or newer. `build.rs` also requires a native C compiler and `libclang`; set `LIBCLANG_PATH` when discovery fails.
+`rust-toolchain.toml` pins Rust 1.98.0, which is also the minimum version in
+`Cargo.toml`. `build.rs` additionally requires a native C compiler and
+`libclang`; set `LIBCLANG_PATH` when discovery fails.
 
 ## Context pointers
 
