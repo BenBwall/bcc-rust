@@ -1443,7 +1443,10 @@ impl Parser {
 
         while let Some(token) = self.cursor.current(context) {
             let at_top_level = parentheses == 0 && brackets == 0 && braces == 0;
-            if at_top_level && set.kind.stops_before(token.kind) {
+            let at_owning_array_bracket = matches!(set.kind, SynchronizationKind::ArrayBound)
+                && brackets == 0
+                && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket);
+            if at_owning_array_bracket || at_top_level && set.kind.stops_before(token.kind) {
                 break;
             }
 
@@ -2118,10 +2121,9 @@ impl DeclarationSpecifiersFrame {
                     ),
                     Some(token),
                 );
-            } else {
-                self.specifiers.storage_class = storage_class;
-                self.storage_seen = true;
             }
+            self.specifiers.storage_class = storage_class;
+            self.storage_seen = true;
             parser.merge_source(context, &mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
@@ -4186,6 +4188,40 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_storage_class_keeps_the_last_class_for_typedef_publication() {
+        let parsed = parse("extern typedef int T;\nT x;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            declaration(&parsed, 0).declaration_specifiers.storage_class,
+            StorageClass::Typedef
+        );
+        assert!(
+            parser_errors(&parsed)
+                .any(|error| matches!(error, ParserErrorType::StorageClassRedefinition(..)))
+        );
+        let t = parsed
+            .context
+            .string_cache
+            .get_id_from_string("T")
+            .expect("interned T");
+        assert_eq!(
+            declaration(&parsed, 1)
+                .declaration_specifiers
+                .type_specifiers,
+            TypeSpecifiers::TypedefName(Identifier::new(t))
+        );
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("x")
+        );
+    }
+
+    #[test]
     fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
         let parsed = parse(
             "int a[];\nint matrix[][];\nint f(int, const char *, ...);\nint old(a,b);\nint \
@@ -4439,6 +4475,28 @@ mod tests {
                 .and_then(|declarator| identifier_name(&parsed, declarator))
                 .as_deref(),
             Some("y")
+        );
+    }
+
+    #[test]
+    fn malformed_array_bound_recovery_stops_at_the_owning_bracket() {
+        let parsed = parse("int a[(1];\nint after;\n");
+
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(matches!(
+            parsed.items.get(1),
+            Some(ExternalDeclaration::Declaration(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
         );
     }
 
