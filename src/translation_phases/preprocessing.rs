@@ -241,6 +241,15 @@ mod tests {
         assert_eq!(identifiers, ["SHORT_CIRCUIT_RESULT_1"]);
         assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
     }
+
+    #[test]
+    fn comma_in_unevaluated_conditional_middle_preserves_the_question_marker() {
+        let (identifiers, errors) =
+            preprocess_with_configuration("#if 0 ? 2, 3 : 0\nUNREACHABLE\n#endif\n", strict_c99());
+
+        assert!(identifiers.is_empty());
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -5011,7 +5020,12 @@ impl Preprocessor {
                     BINARY) => {
                         let token_op = self.map_operator(context, token);
                         while let Some(op) = self.expression_parser.operator_stack.pop() {
-                            if op.has_precedence_over(token_op) {
+                            if op == PreprocessorExpressionOperator::QuestionMark
+                                && token_op == PreprocessorExpressionOperator::Comma
+                            {
+                                self.expression_parser.operator_stack.push(op);
+                                break;
+                            } else if op.has_precedence_over(token_op) {
                                 self.handle_expression_operator(context, op);
                             } else {
                                 self.expression_parser.operator_stack.push(op);
