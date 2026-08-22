@@ -15,14 +15,21 @@
 
 use criterion::{
     Criterion,
+    Throughput,
     criterion_group,
     criterion_main,
 };
 
 fn bench(c: &mut Criterion) {
-    _ = c.bench_function("Preprocess one million", |b| {
+    let mut group = c.benchmark_group("Preprocessor");
+    group.throughput(Throughput::ElementsAndBytes {
+        elements: 1_000_000,
+        bytes:    bcc_rust::one_million_input_bytes(),
+    });
+    _ = group.bench_function("one million lines", |b| {
         b.iter(bcc_rust::preprocess_one_million);
     });
+    group.finish();
 }
 
 criterion_group!(benches, bench);
