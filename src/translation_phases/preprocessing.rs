@@ -175,6 +175,22 @@ mod tests {
     }
 
     #[test]
+    fn trailing_unmatched_colon_reports_a_diagnostic_without_panicking() {
+        let (_, errors) = preprocess("#if 1 :\nRECOVERED\n#endif\n");
+
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
+                    ..
+                })
+            )),
+            "diagnostics: {errors:#?}"
+        );
+    }
+
+    #[test]
     fn default_extension_mode_evaluates_comma_to_rhs_without_a_diagnostic() {
         let (identifiers, errors) = preprocess("#if (1, 0)\nUNREACHABLE\n#endif\n");
 
@@ -4998,8 +5014,9 @@ impl Preprocessor {
                                 error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
                                 source_vectors: token.source_vectors,
                             });
+                        } else {
+                            self.expression_parser.state = UNARY;
                         }
-                        self.expression_parser.state = UNARY;
                     },
                     (
                         | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
