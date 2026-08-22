@@ -291,8 +291,8 @@
       </div>
       <div class="metrics" role="list" aria-label="Investigation metrics">
         <div class="metric" role="listitem"><span class="metric-value">1</span><span class="metric-label">Double-E evaluator already in bcc-rust</span></div>
-        <div class="metric" role="listitem"><span class="metric-value">25</span><span class="metric-label">Preprocessor expression operator variants</span></div>
-        <div class="metric" role="listitem"><span class="metric-value">23/23</span><span class="metric-label">Local prototype tests passing</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">26</span><span class="metric-label">Preprocessor expression operator variants</span></div>
+        <div class="metric" role="listitem"><span class="metric-value">31/31</span><span class="metric-label">Local prototype tests passing</span></div>
         <div class="metric" role="listitem"><span class="metric-value">2 + 2</span><span class="metric-label">States plus stacks in each Double-E reducer</span></div>
         <div class="metric" role="listitem"><span class="metric-value">0</span><span class="metric-label">Target recursive parser calls</span></div>
         <div class="metric" role="listitem"><span class="metric-value">O(n)</span><span class="metric-label">Expected parsing time in consumed tokens</span></div>
@@ -339,10 +339,12 @@
           <h3>This is not just a resemblance</h3>
           <p>bcc-rust’s <code>PreprocessorExpressionParser</code> contains the defining structure directly: <code>Unary</code>/<code>Binary</code> states, precedence and associativity, separate operator and operand stacks, and a reduction loop over preprocessor tokens.</p>
           <ul class="list good">
-            <li>Twenty-five operator/marker variants cover unary, arithmetic, shift, relational, equality, bitwise, logical, ternary, and grouping forms.</li>
+            <li>Twenty-six operator/marker variants cover unary, arithmetic, shift, relational, equality, bitwise, logical, ternary, comma, and grouping forms.</li>
             <li>The operand stack preserves signed versus unsigned integer behavior.</li>
             <li>The evaluator is already connected to <code>Context</code>, source vectors, token conversion, and structured diagnostics.</li>
             <li>State and stacks are reset and reused between <code>#if</code>/<code>#elif</code> expressions.</li>
+            <li>A compact typed configuration selects C99 plus an allow/warn/deny extension policy; comma diagnostics use operand liveness so short-circuited subexpressions remain unevaluated.</li>
+            <li>The outer preprocessing adapter yields <code>Result&lt;Token, TranslationError&gt;</code>, preserving source provenance while diagnostics bubble to the caller; only the executable boundary renders them.</li>
           </ul>
           <div class="evidence-path">src/translation_phases/preprocessing.rs<br>state: 158 · precedence: 203 · stacks: 267 · evaluator loop: 4524</div>
         </article>
@@ -460,19 +462,19 @@
       <div class="section-head"><div class="section-id">08 / VALIDATION</div><h2>Two implementations prove the reducer—not the whole-parser frame machine</h2></div>
       <div class="test-results">
         <div class="test pass"><code>PreprocessorExpressionParser</code><strong>Integrated</strong><p>Already consumes project tokens and emits structured diagnostics.</p></div>
-        <div class="test fail"><code>Ternary + Else</code><strong>Needs redesign</strong><p>Source structure appears to share the prototype’s nested-ternary defect.</p></div>
+        <div class="test pass"><code>QuestionMark + Conditional</code><strong>Fixed</strong><p>Colon converts the nearest unmatched question marker without crossing a grouping boundary.</p></div>
         <div class="test pass"><code>exp(2, 3)</code><strong>Passes → 8</strong><p>Basic call marker and argument counting work.</p></div>
         <div class="test pass"><code>1 * -2</code><strong>Passes → −2</strong><p>Unary/binary interpretation works in a common mixed case.</p></div>
-        <div class="test fail"><code>1 ? 0 ? 2 : 3 : 4</code><strong>Wrong → 0</strong><p>C right-associative grouping should evaluate to 3.</p></div>
-        <div class="test fail"><code>abs((1, 2))</code><strong>Panics</strong><p>Grouped comma is mistaken for two function arguments.</p></div>
+        <div class="test pass"><code>1 ? 0 ? 2 : 3 : 4</code><strong>Passes → 3</strong><p>The nearest-marker pairing model handles the nested middle operand.</p></div>
+        <div class="test pass"><code>max((1, 2), 3)</code><strong>Rejected intentionally</strong><p>The demo keeps a smaller language: call-separator commas work, while grouped comma operators report a distinct unsupported-language panic.</p></div>
         <div class="test fail"><code>1 +</code><strong>Panics</strong><p>A missing operand reaches <code>unwrap()</code>.</p></div>
         <div class="test fail"><code>1 &lt; 2</code><strong>Panics</strong><p>The prototype tokenizer does not cover relational operators.</p></div>
-        <div class="test pass"><code>cargo test</code><strong>23 passed</strong><p>The repository’s intended examples all succeed.</p></div>
+        <div class="test pass"><code>cargo test</code><strong>31 passed</strong><p>Ternary, calls, deliberate comma rejection, arithmetic, unary, and tokenizer examples all succeed.</p></div>
         <div class="test fail"><code>cargo clippy -D warnings</code><strong>1 error</strong><p>A lifetime syntax warning is promoted to an error.</p></div>
       </div>
       <div class="two-col">
         <article class="card"><h3>What the two implementations demonstrate</h3><ul class="list good"><li>A compact two-state control loop in Rust.</li><li>Operator precedence and left/right associativity mechanics.</li><li>Grouping parentheses without recursive expression descent.</li><li>Integration with bcc-rust tokens, source vectors, signedness, and diagnostics.</li><li>Basic conditional, call-marker, and fixed-arity bookkeeping.</li><li>A concrete base for extracting a reusable reduction kernel.</li></ul></article>
-        <article class="card"><h3>What still needs to be demonstrated</h3><ul class="list bad"><li>AST construction and source-range preservation.</li><li>A safe <code>ParseFrame</code> push/reduce/resume protocol.</li><li>Complete C operators, correct nested ternary, and comma/call interactions.</li><li>Non-recursive declarations, declarators, type names, initializers, and statements.</li><li>Scope-aware declaration-versus-expression selection.</li><li>Whole-parser recovery without frame leaks, invalid reductions, or panics.</li></ul></article>
+        <article class="card"><h3>What still needs to be demonstrated</h3><ul class="list bad"><li>AST construction and source-range preservation.</li><li>A safe <code>ParseFrame</code> push/reduce/resume protocol.</li><li>The complete C operator set and language-parser comma/call distinction; the demo intentionally does not implement comma expressions.</li><li>Non-recursive declarations, declarators, type names, initializers, and statements.</li><li>Scope-aware declaration-versus-expression selection.</li><li>Whole-parser recovery without frame leaks, invalid reductions, or panics.</li></ul></article>
       </div>
     </section>
 
@@ -532,7 +534,7 @@
       <div class="section-head"><div class="section-id">12 / SOURCES</div><h2>Evidence used for this assessment</h2></div>
       <div class="sources">
         <article class="source"><small>Primary description</small><strong><a href="https://erikeidt.github.io/The-Double-E-Method.html">The Double-E Infix Expression Parsing Method</a></strong><p>Algorithm states, stacks, reductions, termination contract, function-call/comma behavior, and composition with a statement parser.</p></article>
-        <article class="source"><small>Local implementation</small><strong><code>C:\Users\benbw\Documents\GitRepo\double-e-parsing</code></strong><p>Rust evaluator prototype, source audit, Git history, 23-test run, strict Clippy run, and targeted edge-case executions.</p></article>
+        <article class="source"><small>Local implementation</small><strong><code>C:\Users\benbw\Documents\GitRepo\double-e-parsing</code></strong><p>Rust evaluator prototype, source audit, Git history, 31-test run, strict Clippy run, and targeted edge-case executions.</p></article>
         <article class="source"><small>In-tree implementation</small><strong><code>src/translation_phases/preprocessing.rs</code></strong><p>The preprocessor expression evaluator already uses unary/binary states plus operator and operand stacks. Its operator metadata, reduction loop, source tracking, and error integration provide the strongest starting point for a shared reducer.</p></article>
         <article class="source"><small>Author reference implementation</small><strong><a href="https://github.com/erikeidt/Draconum/blob/master/src/3.%20Expression%20Parser/Expression%20Parser%20Library/ExpressionParser.cs">Draconum ExpressionParser.cs</a></strong><p>Fuller operator handling, blocking markers, terminator behavior, comma classification, and published implementation/license limitations.</p></article>
       </div>

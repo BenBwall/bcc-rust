@@ -12,13 +12,16 @@ use std::{
     path::Path,
 };
 
-use crate::util::{
-    dedup_arena::DedupArena,
-    shared::SharedString,
-    string_cache::StringCache,
-    vector_slice::{
-        UsizeExt,
-        VectorSlice,
+use crate::{
+    configuration::CompilerConfiguration,
+    util::{
+        dedup_arena::DedupArena,
+        shared::SharedString,
+        string_cache::StringCache,
+        vector_slice::{
+            UsizeExt,
+            VectorSlice,
+        },
     },
 };
 
@@ -374,6 +377,7 @@ impl Display for SourceVectorStack {
 }
 
 pub(crate) struct Context {
+    pub(crate) configuration:     CompilerConfiguration,
     pub(crate) source_vectors:    SourceVectorStack,
     pub(crate) string_cache:      StringCache,
     is_tokenizing_include_string: bool,
@@ -384,13 +388,18 @@ pub(crate) struct Context {
 
 impl Context {
     pub(crate) fn new() -> Self {
+        Self::with_configuration(CompilerConfiguration::default())
+    }
+
+    pub(crate) fn with_configuration(configuration: CompilerConfiguration) -> Self {
         Self {
-            source_vectors:               SourceVectorStack(Vec::new()),
-            string_cache:                 StringCache::new(),
+            configuration,
+            source_vectors: SourceVectorStack(Vec::new()),
+            string_cache: StringCache::new(),
             is_tokenizing_include_string: false,
-            ignore_tokenizer_errors:      false,
-            pending_errors:               Vec::new(),
-            source_files:                 DedupArena::new(),
+            ignore_tokenizer_errors: false,
+            pending_errors: Vec::new(),
+            source_files: DedupArena::new(),
         }
     }
 
