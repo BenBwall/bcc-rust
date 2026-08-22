@@ -30,7 +30,7 @@ cargo +nightly fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-`cargo check`, formatting, and all-target tests pass for the Phase 02 implementation. The repository-wide strict-Clippy command is an attribution gate for this phase: it still exposes pre-existing lint debt in generated bindings, preprocessing, and utilities that Phase 02 deliberately leaves unchanged. The parser uses compile-time entrypoint signature guards and item-scoped expectations only for explicitly deferred syntax. The existing preprocessing CLI can be exercised with either input form:
+`cargo check`, formatting, and all-target tests pass for the Phase 02 implementation. The repository-wide strict-Clippy command is an attribution gate for this phase: it still exposes pre-existing lint debt in generated bindings, preprocessing, and utilities that Phase 02 deliberately leaves unchanged. The parser uses compile-time entrypoint signature guards, item-scoped dead-code expectations for explicitly deferred syntax, and narrowly justified structural Clippy expectations where the C grammar makes the representation intentional. The existing preprocessing CLI can be exercised with either input form:
 
 ```sh
 cargo run -- --input '#define N 3
