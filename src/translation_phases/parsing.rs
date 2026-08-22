@@ -55,7 +55,7 @@ pub(crate) struct Parser {
     returned:            Option<ParseValue>,
     syntax:              SyntaxStore,
     scopes:              ScopeStack,
-    recovery:            RecoveryState,
+    recovered_sources:   Option<SourceVectors>,
     invalid_event_count: usize,
     #[cfg(test)]
     trace:               Vec<FrameTraceEvent>,
@@ -663,6 +663,7 @@ pub(crate) struct StructOrUnionSpecifier {
     /// empty body. `struct Foo;` has no body. `struct Foo {};` has an empty
     /// body.
     pub(crate) struct_declaration_list: Option<VectorSlice<StructDeclaration>>,
+    pub(crate) source_vectors:          SourceVectors,
 }
 
 /// struct-or-union:
@@ -683,6 +684,7 @@ pub(crate) struct StructDeclaration {
     type_qualifiers:        TypeQualifiers,
     type_specifiers:        TypeSpecifiers,
     struct_declarator_list: VectorSlice<StructDeclarator>,
+    source_vectors:         SourceVectors,
 }
 
 /// struct-declarator:
@@ -692,6 +694,7 @@ pub(crate) struct StructDeclaration {
 pub(crate) struct StructDeclarator {
     declarator:     Option<Declarator>,
     bitfield_width: Option<ConstantExpressionIndex>,
+    source_vectors: SourceVectors,
 }
 
 /// enum-specifier:
@@ -702,6 +705,7 @@ pub(crate) struct StructDeclarator {
 pub(crate) struct EnumSpecifier {
     pub(crate) name:             Option<Identifier>,
     pub(crate) enumeration_list: Option<VectorSlice<Enumerator>>,
+    pub(crate) source_vectors:   SourceVectors,
 }
 
 /// enumerator:
@@ -709,8 +713,9 @@ pub(crate) struct EnumSpecifier {
 /// - enumeration-constant = constant-expression
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Enumerator {
-    pub(crate) name:       Identifier,
-    pub(crate) expression: Option<ConstantExpressionIndex>,
+    pub(crate) name:           Identifier,
+    pub(crate) expression:     Option<ConstantExpressionIndex>,
+    pub(crate) source_vectors: SourceVectors,
 }
 
 /// function-specifier:
@@ -781,8 +786,9 @@ pub(crate) struct PointerDeclarator {
 /// Represents both declarators and abstract declarators.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Declarator {
-    pub(crate) pointer_declarator: PointerDeclarator,
-    pub(crate) kind:               VectorSlice<DirectDeclarator>,
+    pub(crate) pointer:        PointerDeclarator,
+    pub(crate) kind:           VectorSlice<DirectDeclarator>,
+    pub(crate) source_vectors: SourceVectors,
 }
 
 /// direct-declarator:
@@ -834,6 +840,7 @@ pub(crate) struct ParameterDeclaration {
     declaration_specifiers: DeclarationSpecifiers,
     /// Could be a declarator or an abstract declarator or neither.
     declarator:             Option<Declarator>,
+    source_vectors:         SourceVectors,
 }
 
 // The Phase 02 parser machine is implemented below the retained syntax model.
@@ -894,14 +901,6 @@ struct SyntaxStore {
     struct_declarators:         Vec<StructDeclarator>,
     enum_specifiers:            Vec<EnumSpecifier>,
     enumerators:                Vec<Enumerator>,
-    declaration_sources:        Vec<SourceVectors>,
-    declarator_sources:         Vec<SourceVectors>,
-    parameter_sources:          Vec<SourceVectors>,
-    struct_specifier_sources:   Vec<SourceVectors>,
-    enum_specifier_sources:     Vec<SourceVectors>,
-    struct_declaration_sources: Vec<SourceVectors>,
-    struct_declarator_sources:  Vec<SourceVectors>,
-    enumerator_sources:         Vec<SourceVectors>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -987,6 +986,7 @@ enum SynchronizationKind {
     Initializer,
     ArrayBound,
     Parameter,
+    VariadicParameterList,
     StructMember,
     EnumeratorValue,
     FunctionBody,
@@ -995,14 +995,6 @@ enum SynchronizationKind {
 #[derive(Debug, Clone, Copy)]
 enum RecoveryTarget {
     CurrentFrame,
-}
-
-#[derive(Default)]
-struct RecoveryState {
-    active:         bool,
-    skipped_tokens: usize,
-    last:           Option<SynchronizationSet>,
-    source_vectors: Option<SourceVectors>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1022,6 +1014,18 @@ impl FutureChildKind {
             | Self::EnumeratorValueExpression => "enumerator-value-expression",
             | Self::Initializer => "initializer",
             | Self::FunctionBody => "statement",
+        }
+    }
+
+    fn not_implemented_error(self) -> ParserErrorType {
+        match self {
+            | Self::ArrayBoundExpression => ParserErrorType::ArrayBoundExpressionNotImplemented,
+            | Self::BitFieldWidthExpression =>
+                ParserErrorType::BitFieldWidthExpressionNotImplemented,
+            | Self::EnumeratorValueExpression =>
+                ParserErrorType::EnumeratorValueExpressionNotImplemented,
+            | Self::Initializer => ParserErrorType::InitializerNotImplemented,
+            | Self::FunctionBody => ParserErrorType::FunctionBodyNotImplemented,
         }
     }
 }
@@ -1209,7 +1213,6 @@ struct ParameterListFrame {
     phase:              ParameterListPhase,
     allow_k_and_r:      bool,
     parameters:         Vec<ParameterDeclaration>,
-    parameter_sources:  Vec<SourceVectors>,
     identifiers:        Vec<Identifier>,
     pending_specifiers: Option<DeclarationSpecifiers>,
     pending_source:     Option<SourceVectors>,
@@ -1238,7 +1241,6 @@ impl ParameterListFrame {
             phase: ParameterListPhase::Start,
             allow_k_and_r,
             parameters: Vec::new(),
-            parameter_sources: Vec::new(),
             identifiers: Vec::new(),
             pending_specifiers: None,
             pending_source: None,
@@ -1255,8 +1257,6 @@ struct StructOrUnionSpecifierFrame {
     identifier: Option<Identifier>,
     declarations: Vec<StructDeclaration>,
     member_declarators: Vec<StructDeclarator>,
-    declaration_sources: Vec<SourceVectors>,
-    member_declarator_sources: Vec<SourceVectors>,
     member_specifiers: Option<DeclarationSpecifiers>,
     member_declarator: Option<Declarator>,
     body_started: bool,
@@ -1289,8 +1289,6 @@ impl StructOrUnionSpecifierFrame {
             identifier: None,
             declarations: Vec::new(),
             member_declarators: Vec::new(),
-            declaration_sources: Vec::new(),
-            member_declarator_sources: Vec::new(),
             member_specifiers: None,
             member_declarator: None,
             body_started: false,
@@ -1306,7 +1304,6 @@ struct EnumSpecifierFrame {
     phase: EnumPhase,
     name: Option<Identifier>,
     enumerators: Vec<Enumerator>,
-    enumerator_sources: Vec<SourceVectors>,
     current_enumerator: Option<Identifier>,
     body_started: bool,
     source_vectors: Option<SourceVectors>,
@@ -1332,7 +1329,6 @@ impl EnumSpecifierFrame {
             phase: EnumPhase::Start,
             name: None,
             enumerators: Vec::new(),
-            enumerator_sources: Vec::new(),
             current_enumerator: None,
             body_started: false,
             source_vectors: None,
@@ -1358,7 +1354,7 @@ impl Parser {
             returned:            None,
             syntax:              SyntaxStore::default(),
             scopes:              ScopeStack::default(),
-            recovery:            RecoveryState::default(),
+            recovered_sources:   None,
             invalid_event_count: 0,
             #[cfg(test)]
             trace:               Vec::new(),
@@ -1404,10 +1400,10 @@ impl Parser {
                     if token.is_some() {
                         self.cursor.consume();
                     } else {
-                        self.report_eof(
+                        self.report(
                             context,
-                            frame_name,
-                            "a token before completing the active frame",
+                            ParserErrorType::ParserFrameConsumedAtEndOfInput(frame_name),
+                            None,
                         );
                     }
                 },
@@ -1426,7 +1422,7 @@ impl Parser {
                         matches!(set.target, RecoveryTarget::CurrentFrame),
                         "every recovery set must identify a legal unwind target"
                     );
-                    self.recovery.source_vectors = self.recover(context, set);
+                    self.recovered_sources = self.recover(context, set);
                     self.frames.push(frame);
                 },
             }
@@ -1434,8 +1430,6 @@ impl Parser {
     }
 
     fn recover(&mut self, context: &mut Context, set: SynchronizationSet) -> Option<SourceVectors> {
-        self.recovery.active = true;
-        self.recovery.last = Some(set);
         let mut parentheses = 0usize;
         let mut brackets = 0usize;
         let mut braces = 0usize;
@@ -1471,7 +1465,6 @@ impl Parser {
                     if matches!(set.kind, SynchronizationKind::FunctionBody) && braces == 0 {
                         self.merge_source(context, &mut source_vectors, token);
                         self.cursor.consume();
-                        self.recovery.skipped_tokens += 1;
                         break;
                     }
                 },
@@ -1480,9 +1473,7 @@ impl Parser {
 
             self.merge_source(context, &mut source_vectors, token);
             self.cursor.consume();
-            self.recovery.skipped_tokens += 1;
         }
-        self.recovery.active = false;
         source_vectors
     }
 
@@ -1498,36 +1489,6 @@ impl Parser {
             error_type,
             source_vectors,
         });
-    }
-
-    fn report_unexpected(
-        &mut self,
-        context: &mut Context,
-        frame: &'static str,
-        expected: &'static str,
-        token: Option<Token>,
-    ) {
-        if let Some(token) = token {
-            self.report(
-                context,
-                ParserErrorType::UnexpectedToken {
-                    frame,
-                    expected,
-                    found: token.kind,
-                },
-                Some(token),
-            );
-        } else {
-            self.report_eof(context, frame, expected);
-        }
-    }
-
-    fn report_eof(&mut self, context: &mut Context, frame: &'static str, expected: &'static str) {
-        self.report(
-            context,
-            ParserErrorType::UnexpectedEndOfFrame { frame, expected },
-            None,
-        );
     }
 
     #[expect(
@@ -1630,6 +1591,8 @@ impl SynchronizationKind {
                     OperatorTokenType::Comma | OperatorTokenType::ClosingParenthesis
                 )
             ),
+            | Self::VariadicParameterList =>
+                token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
             | Self::StructMember => matches!(
                 token,
                 TokenType::Operator(
@@ -1712,11 +1675,7 @@ impl FutureChildFrame {
         );
         match self.phase {
             | FutureChildPhase::Start => {
-                parser.report(
-                    context,
-                    ParserErrorType::FutureChildNotImplemented(self.kind),
-                    token,
-                );
+                parser.report(context, self.kind.not_implemented_error(), token);
                 self.phase = FutureChildPhase::Recovered;
                 let kind = match self.kind {
                     | FutureChildKind::ArrayBoundExpression => SynchronizationKind::ArrayBound,
@@ -1734,7 +1693,7 @@ impl FutureChildFrame {
             | FutureChildPhase::Recovered =>
                 ParseAction::Reduce(ParseValue::FutureChild(FutureChildResult {
                     kind:           self.kind,
-                    source_vectors: parser.recovery.source_vectors.take().unwrap_or_default(),
+                    source_vectors: parser.recovered_sources.take().unwrap_or_default(),
                 })),
         }
     }
@@ -1766,9 +1725,9 @@ impl ExternalDeclarationFrame {
                 if parser.invalid_event_count > self.starting_error_count {
                     let source_vectors = parser
                         .syntax
-                        .declaration_sources
+                        .declarations
                         .get(declaration.0 as usize)
-                        .copied()
+                        .map(|declaration| declaration.source_vectors)
                         .unwrap_or_default();
                     return ParseAction::Reduce(ParseValue::ExternalDeclaration(
                         ExternalDeclaration::Error(source_vectors),
@@ -1809,10 +1768,11 @@ impl DeclarationFrame {
                 self.source_vectors = Some(specifiers.source_vectors);
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     if specifiers.storage_class == StorageClass::Typedef {
-                        parser.report_unexpected(
+                        parser.report(
                             context,
-                            "declaration",
-                            "a typedef declarator",
+                            ParserErrorType::ExpectedDeclaratorInTypedef(
+                                token.map(|token| token.kind),
+                            ),
                             token,
                         );
                     }
@@ -1833,7 +1793,13 @@ impl DeclarationFrame {
                     panic!("declarator frame returned an unexpected value: {returned:?}");
                 };
                 let Some(declarator) = declarator else {
-                    parser.report_unexpected(context, "declaration", "a declarator", token);
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedDeclaratorInDeclaration(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
                     self.phase = DeclarationPhase::AfterDeclarator;
                     return ParseAction::Recover(SynchronizationSet {
                         kind:   SynchronizationKind::Declaration,
@@ -1841,12 +1807,7 @@ impl DeclarationFrame {
                     });
                 };
 
-                let source_vectors = parser
-                    .syntax
-                    .declarator_sources
-                    .last()
-                    .copied()
-                    .unwrap_or_default();
+                let source_vectors = declarator.source_vectors;
                 self.source_vectors =
                     Some(self.source_vectors.map_or(source_vectors, |existing| {
                         context.merge_vectors(existing, source_vectors)
@@ -1903,27 +1864,29 @@ impl DeclarationFrame {
                         FutureChildKind::FunctionBody,
                     )))
                 } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
-                    parser.report_unexpected(
+                    parser.report(
                         context,
-                        "declaration",
-                        "`,`, `=`, or `;` after a declarator",
+                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+                            token.map(|token| token.kind),
+                        ),
                         token,
                     );
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Consume
                 } else if token.is_none() {
-                    parser.report_eof(
+                    parser.report(
                         context,
-                        "declaration",
-                        "`,`, `=`, or `;` after a declarator",
+                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(None),
+                        None,
                     );
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Reprocess
                 } else {
-                    parser.report_unexpected(
+                    parser.report(
                         context,
-                        "declaration",
-                        "`,`, `=`, or `;` after a declarator",
+                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+                            token.map(|token| token.kind),
+                        ),
                         token,
                     );
                     self.phase = DeclarationPhase::AfterDeclarator;
@@ -2012,7 +1975,6 @@ impl DeclarationFrame {
                     ),
                     source_vectors,
                 });
-                parser.syntax.declaration_sources.push(source_vectors);
                 ParseAction::Reduce(ParseValue::Declaration(DeclarationIndex(index)))
             },
         }
@@ -2037,9 +1999,9 @@ impl DeclarationSpecifiersFrame {
                     .make_struct_or_union(parser, context, index);
                 if let Some(source_vectors) = parser
                     .syntax
-                    .struct_specifier_sources
+                    .struct_or_union_specifiers
                     .get(index.0 as usize)
-                    .copied()
+                    .map(|specifier| specifier.source_vectors)
                 {
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
@@ -2059,9 +2021,9 @@ impl DeclarationSpecifiersFrame {
                     .make_enum(parser, context, index);
                 if let Some(source_vectors) = parser
                     .syntax
-                    .enum_specifier_sources
+                    .enum_specifiers
                     .get(index.0 as usize)
-                    .copied()
+                    .map(|specifier| specifier.source_vectors)
                 {
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
@@ -2082,13 +2044,17 @@ impl DeclarationSpecifiersFrame {
 
         let Some(token) = token else {
             if !self.consumed {
-                parser.report_eof(context, "declaration-specifiers", "a declaration specifier");
+                parser.report(
+                    context,
+                    ParserErrorType::UnexpectedEndBeforeDeclarationSpecifier,
+                    None,
+                );
             }
             if self.specifiers.type_specifiers == TypeSpecifiers::Empty {
-                parser.report_eof(
+                parser.report(
                     context,
-                    "declaration-specifiers",
-                    "at least one type specifier",
+                    ParserErrorType::UnexpectedEndBeforeTypeSpecifier,
+                    None,
                 );
             }
             self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
@@ -2130,9 +2096,9 @@ impl DeclarationSpecifiersFrame {
         }
 
         if let TokenType::Keyword(keyword) = token.kind
-            && is_primitive_type_keyword(keyword)
+            && let Some(specifier) = primitive_type_specifier(keyword)
         {
-            self.apply_type_specifier(parser, context, token, keyword);
+            self.apply_type_specifier(parser, context, token, specifier);
             parser.merge_source(context, &mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
@@ -2203,66 +2169,62 @@ impl DeclarationSpecifiersFrame {
         parser: &mut Parser,
         context: &mut Context,
         token: Token,
-        keyword: KeywordTokenType,
+        specifier: PrimitiveTypeSpecifier,
     ) {
         let type_specifiers = &mut self.specifiers.type_specifiers;
-        let duplicate = match keyword {
-            | KeywordTokenType::Signed => type_specifiers.is_signed(),
-            | KeywordTokenType::Unsigned => type_specifiers.is_unsigned(),
-            | KeywordTokenType::Int => type_specifiers.is_int(),
-            | KeywordTokenType::Short => type_specifiers.is_short(),
-            | KeywordTokenType::Long => false,
-            | KeywordTokenType::Char => type_specifiers.is_char(),
-            | KeywordTokenType::Float => type_specifiers.is_float(),
-            | KeywordTokenType::Double => type_specifiers.is_double(),
-            | KeywordTokenType::Void => type_specifiers.is_void(),
-            | KeywordTokenType::Bool => type_specifiers.is_bool(),
-            | KeywordTokenType::Complex => type_specifiers.is_complex(),
-            | KeywordTokenType::Imaginary => type_specifiers.is_imaginary(),
-            | _ => unreachable!("only primitive type keywords reach this method"),
-        };
-        if duplicate {
-            parser.report(
-                context,
-                ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                Some(token),
-            );
-            return;
+        macro_rules! apply_once {
+            ($is_duplicate:ident, $apply:ident) => {
+                if type_specifiers.$is_duplicate() {
+                    parser.report(
+                        context,
+                        ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        Some(token),
+                    );
+                } else {
+                    type_specifiers.$apply(parser, context);
+                }
+            };
         }
 
-        match keyword {
-            | KeywordTokenType::Signed => type_specifiers.make_signed(parser, context),
-            | KeywordTokenType::Unsigned => type_specifiers.make_unsigned(parser, context),
-            | KeywordTokenType::Int => type_specifiers.make_int(parser, context),
-            | KeywordTokenType::Short => type_specifiers.make_short(parser, context),
-            | KeywordTokenType::Long if type_specifiers.is_long_double() => {
+        match specifier {
+            | PrimitiveTypeSpecifier::Signed => apply_once!(is_signed, make_signed),
+            | PrimitiveTypeSpecifier::Unsigned => apply_once!(is_unsigned, make_unsigned),
+            | PrimitiveTypeSpecifier::Int => apply_once!(is_int, make_int),
+            | PrimitiveTypeSpecifier::Short => apply_once!(is_short, make_short),
+            | PrimitiveTypeSpecifier::Long if type_specifiers.is_long_double() => {
                 parser.report(
                     context,
                     ParserErrorType::LongLongDoubleSpecified,
                     Some(token),
                 );
             },
-            | KeywordTokenType::Long
+            | PrimitiveTypeSpecifier::Long
                 if type_specifiers.is_long() && type_specifiers.is_long_long() =>
             {
                 parser.report(context, ParserErrorType::LongSpecifiedThrice, Some(token));
             },
-            | KeywordTokenType::Long => type_specifiers.make_long(parser, context),
-            | KeywordTokenType::Char => type_specifiers.make_char(parser, context),
-            | KeywordTokenType::Float => type_specifiers.make_float(parser, context),
-            | KeywordTokenType::Double if type_specifiers.is_long_long() => {
+            | PrimitiveTypeSpecifier::Long => type_specifiers.make_long(parser, context),
+            | PrimitiveTypeSpecifier::Char => apply_once!(is_char, make_char),
+            | PrimitiveTypeSpecifier::Float => apply_once!(is_float, make_float),
+            | PrimitiveTypeSpecifier::Double if type_specifiers.is_double() => {
+                parser.report(
+                    context,
+                    ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                    Some(token),
+                );
+            },
+            | PrimitiveTypeSpecifier::Double if type_specifiers.is_long_long() => {
                 parser.report(
                     context,
                     ParserErrorType::LongLongDoubleSpecified,
                     Some(token),
                 );
             },
-            | KeywordTokenType::Double => type_specifiers.make_double(parser, context),
-            | KeywordTokenType::Void => type_specifiers.make_void(parser, context),
-            | KeywordTokenType::Bool => type_specifiers.make_bool(parser, context),
-            | KeywordTokenType::Complex => type_specifiers.make_complex(parser, context),
-            | KeywordTokenType::Imaginary => type_specifiers.make_imaginary(parser, context),
-            | _ => unreachable!("only primitive type keywords reach this method"),
+            | PrimitiveTypeSpecifier::Double => type_specifiers.make_double(parser, context),
+            | PrimitiveTypeSpecifier::Void => apply_once!(is_void, make_void),
+            | PrimitiveTypeSpecifier::Bool => apply_once!(is_bool, make_bool),
+            | PrimitiveTypeSpecifier::Complex => apply_once!(is_complex, make_complex),
+            | PrimitiveTypeSpecifier::Imaginary => apply_once!(is_imaginary, make_imaginary),
         }
     }
 }
@@ -2287,22 +2249,38 @@ fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
     }
 }
 
-fn is_primitive_type_keyword(keyword: KeywordTokenType) -> bool {
-    matches!(
-        keyword,
-        KeywordTokenType::Signed
-            | KeywordTokenType::Unsigned
-            | KeywordTokenType::Int
-            | KeywordTokenType::Short
-            | KeywordTokenType::Long
-            | KeywordTokenType::Char
-            | KeywordTokenType::Float
-            | KeywordTokenType::Double
-            | KeywordTokenType::Void
-            | KeywordTokenType::Bool
-            | KeywordTokenType::Complex
-            | KeywordTokenType::Imaginary
-    )
+#[derive(Debug, Clone, Copy)]
+enum PrimitiveTypeSpecifier {
+    Signed,
+    Unsigned,
+    Int,
+    Short,
+    Long,
+    Char,
+    Float,
+    Double,
+    Void,
+    Bool,
+    Complex,
+    Imaginary,
+}
+
+fn primitive_type_specifier(keyword: KeywordTokenType) -> Option<PrimitiveTypeSpecifier> {
+    match keyword {
+        | KeywordTokenType::Signed => Some(PrimitiveTypeSpecifier::Signed),
+        | KeywordTokenType::Unsigned => Some(PrimitiveTypeSpecifier::Unsigned),
+        | KeywordTokenType::Int => Some(PrimitiveTypeSpecifier::Int),
+        | KeywordTokenType::Short => Some(PrimitiveTypeSpecifier::Short),
+        | KeywordTokenType::Long => Some(PrimitiveTypeSpecifier::Long),
+        | KeywordTokenType::Char => Some(PrimitiveTypeSpecifier::Char),
+        | KeywordTokenType::Float => Some(PrimitiveTypeSpecifier::Float),
+        | KeywordTokenType::Double => Some(PrimitiveTypeSpecifier::Double),
+        | KeywordTokenType::Void => Some(PrimitiveTypeSpecifier::Void),
+        | KeywordTokenType::Bool => Some(PrimitiveTypeSpecifier::Bool),
+        | KeywordTokenType::Complex => Some(PrimitiveTypeSpecifier::Complex),
+        | KeywordTokenType::Imaginary => Some(PrimitiveTypeSpecifier::Imaginary),
+        | _ => None,
+    }
 }
 
 impl DeclaratorFrame {
@@ -2400,7 +2378,13 @@ impl DeclaratorFrame {
                     return ParseAction::Reprocess;
                 }
                 if self.mode == DeclaratorMode::Named {
-                    parser.report_unexpected(context, "declarator", "an identifier or `(`", token);
+                    parser.report(
+                        context,
+                        ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
                 }
                 self.phase = DeclaratorPhase::Finish;
                 ParseAction::Reprocess
@@ -2439,21 +2423,21 @@ impl DeclaratorFrame {
                     panic!("nested declarator returned an unexpected value: {returned:?}");
                 };
                 let Some(declarator) = declarator else {
-                    parser.report_unexpected(
+                    parser.report(
                         context,
-                        "declarator",
-                        "a declarator after `(`",
+                        ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(
+                            token.map(|token| token.kind),
+                        ),
                         token,
                     );
                     self.phase = DeclaratorPhase::Suffix;
                     return ParseAction::Reprocess;
                 };
-                if let Some(source_vectors) = parser.syntax.declarator_sources.last().copied() {
-                    self.source_vectors =
-                        Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            context.merge_vectors(existing, source_vectors)
-                        }));
-                }
+                let source_vectors = declarator.source_vectors;
+                self.source_vectors =
+                    Some(self.source_vectors.map_or(source_vectors, |existing| {
+                        context.merge_vectors(existing, source_vectors)
+                    }));
                 self.phase = DeclaratorPhase::ExpectNestedClose(declarator);
                 ParseAction::Reprocess
             },
@@ -2471,7 +2455,13 @@ impl DeclaratorFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     ParseAction::Consume
                 } else {
-                    parser.report_unexpected(context, "parenthesized-declarator", "`)`", token);
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
                     ParseAction::Reprocess
                 }
             },
@@ -2543,6 +2533,16 @@ impl DeclaratorFrame {
                 }
                 if is_operator(token, OperatorTokenType::Asterisk) {
                     let token = token.expect("asterisk token exists");
+                    if self.mode != DeclaratorMode::Named
+                        && !self.has_direct_declarator
+                        && !self.array_qualifiers.is_empty()
+                    {
+                        parser.report(
+                            context,
+                            ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
+                            Some(token),
+                        );
+                    }
                     if self.array_is_static {
                         parser.report(
                             context,
@@ -2570,7 +2570,11 @@ impl DeclaratorFrame {
                     return ParseAction::Consume;
                 }
                 if token.is_none() {
-                    parser.report_eof(context, "array-declarator", "`]`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(None),
+                        None,
+                    );
                     self.push_array();
                     self.phase = DeclaratorPhase::Finish;
                     return ParseAction::Reprocess;
@@ -2591,8 +2595,30 @@ impl DeclaratorFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Asterisk) {
+                    let token = token.expect("asterisk token exists");
+                    parser.report(context, ParserErrorType::PointerSpecifiedTwice, Some(token));
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    ParseAction::Consume
+                } else if let Some(token) = token {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
+                            token.kind,
+                        ),
+                        Some(token),
+                    );
+                    self.phase = DeclaratorPhase::AwaitArrayBound;
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::ArrayBound,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
                 } else {
-                    parser.report_unexpected(context, "array-declarator", "`]` after `*`", token);
+                    parser.report(
+                        context,
+                        ParserErrorType::UnexpectedEndOfArrayDeclaratorAfterPointer,
+                        None,
+                    );
                     self.phase = DeclaratorPhase::AwaitArrayBound;
                     ParseAction::Recover(SynchronizationSet {
                         kind:   SynchronizationKind::ArrayBound,
@@ -2621,12 +2647,22 @@ impl DeclaratorFrame {
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
                 } else if token.is_none() {
-                    parser.report_eof(context, "array-declarator", "`]`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(None),
+                        None,
+                    );
                     self.push_array();
                     self.phase = DeclaratorPhase::Finish;
                     ParseAction::Reprocess
                 } else {
-                    parser.report_unexpected(context, "array-declarator", "`]`", token);
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
                     ParseAction::Recover(SynchronizationSet {
                         kind:   SynchronizationKind::ArrayBound,
                         target: RecoveryTarget::CurrentFrame,
@@ -2656,7 +2692,11 @@ impl DeclaratorFrame {
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
                 } else if token.is_none() {
-                    parser.report_eof(context, "function-declarator", "`)`");
+                    parser.report(
+                        context,
+                        ParserErrorType::UnexpectedEndOfFunctionDeclaratorParameterList,
+                        None,
+                    );
                     self.phase = DeclaratorPhase::Finish;
                     ParseAction::Reprocess
                 } else {
@@ -2692,10 +2732,11 @@ impl DeclaratorFrame {
                     return ParseAction::Reduce(ParseValue::Declarator(None));
                 }
                 if self.mode == DeclaratorMode::Named && !self.has_direct_declarator {
-                    parser.report_unexpected(
+                    parser.report(
                         context,
-                        "declarator",
-                        "an identifier or parenthesized declarator",
+                        ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
+                            token.map(|token| token.kind),
+                        ),
                         token,
                     );
                     return ParseAction::Reduce(ParseValue::Declarator(None));
@@ -2712,21 +2753,18 @@ impl DeclaratorFrame {
                     .direct_declarators
                     .append(&mut self.direct_declarators);
                 let declarator = Declarator {
-                    pointer_declarator: PointerDeclarator {
+                    pointer:        PointerDeclarator {
                         type_qualifiers_list: VectorSlice::new(
                             pointer_start,
                             parser.syntax.type_qualifiers.len().to_u32(),
                         ),
                     },
-                    kind:               VectorSlice::new(
+                    kind:           VectorSlice::new(
                         direct_start,
                         parser.syntax.direct_declarators.len().to_u32(),
                     ),
+                    source_vectors: self.source_vectors.unwrap_or_default(),
                 };
-                parser
-                    .syntax
-                    .declarator_sources
-                    .push(self.source_vectors.unwrap_or_default());
                 ParseAction::Reduce(ParseValue::Declarator(Some(declarator)))
             },
         }
@@ -2779,15 +2817,34 @@ impl ParameterListFrame {
                     "this frame phase cannot receive a child value"
                 );
                 let Some(token) = token else {
-                    parser.report_eof(context, "K&R parameter-list", "an identifier and `)`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
+                            None,
+                        ),
+                        None,
+                    );
                     self.phase = ParameterListPhase::FinishKAndR;
                     return ParseAction::Reprocess;
                 };
-                if token.kind != TokenType::Identifier || parser.scopes.is_typedef(token.contents) {
-                    parser.report_unexpected(
+                if parser.declaration_starter(token) {
+                    parser.report(
                         context,
-                        "K&R parameter-list",
-                        "a non-typedef identifier",
+                        ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator,
+                        Some(token),
+                    );
+                    self.phase = ParameterListPhase::KAndRSeparator;
+                    return ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::Parameter,
+                        target: RecoveryTarget::CurrentFrame,
+                    });
+                }
+                if token.kind != TokenType::Identifier || parser.scopes.is_typedef(token.contents) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
+                            Some(token.kind),
+                        ),
                         Some(token),
                     );
                     self.phase = ParameterListPhase::KAndRSeparator;
@@ -2818,11 +2875,23 @@ impl ParameterListFrame {
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Consume
                 } else if token.is_none() {
-                    parser.report_eof(context, "K&R parameter-list", "`)`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
+                            None,
+                        ),
+                        None,
+                    );
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Reprocess
                 } else {
-                    parser.report_unexpected(context, "K&R parameter-list", "`,` or `)`", token);
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
                     ParseAction::Recover(SynchronizationSet {
                         kind:   SynchronizationKind::Parameter,
                         target: RecoveryTarget::CurrentFrame,
@@ -2851,8 +2920,8 @@ impl ParameterListFrame {
                     self.parameters.push(ParameterDeclaration {
                         declaration_specifiers: specifiers,
                         declarator:             None,
+                        source_vectors:         specifiers.source_vectors,
                     });
-                    self.parameter_sources.push(specifiers.source_vectors);
                     self.source_vectors = Some(
                         self.source_vectors
                             .map_or(specifiers.source_vectors, |existing| {
@@ -2873,8 +2942,7 @@ impl ParameterListFrame {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
                     panic!("parameter declarator returned an unexpected value: {returned:?}");
                 };
-                let declarator_source =
-                    declarator.and_then(|_| parser.syntax.declarator_sources.last().copied());
+                let declarator_source = declarator.map(|declarator| declarator.source_vectors);
                 let parameter_source = match (self.pending_source.take(), declarator_source) {
                     | (Some(specifiers), Some(declarator)) =>
                         context.merge_vectors(specifiers, declarator),
@@ -2888,8 +2956,8 @@ impl ParameterListFrame {
                         .take()
                         .expect("parameter declarator follows specifiers"),
                     declarator,
+                    source_vectors: parameter_source,
                 });
-                self.parameter_sources.push(parameter_source);
                 self.source_vectors =
                     Some(self.source_vectors.map_or(parameter_source, |existing| {
                         context.merge_vectors(existing, parameter_source)
@@ -2914,14 +2982,21 @@ impl ParameterListFrame {
                     self.phase = ParameterListPhase::AfterComma;
                     ParseAction::Consume
                 } else if token.is_none() {
-                    parser.report_eof(context, "prototype parameter-list", "`,` or `)`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
+                            None,
+                        ),
+                        None,
+                    );
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Reprocess
                 } else {
-                    parser.report_unexpected(
+                    parser.report(
                         context,
-                        "prototype parameter-list",
-                        "`,` or `)`",
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
+                            token.map(|token| token.kind),
+                        ),
                         token,
                     );
                     ParseAction::Recover(SynchronizationSet {
@@ -2958,20 +3033,27 @@ impl ParameterListFrame {
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Consume
                 } else if token.is_none() {
-                    parser.report_eof(context, "variadic parameter-list", "`)`");
+                    parser.report(
+                        context,
+                        ParserErrorType::UnexpectedEndOfVariadicFunctionDeclaratorParameterList,
+                        None,
+                    );
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Reprocess
-                } else {
-                    parser.report_unexpected(
+                } else if let Some(token) = token {
+                    parser.report(
                         context,
-                        "variadic parameter-list",
-                        "`)` after `...`",
-                        token,
+                        ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
+                            token.kind,
+                        ),
+                        Some(token),
                     );
                     ParseAction::Recover(SynchronizationSet {
-                        kind:   SynchronizationKind::Parameter,
+                        kind:   SynchronizationKind::VariadicParameterList,
                         target: RecoveryTarget::CurrentFrame,
                     })
+                } else {
+                    unreachable!("EOF is handled before malformed variadic tokens")
                 }
             },
             | ParameterListPhase::FinishKAndR => {
@@ -3001,10 +3083,6 @@ impl ParameterListFrame {
                     .syntax
                     .parameter_declarations
                     .append(&mut self.parameters);
-                parser
-                    .syntax
-                    .parameter_sources
-                    .append(&mut self.parameter_sources);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {
                     direct_declarator: DirectDeclarator::Function {
                         parameter_list: VectorSlice::new(
@@ -3035,17 +3113,20 @@ impl StructOrUnionSpecifierFrame {
                     "this frame phase cannot receive a child value"
                 );
                 let Some(token) = token else {
-                    parser.report_eof(context, "struct-or-union-specifier", "`struct` or `union`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStructOrUnionKeyword(None),
+                        None,
+                    );
                     return self.finish(parser);
                 };
                 self.kind = match token.kind {
                     | TokenType::Keyword(KeywordTokenType::Struct) => Some(StructOrUnion::Struct),
                     | TokenType::Keyword(KeywordTokenType::Union) => Some(StructOrUnion::Union),
                     | _ => {
-                        parser.report_unexpected(
+                        parser.report(
                             context,
-                            "struct-or-union-specifier",
-                            "`struct` or `union`",
+                            ParserErrorType::ExpectedStructOrUnionKeyword(Some(token.kind)),
                             Some(token),
                         );
                         None
@@ -3074,10 +3155,11 @@ impl StructOrUnionSpecifierFrame {
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Consume
                 } else {
-                    parser.report_unexpected(
+                    parser.report(
                         context,
-                        "struct-or-union-specifier",
-                        "a tag name or `{`",
+                        ParserErrorType::StructOrUnionSpecifierWithoutNameAndBody(
+                            token.map(|token| token.kind),
+                        ),
                         token,
                     );
                     self.finish(parser)
@@ -3109,7 +3191,11 @@ impl StructOrUnionSpecifierFrame {
                     self.phase = StructOrUnionPhase::FinishBody;
                     ParseAction::Consume
                 } else if token.is_none() {
-                    parser.report_eof(context, "struct-declaration-list", "`}`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList,
+                        None,
+                    );
                     self.phase = StructOrUnionPhase::FinishBody;
                     ParseAction::Reprocess
                 } else {
@@ -3161,8 +3247,7 @@ impl StructOrUnionSpecifierFrame {
                     panic!("member declarator returned an unexpected value: {returned:?}");
                 };
                 self.member_declarator = declarator;
-                if let Some(source_vectors) =
-                    declarator.and_then(|_| parser.syntax.declarator_sources.last().copied())
+                if let Some(source_vectors) = declarator.map(|declarator| declarator.source_vectors)
                 {
                     self.member_source =
                         Some(self.member_source.map_or(source_vectors, |existing| {
@@ -3185,15 +3270,15 @@ impl StructOrUnionSpecifierFrame {
                     self.phase = StructOrUnionPhase::PushBitFieldWidth;
                     ParseAction::Consume
                 } else {
+                    let source_vectors = self
+                        .current_member_declarator_source
+                        .take()
+                        .unwrap_or_default();
                     self.member_declarators.push(StructDeclarator {
-                        declarator:     self.member_declarator.take(),
+                        declarator: self.member_declarator.take(),
                         bitfield_width: None,
+                        source_vectors,
                     });
-                    self.member_declarator_sources.push(
-                        self.current_member_declarator_source
-                            .take()
-                            .unwrap_or_default(),
-                    );
                     self.phase = StructOrUnionPhase::AfterStructDeclarator;
                     ParseAction::Reprocess
                 }
@@ -3225,15 +3310,15 @@ impl StructOrUnionSpecifierFrame {
                             context.merge_vectors(existing, source_vectors)
                         }),
                 );
+                let source_vectors = self
+                    .current_member_declarator_source
+                    .take()
+                    .unwrap_or_default();
                 self.member_declarators.push(StructDeclarator {
-                    declarator:     self.member_declarator.take(),
+                    declarator: self.member_declarator.take(),
                     bitfield_width: None,
+                    source_vectors,
                 });
-                self.member_declarator_sources.push(
-                    self.current_member_declarator_source
-                        .take()
-                        .unwrap_or_default(),
-                );
                 self.phase = StructOrUnionPhase::AfterStructDeclarator;
                 ParseAction::Reprocess
             },
@@ -3254,25 +3339,29 @@ impl StructOrUnionSpecifierFrame {
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
-                    parser.report_unexpected(
+                    parser.report(
                         context,
-                        "struct-declarator-list",
-                        "`;` before `}`",
+                        ParserErrorType::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList,
                         token,
                     );
                     self.finish_member(parser, context);
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Reprocess
                 } else if token.is_none() {
-                    parser.report_eof(context, "struct-declarator-list", "`,` or `;`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(None),
+                        None,
+                    );
                     self.finish_member(parser, context);
                     self.phase = StructOrUnionPhase::FinishBody;
                     ParseAction::Reprocess
                 } else {
-                    parser.report_unexpected(
+                    parser.report(
                         context,
-                        "struct-declarator-list",
-                        "`,` or `;`",
+                        ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(
+                            token.map(|token| token.kind),
+                        ),
                         token,
                     );
                     ParseAction::Recover(SynchronizationSet {
@@ -3297,24 +3386,20 @@ impl StructOrUnionSpecifierFrame {
             .syntax
             .struct_declarators
             .append(&mut self.member_declarators);
-        parser
-            .syntax
-            .struct_declarator_sources
-            .append(&mut self.member_declarator_sources);
         let specifiers = self
             .member_specifiers
             .take()
             .expect("a struct member has specifiers");
+        let source_vectors = self.member_source.take().unwrap_or_default();
         self.declarations.push(StructDeclaration {
-            type_qualifiers:        specifiers.type_qualifiers,
-            type_specifiers:        specifiers.type_specifiers,
+            type_qualifiers: specifiers.type_qualifiers,
+            type_specifiers: specifiers.type_specifiers,
             struct_declarator_list: VectorSlice::new(
                 start,
                 parser.syntax.struct_declarators.len().to_u32(),
             ),
+            source_vectors,
         });
-        let source_vectors = self.member_source.take().unwrap_or_default();
-        self.declaration_sources.push(source_vectors);
         self.source_vectors = Some(self.source_vectors.map_or(source_vectors, |existing| {
             context.merge_vectors(existing, source_vectors)
         }));
@@ -3327,10 +3412,6 @@ impl StructOrUnionSpecifierFrame {
                 .syntax
                 .struct_declarations
                 .append(&mut self.declarations);
-            parser
-                .syntax
-                .struct_declaration_sources
-                .append(&mut self.declaration_sources);
             VectorSlice::new(start, parser.syntax.struct_declarations.len().to_u32())
         });
         let index = parser.syntax.struct_or_union_specifiers.len().to_u32();
@@ -3341,11 +3422,8 @@ impl StructOrUnionSpecifierFrame {
                 struct_or_union:         self.kind.unwrap_or(StructOrUnion::Struct),
                 identifier:              self.identifier,
                 struct_declaration_list: declaration_list,
+                source_vectors:          self.source_vectors.unwrap_or_default(),
             });
-        parser
-            .syntax
-            .struct_specifier_sources
-            .push(self.source_vectors.unwrap_or_default());
         ParseAction::Reduce(ParseValue::StructOrUnionSpecifier(
             StructOrUnionSpecifierIndex(index),
         ))
@@ -3367,11 +3445,15 @@ impl EnumSpecifierFrame {
                     "this frame phase cannot receive a child value"
                 );
                 let Some(token) = token else {
-                    parser.report_eof(context, "enum-specifier", "`enum`");
+                    parser.report(context, ParserErrorType::ExpectedEnumKeyword(None), None);
                     return self.finish(parser);
                 };
                 if token.kind != TokenType::Keyword(KeywordTokenType::Enum) {
-                    parser.report_unexpected(context, "enum-specifier", "`enum`", Some(token));
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedEnumKeyword(Some(token.kind)),
+                        Some(token),
+                    );
                 }
                 parser.merge_source(context, &mut self.source_vectors, token);
                 self.phase = EnumPhase::NameOrBody;
@@ -3396,7 +3478,13 @@ impl EnumSpecifierFrame {
                     self.phase = EnumPhase::EnumeratorOrClose;
                     ParseAction::Consume
                 } else {
-                    parser.report_unexpected(context, "enum-specifier", "a tag name or `{`", token);
+                    parser.report(
+                        context,
+                        ParserErrorType::EnumSpecifierWithoutNameAndBody(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
                     self.finish(parser)
                 }
             },
@@ -3434,14 +3522,21 @@ impl EnumSpecifierFrame {
                     self.phase = EnumPhase::AfterEnumeratorName;
                     ParseAction::Consume
                 } else if token.is_none() {
-                    parser.report_eof(context, "enumerator-list", "an enumerator or `}`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
+                            None,
+                        ),
+                        None,
+                    );
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
                 } else {
-                    parser.report_unexpected(
+                    parser.report(
                         context,
-                        "enumerator-list",
-                        "an enumeration constant or `}`",
+                        ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
+                            token.map(|token| token.kind),
+                        ),
                         token,
                     );
                     self.phase = EnumPhase::AfterEnumerator;
@@ -3516,11 +3611,21 @@ impl EnumSpecifierFrame {
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Consume
                 } else if token.is_none() {
-                    parser.report_eof(context, "enumerator-list", "`,` or `}`");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(None),
+                        None,
+                    );
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
                 } else {
-                    parser.report_unexpected(context, "enumerator-list", "`,` or `}`", token);
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
                     ParseAction::Recover(SynchronizationSet {
                         kind:   SynchronizationKind::EnumeratorValue,
                         target: RecoveryTarget::CurrentFrame,
@@ -3542,9 +3647,8 @@ impl EnumSpecifierFrame {
             self.enumerators.push(Enumerator {
                 name,
                 expression: None,
+                source_vectors: self.current_enumerator_source.take().unwrap_or_default(),
             });
-            self.enumerator_sources
-                .push(self.current_enumerator_source.take().unwrap_or_default());
             parser.scopes.publish(name.name, NameClass::Ordinary);
         }
     }
@@ -3553,21 +3657,14 @@ impl EnumSpecifierFrame {
         let enumeration_list = self.body_started.then(|| {
             let start = parser.syntax.enumerators.len().to_u32();
             parser.syntax.enumerators.append(&mut self.enumerators);
-            parser
-                .syntax
-                .enumerator_sources
-                .append(&mut self.enumerator_sources);
             VectorSlice::new(start, parser.syntax.enumerators.len().to_u32())
         });
         let index = parser.syntax.enum_specifiers.len().to_u32();
         parser.syntax.enum_specifiers.push(EnumSpecifier {
             name: self.name,
             enumeration_list,
+            source_vectors: self.source_vectors.unwrap_or_default(),
         });
-        parser
-            .syntax
-            .enum_specifier_sources
-            .push(self.source_vectors.unwrap_or_default());
         ParseAction::Reduce(ParseValue::EnumSpecifier(EnumSpecifierIndex(index)))
     }
 }
@@ -3837,16 +3934,34 @@ impl std::error::Error for ParserError {}
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum ParserErrorType {
-    UnexpectedEndOfFrame {
-        frame:    &'static str,
-        expected: &'static str,
-    },
-    UnexpectedToken {
-        frame:    &'static str,
-        expected: &'static str,
-        found:    TokenType,
-    },
-    FutureChildNotImplemented(FutureChildKind),
+    ParserFrameConsumedAtEndOfInput(&'static str),
+    ArrayBoundExpressionNotImplemented,
+    BitFieldWidthExpressionNotImplemented,
+    EnumeratorValueExpressionNotImplemented,
+    InitializerNotImplemented,
+    FunctionBodyNotImplemented,
+    ExpectedDeclaratorInTypedef(Option<TokenType>),
+    ExpectedDeclaratorInDeclaration(Option<TokenType>),
+    ExpectedDeclarationContinuationAfterDeclarator(Option<TokenType>),
+    UnexpectedEndBeforeDeclarationSpecifier,
+    UnexpectedEndBeforeTypeSpecifier,
+    DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(Option<TokenType>),
+    ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(Option<TokenType>),
+    ExpectedClosingParenthesisAfterParenthesizedDeclarator(Option<TokenType>),
+    ExpectedClosingSquareBracketInArrayDirectDeclarator(Option<TokenType>),
+    UnexpectedEndOfFunctionDeclaratorParameterList,
+    ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(Option<TokenType>),
+    ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(Option<TokenType>),
+    ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(Option<TokenType>),
+    ExpectedStructOrUnionKeyword(Option<TokenType>),
+    StructOrUnionSpecifierWithoutNameAndBody(Option<TokenType>),
+    ExpectedClosingCurlyBraceInStructDeclarationList,
+    ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList,
+    ExpectedCommaOrSemicolonInStructDeclaratorList(Option<TokenType>),
+    ExpectedEnumKeyword(Option<TokenType>),
+    EnumSpecifierWithoutNameAndBody(Option<TokenType>),
+    ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(Option<TokenType>),
+    ExpectedCommaOrClosingCurlyInEnumeratorList(Option<TokenType>),
     StorageClassRedefinition(StorageClass, TokenType),
     ConstSpecifiedTwice,
     VolatileSpecifiedTwice,
@@ -3862,20 +3977,59 @@ pub(crate) enum ParserErrorType {
     NoTypeSpecifiersInDeclarationSpecifiers(TokenType),
     BothStaticAndPointerInArrayDirectDeclarator,
     ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator,
+    ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(TokenType),
+    UnexpectedEndOfArrayDeclaratorAfterPointer,
+    PointerSpecifiedTwice,
+    TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
+    KAndRFunctionDeclaratorMixedWithModernDeclarator,
+    ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(TokenType),
+    UnexpectedEndOfVariadicFunctionDeclaratorParameterList,
     EmptyStructDeclarator,
 }
 
 impl GetSeverity for ParserErrorType {
     fn severity(&self) -> ErrorSeverity {
         match self {
-            | Self::UnexpectedEndOfFrame { .. }
-            | Self::UnexpectedToken { .. }
-            | Self::FutureChildNotImplemented(..)
+            | Self::ParserFrameConsumedAtEndOfInput(..)
+            | Self::ArrayBoundExpressionNotImplemented
+            | Self::BitFieldWidthExpressionNotImplemented
+            | Self::EnumeratorValueExpressionNotImplemented
+            | Self::InitializerNotImplemented
+            | Self::FunctionBodyNotImplemented
+            | Self::ExpectedDeclaratorInTypedef(..)
+            | Self::ExpectedDeclaratorInDeclaration(..)
+            | Self::ExpectedDeclarationContinuationAfterDeclarator(..)
+            | Self::UnexpectedEndBeforeDeclarationSpecifier
+            | Self::UnexpectedEndBeforeTypeSpecifier
+            | Self::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
+            | Self::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(..)
+            | Self::ExpectedClosingParenthesisAfterParenthesizedDeclarator(..)
+            | Self::ExpectedClosingSquareBracketInArrayDirectDeclarator(..)
+            | Self::UnexpectedEndOfFunctionDeclaratorParameterList
+            | Self::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
+            | Self::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(..)
+            | Self::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(..)
+            | Self::ExpectedStructOrUnionKeyword(..)
+            | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
+            | Self::ExpectedClosingCurlyBraceInStructDeclarationList
+            | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList
+            | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(..)
+            | Self::ExpectedEnumKeyword(..)
+            | Self::EnumSpecifierWithoutNameAndBody(..)
+            | Self::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(..)
+            | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(..)
             | Self::EmptyDeclarationSpecifiers(..)
             | Self::NoTypeSpecifiersInDeclarationSpecifiers(..)
             | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
             | Self::BothStaticAndPointerInArrayDirectDeclarator
             | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator
+            | Self::UnexpectedEndOfArrayDeclaratorAfterPointer
+            | Self::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
+                ..,
+            )
+            | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList
+            | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
+            | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
             | Self::EmptyStructDeclarator => ErrorSeverity::Error,
             | Self::StorageClassRedefinition(..)
             | Self::ConstSpecifiedTwice
@@ -3886,7 +4040,10 @@ impl GetSeverity for ParserErrorType {
             | Self::ConflictingTypeSpecifiers(..)
             | Self::TypeSpecifierSpecifiedTwice(..)
             | Self::LongSpecifiedThrice
-            | Self::LongLongDoubleSpecified => ErrorSeverity::Warning,
+            | Self::LongLongDoubleSpecified
+            | Self::PointerSpecifiedTwice
+            | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(..) =>
+                ErrorSeverity::Warning,
         }
     }
 }
@@ -3894,24 +4051,132 @@ impl GetSeverity for ParserErrorType {
 impl Display for ParserErrorType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            | Self::UnexpectedEndOfFrame { frame, expected } => {
-                write!(
-                    f,
-                    "Unexpected end of input in {frame}; expected {expected}!"
-                )
-            },
-            | Self::UnexpectedToken {
-                frame,
-                expected,
-                found,
-            } => write!(
+            | Self::ParserFrameConsumedAtEndOfInput(frame) => write!(
                 f,
-                "Unexpected token {found:?} in {frame}; expected {expected}!"
+                "Parser frame `{frame}` attempted to consume a token at end of input."
             ),
-            | Self::FutureChildNotImplemented(kind) => write!(
+            | Self::ArrayBoundExpressionNotImplemented => write!(
                 f,
-                "The {} parser is not implemented yet; skipped this grammar child.",
-                kind.frame_name()
+                "The array-bound expression parser is not implemented yet; skipped the bound."
+            ),
+            | Self::BitFieldWidthExpressionNotImplemented => write!(
+                f,
+                "The bit-field-width expression parser is not implemented yet; skipped the width."
+            ),
+            | Self::EnumeratorValueExpressionNotImplemented => write!(
+                f,
+                "The enumerator-value expression parser is not implemented yet; skipped the value."
+            ),
+            | Self::InitializerNotImplemented => write!(
+                f,
+                "The initializer parser is not implemented yet; skipped the initializer."
+            ),
+            | Self::FunctionBodyNotImplemented => write!(
+                f,
+                "The statement parser is not implemented yet; skipped the function body."
+            ),
+            | Self::ExpectedDeclaratorInTypedef(found) => write_expected(
+                f,
+                "typedef declaration",
+                "a declarator naming the typedef",
+                *found,
+            ),
+            | Self::ExpectedDeclaratorInDeclaration(found) =>
+                write_expected(f, "declaration", "a declarator", *found),
+            | Self::ExpectedDeclarationContinuationAfterDeclarator(found) => write_expected(
+                f,
+                "declaration after a declarator",
+                "`,`, `=`, `;`, or a function body",
+                *found,
+            ),
+            | Self::UnexpectedEndBeforeDeclarationSpecifier => write!(
+                f,
+                "Unexpected end of input before any declaration specifier was parsed."
+            ),
+            | Self::UnexpectedEndBeforeTypeSpecifier => write!(
+                f,
+                "Unexpected end of input before any type specifier was parsed."
+            ),
+            | Self::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(found) =>
+                write_expected(f, "direct declarator", "an identifier or `(`", *found),
+            | Self::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(found) =>
+                write_expected(
+                    f,
+                    "parenthesized direct declarator",
+                    "a declarator after `(`",
+                    *found,
+                ),
+            | Self::ExpectedClosingParenthesisAfterParenthesizedDeclarator(found) =>
+                write_expected(
+                    f,
+                    "parenthesized declarator",
+                    "`)` after the nested declarator",
+                    *found,
+                ),
+            | Self::ExpectedClosingSquareBracketInArrayDirectDeclarator(found) => write_expected(
+                f,
+                "array direct declarator",
+                "`]` after the array-bound expression",
+                *found,
+            ),
+            | Self::UnexpectedEndOfFunctionDeclaratorParameterList => write!(
+                f,
+                "Unexpected end of input in a function declarator parameter list; expected `)`."
+            ),
+            | Self::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(found) =>
+                write_expected(
+                    f,
+                    "K&R function declarator parameter list",
+                    "a non-typedef identifier",
+                    *found,
+                ),
+            | Self::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
+                found,
+            ) => write_expected(
+                f,
+                "K&R function declarator parameter list",
+                "`,` or `)` after a parameter name",
+                *found,
+            ),
+            | Self::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(found) =>
+                write_expected(
+                    f,
+                    "function declarator parameter list",
+                    "`,` or `)` after a parameter declaration",
+                    *found,
+                ),
+            | Self::ExpectedStructOrUnionKeyword(found) => write_expected(
+                f,
+                "struct-or-union specifier",
+                "the `struct` or `union` keyword",
+                *found,
+            ),
+            | Self::StructOrUnionSpecifierWithoutNameAndBody(found) =>
+                write_expected(f, "struct-or-union specifier", "a tag name or `{`", *found),
+            | Self::ExpectedClosingCurlyBraceInStructDeclarationList => write!(
+                f,
+                "Unexpected end of input in a struct declaration list; expected `}}`."
+            ),
+            | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList =>
+                write!(f, "Expected `;` before `}}` in a struct declarator list."),
+            | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(found) =>
+                write_expected(f, "struct declarator list", "`,` or `;`", *found),
+            | Self::ExpectedEnumKeyword(found) =>
+                write_expected(f, "enum specifier", "the `enum` keyword", *found),
+            | Self::EnumSpecifierWithoutNameAndBody(found) =>
+                write_expected(f, "enum specifier", "a tag name or `{`", *found),
+            | Self::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(found) =>
+                write_expected(
+                    f,
+                    "enumerator list",
+                    "an enumeration constant or `}`",
+                    *found,
+                ),
+            | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(found) => write_expected(
+                f,
+                "enumerator list",
+                "`,` or `}` after an enumerator",
+                *found,
             ),
             | Self::StorageClassRedefinition(last, new) => {
                 write!(f, "Redefinition of storage class {last:?} with {new:?}!")
@@ -3969,10 +4234,64 @@ impl Display for ParserErrorType {
             | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator => {
                 write!(f, "Expected an assignment expression after `static`!")
             },
+            | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(found) =>
+                write!(
+                    f,
+                    "Expected `]` immediately after `*` in an array direct declarator; found \
+                     {found:?}."
+                ),
+            | Self::UnexpectedEndOfArrayDeclaratorAfterPointer => write!(
+                f,
+                "Unexpected end of input after `*` in an array direct declarator; expected `]`."
+            ),
+            | Self::PointerSpecifiedTwice => {
+                write!(
+                    f,
+                    "Pointer marker `*` specified twice in an array declarator."
+                )
+            },
+            | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator => write!(
+                f,
+                "Type qualifiers appeared before `*` in an array abstract declarator."
+            ),
+            | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator => write!(
+                f,
+                "A K&R identifier list cannot contain a prototype-style parameter declaration."
+            ),
+            | Self::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
+                found,
+            ) => write!(
+                f,
+                "Expected `)` immediately after `...` in a function declarator parameter list; \
+                 found {found:?}."
+            ),
+            | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList => write!(
+                f,
+                "Unexpected end of input after `...` in a function declarator parameter list; \
+                 expected `)`."
+            ),
             | Self::EmptyStructDeclarator => {
                 write!(f, "Expected a declarator in the struct member declaration!")
             },
         }
+    }
+}
+
+fn write_expected(
+    f: &mut Formatter<'_>,
+    grammar_position: &str,
+    expected: &str,
+    found: Option<TokenType>,
+) -> FmtResult {
+    match found {
+        | Some(found) => write!(
+            f,
+            "Expected {expected} in {grammar_position}; found {found:?}."
+        ),
+        | None => write!(
+            f,
+            "Unexpected end of input in {grammar_position}; expected {expected}."
+        ),
     }
 }
 
@@ -4144,7 +4463,7 @@ mod tests {
         let pointer_declaration = declaration(&parsed, 3);
         let pointer = init_declarators(&parsed, pointer_declaration)[0]
             .declarator
-            .pointer_declarator
+            .pointer
             .type_qualifiers_list;
         let start = pointer.start_index as usize;
         let end = start + pointer.length as usize;
@@ -4308,34 +4627,30 @@ mod tests {
             .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
             .collect::<Vec<_>>();
         assert_eq!(names, ["A", "B"]);
-        assert_eq!(
-            parsed.parser.syntax.enumerator_sources.len(),
-            parsed.parser.syntax.enumerators.len()
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .enumerators
+                .iter()
+                .all(|enumerator| enumerator.source_vectors.length > 0)
         );
         assert!(
             parsed
                 .parser
                 .syntax
-                .enumerator_sources
+                .struct_declarations
                 .iter()
-                .all(|source| source.length > 0)
-        );
-        assert_eq!(
-            parsed.parser.syntax.struct_declaration_sources.len(),
-            parsed.parser.syntax.struct_declarations.len()
-        );
-        assert_eq!(
-            parsed.parser.syntax.struct_declarator_sources.len(),
-            parsed.parser.syntax.struct_declarators.len()
-        );
-        assert!(
-            parsed
-                .parser
-                .syntax
-                .struct_declaration_sources
-                .iter()
-                .chain(&parsed.parser.syntax.struct_declarator_sources)
-                .all(|source| source.length > 0)
+                .map(|declaration| declaration.source_vectors)
+                .chain(
+                    parsed
+                        .parser
+                        .syntax
+                        .struct_declarators
+                        .iter()
+                        .map(|declarator| declarator.source_vectors)
+                )
+                .all(|source_vectors| source_vectors.length > 0)
         );
     }
 
@@ -4397,7 +4712,15 @@ mod tests {
         assert_eq!(parsed.items.len(), 6);
         let future_children = parser_errors(&parsed)
             .filter_map(|error| match error {
-                | ParserErrorType::FutureChildNotImplemented(kind) => Some(*kind),
+                | ParserErrorType::ArrayBoundExpressionNotImplemented =>
+                    Some(FutureChildKind::ArrayBoundExpression),
+                | ParserErrorType::BitFieldWidthExpressionNotImplemented =>
+                    Some(FutureChildKind::BitFieldWidthExpression),
+                | ParserErrorType::EnumeratorValueExpressionNotImplemented =>
+                    Some(FutureChildKind::EnumeratorValueExpression),
+                | ParserErrorType::InitializerNotImplemented => Some(FutureChildKind::Initializer),
+                | ParserErrorType::FunctionBodyNotImplemented =>
+                    Some(FutureChildKind::FunctionBody),
                 | _ => None,
             })
             .collect::<Vec<_>>();
@@ -4433,11 +4756,10 @@ mod tests {
             parsed.items.get(1),
             Some(ExternalDeclaration::Declaration(_))
         ));
-        assert!(parser_errors(&parsed).any(|error| matches!(
-            error,
-            ParserErrorType::EmptyDeclarationSpecifiers(..)
-                | ParserErrorType::UnexpectedToken { .. }
-        )));
+        assert!(
+            parser_errors(&parsed)
+                .any(|error| matches!(error, ParserErrorType::EmptyDeclarationSpecifiers(..)))
+        );
     }
 
     #[test]
@@ -4457,9 +4779,9 @@ mod tests {
             parsed
                 .parser
                 .syntax
-                .parameter_sources
+                .parameter_declarations
                 .iter()
-                .map(|source| sourced_text(&parsed, *source))
+                .map(|parameter| sourced_text(&parsed, parameter.source_vectors))
                 .collect::<Vec<_>>(),
             ["intx", "chary"]
         );
@@ -4476,6 +4798,19 @@ mod tests {
                 .as_deref(),
             Some("y")
         );
+    }
+
+    #[test]
+    fn malformed_parameter_after_ellipsis_terminates() {
+        let parsed = parse("int f(int, ..., char trailing);\n");
+
+        assert_eq!(parsed.items.len(), 1);
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
+                TokenType::Operator(OperatorTokenType::Comma)
+            )
+        )));
     }
 
     #[test]
@@ -4501,6 +4836,48 @@ mod tests {
     }
 
     #[test]
+    fn pointer_array_declarator_reports_its_specific_closing_bracket_diagnostic() {
+        let parsed = parse("int array[* trailing];\n");
+
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
+                TokenType::Identifier
+            )
+        )));
+    }
+
+    #[test]
+    fn duplicate_pointer_array_marker_keeps_its_legacy_diagnostic() {
+        let parsed = parse("int array[**];\n");
+
+        assert!(
+            parser_errors(&parsed)
+                .any(|error| matches!(error, ParserErrorType::PointerSpecifiedTwice))
+        );
+    }
+
+    #[test]
+    fn qualifiers_before_an_abstract_array_pointer_keep_their_legacy_diagnostic() {
+        let parsed = parse("int function(int [const *]);\n");
+
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
+        )));
+    }
+
+    #[test]
+    fn mixed_k_and_r_and_prototype_parameters_keep_their_legacy_diagnostic() {
+        let parsed = parse("int function(first, int second);\n");
+
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator
+        )));
+    }
+
+    #[test]
     fn array_qualifiers_on_both_sides_of_static_keep_the_legacy_diagnostic() {
         let parsed = parse("int values[const static volatile 4];\n");
 
@@ -4518,14 +4895,7 @@ mod tests {
         );
 
         let parenthesized = init_declarators(&parsed, declaration(&parsed, 0))[0].declarator;
-        let parenthesized_source = parsed
-            .parser
-            .syntax
-            .declarator_sources
-            .iter()
-            .copied()
-            .find(|source| sourced_text(&parsed, *source) == "(*value)")
-            .expect("parenthesized declarator source");
+        let parenthesized_source = parenthesized.source_vectors;
         assert_eq!(sourced_text(&parsed, parenthesized_source), "(*value)");
         assert_eq!(
             identifier_name(&parsed, parenthesized).as_deref(),
@@ -4535,51 +4905,151 @@ mod tests {
         let parameter_text = parsed
             .parser
             .syntax
-            .parameter_sources
+            .parameter_declarations
             .iter()
-            .map(|source| sourced_text(&parsed, *source))
+            .map(|parameter| sourced_text(&parsed, parameter.source_vectors))
             .collect::<Vec<_>>();
         assert_eq!(parameter_text, ["constchar*name", "unsignedcount"]);
 
         let member_text = parsed
             .parser
             .syntax
-            .struct_declaration_sources
+            .struct_declarations
             .iter()
-            .map(|source| sourced_text(&parsed, *source))
+            .map(|declaration| sourced_text(&parsed, declaration.source_vectors))
             .collect::<Vec<_>>();
         assert_eq!(member_text, ["intfirst,*second;", "unsignedbits:3;"]);
         let member_declarator_text = parsed
             .parser
             .syntax
-            .struct_declarator_sources
+            .struct_declarators
             .iter()
-            .map(|source| sourced_text(&parsed, *source))
+            .map(|declarator| sourced_text(&parsed, declarator.source_vectors))
             .collect::<Vec<_>>();
         assert_eq!(member_declarator_text, ["first", "*second", "bits:3"]);
     }
 
     #[test]
     fn malformed_and_eof_paths_terminate_with_source_backed_diagnostics() {
-        for source in [
-            "int\n",
-            "int *\n",
-            "int (value\n",
-            "int (value;\n",
-            "int array[\n",
-            "int array[*;\n",
-            "int function(int\n",
-            "int function(int, ...;\n",
-            "struct S { int member\n",
-            "struct S { int first,\n",
-            "struct S { int member }\n",
-            "struct {\n",
-            "enum E { A\n",
-            "enum E { A,, B };\n",
-            "enum {\n",
-            "typedef ;\n",
-            "}\nint after;\n",
-        ] {
+        type DiagnosticMatcher = fn(&ParserErrorType) -> bool;
+        let cases: &[(&str, DiagnosticMatcher)] = &[
+            ("int\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
+                        None
+                    )
+                )
+            }),
+            ("int *\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
+                        None
+                    )
+                )
+            }),
+            ("int (value\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(None)
+                )
+            }),
+            ("int (value;\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(Some(
+                        TokenType::Operator(OperatorTokenType::Semicolon)
+                    ))
+                )
+            }),
+            ("int array[\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(None)
+                )
+            }),
+            ("int array[*;\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
+                        TokenType::Operator(OperatorTokenType::Semicolon)
+                    )
+                )
+            }),
+            ("int function(int\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
+                        None
+                    )
+                )
+            }),
+            ("int function(int, ...;\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
+                        TokenType::Operator(OperatorTokenType::Semicolon)
+                    )
+                )
+            }),
+            ("struct S { int member\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(None)
+                )
+            }),
+            ("struct S { int first,\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
+                        None
+                    )
+                )
+            }),
+            ("struct S { int member }\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList
+                )
+            }),
+            ("struct {\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList
+                )
+            }),
+            ("enum E { A\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(None)
+                )
+            }),
+            ("enum E { A,, B };\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
+                        Some(TokenType::Operator(OperatorTokenType::Comma))
+                    )
+                )
+            }),
+            ("enum {\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
+                        None
+                    )
+                )
+            }),
+            ("typedef ;\n", |error| {
+                matches!(error, ParserErrorType::ExpectedDeclaratorInTypedef(..))
+            }),
+            ("}\nint after;\n", |error| {
+                matches!(error, ParserErrorType::EmptyDeclarationSpecifiers(..))
+            }),
+        ];
+
+        for (source, expected_diagnostic) in cases {
             let parsed = parse(source);
             let errors = parsed
                 .errors
@@ -4590,8 +5060,10 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             assert!(
-                !errors.is_empty(),
-                "missing parser diagnostic for {source:?}"
+                errors
+                    .iter()
+                    .any(|error| expected_diagnostic(&error.error_type)),
+                "missing expected parser diagnostic for {source:?}: {errors:#?}"
             );
             assert!(errors.iter().all(|error| error.source_vectors.length > 0));
         }
