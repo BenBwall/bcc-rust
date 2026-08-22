@@ -123,8 +123,8 @@ The typed result passed from a completed child frame to its parent. The current 
 The tokens at which a particular frame can safely resume or unwind after malformed input, paired with a legal recovery target.
 _Avoid_: Global recovery point
 
-**Error node** *(partially implemented)*:
-A syntax placeholder representing malformed input after a diagnostic, allowing parent frames to retain a valid shape and parsing to continue.
+**Error node** *(implemented at the external-declaration boundary)*:
+A syntax placeholder representing malformed input after a diagnostic. Migrated declaration frames finish recovery and provenance collection, then yield `ExternalDeclaration::Error` so parsing can continue without presenting malformed syntax as a successful declaration.
 
 ## Compiler boundaries
 
