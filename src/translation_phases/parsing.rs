@@ -1,5 +1,9 @@
+#![expect(
+    dead_code,
+    reason = "Phase 02 retains syntax types for explicitly deferred parser children."
+)]
+
 use std::{
-    assert_matches,
     fmt::{
         Debug,
         Display,
@@ -50,76 +54,80 @@ use crate::{
     },
 };
 
-#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Parser {
-    pub(crate) preprocessor:               Preprocessor,
-    pub(crate) type_names:                 Vec<TypeName>,
-    pub(crate) pending_token:              Option<Token>,
-    pub(crate) expressions:                Vec<Expression>,
-    pub(crate) expression_indices:         Vec<ExpressionIndex>,
-    pub(crate) statements:                 Vec<Statement>,
-    pub(crate) type_qualifiers:            Vec<TypeQualifiers>,
-    pub(crate) direct_declarators:         Vec<DirectDeclarator>,
-    pub(crate) identifiers:                Vec<Identifier>,
-    pub(crate) typedef_names:              HashMap<StringCacheId, TypeIndex>,
-    pub(crate) struct_names:               HashMap<StringCacheId, TypeIndex>,
-    pub(crate) enum_names:                 HashMap<StringCacheId, TypeIndex>,
-    pub(crate) parameter_declarations:     Vec<ParameterDeclaration>,
-    pub(crate) struct_or_union_specifiers: Vec<StructOrUnionSpecifier>,
-    pub(crate) struct_declarations:        Vec<StructDeclaration>,
-    pub(crate) struct_declarators:         Vec<StructDeclarator>,
-    pub(crate) enum_specifiers:            Vec<EnumSpecifier>,
-    pub(crate) enumerators:                Vec<Enumerator>,
+    cursor:   TokenCursor,
+    frames:   Vec<ParseFrame>,
+    returned: Option<ParseValue>,
+    syntax:   SyntaxStore,
+    scopes:   ScopeStack,
+    recovery: RecoveryState,
+    #[cfg(test)]
+    trace:    Vec<FrameTraceEvent>,
 }
 
 impl GetPosition for Parser {
     fn position(&self, context: &Context) -> SourcePosition {
-        self.preprocessor.position(context)
+        self.cursor.preprocessor.position(context)
     }
 }
 
 impl SetPosition for Parser {
     fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
-        self.preprocessor.set_position(context, position);
+        self.cursor.preprocessor.set_position(context, position);
     }
 }
 
 impl GetSourceFileIndex for Parser {
     fn source_file_index(&self) -> u32 {
-        self.preprocessor.source_file_index()
+        self.cursor.preprocessor.source_file_index()
     }
 }
 
 impl SetSourceFileIndex for Parser {
     fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
-        self.preprocessor
+        self.cursor
+            .preprocessor
             .set_source_file_index(context, source_file_index);
     }
 }
 
 /// declaration:
 /// - declaration-specifiers init-declarator-list? ;
+#[derive(Debug, PartialEq, Clone, Copy)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "The C grammar's declaration-specifiers term is the precise field name."
+)]
 pub(crate) struct Declaration {
     pub(crate) declaration_specifiers: DeclarationSpecifiers,
     /// init-declarator-list
     pub(crate) init_declarators:       VectorSlice<InitDeclarator>,
+    pub(crate) source_vectors:         SourceVectors,
 }
 
 /// init-declarator:
 /// - declarator
 /// - declarator = initializer
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct InitDeclarator {
-    pub(crate) declarator:  Declarator,
-    pub(crate) initializer: Option<Initializer>,
+    pub(crate) declarator:     Declarator,
+    pub(crate) initializer:    Option<Initializer>,
+    pub(crate) source_vectors: SourceVectors,
 }
 
 /// initializer:
 /// - assignment-expression
 /// - { initializer-list }
 /// - { initializer-list , }
+#[derive(Debug, PartialEq, Clone)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "InitializerList is the C grammar production represented by this variant."
+)]
 pub(crate) enum Initializer {
     AssignmentExpression(ExpressionIndex),
     InitializerList(VectorSlice<Initializer>),
+    FutureChild(SourceVectors),
 }
 
 bitflags::bitflags! {
@@ -653,7 +661,7 @@ pub(crate) enum StructOrUnion {
 /// struct-declaration:
 /// - specifier-qualifier-list struct-declarator-list ;
 ///
-/// type_qualifiers and type_specifiers are split into two fields.
+/// `type_qualifiers` and `type_specifiers` are split into two fields.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct StructDeclaration {
     type_qualifiers:        TypeQualifiers,
@@ -703,7 +711,7 @@ pub(crate) struct FunctionSpecifiers {
 /// - function-specifier declaration-specifiers?
 ///
 /// each field in this struct contains all the specifiers of that type. For
-/// example, the type_qualifiers field contains all the type qualifiers in the
+/// example, the `type_qualifiers` field contains all the type qualifiers in the
 /// declaration.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct DeclarationSpecifiers {
@@ -711,6 +719,7 @@ pub(crate) struct DeclarationSpecifiers {
     pub(crate) type_qualifiers:     TypeQualifiers,
     pub(crate) type_specifiers:     TypeSpecifiers,
     pub(crate) function_specifiers: FunctionSpecifiers,
+    pub(crate) source_vectors:      SourceVectors,
 }
 
 impl Default for DeclarationSpecifiers {
@@ -720,12 +729,13 @@ impl Default for DeclarationSpecifiers {
 }
 
 impl DeclarationSpecifiers {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
             storage_class:       StorageClass::Auto,
             type_qualifiers:     TypeQualifiers::empty(),
             type_specifiers:     TypeSpecifiers::Empty,
             function_specifiers: FunctionSpecifiers { is_inline: false },
+            source_vectors:      VectorSlice::empty(),
         }
     }
 }
@@ -734,9 +744,9 @@ impl DeclarationSpecifiers {
 /// - type-qualifier-list?
 /// - type-qualifier-list? pointer
 ///
-/// Each element in the type_qualifiers_list represents the type qualifiers for
-/// one level of indirection. For example, this declaration: `*const *volatile
-/// *x` would be parsed as: `[TypeQualifiers::CONST,
+/// Each element in the `type_qualifiers_list` represents the type qualifiers
+/// for one level of indirection. For example, this declaration: `*const
+/// *volatile *x` would be parsed as: `[TypeQualifiers::CONST,
 /// TypeQualifiers::VOLATILE, TypeQualifiers::empty()]`
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct PointerDeclarator {
@@ -810,1523 +820,2515 @@ pub(crate) struct ParameterDeclaration {
     declarator:             Option<Declarator>,
 }
 
-// FIXME: Change this to an enum when using enums as const generics is
-// supported.
-const IS_ABSTRACT_DECLARATOR: u8 = 0;
-const IS_NOT_ABSTRACT_DECLARATOR: u8 = 1;
-const IS_MAYBE_ABSTRACT_DECLARATOR: u8 = 2;
+// The Phase 02 parser machine is implemented below the retained syntax model.
 
-// FIXME: Change this to an enum when using enums as const generics is
-// supported.
-const IS_FUNCTION_DEFINITION: u8 = 0;
-const IS_NOT_FUNCTION_DEFINITION: u8 = 1;
-const IS_MAYBE_FUNCTION_DEFINITION: u8 = 2;
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct TypeName {
+    pub(crate) declaration_specifiers: DeclarationSpecifiers,
+    pub(crate) declarator:             Option<Declarator>,
+}
+
+struct TokenCursor {
+    preprocessor: Preprocessor,
+    current:      Option<Token>,
+    reached_eof:  bool,
+}
+
+impl TokenCursor {
+    fn new(preprocessor: Preprocessor) -> Self {
+        Self {
+            preprocessor,
+            current: None,
+            reached_eof: false,
+        }
+    }
+
+    fn current(&mut self, context: &mut Context) -> Option<Token> {
+        if self.current.is_none() && !self.reached_eof {
+            self.current = self.preprocessor.next_item(context);
+            self.reached_eof = self.current.is_none();
+        }
+        self.current
+    }
+
+    fn consume(&mut self) {
+        debug_assert!(self.current.is_some(), "cannot consume parser EOF");
+        self.current = None;
+    }
+}
+
+#[derive(Default)]
+struct SyntaxStore {
+    type_names:                 Vec<TypeName>,
+    declarations:               Vec<Declaration>,
+    init_declarators:           Vec<InitDeclarator>,
+    expressions:                Vec<Expression>,
+    expression_indices:         Vec<ExpressionIndex>,
+    statements:                 Vec<Statement>,
+    type_qualifiers:            Vec<TypeQualifiers>,
+    direct_declarators:         Vec<DirectDeclarator>,
+    identifiers:                Vec<Identifier>,
+    parameter_declarations:     Vec<ParameterDeclaration>,
+    struct_or_union_specifiers: Vec<StructOrUnionSpecifier>,
+    struct_declarations:        Vec<StructDeclaration>,
+    struct_declarators:         Vec<StructDeclarator>,
+    enum_specifiers:            Vec<EnumSpecifier>,
+    enumerators:                Vec<Enumerator>,
+    declaration_sources:        Vec<SourceVectors>,
+    declarator_sources:         Vec<SourceVectors>,
+    parameter_sources:          Vec<SourceVectors>,
+    struct_specifier_sources:   Vec<SourceVectors>,
+    enum_specifier_sources:     Vec<SourceVectors>,
+    struct_declaration_sources: Vec<SourceVectors>,
+    struct_declarator_sources:  Vec<SourceVectors>,
+    enumerator_sources:         Vec<SourceVectors>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum NameClass {
+    Typedef,
+    Ordinary,
+}
+
+#[derive(Default)]
+struct ScopeStack {
+    file_scope: HashMap<StringCacheId, NameClass>,
+}
+
+impl ScopeStack {
+    fn is_typedef(&self, name: StringCacheId) -> bool {
+        self.file_scope.get(&name) == Some(&NameClass::Typedef)
+    }
+
+    fn publish(&mut self, name: StringCacheId, class: NameClass) {
+        _ = self.file_scope.insert(name, class);
+    }
+}
+
+#[derive(Debug)]
+enum ParseAction {
+    Consume,
+    Push(ParseFrame),
+    Reduce(ParseValue),
+    Reprocess,
+    Recover(SynchronizationSet),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ParseValue {
+    DeclarationSpecifiers(DeclarationSpecifiers),
+    Declarator(Option<Declarator>),
+    ParameterList(DirectDeclarator),
+    StructOrUnionSpecifier(StructOrUnionSpecifierIndex),
+    EnumSpecifier(EnumSpecifierIndex),
+    Declaration(DeclarationIndex),
+    ExternalDeclaration(ExternalDeclaration),
+    FutureChild(FutureChildKind),
+}
+
+#[derive(Debug)]
+enum ParseFrame {
+    ExternalDeclaration(ExternalDeclarationFrame),
+    Declaration(DeclarationFrame),
+    DeclarationSpecifiers(DeclarationSpecifiersFrame),
+    Declarator(DeclaratorFrame),
+    ParameterList(ParameterListFrame),
+    StructOrUnionSpecifier(StructOrUnionSpecifierFrame),
+    EnumSpecifier(EnumSpecifierFrame),
+    FutureChild(FutureChildFrame),
+}
+
+impl ParseFrame {
+    fn name(&self) -> &'static str {
+        match self {
+            | Self::ExternalDeclaration(_) => "external-declaration",
+            | Self::Declaration(_) => "declaration",
+            | Self::DeclarationSpecifiers(_) => "declaration-specifiers",
+            | Self::Declarator(_) => "declarator",
+            | Self::ParameterList(_) => "parameter-list",
+            | Self::StructOrUnionSpecifier(_) => "struct-or-union-specifier",
+            | Self::EnumSpecifier(_) => "enum-specifier",
+            | Self::FutureChild(frame) => frame.kind.frame_name(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SynchronizationSet {
+    kind:   SynchronizationKind,
+    target: RecoveryTarget,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SynchronizationKind {
+    Declaration,
+    Initializer,
+    ArrayBound,
+    Parameter,
+    StructMember,
+    EnumeratorValue,
+    FunctionBody,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RecoveryTarget {
+    CurrentFrame,
+}
+
+#[derive(Default)]
+struct RecoveryState {
+    active:         bool,
+    skipped_tokens: usize,
+    last:           Option<SynchronizationSet>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FutureChildKind {
+    ArrayBoundExpression,
+    BitFieldWidthExpression,
+    EnumeratorValueExpression,
+    Initializer,
+    FunctionBody,
+}
+
+impl FutureChildKind {
+    fn frame_name(self) -> &'static str {
+        match self {
+            | Self::ArrayBoundExpression => "array-bound-expression",
+            | Self::BitFieldWidthExpression => "bit-field-width-expression",
+            | Self::EnumeratorValueExpression => "enumerator-value-expression",
+            | Self::Initializer => "initializer",
+            | Self::FunctionBody => "statement",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FutureChildFrame {
+    kind:  FutureChildKind,
+    phase: FutureChildPhase,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FutureChildPhase {
+    Start,
+    Recovered,
+}
+
+impl FutureChildFrame {
+    fn new(kind: FutureChildKind) -> Self {
+        Self {
+            kind,
+            phase: FutureChildPhase::Start,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExternalDeclarationFrame {
+    phase: ExternalDeclarationPhase,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ExternalDeclarationPhase {
+    Start,
+    AwaitDeclaration,
+}
+
+impl ExternalDeclarationFrame {
+    fn new() -> Self {
+        Self {
+            phase: ExternalDeclarationPhase::Start,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DeclarationFrame {
+    phase:                  DeclarationPhase,
+    declaration_specifiers: Option<DeclarationSpecifiers>,
+    init_declarator_start:  u32,
+    source_vectors:         Option<SourceVectors>,
+    last_init_index:        Option<u32>,
+    initializer_source:     Option<SourceVectors>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DeclarationPhase {
+    Start,
+    AwaitSpecifiers,
+    AwaitDeclarator,
+    AfterDeclarator,
+    PushInitializer,
+    AwaitInitializer,
+    AwaitFunctionBody,
+    BeforeNextDeclarator,
+    Finish,
+}
+
+impl DeclarationFrame {
+    fn new(init_declarator_start: u32) -> Self {
+        Self {
+            phase: DeclarationPhase::Start,
+            declaration_specifiers: None,
+            init_declarator_start,
+            source_vectors: None,
+            last_init_index: None,
+            initializer_source: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpecifierMode {
+    Declaration,
+    SpecifierQualifier,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DeclarationSpecifiersFrame {
+    phase:          DeclarationSpecifiersPhase,
+    mode:           SpecifierMode,
+    specifiers:     DeclarationSpecifiers,
+    consumed:       bool,
+    storage_seen:   bool,
+    source_vectors: Option<SourceVectors>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DeclarationSpecifiersPhase {
+    Collect,
+    AwaitStructOrUnion,
+    AwaitEnum,
+}
+
+impl DeclarationSpecifiersFrame {
+    fn new(mode: SpecifierMode) -> Self {
+        Self {
+            phase: DeclarationSpecifiersPhase::Collect,
+            mode,
+            specifiers: DeclarationSpecifiers::new(),
+            consumed: false,
+            storage_seen: false,
+            source_vectors: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeclaratorMode {
+    Named,
+    Abstract,
+    MaybeAbstract,
+}
+
+#[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The booleans retain independent C array/declarator grammar facts."
+)]
+struct DeclaratorFrame {
+    phase:                 DeclaratorPhase,
+    mode:                  DeclaratorMode,
+    pointer_qualifiers:    Vec<TypeQualifiers>,
+    direct_declarators:    Vec<DirectDeclarator>,
+    current_qualifiers:    TypeQualifiers,
+    has_pointer_level:     bool,
+    has_direct_declarator: bool,
+    array_qualifiers:      TypeQualifiers,
+    array_is_static:       bool,
+    array_is_pointer:      bool,
+    source_vectors:        Option<SourceVectors>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DeclaratorPhase {
+    PointerOrBase,
+    PointerQualifiers,
+    Base,
+    PushNested,
+    ClassifyAbstractParenthesis,
+    AwaitNested,
+    ExpectNestedClose(Declarator),
+    Suffix,
+    Array,
+    ArrayExpectClose,
+    AwaitArrayBound,
+    FunctionStart,
+    AwaitParameterList,
+    Finish,
+}
+
+impl DeclaratorFrame {
+    fn new(mode: DeclaratorMode) -> Self {
+        Self {
+            phase: DeclaratorPhase::PointerOrBase,
+            mode,
+            pointer_qualifiers: Vec::new(),
+            direct_declarators: Vec::new(),
+            current_qualifiers: TypeQualifiers::empty(),
+            has_pointer_level: false,
+            has_direct_declarator: false,
+            array_qualifiers: TypeQualifiers::empty(),
+            array_is_static: false,
+            array_is_pointer: false,
+            source_vectors: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ParameterListFrame {
+    phase:              ParameterListPhase,
+    allow_k_and_r:      bool,
+    parameters:         Vec<ParameterDeclaration>,
+    identifiers:        Vec<Identifier>,
+    pending_specifiers: Option<DeclarationSpecifiers>,
+    is_variadic:        bool,
+    source_vectors:     Option<SourceVectors>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ParameterListPhase {
+    Start,
+    KAndRIdentifier,
+    KAndRSeparator,
+    PrototypeParameter,
+    AwaitSpecifiers,
+    AwaitDeclarator,
+    PrototypeSeparator,
+    AfterComma,
+    ExpectCloseAfterEllipsis,
+    FinishKAndR,
+    FinishPrototype,
+}
+
+impl ParameterListFrame {
+    fn new(allow_k_and_r: bool) -> Self {
+        Self {
+            phase: ParameterListPhase::Start,
+            allow_k_and_r,
+            parameters: Vec::new(),
+            identifiers: Vec::new(),
+            pending_specifiers: None,
+            is_variadic: false,
+            source_vectors: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StructOrUnionSpecifierFrame {
+    phase: StructOrUnionPhase,
+    kind: Option<StructOrUnion>,
+    identifier: Option<Identifier>,
+    declarations: Vec<StructDeclaration>,
+    member_declarators: Vec<StructDeclarator>,
+    declaration_sources: Vec<SourceVectors>,
+    member_declarator_sources: Vec<SourceVectors>,
+    member_specifiers: Option<DeclarationSpecifiers>,
+    member_declarator: Option<Declarator>,
+    body_started: bool,
+    source_vectors: Option<SourceVectors>,
+    member_source: Option<SourceVectors>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StructOrUnionPhase {
+    Start,
+    NameOrBody,
+    AfterName,
+    MemberStart,
+    AwaitMemberSpecifiers,
+    PushMemberDeclarator,
+    AwaitMemberDeclarator,
+    AfterMemberDeclarator,
+    PushBitFieldWidth,
+    AwaitBitFieldWidth,
+    AfterStructDeclarator,
+    FinishBody,
+}
+
+impl StructOrUnionSpecifierFrame {
+    fn new() -> Self {
+        Self {
+            phase: StructOrUnionPhase::Start,
+            kind: None,
+            identifier: None,
+            declarations: Vec::new(),
+            member_declarators: Vec::new(),
+            declaration_sources: Vec::new(),
+            member_declarator_sources: Vec::new(),
+            member_specifiers: None,
+            member_declarator: None,
+            body_started: false,
+            source_vectors: None,
+            member_source: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EnumSpecifierFrame {
+    phase: EnumPhase,
+    name: Option<Identifier>,
+    enumerators: Vec<Enumerator>,
+    enumerator_sources: Vec<SourceVectors>,
+    current_enumerator: Option<Identifier>,
+    body_started: bool,
+    source_vectors: Option<SourceVectors>,
+    current_enumerator_source: Option<SourceVectors>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EnumPhase {
+    Start,
+    NameOrBody,
+    AfterName,
+    EnumeratorOrClose,
+    AfterEnumeratorName,
+    PushEnumeratorValue,
+    AwaitEnumeratorValue,
+    AfterEnumerator,
+    FinishBody,
+}
+
+impl EnumSpecifierFrame {
+    fn new() -> Self {
+        Self {
+            phase: EnumPhase::Start,
+            name: None,
+            enumerators: Vec::new(),
+            enumerator_sources: Vec::new(),
+            current_enumerator: None,
+            body_started: false,
+            source_vectors: None,
+            current_enumerator_source: None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+struct FrameTraceEvent {
+    frame:  &'static str,
+    action: &'static str,
+    token:  Option<TokenType>,
+    depth:  usize,
+}
 
 impl Parser {
     pub(crate) fn new(preprocessor: Preprocessor) -> Self {
         Self {
-            preprocessor,
-            type_names: Vec::new(),
-            pending_token: None,
-            expressions: Vec::new(),
-            expression_indices: Vec::new(),
-            statements: Vec::new(),
-            type_qualifiers: Vec::new(),
-            identifiers: Vec::new(),
-            direct_declarators: Vec::new(),
-            enum_names: HashMap::default(),
-            struct_names: HashMap::default(),
-            typedef_names: HashMap::default(),
-            parameter_declarations: Vec::new(),
-            struct_or_union_specifiers: Vec::new(),
-            struct_declarations: Vec::new(),
-            struct_declarators: Vec::new(),
-            enum_specifiers: Vec::new(),
-            enumerators: Vec::new(),
+            cursor:             TokenCursor::new(preprocessor),
+            frames:             Vec::new(),
+            returned:           None,
+            syntax:             SyntaxStore::default(),
+            scopes:             ScopeStack::default(),
+            recovery:           RecoveryState::default(),
+            #[cfg(test)]
+            trace:              Vec::new(),
         }
     }
 
-    fn next_token(&mut self, context: &mut Context) -> Option<Token> {
-        if let Some(token) = self.pending_token.take() {
-            return Some(token);
-        }
-        self.preprocessor.next_item(context)
-    }
-
-    fn parse_statement(&mut self, _context: &mut Context) -> Statement {
-        todo!();
-    }
-
-    fn parse_expression<const IS_CONSTANT_EXPRESSION: bool>(
-        &mut self,
-        _context: &mut Context,
-    ) -> ExpressionIndex {
-        todo!();
-    }
-
-    fn parse_assignment_expression(&mut self, _context: &mut Context) -> ExpressionIndex {
-        todo!();
-    }
-
-    fn parse_struct_or_union_declaration(
-        &mut self,
-        context: &mut Context,
-        token: Token,
-    ) -> StructOrUnionSpecifierIndex {
-        assert!(
-            matches!(
-                token.kind,
-                TokenType::Keyword(KeywordTokenType::Struct | KeywordTokenType::Union)
-            ),
-            "parse_struct_or_union_declaration called with non-struct-or-union token."
-        );
-        let start_index = self.struct_or_union_specifiers.len().to_u32();
-        let name = self.parse_maybe_identifier(
-            context,
-            "while parsing struct-or-union-declarator",
-            |_| None,
-        );
-        let Some(next) = self.next_token(context) else {
-            let source_vectors =
-                context.create_source_vectors(self.position(context), self.source_file_index(), 0);
-            context.parser_error(ParserError {
-                error_type: ParserErrorType::UnexpectedEndOfInput(
-                    "while parsing struct-or-union-declarator",
-                ),
-                source_vectors,
-            });
-            if let Some(v) = name {
-                self.struct_or_union_specifiers
-                    .push(StructOrUnionSpecifier {
-                        struct_or_union:         StructOrUnion::Struct,
-                        identifier:              Some(v),
-                        struct_declaration_list: None,
-                    });
-                return StructOrUnionSpecifierIndex(start_index);
-            }
-            return StructOrUnionSpecifierIndex(u32::MAX);
-        };
-        if next.kind != TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-            && let Some(v) = name
-        {
-            self.struct_or_union_specifiers
-                .push(StructOrUnionSpecifier {
-                    struct_or_union:         StructOrUnion::Struct,
-                    identifier:              Some(v),
-                    struct_declaration_list: None,
-                });
-            return StructOrUnionSpecifierIndex(start_index);
-        }
-        if next.kind != TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) {
-            return StructOrUnionSpecifierIndex(u32::MAX);
-        }
-        // Parse struct-declaration-list
-        // struct-declaration-list:
-        // - struct-declaration
-        // - struct-declaration-list struct-declaration
-        // struct-declaration:
-        // - specifier-qualifier-list struct-declarator-list ;
-        // specifier-qualifier-list:
-        // - type-specifier specifier-qualifier-list?
-        // - type-qualifier specifier-qualifier-list?
-        // struct-declarator-list:
-        // - struct-declarator
-        // - struct-declarator-list , struct-declarator
-        // struct-declarator:
-        // - declarator
-        // - declarator? : constant-expression
-        let struct_declarations_start_index = self.struct_declarations.len().to_u32();
-        'struct_declaration_list: loop {
-            let struct_declarators_start_index = self.struct_declarators.len().to_u32();
-            let mut type_qualifiers = TypeQualifiers::empty();
-            let mut type_specifiers = TypeSpecifiers::Empty;
-            // Parse specifiers-qualifier-list:
-            loop {
-                let Some(token) = self.next_token(context) else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    );
-                    context.parser_error(ParserError {
-                        error_type: ParserErrorType::UnexpectedEndOfInput(
-                            "while parsing struct-qualifier-list",
-                        ),
-                        source_vectors,
-                    });
-                    break;
+    fn drive(&mut self, context: &mut Context) -> Option<ExternalDeclaration> {
+        loop {
+            if matches!(self.returned, Some(ParseValue::ExternalDeclaration(_))) {
+                let Some(ParseValue::ExternalDeclaration(external)) = self.returned.take() else {
+                    unreachable!("the returned value was just checked")
                 };
-                if let Some(()) = self.handle_type_specifier(context, &mut type_specifiers, token) {
-                    continue;
-                }
-                if let Some(()) = self.handle_type_qualifier(context, &mut type_qualifiers, token) {
-                    continue;
-                }
-                break;
+                return Some(external);
             }
-            // If type_specifiers and type_qualifiers are both empty, we must have reached
-            // the end of the struct-declaration-list.
-            if type_specifiers == TypeSpecifiers::Empty && type_qualifiers.is_empty() {
-                let Some(closing_curly_brace) = self.next_token(context) else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    );
-                    context.parser_error(ParserError {
-                        error_type: ParserErrorType::UnexpectedEndOfInput(
-                            "while parsing struct-declaration-list",
-                        ),
-                        source_vectors,
-                    });
-                    break 'struct_declaration_list;
-                };
-                if closing_curly_brace.kind
-                    != TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
-                {
-                    let start_position = closing_curly_brace.source_vectors.position(context);
-                    let source_vectors =
-                        context.create_source_vectors(start_position, self.source_file_index(), 0);
-                    context.parser_error(ParserError {
-                        error_type:
-                            ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList(
-                                closing_curly_brace.kind,
-                            ),
-                        source_vectors,
-                    });
-                    self.pending_token = Some(closing_curly_brace);
-                }
-                break 'struct_declaration_list;
-            }
-            'struct_declarator_list: loop {
-                let declarator = self.parse_declarator::<IS_NOT_ABSTRACT_DECLARATOR>(context);
-                let mut bitfield_width = None;
-                loop {
-                    let Some(maybe_colon_or_comma) = self.next_token(context) else {
-                        let source_vectors = context.create_source_vectors(
-                            self.position(context),
-                            self.source_file_index(),
-                            0,
-                        );
-                        context.parser_error(ParserError {
-                            error_type: ParserErrorType::UnexpectedEndOfInput(
-                                "while parsing struct-declarator-list",
-                            ),
-                            source_vectors,
-                        });
-                        break 'struct_declaration_list;
-                    };
-                    match maybe_colon_or_comma.kind {
-                        | TokenType::Operator(OperatorTokenType::Comma) => {
-                            self.struct_declarators.push(StructDeclarator {
-                                declarator,
-                                bitfield_width,
-                            });
-                            continue 'struct_declarator_list;
-                        },
-                        | TokenType::Operator(OperatorTokenType::Colon) => {
-                            if bitfield_width.is_some() {
-                                let source_vectors = context.create_source_vectors(
-                                    self.position(context),
-                                    self.source_file_index(),
-                                    0,
-                                );
-                                context.parser_error(ParserError {
-                                    error_type:
-                                        ParserErrorType::MultipleBitfieldWidthsInStructDeclarator,
-                                    source_vectors,
-                                });
-                            }
-                            bitfield_width = Some(self.parse_expression::<true>(context));
-                        },
-                        | TokenType::Operator(OperatorTokenType::Semicolon) => {
-                            if declarator.is_none() && bitfield_width.is_none() {
-                                let source_vectors = context.create_source_vectors(
-                                    self.position(context),
-                                    self.source_file_index(),
-                                    0,
-                                );
-                                context.parser_error(ParserError {
-                                    error_type: ParserErrorType::EmptyStructDeclarator,
-                                    source_vectors,
-                                });
-                            }
-                            self.struct_declarators.push(StructDeclarator {
-                                declarator,
-                                bitfield_width,
-                            });
-                            break 'struct_declarator_list;
-                        },
-                        | _ => {
-                            let source_vectors = context.create_source_vectors(
-                                self.position(context),
-                                self.source_file_index(),
-                                0,
-                            );
-                            context.parser_error(ParserError {
-                                error_type: ParserErrorType::ExpectedCommaColonOrSemicolonInStructDeclarator(maybe_colon_or_comma.kind),
-                                source_vectors,
-                            });
-                            self.pending_token = Some(maybe_colon_or_comma);
-                            break 'struct_declarator_list;
-                        },
-                    }
-                }
-            }
-            self.struct_declarations.push(StructDeclaration {
-                type_qualifiers,
-                type_specifiers,
-                struct_declarator_list: VectorSlice::new(
-                    struct_declarators_start_index,
-                    self.struct_declarators.len().to_u32(),
-                ),
-            });
-        }
-        self.struct_or_union_specifiers
-            .push(StructOrUnionSpecifier {
-                struct_or_union:         StructOrUnion::Struct,
-                identifier:              name,
-                struct_declaration_list: Some(VectorSlice::new(
-                    struct_declarations_start_index,
-                    self.struct_declarations.len().to_u32(),
-                )),
-            });
-        StructOrUnionSpecifierIndex(start_index)
-    }
-
-    fn parse_enum_declaration(
-        &mut self,
-        context: &mut Context,
-        token: Token,
-    ) -> EnumSpecifierIndex {
-        assert_matches!(token.kind, TokenType::Keyword(KeywordTokenType::Enum));
-        let maybe_name =
-            self.parse_maybe_identifier(context, "while parsing enum-declarator", |_| None);
-        let Some(maybe_opening_curly_brace) = self.next_token(context) else {
-            let source_vectors =
-                context.create_source_vectors(self.position(context), self.source_file_index(), 0);
-            context.parser_error(ParserError {
-                error_type: ParserErrorType::UnexpectedEndOfInput("while parsing enum-declarator"),
-                source_vectors,
-            });
-            if let Some(v) = maybe_name {
-                self.enum_specifiers.push(EnumSpecifier {
-                    name:             Some(v),
-                    enumeration_list: None,
-                });
-                return EnumSpecifierIndex(self.enum_specifiers.len().to_u32() - 1);
-            }
-            return EnumSpecifierIndex(u32::MAX);
-        };
-        if maybe_opening_curly_brace.kind
-            != TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-        {
-            if maybe_name.is_none() {
-                let source_vectors = context.create_source_vectors(
-                    maybe_opening_curly_brace.source_vectors.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::EnumSpecifierWithoutNameAndBody(
-                        maybe_opening_curly_brace.kind,
-                    ),
-                    source_vectors,
-                });
-                self.pending_token = Some(maybe_opening_curly_brace);
-                return EnumSpecifierIndex(u32::MAX);
-            }
-            self.enum_specifiers.push(EnumSpecifier {
-                name:             maybe_name,
-                enumeration_list: None,
-            });
-            return EnumSpecifierIndex(self.enum_specifiers.len().to_u32() - 1);
-        }
-        let enumerator_list_start_index = self.identifiers.len().to_u32();
-        'enumerator_list: loop {
-            let mut enumeration_constant = None;
-            let mut constant_expression = None;
-            let Some(maybe_enumeration_constant) = self.next_token(context) else {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::UnexpectedEndOfInput(
-                        "while parsing enumerator-list",
-                    ),
-                    source_vectors,
-                });
-                break 'enumerator_list;
-            };
-            if maybe_enumeration_constant.kind
-                == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
-            {
-                break 'enumerator_list;
-            }
-            if maybe_enumeration_constant.kind != TokenType::Identifier {
-                let source_vectors = context.create_source_vectors(
-                    maybe_enumeration_constant.source_vectors.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type:
-                        ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
-                            maybe_enumeration_constant.kind,
-                        ),
-                    source_vectors,
-                });
-                self.pending_token = Some(maybe_enumeration_constant);
-                break 'enumerator_list;
-            }
-            enumeration_constant = Some(Identifier::new(maybe_enumeration_constant.contents));
-            let Some(maybe_assignment_operator) = self.next_token(context) else {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::UnexpectedEndOfInput(
-                        "while parsing enumerator-list",
-                    ),
-                    source_vectors,
-                });
-                break 'enumerator_list;
-            };
-            if maybe_assignment_operator.kind == TokenType::Operator(OperatorTokenType::Equals) {
-                constant_expression = Some(self.parse_expression::<true>(context));
-            } else {
-                self.pending_token = Some(maybe_assignment_operator);
-            }
-            self.enumerators.push(Enumerator {
-                name:       enumeration_constant.unwrap(),
-                expression: constant_expression,
-            });
-            let Some(maybe_comma) = self.next_token(context) else {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::UnexpectedEndOfInput(
-                        "while parsing enumerator-list",
-                    ),
-                    source_vectors,
-                });
-                break 'enumerator_list;
-            };
-            if maybe_comma.kind != TokenType::Operator(OperatorTokenType::Comma) {
-                self.pending_token = Some(maybe_comma);
-            }
-        }
-        let ret = self.enum_specifiers.len().to_u32();
-        self.enum_specifiers.push(EnumSpecifier {
-            name:             maybe_name,
-            enumeration_list: Some(VectorSlice::new(
-                enumerator_list_start_index,
-                self.enumerators.len().to_u32(),
-            )),
-        });
-        EnumSpecifierIndex(ret)
-    }
-
-    fn expect_token(
-        &mut self,
-        context: &mut Context,
-        eof_message: &'static str,
-        expected_token_type: TokenType,
-        on_error: impl FnOnce(&mut Self, &mut Context, Token) -> ParserErrorType,
-    ) -> Option<Token> {
-        let Some(token) = self.next_token(context) else {
-            let source_vectors =
-                context.create_source_vectors(self.position(context), self.source_file_index(), 0);
-            context.parser_error(ParserError {
-                error_type: ParserErrorType::UnexpectedEndOfInput(eof_message),
-                source_vectors,
-            });
-            return None;
-        };
-        if token.kind != expected_token_type {
-            self.pending_token = Some(token);
-            let source_vectors = token.source_vectors;
-            context.parser_error(ParserError {
-                error_type: on_error(token),
-                source_vectors,
-            });
-            return None;
-        }
-        Some(token)
-    }
-
-    fn parse_identifier(
-        &mut self,
-        context: &mut Context,
-        eof_message: &'static str,
-        on_error: impl FnOnce(Token) -> ParserErrorType,
-    ) -> Identifier {
-        self.parse_maybe_identifier(context, eof_message, |token| Some(on_error(token)))
-            .expect("parse_maybe_identifier returned None when called with infallible on_error.")
-    }
-
-    fn parse_maybe_identifier(
-        &mut self,
-        context: &mut Context,
-        eof_message: &'static str,
-        on_error: impl FnOnce(Token) -> Option<ParserErrorType>,
-    ) -> Option<Identifier> {
-        let Some(token) = self.next_token(context) else {
-            let source_vectors =
-                context.create_source_vectors(self.position(context), self.source_file_index(), 0);
-            context.parser_error(ParserError {
-                error_type: ParserErrorType::UnexpectedEndOfInput(eof_message),
-                source_vectors,
-            });
-            return Some(Identifier {
-                name: context.string_cache.intern("<non-existent-identifier>"),
-            });
-        };
-        match token.kind {
-            | TokenType::Identifier => Some(Identifier {
-                name: token.contents,
-            }),
-            | _tt => {
-                self.pending_token = Some(token);
-                context.parser_error(ParserError {
-                    error_type:     on_error(token)?,
-                    source_vectors: token.source_vectors,
-                });
-                Some(Identifier {
-                    name: context.string_cache.intern("<non-existent-identifier>"),
-                })
-            },
-        }
-    }
-
-    fn parse_declaration_or_function_definition<const IS_FUNCTION: u8>(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<ExternalDeclaration> {
-        let declaration_index = self.declarations.len().to_u32();
-        let function_definition_index = self.function_definitions.len().to_u32();
-        let declaration_specifiers = self.parse_declaration_specifiers(context);
-        let first_declarator = self.parse_declarator::<IS_NOT_ABSTRACT_DECLARATOR>(context);
-        if IS_FUNCTION == IS_FUNCTION_DEFINITION && first_declarator.is_none() {
-            let source_vectors =
-                context.create_source_vectors(self.position(context), self.source_file_index(), 0);
-            context.parser_error(ParserError {
-                error_type: ParserErrorType::ExpectedDeclaratorInFunctionDefinition,
-                source_vectors,
-            });
-            return None;
-        }
-        if first_declarator.is_none() {
-            _ = self.expect_token(
-                context,
-                "while parsing declaration",
-                TokenType::Operator(OperatorTokenType::Semicolon),
-                |this, context, tt| ParserErrorType::ExpectedSemicolonInDeclaration(tt),
+            debug_assert!(
+                self.returned.is_none() || !self.frames.is_empty(),
+                "a child value must have a parent frame"
             );
-            self.declarations.push(Declaration {
-                declaration_specifiers,
-                init_declarators: VectorSlice::empty(),
+
+            if self.frames.is_empty() {
+                _ = self.cursor.current(context)?;
+                self.frames.push(ParseFrame::ExternalDeclaration(
+                    ExternalDeclarationFrame::new(),
+                ));
+            }
+
+            let token = self.cursor.current(context);
+            let mut frame = self.frames.pop().expect("parser frame stack is nonempty");
+            let frame_name = frame.name();
+            let returned = self.returned.take();
+            let action = frame.step(self, context, token, returned);
+
+            #[cfg(test)]
+            self.trace.push(FrameTraceEvent {
+                frame:  frame_name,
+                action: action.name(),
+                token:  token.map(|token| token.kind),
+                depth:  self.frames.len() + 1,
             });
-            return Some(ExternalDeclaration::Declaration(DeclarationIndex(
-                declaration_index,
-            )));
-        }
-    }
 
-    fn parse_declaration(&mut self, context: &mut Context) -> Option<DeclarationIndex> {
-        match self.parse_declaration_or_function_definition::<IS_NOT_FUNCTION_DEFINITION>(context) {
-            | None => None,
-            | Some(ExternalDeclaration::Declaration(declaration)) => Some(declaration),
-            | Some(ExternalDeclaration::FunctionDefinition(..)) => unreachable!(
-                "parse_declaration_or_function_definition returned non-declaration when called \
-                 with IS_NOT_FUNCTION_DEFINITION."
-            ),
-        }
-    }
-
-    fn handle_storage_class(
-        &mut self,
-        context: &mut Context,
-        storage_class: &mut StorageClass,
-        token: Token,
-        storage_class_specified: &mut bool,
-    ) -> Option<()> {
-        if *storage_class_specified {
-            context.parser_error(ParserError {
-                error_type:     ParserErrorType::StorageClassRedefinition(
-                    *storage_class,
-                    token.kind,
-                ),
-                source_vectors: token.source_vectors,
-            });
-        }
-        let new = match token.kind {
-            | TokenType::Keyword(KeywordTokenType::Auto) => StorageClass::Auto,
-            | TokenType::Keyword(KeywordTokenType::Register) => StorageClass::Register,
-            | TokenType::Keyword(KeywordTokenType::Static) => StorageClass::Static,
-            | TokenType::Keyword(KeywordTokenType::Extern) => StorageClass::Extern,
-            | TokenType::Keyword(KeywordTokenType::Typedef) => StorageClass::Typedef,
-            | _ => {
-                self.pending_token = Some(token);
-                return None;
-            },
-        };
-        *storage_class = new;
-        *storage_class_specified = true;
-        Some(())
-    }
-
-    fn handle_keyword_type_specifier(
-        &mut self,
-        context: &mut Context,
-        type_specifiers: &mut TypeSpecifiers,
-        token: Token,
-    ) {
-        let TokenType::Keyword(keyword_token_type) = token.kind else {
-            unreachable!("set_type_specifiers called with non-keyword token.");
-        };
-        match keyword_token_type {
-            | KeywordTokenType::Int =>
-                if type_specifiers.is_int() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_int(self, context);
-                },
-            | KeywordTokenType::Long =>
-                if type_specifiers.is_long_long() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::LongSpecifiedThrice,
-                        source_vectors: token.source_vectors,
-                    });
-                } else if type_specifiers.is_long_double() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::LongLongDoubleSpecified,
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_long(self, context);
-                },
-            | KeywordTokenType::Short =>
-                if type_specifiers.is_short() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_short(self, context);
-                },
-            | KeywordTokenType::Signed =>
-                if type_specifiers.is_signed() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_signed(self, context);
-                },
-            | KeywordTokenType::Unsigned =>
-                if type_specifiers.is_unsigned() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_unsigned(self, context);
-                },
-            | KeywordTokenType::Float =>
-                if type_specifiers.is_float() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_float(self, context);
-                },
-            | KeywordTokenType::Double =>
-                if type_specifiers.is_double() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else if type_specifiers.is_long_double() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::LongLongDoubleSpecified,
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_double(self, context);
-                },
-            | KeywordTokenType::Void =>
-                if type_specifiers.is_void() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_void(self, context);
-                },
-            | KeywordTokenType::Bool =>
-                if type_specifiers.is_bool() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_bool(self, context);
-                },
-            | KeywordTokenType::Complex =>
-                if type_specifiers.is_complex() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_complex(self, context);
-                },
-            | KeywordTokenType::Imaginary =>
-                if type_specifiers.is_imaginary() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_imaginary(self, context);
-                },
-            | KeywordTokenType::Char =>
-                if type_specifiers.is_char() {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
-                        source_vectors: token.source_vectors,
-                    });
-                } else {
-                    type_specifiers.make_char(self, context);
-                },
-            | _ => unreachable!("set_type_specifiers called with non-type-specifier token."),
-        }
-    }
-
-    fn handle_type_specifier(
-        &mut self,
-        context: &mut Context,
-        type_specifiers: &mut TypeSpecifiers,
-        token: Token,
-    ) -> Option<()> {
-        match token.kind {
-            | TokenType::Keyword(
-                KeywordTokenType::Int
-                | KeywordTokenType::Short
-                | KeywordTokenType::Long
-                | KeywordTokenType::Char
-                | KeywordTokenType::Signed
-                | KeywordTokenType::Unsigned
-                | KeywordTokenType::Float
-                | KeywordTokenType::Double
-                | KeywordTokenType::Void
-                | KeywordTokenType::Bool
-                | KeywordTokenType::Complex
-                | KeywordTokenType::Imaginary,
-            ) => self.handle_keyword_type_specifier(context, type_specifiers, token),
-            | TokenType::Keyword(KeywordTokenType::Struct | KeywordTokenType::Union) => {
-                let struct_declaration = self.parse_struct_or_union_declaration(context, token);
-                type_specifiers.make_struct_or_union(self, context, struct_declaration)
-            },
-            | TokenType::Keyword(KeywordTokenType::Enum) => {
-                let enum_declaration = self.parse_enum_declaration(context, token);
-                type_specifiers.make_enum(self, context, enum_declaration)
-            },
-            | TokenType::Identifier if self.typedef_names.contains_key(&token.contents) =>
-                type_specifiers.make_typedef_name(self, context, Identifier::new(token.contents)),
-            | _ => {
-                self.pending_token = Some(token);
-                return None;
-            },
-        }
-        Some(())
-    }
-
-    fn handle_type_qualifier(
-        &mut self,
-        context: &mut Context,
-        type_qualifiers: &mut TypeQualifiers,
-        token: Token,
-    ) -> Option<()> {
-        match token.kind {
-            | TokenType::Keyword(KeywordTokenType::Const) => {
-                if type_qualifiers.contains(TypeQualifiers::CONST) {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::ConstSpecifiedTwice,
-                        source_vectors: token.source_vectors,
-                    });
-                }
-                type_qualifiers.insert(TypeQualifiers::CONST);
-            },
-            | TokenType::Keyword(KeywordTokenType::Volatile) => {
-                if type_qualifiers.contains(TypeQualifiers::VOLATILE) {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::VolatileSpecifiedTwice,
-                        source_vectors: token.source_vectors,
-                    });
-                }
-                type_qualifiers.insert(TypeQualifiers::VOLATILE);
-            },
-            | TokenType::Keyword(KeywordTokenType::Restrict) => {
-                if type_qualifiers.contains(TypeQualifiers::RESTRICT) {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::RestrictSpecifiedTwice,
-                        source_vectors: token.source_vectors,
-                    });
-                }
-                type_qualifiers.insert(TypeQualifiers::RESTRICT);
-            },
-            | _ => {
-                self.pending_token = Some(token);
-                return None;
-            },
-        }
-        Some(())
-    }
-
-    fn handle_function_specifier(
-        &mut self,
-        context: &mut Context,
-        function_specifiers: &mut FunctionSpecifiers,
-        token: Token,
-    ) -> Option<()> {
-        match token.kind {
-            | TokenType::Keyword(KeywordTokenType::Inline) => {
-                if function_specifiers.is_inline {
-                    context.parser_error(ParserError {
-                        error_type:     ParserErrorType::InlineSpecifiedTwice,
-                        source_vectors: token.source_vectors,
-                    });
-                }
-                function_specifiers.is_inline = true;
-            },
-            | _ => {
-                self.pending_token = Some(token);
-                return None;
-            },
-        }
-        Some(())
-    }
-
-    fn parse_declaration_specifiers(&mut self, context: &mut Context) -> DeclarationSpecifiers {
-        let mut specifiers = DeclarationSpecifiers::default();
-        let mut storage_class_specified = false;
-        loop {
-            let Some(token) = self.next_token(context) else {
-                if specifiers == DeclarationSpecifiers::default() {
-                    return specifiers;
-                }
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::UnexpectedEndOfInput(
-                        "parsing declaration specifiers. Expected a type specifier.",
-                    ),
-                    source_vectors,
-                });
-                return specifiers;
-            };
-            if let Some(()) =
-                self.handle_type_qualifier(context, &mut specifiers.type_qualifiers, token)
-            {
-                continue;
-            }
-            if let Some(()) =
-                self.handle_type_specifier(context, &mut specifiers.type_specifiers, token)
-            {
-                continue;
-            }
-            if let Some(()) =
-                self.handle_function_specifier(context, &mut specifiers.function_specifiers, token)
-            {
-                continue;
-            }
-            if let Some(()) = self.handle_storage_class(
-                context,
-                &mut specifiers.storage_class,
-                token,
-                &mut storage_class_specified,
-            ) {
-                continue;
-            }
-            self.pending_token = Some(token);
-            if specifiers == DeclarationSpecifiers::default() {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::EmptyDeclarationSpecifiers(token.kind),
-                    source_vectors,
-                });
-            } else if specifiers.type_specifiers == TypeSpecifiers::Empty {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(
-                        token.kind,
-                    ),
-                    source_vectors,
-                });
-            }
-            return specifiers;
-        }
-    }
-
-    fn parse_declarator<const IS_ABSTRACT: u8>(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<Declarator> {
-        let pointer_declarator = self.parse_pointer_declarator(context);
-        let vector_slice = self.parse_direct_declarator::<IS_ABSTRACT>(context);
-        if vector_slice.length == 0 {
-            // Non-abstract declarators must have at least one direct declarator.
-            if IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR
-                && pointer_declarator.type_qualifiers_list.length != 0
-            {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::TypeQualifiersWithoutDeclarator,
-                    source_vectors,
-                });
-            }
-            return None;
-        }
-        Some(Declarator {
-            pointer_declarator,
-            kind: vector_slice,
-        })
-    }
-
-    // Question marks indicate optional parts of the grammar.
-    // C99 standard:
-    //      direct-declarator:
-    //      identifier
-    //      ( declarator )
-    //      direct-declarator [ type-qualifier-list? assignment-expression? ]
-    //      direct-declarator [ static type-qualifier-list? assignment-expression ]
-    //      direct-declarator [ type-qualifier-list static assignment-expression ]
-    //      direct-declarator [ type-qualifier-list? *]
-    //      direct-declarator ( parameter-type-list )
-    //      direct-declarator ( identifier-list? )
-    fn parse_direct_declarator<const IS_ABSTRACT: u8>(
-        &mut self,
-        context: &mut Context,
-    ) -> VectorSlice<DirectDeclarator> {
-        let start_index = self.direct_declarators.len().to_u32();
-        // The first part of a declarator is only required to be an identifier or a
-        // parenthesized declarator if it is not abstract.
-        if IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR
-            && self
-                .parse_first_direct_declarator::<IS_ABSTRACT>(context)
-                .is_none()
-        {
-            return VectorSlice::new(start_index, self.direct_declarators.len().to_u32());
-        }
-        loop {
-            if self
-                .parse_nested_direct_declarator::<IS_ABSTRACT>(context)
-                .is_none()
-            {
-                return VectorSlice::new(start_index, self.direct_declarators.len().to_u32());
-            }
-        }
-    }
-
-    // None indicates a nested direct declarator was not parsed.
-    // Parses a nested direct declarator, AKA the part after the initial identifier
-    // or the parenthesized declarator in a direct declarator.
-    fn parse_nested_direct_declarator<const IS_ABSTRACT: u8>(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<()> {
-        let token = self.next_token(context)?;
-        if token.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket) {
-            self.parse_array_direct_declarator::<IS_ABSTRACT>(context)
-        } else if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
-            self.parse_function_direct_declarator::<IS_ABSTRACT>(context)
-        } else {
-            self.pending_token = Some(token);
-            None
-        }
-    }
-
-    fn parse_array_direct_declarator<const IS_ABSTRACT: u8>(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<()> {
-        let mut is_static = false;
-        let mut is_pointer = false;
-        let mut type_qualifiers = TypeQualifiers::empty();
-        let mut type_qualifiers_before_static = false;
-        let mut assignment_expression = None;
-        macro_rules! push {
-            () => {
-                self.direct_declarators.push(DirectDeclarator::Array {
-                    type_qualifiers,
-                    is_static,
-                    is_pointer,
-                    assignment_expression,
-                });
-            };
-        }
-        loop {
-            let Some(token) = self.next_token(context) else {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::UnexpectedEndOfInput(
-                        "parsing array direct declarator. Expected a closing square bracket.",
-                    ),
-                    source_vectors,
-                });
-                push!();
-                return Some(());
-            };
-            match token.kind {
-                | TokenType::Keyword(KeywordTokenType::Static) => {
-                    if is_static {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::StaticSpecifiedTwice,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    is_static = true;
-                },
-                | TokenType::Keyword(KeywordTokenType::Const) => {
-                    if type_qualifiers.contains(TypeQualifiers::CONST) {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::ConstSpecifiedTwice,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if is_static && type_qualifiers_before_static {
-                        context.parser_error(ParserError {
-                            error_type: ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if !is_static {
-                        type_qualifiers_before_static = true;
-                    }
-                    type_qualifiers.insert(TypeQualifiers::CONST);
-                },
-                | TokenType::Keyword(KeywordTokenType::Volatile) => {
-                    if type_qualifiers.contains(TypeQualifiers::VOLATILE) {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::VolatileSpecifiedTwice,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if is_static && type_qualifiers_before_static {
-                        context.parser_error(ParserError {
-                            error_type: ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if !is_static {
-                        type_qualifiers_before_static = true;
-                    }
-                    type_qualifiers.insert(TypeQualifiers::VOLATILE);
-                },
-                | TokenType::Keyword(KeywordTokenType::Restrict) => {
-                    if type_qualifiers.contains(TypeQualifiers::RESTRICT) {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::RestrictSpecifiedTwice,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if is_static && type_qualifiers_before_static {
-                        context.parser_error(ParserError {
-                            error_type: ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if !is_static {
-                        type_qualifiers_before_static = true;
-                    }
-                    type_qualifiers.insert(TypeQualifiers::RESTRICT);
-                },
-                | TokenType::Operator(OperatorTokenType::Asterisk) => {
-                    if is_pointer {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::PointerSpecifiedTwice,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if is_static {
-                        context.parser_error(ParserError {
-                            error_type:
-                                ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if assignment_expression.is_some() {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::PointerAfterAssignmentExpressionInArrayDirectDeclarator,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if !type_qualifiers.is_empty() && IS_ABSTRACT == IS_ABSTRACT_DECLARATOR {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    is_pointer = true;
-                    if !matches!(
-                        self.next_token(context),
-                        Some(Token {
-                            kind: TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
-                            ..
-                        })
-                    ) {
-                        // We know '*' can't be used as a unary operator in constant expressions, so
-                        // we don't have to consider that case.
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(token.kind),
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    push!();
-                    return Some(());
-                },
-                | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) => {
-                    if assignment_expression.is_none() && is_static {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    if assignment_expression.is_some() && is_pointer {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::AssignmentExpressionAfterPointerInArrayDirectDeclarator,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    push!();
-                    return Some(());
-                },
-                | _ =>
-                    if assignment_expression.is_none() && !is_pointer {
-                        self.pending_token = Some(token);
-                        assignment_expression = Some(self.parse_assignment_expression(context));
+            match action {
+                | ParseAction::Consume => {
+                    self.frames.push(frame);
+                    if token.is_some() {
+                        self.cursor.consume();
                     } else {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::ExpectedClosingSquareBracket(
-                                token.kind,
-                            ),
-                            source_vectors: token.source_vectors,
-                        });
-                        self.pending_token = Some(token);
-                        return None;
-                    },
-            }
-        }
-    }
-
-    #[inline(never)]
-    #[cold]
-    fn parse_k_and_r_function_direct_declarator_eof_error(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<Result<(), ()>> {
-        let position = self.position(context);
-        let source_vectors = context.create_source_vectors(position, self.source_file_index(), 0);
-        context.parser_error(ParserError {
-            error_type: ParserErrorType::UnexpectedEndOfInput(
-                "parsing K&R function direct declarator. Expected a closing parenthesis.",
-            ),
-            source_vectors,
-        });
-        Some(Err(()))
-    }
-
-    #[inline(never)]
-    #[cold]
-    fn mixed_k_and_r_and_modern_function_declarator_error(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<Result<(), ()>> {
-        let source_vectors =
-            context.create_source_vectors(self.position(context), self.source_file_index(), 0);
-        context.parser_error(ParserError {
-            error_type: ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator,
-            source_vectors,
-        });
-        // Skip over tokens until we a closing brace.
-        let mut brace_balance = 0isize;
-        loop {
-            let Some(next) = self.next_token(context) else {
-                return self.parse_k_and_r_function_direct_declarator_eof_error(context);
-            };
-            match next.kind {
-                | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => brace_balance += 1,
-                | TokenType::Operator(OperatorTokenType::ClosingParenthesis)
-                    if brace_balance == 1 =>
-                    break,
-                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) => brace_balance -= 1,
-                | _ => (),
-            }
-        }
-        Some(Err(()))
-    }
-
-    /// Returns number of identifiers parsed on failure.
-    fn parse_k_and_r_function_direct_declarator<const IS_ABSTRACT: u8>(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<Result<(), ()>> {
-        let mut has_parsed_identifier = false;
-        // K&R declarations are not supported in abstract declarators.
-        if IS_ABSTRACT == IS_ABSTRACT_DECLARATOR {
-            return None;
-        }
-        let start_index = self.identifiers.len().to_u32();
-        loop {
-            let Some(next) = self.next_token(context) else {
-                return self.parse_k_and_r_function_direct_declarator_eof_error(context);
-            };
-            // We reached the end of the parameter list.
-            if next.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis) {
-                break;
-            }
-            // Turns out that this wasn't a K&R-style function declarator. If we haven't
-            // parsed anything yet, we're all good and can just return Err(0).
-            // Otherwise we have to generate an error because the parameter list
-            // is half K&R style and half modern style which is not allowed.
-            // The standard says that if an identifier could be a typedef name, it IS a
-            // typedef name.
-            if next.kind != TokenType::Identifier || self.typedef_names.contains_key(&next.contents)
-            {
-                // We create a parser error here, because the identifiers we previously parsed
-                // are syntax errors since they are declarators with only an identifier, that is
-                // not valid typedef.
-                if has_parsed_identifier {
-                    return self.mixed_k_and_r_and_modern_function_declarator_error(context);
-                }
-                // This is the first token, and we now know that this isn't a K&R-style function
-                // declarator, so we return None to indicate this.
-                self.pending_token = Some(next);
-                return None;
-            }
-            has_parsed_identifier = true;
-            let identifier = Identifier {
-                name: next.contents,
-            };
-            self.identifiers.push(identifier);
-        }
-        self.direct_declarators
-            .push(DirectDeclarator::KAndRStyleFunction {
-                parameters: VectorSlice::new(start_index, self.identifiers.len().to_u32()),
-            });
-        Some(Ok(()))
-    }
-
-    fn parse_function_direct_declarator<const IS_ABSTRACT: u8>(
-        &mut self,
-        context: &mut Context,
-    ) -> Option<()> {
-        match self.parse_k_and_r_function_direct_declarator::<IS_ABSTRACT>(context) {
-            | None => (),
-            | Some(Ok(())) => return Some(()),
-            | Some(Err(())) => return None,
-        }
-        let start_index = self.parameter_declarations.len().to_u32();
-        let mut is_variadic = false;
-        // Parses this rule in the standard:
-        // parameter-type-list:
-        // - parameter-list
-        // - parameter-list , ...
-        // parameter-list:
-        // - parameter-declaration
-        // - parameter-list , parameter-declaration
-        // parameter-declaration:
-        // - declaration-specifiers declarator
-        // - declaration-specifiers abstract-declarator?
-        loop {
-            let declaration_specifiers = self.parse_declaration_specifiers(context);
-            let declarator = self.parse_declarator::<IS_MAYBE_ABSTRACT_DECLARATOR>(context);
-            let parameter_declaration = ParameterDeclaration {
-                declaration_specifiers,
-                declarator,
-            };
-            self.parameter_declarations.push(parameter_declaration);
-            let Some(next) = self.next_token(context) else {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::UnexpectedEndOfInput(
-                        "parsing function direct declarator. Expected a closing parenthesis.",
-                    ),
-                    source_vectors,
-                });
-                return None;
-            };
-            if next.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis) {
-                break;
-            }
-            if next.kind == TokenType::Operator(OperatorTokenType::Comma) {
-                let Some(maybe_ellipsis) = self.next_token(context) else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    );
-                    context.parser_error(ParserError {
-                        error_type: ParserErrorType::UnexpectedEndOfInput(
-                            "parsing function direct declarator. Expected an ellipses or a \
-                             closing parenthesis.",
-                        ),
-                        source_vectors,
-                    });
-                    self.pending_token = Some(next);
-                    return None;
-                };
-                if maybe_ellipsis.kind == TokenType::Operator(OperatorTokenType::Ellipsis) {
-                    is_variadic = true;
-                    let Some(should_be_closing_parenthesis) = self.next_token(context) else {
-                        let source_vectors = context.create_source_vectors(
-                            self.position(context),
-                            self.source_file_index(),
-                            0,
+                        self.report_eof(
+                            context,
+                            frame_name,
+                            "a token before completing the active frame",
                         );
-                        context.parser_error(ParserError {
-                            error_type: ParserErrorType::UnexpectedEndOfInput(
-                                "parsing function direct declarator. Expected a closing \
-                                 parenthesis.",
-                            ),
-                            source_vectors,
-                        });
-                        return None;
-                    };
-                    if should_be_closing_parenthesis.kind
-                        == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
-                    {
+                    }
+                },
+                | ParseAction::Push(child) => {
+                    self.frames.push(frame);
+                    self.frames.push(child);
+                },
+                | ParseAction::Reduce(value) => {
+                    self.returned = Some(value);
+                },
+                | ParseAction::Reprocess => {
+                    self.frames.push(frame);
+                },
+                | ParseAction::Recover(set) => {
+                    debug_assert!(
+                        matches!(set.target, RecoveryTarget::CurrentFrame),
+                        "every recovery set must identify a legal unwind target"
+                    );
+                    self.recover(context, set);
+                    self.frames.push(frame);
+                },
+            }
+        }
+    }
+
+    fn recover(&mut self, context: &mut Context, set: SynchronizationSet) {
+        self.recovery.active = true;
+        self.recovery.last = Some(set);
+        let mut parentheses = 0usize;
+        let mut brackets = 0usize;
+        let mut braces = 0usize;
+
+        while let Some(token) = self.cursor.current(context) {
+            let at_top_level = parentheses == 0 && brackets == 0 && braces == 0;
+            if at_top_level && set.kind.stops_before(token.kind) {
+                break;
+            }
+
+            match token.kind {
+                | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
+                    parentheses += 1;
+                },
+                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if parentheses > 0 => {
+                    parentheses -= 1;
+                },
+                | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
+                    brackets += 1;
+                },
+                | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) if brackets > 0 => {
+                    brackets -= 1;
+                },
+                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
+                    braces += 1;
+                },
+                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) if braces > 0 => {
+                    braces -= 1;
+                    if matches!(set.kind, SynchronizationKind::FunctionBody) && braces == 0 {
+                        self.cursor.consume();
+                        self.recovery.skipped_tokens += 1;
                         break;
                     }
-                    let source_vectors = should_be_closing_parenthesis.source_vectors;
-                    context.parser_error(ParserError {
-                            error_type: ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
-                                should_be_closing_parenthesis.kind,
-                            ),
-                            source_vectors,
-                        });
-                    self.pending_token = Some(should_be_closing_parenthesis);
-                } else {
-                    self.pending_token = Some(maybe_ellipsis);
-                }
-                continue;
+                },
+                | _ => {},
             }
-            if next.kind != TokenType::Operator(OperatorTokenType::Comma) {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
-                context.parser_error(ParserError {
-                    error_type: ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(next.kind),
-                    source_vectors,
-                });
-                self.pending_token = Some(next);
-                return None;
-            }
+
+            self.cursor.consume();
+            self.recovery.skipped_tokens += 1;
         }
-        self.direct_declarators.push(DirectDeclarator::Function {
-            parameter_list: VectorSlice::new(
-                start_index,
-                self.parameter_declarations.len().to_u32(),
-            ),
-            is_variadic,
-        });
-        Some(())
+        self.recovery.active = false;
     }
 
-    // Parses the first two rules of direct-declarator.
-    fn parse_first_direct_declarator<const IS_ABSTRACT: u8>(
-        &mut self,
+    fn report(&self, context: &mut Context, error_type: ParserErrorType, token: Option<Token>) {
+        let source_vectors = token.map_or_else(
+            || context.create_source_vectors(self.position(context), self.source_file_index(), 0),
+            |token| token.source_vectors,
+        );
+        context.parser_error(ParserError {
+            error_type,
+            source_vectors,
+        });
+    }
+
+    fn report_unexpected(
+        &self,
         context: &mut Context,
-    ) -> Option<()> {
-        let token = self.next_token(context)?;
-        // Matches this rule: direct-declarator: identifier
-        if token.kind == TokenType::Identifier && IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR {
-            self.direct_declarators
-                .push(DirectDeclarator::Identifier(Identifier {
-                    name: token.contents,
-                }));
-            return Some(());
+        frame: &'static str,
+        expected: &'static str,
+        token: Option<Token>,
+    ) {
+        if let Some(token) = token {
+            self.report(
+                context,
+                ParserErrorType::UnexpectedToken {
+                    frame,
+                    expected,
+                    found: token.kind,
+                },
+                Some(token),
+            );
+        } else {
+            self.report_eof(context, frame, expected);
         }
-        if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
-            let declarator = self.parse_declarator::<IS_ABSTRACT>(context);
-            if declarator.is_none() {
-                context.parser_error(ParserError {
-                    error_type:     ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator,
-                    source_vectors: token.source_vectors,
-                });
+    }
+
+    fn report_eof(&self, context: &mut Context, frame: &'static str, expected: &'static str) {
+        self.report(
+            context,
+            ParserErrorType::UnexpectedEndOfFrame { frame, expected },
+            None,
+        );
+    }
+
+    #[expect(
+        clippy::unused_self,
+        reason = "Source accumulation is a parser-machine operation used by every frame."
+    )]
+    fn merge_source(
+        &self,
+        context: &mut Context,
+        existing: &mut Option<SourceVectors>,
+        token: Token,
+    ) {
+        *existing = Some(existing.map_or(token.source_vectors, |source_vectors| {
+            context.merge_vectors(source_vectors, token.source_vectors)
+        }));
+    }
+
+    fn declaration_starter(&self, token: Token) -> bool {
+        match token.kind {
+            | TokenType::Keyword(
+                KeywordTokenType::Auto
+                | KeywordTokenType::Char
+                | KeywordTokenType::Complex
+                | KeywordTokenType::Const
+                | KeywordTokenType::Double
+                | KeywordTokenType::Enum
+                | KeywordTokenType::Extern
+                | KeywordTokenType::Float
+                | KeywordTokenType::Imaginary
+                | KeywordTokenType::Inline
+                | KeywordTokenType::Int
+                | KeywordTokenType::Long
+                | KeywordTokenType::Register
+                | KeywordTokenType::Restrict
+                | KeywordTokenType::Short
+                | KeywordTokenType::Signed
+                | KeywordTokenType::Static
+                | KeywordTokenType::Struct
+                | KeywordTokenType::Typedef
+                | KeywordTokenType::Union
+                | KeywordTokenType::Unsigned
+                | KeywordTokenType::Void
+                | KeywordTokenType::Volatile
+                | KeywordTokenType::Bool,
+            ) => true,
+            | TokenType::Identifier => self.scopes.is_typedef(token.contents),
+            | _ => false,
+        }
+    }
+
+    fn declarator_identifier(&self, declarator: Declarator) -> Option<Identifier> {
+        let mut declarator = declarator;
+        loop {
+            let start = declarator.kind.start_index as usize;
+            let end = start + declarator.kind.length as usize;
+            let mut nested = None;
+            for direct in &self.syntax.direct_declarators[start..end] {
+                match *direct {
+                    | DirectDeclarator::Identifier(identifier) => return Some(identifier),
+                    | DirectDeclarator::Parenthesized(child) => nested = Some(child),
+                    | _ => {},
+                }
             }
-            let token = self.next_token(context);
-            if !matches!(
+            declarator = nested?;
+        }
+    }
+}
+
+impl ParseAction {
+    #[cfg(test)]
+    fn name(&self) -> &'static str {
+        match self {
+            | Self::Consume => "consume",
+            | Self::Push(_) => "push",
+            | Self::Reduce(_) => "reduce",
+            | Self::Reprocess => "reprocess",
+            | Self::Recover(_) => "recover",
+        }
+    }
+}
+
+impl SynchronizationKind {
+    fn stops_before(self, token: TokenType) -> bool {
+        match self {
+            | Self::Declaration => matches!(
                 token,
-                Some(Token {
-                    kind: TokenType::Operator(OperatorTokenType::ClosingParenthesis),
-                    ..
-                })
-            ) {
-                let source_vectors = token.map_or_else(
-                    || {
-                        context.create_source_vectors(
-                            self.position(context),
-                            self.source_file_index(),
-                            0,
-                        )
-                    },
-                    |t| t.source_vectors,
+                TokenType::Operator(
+                    OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                )
+            ),
+            | Self::Initializer => matches!(
+                token,
+                TokenType::Operator(OperatorTokenType::Comma | OperatorTokenType::Semicolon)
+            ),
+            | Self::ArrayBound =>
+                token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
+            | Self::Parameter =>
+                token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+            | Self::StructMember => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Semicolon
+                        | OperatorTokenType::ClosingCurlyBrace
+                )
+            ),
+            | Self::EnumeratorValue => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma | OperatorTokenType::ClosingCurlyBrace
+                )
+            ),
+            | Self::FunctionBody => false,
+        }
+    }
+}
+
+fn is_operator(token: Option<Token>, operator: OperatorTokenType) -> bool {
+    token.is_some_and(|token| token.kind == TokenType::Operator(operator))
+}
+
+impl ParseFrame {
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self {
+            | Self::ExternalDeclaration(frame) => frame.step(parser, context, token, returned),
+            | Self::Declaration(frame) => frame.step(parser, context, token, returned),
+            | Self::DeclarationSpecifiers(frame) => frame.step(parser, context, token, returned),
+            | Self::Declarator(frame) => frame.step(parser, context, token, returned),
+            | Self::ParameterList(frame) => frame.step(parser, context, token, returned),
+            | Self::StructOrUnionSpecifier(frame) => frame.step(parser, context, token, returned),
+            | Self::EnumSpecifier(frame) => frame.step(parser, context, token, returned),
+            | Self::FutureChild(frame) => frame.step(parser, context, token, returned),
+        }
+    }
+}
+
+impl FutureChildFrame {
+    fn step(
+        &mut self,
+        parser: &Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        debug_assert!(
+            returned.is_none(),
+            "future-child frames cannot receive child values"
+        );
+        match self.phase {
+            | FutureChildPhase::Start => {
+                parser.report(
+                    context,
+                    ParserErrorType::FutureChildNotImplemented(self.kind),
+                    token,
                 );
-                context.parser_error(ParserError {
-                    error_type:
-                        ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(
-                            token.map(|t| t.kind),
-                        ),
+                self.phase = FutureChildPhase::Recovered;
+                let kind = match self.kind {
+                    | FutureChildKind::ArrayBoundExpression => SynchronizationKind::ArrayBound,
+                    | FutureChildKind::BitFieldWidthExpression => SynchronizationKind::StructMember,
+                    | FutureChildKind::EnumeratorValueExpression =>
+                        SynchronizationKind::EnumeratorValue,
+                    | FutureChildKind::Initializer => SynchronizationKind::Initializer,
+                    | FutureChildKind::FunctionBody => SynchronizationKind::FunctionBody,
+                };
+                ParseAction::Recover(SynchronizationSet {
+                    kind,
+                    target: RecoveryTarget::CurrentFrame,
+                })
+            },
+            | FutureChildPhase::Recovered =>
+                ParseAction::Reduce(ParseValue::FutureChild(self.kind)),
+        }
+    }
+}
+
+impl ExternalDeclarationFrame {
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        _context: &mut Context,
+        _token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | ExternalDeclarationPhase::Start => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.phase = ExternalDeclarationPhase::AwaitDeclaration;
+                ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
+                    parser.syntax.init_declarators.len().to_u32(),
+                )))
+            },
+            | ExternalDeclarationPhase::AwaitDeclaration => {
+                let Some(ParseValue::Declaration(declaration)) = returned else {
+                    panic!("declaration frame returned an unexpected value: {returned:?}");
+                };
+                ParseAction::Reduce(ParseValue::ExternalDeclaration(
+                    ExternalDeclaration::Declaration(declaration),
+                ))
+            },
+        }
+    }
+}
+
+impl DeclarationFrame {
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | DeclarationPhase::Start => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if let Some(token) = token {
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                }
+                self.phase = DeclarationPhase::AwaitSpecifiers;
+                ParseAction::Push(ParseFrame::DeclarationSpecifiers(
+                    DeclarationSpecifiersFrame::new(SpecifierMode::Declaration),
+                ))
+            },
+            | DeclarationPhase::AwaitSpecifiers => {
+                let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
+                    panic!("specifier frame returned an unexpected value: {returned:?}");
+                };
+                self.declaration_specifiers = Some(specifiers);
+                if is_operator(token, OperatorTokenType::Semicolon) {
+                    if specifiers.storage_class == StorageClass::Typedef {
+                        parser.report_unexpected(
+                            context,
+                            "declaration",
+                            "a typedef declarator",
+                            token,
+                        );
+                    }
+                    if let Some(token) = token {
+                        parser.merge_source(context, &mut self.source_vectors, token);
+                    }
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Consume
+                } else {
+                    self.phase = DeclarationPhase::AwaitDeclarator;
+                    ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        DeclaratorMode::Named,
+                    )))
+                }
+            },
+            | DeclarationPhase::AwaitDeclarator => {
+                let Some(ParseValue::Declarator(declarator)) = returned else {
+                    panic!("declarator frame returned an unexpected value: {returned:?}");
+                };
+                let Some(declarator) = declarator else {
+                    parser.report_unexpected(context, "declaration", "a declarator", token);
+                    self.phase = DeclarationPhase::AfterDeclarator;
+                    return ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::Declaration,
+                        target: RecoveryTarget::CurrentFrame,
+                    });
+                };
+
+                let source_vectors = parser
+                    .syntax
+                    .declarator_sources
+                    .last()
+                    .copied()
+                    .unwrap_or_default();
+                let init_index = parser.syntax.init_declarators.len().to_u32();
+                parser.syntax.init_declarators.push(InitDeclarator {
+                    declarator,
+                    initializer: None,
                     source_vectors,
                 });
-                self.pending_token = token;
-            }
-            let declarator = declarator?;
-            self.direct_declarators
-                .push(DirectDeclarator::Parenthesized(declarator));
-            return Some(());
+                self.last_init_index = Some(init_index);
+
+                if let Some(identifier) = parser.declarator_identifier(declarator) {
+                    let class = if self
+                        .declaration_specifiers
+                        .is_some_and(|specifiers| specifiers.storage_class == StorageClass::Typedef)
+                    {
+                        NameClass::Typedef
+                    } else {
+                        NameClass::Ordinary
+                    };
+                    parser.scopes.publish(identifier.name, class);
+                }
+                self.phase = DeclarationPhase::AfterDeclarator;
+                ParseAction::Reprocess
+            },
+            | DeclarationPhase::AfterDeclarator => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::Comma) {
+                    self.phase = DeclarationPhase::BeforeNextDeclarator;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    if let Some(token) = token {
+                        parser.merge_source(context, &mut self.source_vectors, token);
+                    }
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Equals) {
+                    self.initializer_source = token.map(|token| token.source_vectors);
+                    self.phase = DeclarationPhase::PushInitializer;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
+                    self.phase = DeclarationPhase::AwaitFunctionBody;
+                    ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
+                        FutureChildKind::FunctionBody,
+                    )))
+                } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
+                    parser.report_unexpected(
+                        context,
+                        "declaration",
+                        "`,`, `=`, or `;` after a declarator",
+                        token,
+                    );
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Consume
+                } else if token.is_none() {
+                    parser.report_eof(
+                        context,
+                        "declaration",
+                        "`,`, `=`, or `;` after a declarator",
+                    );
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Reprocess
+                } else {
+                    parser.report_unexpected(
+                        context,
+                        "declaration",
+                        "`,`, `=`, or `;` after a declarator",
+                        token,
+                    );
+                    self.phase = DeclarationPhase::AfterDeclarator;
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::Declaration,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
+                }
+            },
+            | DeclarationPhase::PushInitializer => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.phase = DeclarationPhase::AwaitInitializer;
+                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
+                    FutureChildKind::Initializer,
+                )))
+            },
+            | DeclarationPhase::AwaitInitializer => {
+                let Some(ParseValue::FutureChild(FutureChildKind::Initializer)) = returned else {
+                    panic!("initializer seam returned an unexpected value: {returned:?}");
+                };
+                if let Some(index) = self.last_init_index {
+                    parser.syntax.init_declarators[index as usize].initializer = Some(
+                        Initializer::FutureChild(self.initializer_source.unwrap_or_default()),
+                    );
+                }
+                self.phase = DeclarationPhase::AfterDeclarator;
+                ParseAction::Reprocess
+            },
+            | DeclarationPhase::AwaitFunctionBody => {
+                let Some(ParseValue::FutureChild(FutureChildKind::FunctionBody)) = returned else {
+                    panic!("statement seam returned an unexpected value: {returned:?}");
+                };
+                self.phase = DeclarationPhase::Finish;
+                ParseAction::Reprocess
+            },
+            | DeclarationPhase::BeforeNextDeclarator => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.phase = DeclarationPhase::AwaitDeclarator;
+                ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                    DeclaratorMode::Named,
+                )))
+            },
+            | DeclarationPhase::Finish => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                let index = parser.syntax.declarations.len().to_u32();
+                let source_vectors = self.source_vectors.unwrap_or_default();
+                parser.syntax.declarations.push(Declaration {
+                    declaration_specifiers: self
+                        .declaration_specifiers
+                        .expect("a declaration cannot finish without specifiers"),
+                    init_declarators: VectorSlice::new(
+                        self.init_declarator_start,
+                        parser.syntax.init_declarators.len().to_u32(),
+                    ),
+                    source_vectors,
+                });
+                parser.syntax.declaration_sources.push(source_vectors);
+                ParseAction::Reduce(ParseValue::Declaration(DeclarationIndex(index)))
+            },
         }
-        // Declarators are only required to start with an identifier or a parenthesized
-        // declarator if they're not abstract.
-        if IS_ABSTRACT == IS_NOT_ABSTRACT_DECLARATOR {
-            context.parser_error(ParserError {
-                error_type:
-                    ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
+    }
+}
+
+impl DeclarationSpecifiersFrame {
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | DeclarationSpecifiersPhase::AwaitStructOrUnion => {
+                let Some(ParseValue::StructOrUnionSpecifier(index)) = returned else {
+                    panic!("struct specifier returned an unexpected value: {returned:?}");
+                };
+                self.specifiers
+                    .type_specifiers
+                    .make_struct_or_union(parser, context, index);
+                if let Some(source_vectors) = parser
+                    .syntax
+                    .struct_specifier_sources
+                    .get(index.0 as usize)
+                    .copied()
+                {
+                    self.source_vectors =
+                        Some(self.source_vectors.map_or(source_vectors, |existing| {
+                            context.merge_vectors(existing, source_vectors)
+                        }));
+                }
+                self.consumed = true;
+                self.phase = DeclarationSpecifiersPhase::Collect;
+                return ParseAction::Reprocess;
+            },
+            | DeclarationSpecifiersPhase::AwaitEnum => {
+                let Some(ParseValue::EnumSpecifier(index)) = returned else {
+                    panic!("enum specifier returned an unexpected value: {returned:?}");
+                };
+                self.specifiers
+                    .type_specifiers
+                    .make_enum(parser, context, index);
+                if let Some(source_vectors) = parser
+                    .syntax
+                    .enum_specifier_sources
+                    .get(index.0 as usize)
+                    .copied()
+                {
+                    self.source_vectors =
+                        Some(self.source_vectors.map_or(source_vectors, |existing| {
+                            context.merge_vectors(existing, source_vectors)
+                        }));
+                }
+                self.consumed = true;
+                self.phase = DeclarationSpecifiersPhase::Collect;
+                return ParseAction::Reprocess;
+            },
+            | DeclarationSpecifiersPhase::Collect => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+            },
+        }
+
+        let Some(token) = token else {
+            if !self.consumed {
+                parser.report_eof(context, "declaration-specifiers", "a declaration specifier");
+            }
+            if self.specifiers.type_specifiers == TypeSpecifiers::Empty {
+                parser.report_eof(
+                    context,
+                    "declaration-specifiers",
+                    "at least one type specifier",
+                );
+            }
+            self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
+            return ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers));
+        };
+
+        if matches!(
+            token.kind,
+            TokenType::Keyword(KeywordTokenType::Struct | KeywordTokenType::Union)
+        ) {
+            self.phase = DeclarationSpecifiersPhase::AwaitStructOrUnion;
+            return ParseAction::Push(ParseFrame::StructOrUnionSpecifier(
+                StructOrUnionSpecifierFrame::new(),
+            ));
+        }
+        if token.kind == TokenType::Keyword(KeywordTokenType::Enum) {
+            self.phase = DeclarationSpecifiersPhase::AwaitEnum;
+            return ParseAction::Push(ParseFrame::EnumSpecifier(EnumSpecifierFrame::new()));
+        }
+
+        if self.mode == SpecifierMode::Declaration
+            && let Some(storage_class) = storage_class(token.kind)
+        {
+            if self.storage_seen {
+                parser.report(
+                    context,
+                    ParserErrorType::StorageClassRedefinition(
+                        self.specifiers.storage_class,
                         token.kind,
                     ),
-                source_vectors: token.source_vectors,
+                    Some(token),
+                );
+            } else {
+                self.specifiers.storage_class = storage_class;
+                self.storage_seen = true;
+            }
+            parser.merge_source(context, &mut self.source_vectors, token);
+            self.consumed = true;
+            return ParseAction::Consume;
+        }
+
+        if let TokenType::Keyword(keyword) = token.kind
+            && is_primitive_type_keyword(keyword)
+        {
+            self.apply_type_specifier(parser, context, token, keyword);
+            parser.merge_source(context, &mut self.source_vectors, token);
+            self.consumed = true;
+            return ParseAction::Consume;
+        }
+
+        if let Some(qualifier) = type_qualifier(token.kind) {
+            if self.specifiers.type_qualifiers.contains(qualifier) {
+                let error_type = match qualifier {
+                    | TypeQualifiers::CONST => ParserErrorType::ConstSpecifiedTwice,
+                    | TypeQualifiers::VOLATILE => ParserErrorType::VolatileSpecifiedTwice,
+                    | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
+                    | _ => unreachable!("one type qualifier is handled at a time"),
+                };
+                parser.report(context, error_type, Some(token));
+            }
+            self.specifiers.type_qualifiers.insert(qualifier);
+            parser.merge_source(context, &mut self.source_vectors, token);
+            self.consumed = true;
+            return ParseAction::Consume;
+        }
+
+        if self.mode == SpecifierMode::Declaration
+            && token.kind == TokenType::Keyword(KeywordTokenType::Inline)
+        {
+            if self.specifiers.function_specifiers.is_inline {
+                parser.report(context, ParserErrorType::InlineSpecifiedTwice, Some(token));
+            }
+            self.specifiers.function_specifiers.is_inline = true;
+            parser.merge_source(context, &mut self.source_vectors, token);
+            self.consumed = true;
+            return ParseAction::Consume;
+        }
+
+        if token.kind == TokenType::Identifier
+            && self.specifiers.type_specifiers == TypeSpecifiers::Empty
+            && parser.scopes.is_typedef(token.contents)
+        {
+            self.specifiers.type_specifiers.make_typedef_name(
+                parser,
+                context,
+                Identifier::new(token.contents),
+            );
+            parser.merge_source(context, &mut self.source_vectors, token);
+            self.consumed = true;
+            return ParseAction::Consume;
+        }
+
+        if !self.consumed {
+            parser.report(
+                context,
+                ParserErrorType::EmptyDeclarationSpecifiers(token.kind),
+                Some(token),
+            );
+        }
+        if self.specifiers.type_specifiers == TypeSpecifiers::Empty {
+            parser.report(
+                context,
+                ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(token.kind),
+                Some(token),
+            );
+        }
+        self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
+        ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers))
+    }
+
+    fn apply_type_specifier(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Token,
+        keyword: KeywordTokenType,
+    ) {
+        let type_specifiers = &mut self.specifiers.type_specifiers;
+        let duplicate = match keyword {
+            | KeywordTokenType::Signed => type_specifiers.is_signed(),
+            | KeywordTokenType::Unsigned => type_specifiers.is_unsigned(),
+            | KeywordTokenType::Int => type_specifiers.is_int(),
+            | KeywordTokenType::Short => type_specifiers.is_short(),
+            | KeywordTokenType::Long => false,
+            | KeywordTokenType::Char => type_specifiers.is_char(),
+            | KeywordTokenType::Float => type_specifiers.is_float(),
+            | KeywordTokenType::Double => type_specifiers.is_double(),
+            | KeywordTokenType::Void => type_specifiers.is_void(),
+            | KeywordTokenType::Bool => type_specifiers.is_bool(),
+            | KeywordTokenType::Complex => type_specifiers.is_complex(),
+            | KeywordTokenType::Imaginary => type_specifiers.is_imaginary(),
+            | _ => unreachable!("only primitive type keywords reach this method"),
+        };
+        if duplicate {
+            parser.report(
+                context,
+                ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                Some(token),
+            );
+            return;
+        }
+
+        match keyword {
+            | KeywordTokenType::Signed => type_specifiers.make_signed(parser, context),
+            | KeywordTokenType::Unsigned => type_specifiers.make_unsigned(parser, context),
+            | KeywordTokenType::Int => type_specifiers.make_int(parser, context),
+            | KeywordTokenType::Short => type_specifiers.make_short(parser, context),
+            | KeywordTokenType::Long if type_specifiers.is_long_long() => {
+                parser.report(context, ParserErrorType::LongSpecifiedThrice, Some(token));
+            },
+            | KeywordTokenType::Long => type_specifiers.make_long(parser, context),
+            | KeywordTokenType::Char => type_specifiers.make_char(parser, context),
+            | KeywordTokenType::Float => type_specifiers.make_float(parser, context),
+            | KeywordTokenType::Double if type_specifiers.is_long_long() => {
+                parser.report(
+                    context,
+                    ParserErrorType::LongLongDoubleSpecified,
+                    Some(token),
+                );
+            },
+            | KeywordTokenType::Double => type_specifiers.make_double(parser, context),
+            | KeywordTokenType::Void => type_specifiers.make_void(parser, context),
+            | KeywordTokenType::Bool => type_specifiers.make_bool(parser, context),
+            | KeywordTokenType::Complex => type_specifiers.make_complex(parser, context),
+            | KeywordTokenType::Imaginary => type_specifiers.make_imaginary(parser, context),
+            | _ => unreachable!("only primitive type keywords reach this method"),
+        }
+    }
+}
+
+fn storage_class(token: TokenType) -> Option<StorageClass> {
+    match token {
+        | TokenType::Keyword(KeywordTokenType::Auto) => Some(StorageClass::Auto),
+        | TokenType::Keyword(KeywordTokenType::Register) => Some(StorageClass::Register),
+        | TokenType::Keyword(KeywordTokenType::Static) => Some(StorageClass::Static),
+        | TokenType::Keyword(KeywordTokenType::Extern) => Some(StorageClass::Extern),
+        | TokenType::Keyword(KeywordTokenType::Typedef) => Some(StorageClass::Typedef),
+        | _ => None,
+    }
+}
+
+fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
+    match token {
+        | TokenType::Keyword(KeywordTokenType::Const) => Some(TypeQualifiers::CONST),
+        | TokenType::Keyword(KeywordTokenType::Volatile) => Some(TypeQualifiers::VOLATILE),
+        | TokenType::Keyword(KeywordTokenType::Restrict) => Some(TypeQualifiers::RESTRICT),
+        | _ => None,
+    }
+}
+
+fn is_primitive_type_keyword(keyword: KeywordTokenType) -> bool {
+    matches!(
+        keyword,
+        KeywordTokenType::Signed
+            | KeywordTokenType::Unsigned
+            | KeywordTokenType::Int
+            | KeywordTokenType::Short
+            | KeywordTokenType::Long
+            | KeywordTokenType::Char
+            | KeywordTokenType::Float
+            | KeywordTokenType::Double
+            | KeywordTokenType::Void
+            | KeywordTokenType::Bool
+            | KeywordTokenType::Complex
+            | KeywordTokenType::Imaginary
+    )
+}
+
+impl DeclaratorFrame {
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | DeclaratorPhase::PointerOrBase => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::Asterisk) {
+                    let token = token.expect("asterisk token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.has_pointer_level = true;
+                    self.current_qualifiers = TypeQualifiers::empty();
+                    self.phase = DeclaratorPhase::PointerQualifiers;
+                    ParseAction::Consume
+                } else {
+                    self.phase = DeclaratorPhase::Base;
+                    ParseAction::Reprocess
+                }
+            },
+            | DeclaratorPhase::PointerQualifiers => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if let Some(token) = token
+                    && let Some(qualifier) = type_qualifier(token.kind)
+                {
+                    if self.current_qualifiers.contains(qualifier) {
+                        let error_type = match qualifier {
+                            | TypeQualifiers::CONST => ParserErrorType::ConstSpecifiedTwice,
+                            | TypeQualifiers::VOLATILE => ParserErrorType::VolatileSpecifiedTwice,
+                            | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
+                            | _ => unreachable!("one qualifier is handled at a time"),
+                        };
+                        parser.report(context, error_type, Some(token));
+                    }
+                    self.current_qualifiers.insert(qualifier);
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    return ParseAction::Consume;
+                }
+                if is_operator(token, OperatorTokenType::Asterisk) {
+                    self.pointer_qualifiers.push(self.current_qualifiers);
+                    self.current_qualifiers = TypeQualifiers::empty();
+                    let token = token.expect("asterisk token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    ParseAction::Consume
+                } else {
+                    self.pointer_qualifiers.push(self.current_qualifiers);
+                    self.current_qualifiers = TypeQualifiers::empty();
+                    self.phase = DeclaratorPhase::Base;
+                    ParseAction::Reprocess
+                }
+            },
+            | DeclaratorPhase::Base => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if let Some(token) = token
+                    && token.kind == TokenType::Identifier
+                    && self.mode != DeclaratorMode::Abstract
+                {
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.direct_declarators
+                        .push(DirectDeclarator::Identifier(Identifier::new(
+                            token.contents,
+                        )));
+                    self.has_direct_declarator = true;
+                    self.phase = DeclaratorPhase::Suffix;
+                    return ParseAction::Consume;
+                }
+                if is_operator(token, OperatorTokenType::OpeningParenthesis) {
+                    let token = token.expect("opening-parenthesis token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = if self.mode == DeclaratorMode::Named {
+                        DeclaratorPhase::PushNested
+                    } else {
+                        DeclaratorPhase::ClassifyAbstractParenthesis
+                    };
+                    return ParseAction::Consume;
+                }
+                if self.mode != DeclaratorMode::Named
+                    && is_operator(token, OperatorTokenType::OpeningSquareBracket)
+                {
+                    self.phase = DeclaratorPhase::Suffix;
+                    return ParseAction::Reprocess;
+                }
+                if self.mode == DeclaratorMode::Named {
+                    parser.report_unexpected(context, "declarator", "an identifier or `(`", token);
+                }
+                self.phase = DeclaratorPhase::Finish;
+                ParseAction::Reprocess
+            },
+            | DeclaratorPhase::PushNested => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.phase = DeclaratorPhase::AwaitNested;
+                ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(self.mode)))
+            },
+            | DeclaratorPhase::ClassifyAbstractParenthesis => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    self.direct_declarators.push(DirectDeclarator::Function {
+                        parameter_list: VectorSlice::empty(),
+                        is_variadic:    false,
+                    });
+                    self.has_direct_declarator = true;
+                    self.phase = DeclaratorPhase::Suffix;
+                    ParseAction::Consume
+                } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                    self.phase = DeclaratorPhase::AwaitParameterList;
+                    ParseAction::Push(ParseFrame::ParameterList(ParameterListFrame::new(false)))
+                } else {
+                    self.phase = DeclaratorPhase::AwaitNested;
+                    ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(self.mode)))
+                }
+            },
+            | DeclaratorPhase::AwaitNested => {
+                let Some(ParseValue::Declarator(declarator)) = returned else {
+                    panic!("nested declarator returned an unexpected value: {returned:?}");
+                };
+                let Some(declarator) = declarator else {
+                    parser.report_unexpected(
+                        context,
+                        "declarator",
+                        "a declarator after `(`",
+                        token,
+                    );
+                    self.phase = DeclaratorPhase::Suffix;
+                    return ParseAction::Reprocess;
+                };
+                self.phase = DeclaratorPhase::ExpectNestedClose(declarator);
+                ParseAction::Reprocess
+            },
+            | DeclaratorPhase::ExpectNestedClose(declarator) => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.direct_declarators
+                    .push(DirectDeclarator::Parenthesized(declarator));
+                self.has_direct_declarator = true;
+                self.phase = DeclaratorPhase::Suffix;
+                if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    let token = token.expect("closing-parenthesis token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    ParseAction::Consume
+                } else {
+                    parser.report_unexpected(context, "parenthesized-declarator", "`)`", token);
+                    ParseAction::Reprocess
+                }
+            },
+            | DeclaratorPhase::Suffix => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::OpeningSquareBracket) {
+                    let token = token.expect("opening-square-bracket token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.array_qualifiers = TypeQualifiers::empty();
+                    self.array_is_static = false;
+                    self.array_is_pointer = false;
+                    self.phase = DeclaratorPhase::Array;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::OpeningParenthesis) {
+                    let token = token.expect("opening-parenthesis token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = DeclaratorPhase::FunctionStart;
+                    ParseAction::Consume
+                } else {
+                    self.phase = DeclaratorPhase::Finish;
+                    ParseAction::Reprocess
+                }
+            },
+            | DeclaratorPhase::Array => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if let Some(token) = token
+                    && let Some(qualifier) = type_qualifier(token.kind)
+                {
+                    if self.array_qualifiers.contains(qualifier) {
+                        let error_type = match qualifier {
+                            | TypeQualifiers::CONST => ParserErrorType::ConstSpecifiedTwice,
+                            | TypeQualifiers::VOLATILE => ParserErrorType::VolatileSpecifiedTwice,
+                            | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
+                            | _ => unreachable!("one qualifier is handled at a time"),
+                        };
+                        parser.report(context, error_type, Some(token));
+                    }
+                    self.array_qualifiers.insert(qualifier);
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    return ParseAction::Consume;
+                }
+                if token
+                    .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Static))
+                {
+                    let token = token.expect("static token exists");
+                    if self.array_is_static {
+                        parser.report(context, ParserErrorType::StaticSpecifiedTwice, Some(token));
+                    }
+                    self.array_is_static = true;
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    return ParseAction::Consume;
+                }
+                if is_operator(token, OperatorTokenType::Asterisk) {
+                    let token = token.expect("asterisk token exists");
+                    if self.array_is_static {
+                        parser.report(
+                            context,
+                            ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator,
+                            Some(token),
+                        );
+                    }
+                    self.array_is_pointer = true;
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = DeclaratorPhase::ArrayExpectClose;
+                    return ParseAction::Consume;
+                }
+                if is_operator(token, OperatorTokenType::ClosingSquareBracket) {
+                    let token = token.expect("closing-square-bracket token exists");
+                    if self.array_is_static {
+                        parser.report(
+                            context,
+                            ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator,
+                            Some(token),
+                        );
+                    }
+                    self.push_array();
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = DeclaratorPhase::Suffix;
+                    return ParseAction::Consume;
+                }
+                if token.is_none() {
+                    parser.report_eof(context, "array-declarator", "`]`");
+                    self.push_array();
+                    self.phase = DeclaratorPhase::Finish;
+                    return ParseAction::Reprocess;
+                }
+                self.phase = DeclaratorPhase::AwaitArrayBound;
+                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
+                    FutureChildKind::ArrayBoundExpression,
+                )))
+            },
+            | DeclaratorPhase::ArrayExpectClose => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::ClosingSquareBracket) {
+                    let token = token.expect("closing-square-bracket token exists");
+                    self.push_array();
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = DeclaratorPhase::Suffix;
+                    ParseAction::Consume
+                } else {
+                    parser.report_unexpected(context, "array-declarator", "`]` after `*`", token);
+                    self.phase = DeclaratorPhase::AwaitArrayBound;
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::ArrayBound,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
+                }
+            },
+            | DeclaratorPhase::AwaitArrayBound => {
+                if returned.is_some()
+                    && !matches!(
+                        returned,
+                        Some(ParseValue::FutureChild(
+                            FutureChildKind::ArrayBoundExpression
+                        ))
+                    )
+                {
+                    panic!("array-bound seam returned an unexpected value: {returned:?}");
+                }
+                if is_operator(token, OperatorTokenType::ClosingSquareBracket) {
+                    let token = token.expect("closing-square-bracket token exists");
+                    self.push_array();
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = DeclaratorPhase::Suffix;
+                    ParseAction::Consume
+                } else if token.is_none() {
+                    parser.report_eof(context, "array-declarator", "`]`");
+                    self.push_array();
+                    self.phase = DeclaratorPhase::Finish;
+                    ParseAction::Reprocess
+                } else {
+                    parser.report_unexpected(context, "array-declarator", "`]`", token);
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::ArrayBound,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
+                }
+            },
+            | DeclaratorPhase::FunctionStart => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    let direct = if self.mode == DeclaratorMode::Named {
+                        DirectDeclarator::KAndRStyleFunction {
+                            parameters: VectorSlice::empty(),
+                        }
+                    } else {
+                        DirectDeclarator::Function {
+                            parameter_list: VectorSlice::empty(),
+                            is_variadic:    false,
+                        }
+                    };
+                    self.direct_declarators.push(direct);
+                    self.has_direct_declarator = true;
+                    let token = token.expect("closing-parenthesis token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = DeclaratorPhase::Suffix;
+                    ParseAction::Consume
+                } else if token.is_none() {
+                    parser.report_eof(context, "function-declarator", "`)`");
+                    self.phase = DeclaratorPhase::Finish;
+                    ParseAction::Reprocess
+                } else {
+                    self.phase = DeclaratorPhase::AwaitParameterList;
+                    ParseAction::Push(ParseFrame::ParameterList(ParameterListFrame::new(
+                        self.mode == DeclaratorMode::Named,
+                    )))
+                }
+            },
+            | DeclaratorPhase::AwaitParameterList => {
+                let Some(ParseValue::ParameterList(direct)) = returned else {
+                    panic!("parameter list returned an unexpected value: {returned:?}");
+                };
+                self.direct_declarators.push(direct);
+                self.has_direct_declarator = true;
+                self.phase = DeclaratorPhase::Suffix;
+                ParseAction::Reprocess
+            },
+            | DeclaratorPhase::Finish => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if !self.has_pointer_level && !self.has_direct_declarator {
+                    return ParseAction::Reduce(ParseValue::Declarator(None));
+                }
+                if self.mode == DeclaratorMode::Named && !self.has_direct_declarator {
+                    parser.report_unexpected(
+                        context,
+                        "declarator",
+                        "an identifier or parenthesized declarator",
+                        token,
+                    );
+                    return ParseAction::Reduce(ParseValue::Declarator(None));
+                }
+
+                let pointer_start = parser.syntax.type_qualifiers.len().to_u32();
+                parser
+                    .syntax
+                    .type_qualifiers
+                    .append(&mut self.pointer_qualifiers);
+                let direct_start = parser.syntax.direct_declarators.len().to_u32();
+                parser
+                    .syntax
+                    .direct_declarators
+                    .append(&mut self.direct_declarators);
+                let declarator = Declarator {
+                    pointer_declarator: PointerDeclarator {
+                        type_qualifiers_list: VectorSlice::new(
+                            pointer_start,
+                            parser.syntax.type_qualifiers.len().to_u32(),
+                        ),
+                    },
+                    kind:               VectorSlice::new(
+                        direct_start,
+                        parser.syntax.direct_declarators.len().to_u32(),
+                    ),
+                };
+                parser
+                    .syntax
+                    .declarator_sources
+                    .push(self.source_vectors.unwrap_or_default());
+                ParseAction::Reduce(ParseValue::Declarator(Some(declarator)))
+            },
+        }
+    }
+
+    fn push_array(&mut self) {
+        self.direct_declarators.push(DirectDeclarator::Array {
+            type_qualifiers:       self.array_qualifiers,
+            is_static:             self.array_is_static,
+            is_pointer:            self.array_is_pointer,
+            assignment_expression: None,
+        });
+        self.has_direct_declarator = true;
+        self.array_qualifiers = TypeQualifiers::empty();
+        self.array_is_static = false;
+        self.array_is_pointer = false;
+    }
+}
+
+impl ParameterListFrame {
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | ParameterListPhase::Start => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if self.allow_k_and_r
+                    && token.is_some_and(|token| {
+                        token.kind == TokenType::Identifier
+                            && !parser.scopes.is_typedef(token.contents)
+                    })
+                {
+                    self.phase = ParameterListPhase::KAndRIdentifier;
+                } else {
+                    self.phase = ParameterListPhase::PrototypeParameter;
+                }
+                ParseAction::Reprocess
+            },
+            | ParameterListPhase::KAndRIdentifier => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                let Some(token) = token else {
+                    parser.report_eof(context, "K&R parameter-list", "an identifier and `)`");
+                    self.phase = ParameterListPhase::FinishKAndR;
+                    return ParseAction::Reprocess;
+                };
+                if token.kind != TokenType::Identifier || parser.scopes.is_typedef(token.contents) {
+                    parser.report_unexpected(
+                        context,
+                        "K&R parameter-list",
+                        "a non-typedef identifier",
+                        Some(token),
+                    );
+                    self.phase = ParameterListPhase::KAndRSeparator;
+                    return ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::Parameter,
+                        target: RecoveryTarget::CurrentFrame,
+                    });
+                }
+                self.identifiers.push(Identifier::new(token.contents));
+                parser.merge_source(context, &mut self.source_vectors, token);
+                self.phase = ParameterListPhase::KAndRSeparator;
+                ParseAction::Consume
+            },
+            | ParameterListPhase::KAndRSeparator => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::Comma) {
+                    self.phase = ParameterListPhase::KAndRIdentifier;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    let token = token.expect("closing-parenthesis token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = ParameterListPhase::FinishKAndR;
+                    ParseAction::Consume
+                } else if token.is_none() {
+                    parser.report_eof(context, "K&R parameter-list", "`)`");
+                    self.phase = ParameterListPhase::FinishKAndR;
+                    ParseAction::Reprocess
+                } else {
+                    parser.report_unexpected(context, "K&R parameter-list", "`,` or `)`", token);
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::Parameter,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
+                }
+            },
+            | ParameterListPhase::PrototypeParameter => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.phase = ParameterListPhase::AwaitSpecifiers;
+                ParseAction::Push(ParseFrame::DeclarationSpecifiers(
+                    DeclarationSpecifiersFrame::new(SpecifierMode::Declaration),
+                ))
+            },
+            | ParameterListPhase::AwaitSpecifiers => {
+                let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
+                    panic!("parameter specifiers returned an unexpected value: {returned:?}");
+                };
+                self.pending_specifiers = Some(specifiers);
+                if is_operator(token, OperatorTokenType::Comma)
+                    || is_operator(token, OperatorTokenType::ClosingParenthesis)
+                {
+                    self.parameters.push(ParameterDeclaration {
+                        declaration_specifiers: specifiers,
+                        declarator:             None,
+                    });
+                    self.phase = ParameterListPhase::PrototypeSeparator;
+                    ParseAction::Reprocess
+                } else {
+                    self.phase = ParameterListPhase::AwaitDeclarator;
+                    ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        DeclaratorMode::MaybeAbstract,
+                    )))
+                }
+            },
+            | ParameterListPhase::AwaitDeclarator => {
+                let Some(ParseValue::Declarator(declarator)) = returned else {
+                    panic!("parameter declarator returned an unexpected value: {returned:?}");
+                };
+                self.parameters.push(ParameterDeclaration {
+                    declaration_specifiers: self
+                        .pending_specifiers
+                        .take()
+                        .expect("parameter declarator follows specifiers"),
+                    declarator,
+                });
+                self.phase = ParameterListPhase::PrototypeSeparator;
+                ParseAction::Reprocess
+            },
+            | ParameterListPhase::PrototypeSeparator => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    let token = token.expect("closing-parenthesis token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Comma) {
+                    self.phase = ParameterListPhase::AfterComma;
+                    ParseAction::Consume
+                } else if token.is_none() {
+                    parser.report_eof(context, "prototype parameter-list", "`,` or `)`");
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Reprocess
+                } else {
+                    parser.report_unexpected(
+                        context,
+                        "prototype parameter-list",
+                        "`,` or `)`",
+                        token,
+                    );
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::Parameter,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
+                }
+            },
+            | ParameterListPhase::AfterComma => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::Ellipsis) {
+                    self.is_variadic = true;
+                    self.phase = ParameterListPhase::ExpectCloseAfterEllipsis;
+                    ParseAction::Consume
+                } else {
+                    self.phase = ParameterListPhase::PrototypeParameter;
+                    ParseAction::Reprocess
+                }
+            },
+            | ParameterListPhase::ExpectCloseAfterEllipsis => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    let token = token.expect("closing-parenthesis token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Consume
+                } else if token.is_none() {
+                    parser.report_eof(context, "variadic parameter-list", "`)`");
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Reprocess
+                } else {
+                    parser.report_unexpected(
+                        context,
+                        "variadic parameter-list",
+                        "`)` after `...`",
+                        token,
+                    );
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::Parameter,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
+                }
+            },
+            | ParameterListPhase::FinishKAndR => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                let start = parser.syntax.identifiers.len().to_u32();
+                parser.syntax.identifiers.append(&mut self.identifiers);
+                ParseAction::Reduce(ParseValue::ParameterList(
+                    DirectDeclarator::KAndRStyleFunction {
+                        parameters: VectorSlice::new(
+                            start,
+                            parser.syntax.identifiers.len().to_u32(),
+                        ),
+                    },
+                ))
+            },
+            | ParameterListPhase::FinishPrototype => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                let start = parser.syntax.parameter_declarations.len().to_u32();
+                let parameter_count = self.parameters.len();
+                parser
+                    .syntax
+                    .parameter_declarations
+                    .append(&mut self.parameters);
+                parser.syntax.parameter_sources.extend(std::iter::repeat_n(
+                    self.source_vectors.unwrap_or_default(),
+                    parameter_count,
+                ));
+                ParseAction::Reduce(ParseValue::ParameterList(DirectDeclarator::Function {
+                    parameter_list: VectorSlice::new(
+                        start,
+                        parser.syntax.parameter_declarations.len().to_u32(),
+                    ),
+                    is_variadic:    self.is_variadic,
+                }))
+            },
+        }
+    }
+}
+
+impl StructOrUnionSpecifierFrame {
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | StructOrUnionPhase::Start => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                let Some(token) = token else {
+                    parser.report_eof(context, "struct-or-union-specifier", "`struct` or `union`");
+                    return self.finish(parser);
+                };
+                self.kind = match token.kind {
+                    | TokenType::Keyword(KeywordTokenType::Struct) => Some(StructOrUnion::Struct),
+                    | TokenType::Keyword(KeywordTokenType::Union) => Some(StructOrUnion::Union),
+                    | _ => {
+                        parser.report_unexpected(
+                            context,
+                            "struct-or-union-specifier",
+                            "`struct` or `union`",
+                            Some(token),
+                        );
+                        None
+                    },
+                };
+                parser.merge_source(context, &mut self.source_vectors, token);
+                self.phase = StructOrUnionPhase::NameOrBody;
+                ParseAction::Consume
+            },
+            | StructOrUnionPhase::NameOrBody => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if let Some(token) = token
+                    && token.kind == TokenType::Identifier
+                {
+                    self.identifier = Some(Identifier::new(token.contents));
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = StructOrUnionPhase::AfterName;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
+                    let token = token.expect("opening-curly-brace token exists");
+                    self.body_started = true;
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = StructOrUnionPhase::MemberStart;
+                    ParseAction::Consume
+                } else {
+                    parser.report_unexpected(
+                        context,
+                        "struct-or-union-specifier",
+                        "a tag name or `{`",
+                        token,
+                    );
+                    self.finish(parser)
+                }
+            },
+            | StructOrUnionPhase::AfterName => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
+                    let token = token.expect("opening-curly-brace token exists");
+                    self.body_started = true;
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = StructOrUnionPhase::MemberStart;
+                    ParseAction::Consume
+                } else {
+                    self.finish(parser)
+                }
+            },
+            | StructOrUnionPhase::MemberStart => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
+                    let token = token.expect("closing-curly-brace token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = StructOrUnionPhase::FinishBody;
+                    ParseAction::Consume
+                } else if token.is_none() {
+                    parser.report_eof(context, "struct-declaration-list", "`}`");
+                    self.phase = StructOrUnionPhase::FinishBody;
+                    ParseAction::Reprocess
+                } else {
+                    self.member_source = token.map(|token| token.source_vectors);
+                    self.phase = StructOrUnionPhase::AwaitMemberSpecifiers;
+                    ParseAction::Push(ParseFrame::DeclarationSpecifiers(
+                        DeclarationSpecifiersFrame::new(SpecifierMode::SpecifierQualifier),
+                    ))
+                }
+            },
+            | StructOrUnionPhase::AwaitMemberSpecifiers => {
+                let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
+                    panic!("member specifiers returned an unexpected value: {returned:?}");
+                };
+                self.member_specifiers = Some(specifiers);
+                if is_operator(token, OperatorTokenType::Colon) {
+                    self.member_declarator = None;
+                    self.phase = StructOrUnionPhase::PushBitFieldWidth;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    parser.report(context, ParserErrorType::EmptyStructDeclarator, token);
+                    self.finish_member(parser);
+                    self.phase = StructOrUnionPhase::MemberStart;
+                    ParseAction::Consume
+                } else {
+                    self.phase = StructOrUnionPhase::PushMemberDeclarator;
+                    ParseAction::Reprocess
+                }
+            },
+            | StructOrUnionPhase::PushMemberDeclarator => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.phase = StructOrUnionPhase::AwaitMemberDeclarator;
+                ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                    DeclaratorMode::Named,
+                )))
+            },
+            | StructOrUnionPhase::AwaitMemberDeclarator => {
+                let Some(ParseValue::Declarator(declarator)) = returned else {
+                    panic!("member declarator returned an unexpected value: {returned:?}");
+                };
+                self.member_declarator = declarator;
+                self.phase = StructOrUnionPhase::AfterMemberDeclarator;
+                ParseAction::Reprocess
+            },
+            | StructOrUnionPhase::AfterMemberDeclarator => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::Colon) {
+                    self.phase = StructOrUnionPhase::PushBitFieldWidth;
+                    ParseAction::Consume
+                } else {
+                    self.member_declarators.push(StructDeclarator {
+                        declarator:     self.member_declarator.take(),
+                        bitfield_width: None,
+                    });
+                    self.member_declarator_sources
+                        .push(self.member_source.unwrap_or_default());
+                    self.phase = StructOrUnionPhase::AfterStructDeclarator;
+                    ParseAction::Reprocess
+                }
+            },
+            | StructOrUnionPhase::PushBitFieldWidth => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.phase = StructOrUnionPhase::AwaitBitFieldWidth;
+                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
+                    FutureChildKind::BitFieldWidthExpression,
+                )))
+            },
+            | StructOrUnionPhase::AwaitBitFieldWidth => {
+                let Some(ParseValue::FutureChild(FutureChildKind::BitFieldWidthExpression)) =
+                    returned
+                else {
+                    panic!("bit-field seam returned an unexpected value: {returned:?}");
+                };
+                self.member_declarators.push(StructDeclarator {
+                    declarator:     self.member_declarator.take(),
+                    bitfield_width: None,
+                });
+                self.member_declarator_sources
+                    .push(self.member_source.unwrap_or_default());
+                self.phase = StructOrUnionPhase::AfterStructDeclarator;
+                ParseAction::Reprocess
+            },
+            | StructOrUnionPhase::AfterStructDeclarator => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::Comma) {
+                    self.phase = StructOrUnionPhase::PushMemberDeclarator;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    self.finish_member(parser);
+                    self.phase = StructOrUnionPhase::MemberStart;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
+                    parser.report_unexpected(
+                        context,
+                        "struct-declarator-list",
+                        "`;` before `}`",
+                        token,
+                    );
+                    self.finish_member(parser);
+                    self.phase = StructOrUnionPhase::MemberStart;
+                    ParseAction::Reprocess
+                } else if token.is_none() {
+                    parser.report_eof(context, "struct-declarator-list", "`,` or `;`");
+                    self.finish_member(parser);
+                    self.phase = StructOrUnionPhase::FinishBody;
+                    ParseAction::Reprocess
+                } else {
+                    parser.report_unexpected(
+                        context,
+                        "struct-declarator-list",
+                        "`,` or `;`",
+                        token,
+                    );
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::StructMember,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
+                }
+            },
+            | StructOrUnionPhase::FinishBody => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.finish(parser)
+            },
+        }
+    }
+
+    fn finish_member(&mut self, parser: &mut Parser) {
+        let start = parser.syntax.struct_declarators.len().to_u32();
+        parser
+            .syntax
+            .struct_declarators
+            .append(&mut self.member_declarators);
+        parser
+            .syntax
+            .struct_declarator_sources
+            .append(&mut self.member_declarator_sources);
+        let specifiers = self
+            .member_specifiers
+            .take()
+            .expect("a struct member has specifiers");
+        self.declarations.push(StructDeclaration {
+            type_qualifiers:        specifiers.type_qualifiers,
+            type_specifiers:        specifiers.type_specifiers,
+            struct_declarator_list: VectorSlice::new(
+                start,
+                parser.syntax.struct_declarators.len().to_u32(),
+            ),
+        });
+        self.declaration_sources
+            .push(self.member_source.take().unwrap_or_default());
+    }
+
+    fn finish(&mut self, parser: &mut Parser) -> ParseAction {
+        let declaration_list = self.body_started.then(|| {
+            let start = parser.syntax.struct_declarations.len().to_u32();
+            parser
+                .syntax
+                .struct_declarations
+                .append(&mut self.declarations);
+            parser
+                .syntax
+                .struct_declaration_sources
+                .append(&mut self.declaration_sources);
+            VectorSlice::new(start, parser.syntax.struct_declarations.len().to_u32())
+        });
+        let index = parser.syntax.struct_or_union_specifiers.len().to_u32();
+        parser
+            .syntax
+            .struct_or_union_specifiers
+            .push(StructOrUnionSpecifier {
+                struct_or_union:         self.kind.unwrap_or(StructOrUnion::Struct),
+                identifier:              self.identifier,
+                struct_declaration_list: declaration_list,
             });
-        }
-        // Returning None here is correct because either we've already parsed the first
-        // part of the declarator, we haven't and we're parsing a non-abstract
-        // declarator so we've reached an unrecoverable error, or we haven't and we're
-        // parsing an abstract declarator so we haven't parsed anything and we should
-        // return None to indicate this.
-        self.pending_token = Some(token);
-        None
-    }
-
-    fn parse_type_qualifiers(&mut self, context: &mut Context) -> TypeQualifiers {
-        let mut ret = TypeQualifiers::empty();
-        loop {
-            let Some(token) = self.next_token(context) else {
-                break;
-            };
-            match token.kind {
-                | TokenType::Keyword(KeywordTokenType::Const) => {
-                    if ret.contains(TypeQualifiers::CONST) {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::ConstSpecifiedTwice,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    ret.insert(TypeQualifiers::CONST);
-                },
-                | TokenType::Keyword(KeywordTokenType::Volatile) => {
-                    if ret.contains(TypeQualifiers::VOLATILE) {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::VolatileSpecifiedTwice,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    ret.insert(TypeQualifiers::VOLATILE);
-                },
-                | TokenType::Keyword(KeywordTokenType::Restrict) => {
-                    if ret.contains(TypeQualifiers::RESTRICT) {
-                        context.parser_error(ParserError {
-                            error_type:     ParserErrorType::RestrictSpecifiedTwice,
-                            source_vectors: token.source_vectors,
-                        });
-                    }
-                    ret.insert(TypeQualifiers::RESTRICT);
-                },
-                | _ => {
-                    self.pending_token = Some(token);
-                    break;
-                },
-            }
-        }
-        ret
-    }
-
-    fn parse_pointer_declarator(&mut self, context: &mut Context) -> PointerDeclarator {
-        let start_index = self.type_qualifiers.len().to_u32();
-        loop {
-            let Some(token) = self.next_token(context) else {
-                break;
-            };
-            if token.kind != TokenType::Operator(OperatorTokenType::Asterisk) {
-                self.pending_token = Some(token);
-                break;
-            }
-            let type_qualifiers = self.parse_type_qualifiers(context);
-            self.type_qualifiers.push(type_qualifiers);
-        }
-        let type_qualifiers_list =
-            VectorSlice::new(start_index, self.type_qualifiers.len().to_u32());
-        PointerDeclarator {
-            type_qualifiers_list,
-        }
-    }
-
-    /// Parses either a declaration or a function definition.
-    fn parse_external_declaration(&mut self, context: &mut Context) -> Option<ExternalDeclaration> {
-        let token = self.next_token(context)?;
-        self.pending_token = Some(token);
-        Some(self.parse_declaration_or_function_definition::<IS_MAYBE_FUNCTION_DEFINITION>(context))
+        parser
+            .syntax
+            .struct_specifier_sources
+            .push(self.source_vectors.unwrap_or_default());
+        ParseAction::Reduce(ParseValue::StructOrUnionSpecifier(
+            StructOrUnionSpecifierIndex(index),
+        ))
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum State {}
+impl EnumSpecifierFrame {
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | EnumPhase::Start => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                let Some(token) = token else {
+                    parser.report_eof(context, "enum-specifier", "`enum`");
+                    return self.finish(parser);
+                };
+                if token.kind != TokenType::Keyword(KeywordTokenType::Enum) {
+                    parser.report_unexpected(context, "enum-specifier", "`enum`", Some(token));
+                }
+                parser.merge_source(context, &mut self.source_vectors, token);
+                self.phase = EnumPhase::NameOrBody;
+                ParseAction::Consume
+            },
+            | EnumPhase::NameOrBody => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if let Some(token) = token
+                    && token.kind == TokenType::Identifier
+                {
+                    self.name = Some(Identifier::new(token.contents));
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = EnumPhase::AfterName;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
+                    let token = token.expect("opening-curly-brace token exists");
+                    self.body_started = true;
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = EnumPhase::EnumeratorOrClose;
+                    ParseAction::Consume
+                } else {
+                    parser.report_unexpected(context, "enum-specifier", "a tag name or `{`", token);
+                    self.finish(parser)
+                }
+            },
+            | EnumPhase::AfterName => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
+                    let token = token.expect("opening-curly-brace token exists");
+                    self.body_started = true;
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = EnumPhase::EnumeratorOrClose;
+                    ParseAction::Consume
+                } else {
+                    self.finish(parser)
+                }
+            },
+            | EnumPhase::EnumeratorOrClose => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
+                    let token = token.expect("closing-curly-brace token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = EnumPhase::FinishBody;
+                    ParseAction::Consume
+                } else if let Some(token) = token
+                    && token.kind == TokenType::Identifier
+                {
+                    self.current_enumerator = Some(Identifier::new(token.contents));
+                    self.current_enumerator_source = Some(token.source_vectors);
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = EnumPhase::AfterEnumeratorName;
+                    ParseAction::Consume
+                } else if token.is_none() {
+                    parser.report_eof(context, "enumerator-list", "an enumerator or `}`");
+                    self.phase = EnumPhase::FinishBody;
+                    ParseAction::Reprocess
+                } else {
+                    parser.report_unexpected(
+                        context,
+                        "enumerator-list",
+                        "an enumeration constant or `}`",
+                        token,
+                    );
+                    self.phase = EnumPhase::AfterEnumerator;
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::EnumeratorValue,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
+                }
+            },
+            | EnumPhase::AfterEnumeratorName => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::Equals) {
+                    self.phase = EnumPhase::PushEnumeratorValue;
+                    ParseAction::Consume
+                } else {
+                    self.finish_enumerator(parser);
+                    self.phase = EnumPhase::AfterEnumerator;
+                    ParseAction::Reprocess
+                }
+            },
+            | EnumPhase::PushEnumeratorValue => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.phase = EnumPhase::AwaitEnumeratorValue;
+                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
+                    FutureChildKind::EnumeratorValueExpression,
+                )))
+            },
+            | EnumPhase::AwaitEnumeratorValue => {
+                let Some(ParseValue::FutureChild(FutureChildKind::EnumeratorValueExpression)) =
+                    returned
+                else {
+                    panic!("enumerator-value seam returned an unexpected value: {returned:?}");
+                };
+                self.finish_enumerator(parser);
+                self.phase = EnumPhase::AfterEnumerator;
+                ParseAction::Reprocess
+            },
+            | EnumPhase::AfterEnumerator => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::Comma) {
+                    self.phase = EnumPhase::EnumeratorOrClose;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
+                    let token = token.expect("closing-curly-brace token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = EnumPhase::FinishBody;
+                    ParseAction::Consume
+                } else if token.is_none() {
+                    parser.report_eof(context, "enumerator-list", "`,` or `}`");
+                    self.phase = EnumPhase::FinishBody;
+                    ParseAction::Reprocess
+                } else {
+                    parser.report_unexpected(context, "enumerator-list", "`,` or `}`", token);
+                    ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::EnumeratorValue,
+                        target: RecoveryTarget::CurrentFrame,
+                    })
+                }
+            },
+            | EnumPhase::FinishBody => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                self.finish(parser)
+            },
+        }
+    }
 
-#[derive(Debug, PartialEq, Clone)]
+    fn finish_enumerator(&mut self, parser: &mut Parser) {
+        if let Some(name) = self.current_enumerator.take() {
+            self.enumerators.push(Enumerator {
+                name,
+                expression: None,
+            });
+            self.enumerator_sources
+                .push(self.current_enumerator_source.take().unwrap_or_default());
+            parser.scopes.publish(name.name, NameClass::Ordinary);
+        }
+    }
+
+    fn finish(&mut self, parser: &mut Parser) -> ParseAction {
+        let enumeration_list = self.body_started.then(|| {
+            let start = parser.syntax.enumerators.len().to_u32();
+            parser.syntax.enumerators.append(&mut self.enumerators);
+            parser
+                .syntax
+                .enumerator_sources
+                .append(&mut self.enumerator_sources);
+            VectorSlice::new(start, parser.syntax.enumerators.len().to_u32())
+        });
+        let index = parser.syntax.enum_specifiers.len().to_u32();
+        parser.syntax.enum_specifiers.push(EnumSpecifier {
+            name: self.name,
+            enumeration_list,
+        });
+        parser
+            .syntax
+            .enum_specifier_sources
+            .push(self.source_vectors.unwrap_or_default());
+        ParseAction::Reduce(ParseValue::EnumSpecifier(EnumSpecifierIndex(index)))
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum ExternalDeclaration {
-    FunctionDefinition(FunctionDefinitionIndex),
     Declaration(DeclarationIndex),
+    Error(SourceVectors),
 }
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct FunctionDefinitionIndex(u32);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct DeclarationIndex(u32);
@@ -2345,12 +3347,6 @@ impl From<ConstantExpressionIndex> for ExpressionIndex {
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct StatementIndex(u32);
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct TypeIndex(u32);
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct DeclaratorTypeIndex(u32);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct StructOrUnionSpecifierIndex(u32);
@@ -2569,10 +3565,16 @@ impl std::error::Error for ParserError {}
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum ParserErrorType {
-    UnexpectedEndOfInput(&'static str),
-    ExpectedIdentifierInTypedef(TokenType),
-    ExpectedSemicolonAfterTypedef(TokenType),
-    ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(TokenType),
+    UnexpectedEndOfFrame {
+        frame:    &'static str,
+        expected: &'static str,
+    },
+    UnexpectedToken {
+        frame:    &'static str,
+        expected: &'static str,
+        found:    TokenType,
+    },
+    FutureChildNotImplemented(FutureChildKind),
     StorageClassRedefinition(StorageClass, TokenType),
     ConstSpecifiedTwice,
     VolatileSpecifiedTwice,
@@ -2583,77 +3585,34 @@ pub(crate) enum ParserErrorType {
     TypeSpecifierSpecifiedTwice(TokenType),
     LongSpecifiedThrice,
     LongLongDoubleSpecified,
-    PointerSpecifiedTwice,
-    TypeQualifiersWithoutDeclarator,
     EmptyDeclarationSpecifiers(TokenType),
     NoTypeSpecifiersInDeclarationSpecifiers(TokenType),
-    ExpectedClosingCurlyBraceInStructDeclarationList(TokenType),
-    MultipleBitfieldWidthsInStructDeclarator,
-    EmptyStructDeclarator,
-    ExpectedCommaColonOrSemicolonInStructDeclarator(TokenType),
-    EnumSpecifierWithoutNameAndBody(TokenType),
-    ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(TokenType),
-    ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator,
-    ExpectedClosingParenthesisAfterParenthesizedDeclarator(Option<TokenType>),
-    DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(TokenType),
     BothStaticAndPointerInArrayDirectDeclarator,
-    ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(TokenType),
-    ExpectedClosingSquareBracket(TokenType),
-    PointerAfterAssignmentExpressionInArrayDirectDeclarator,
     ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator,
-    AssignmentExpressionAfterPointerInArrayDirectDeclarator,
-    TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
-    TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
-    KAndRFunctionDeclaratorMixedWithModernDeclarator,
-    ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(TokenType),
-    ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(TokenType),
+    EmptyStructDeclarator,
 }
 
 impl GetSeverity for ParserErrorType {
     fn severity(&self) -> ErrorSeverity {
         match self {
-            | ParserErrorType::UnexpectedEndOfInput(..)
-            | ParserErrorType::ExpectedIdentifierInTypedef(..)
-            | ParserErrorType::ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(..)
-            | ParserErrorType::TypeQualifiersWithoutDeclarator
-            | ParserErrorType::EmptyDeclarationSpecifiers(..)
-            | ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(..)
-            | ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList(..)
-            | ParserErrorType::EmptyStructDeclarator
-            | ParserErrorType::ExpectedCommaColonOrSemicolonInStructDeclarator(..)
-            | ParserErrorType::EnumSpecifierWithoutNameAndBody(..)
-            | ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(..)
-            | ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator
-            | ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(..)
-            | ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
-            | ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator
-            | ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator
-            | ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
-            | ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
-            | ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator
-            | ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(..)
-            | ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(..) =>
-                ErrorSeverity::Error,
-            | ParserErrorType::ExpectedSemicolonAfterTypedef(..)
-            | ParserErrorType::StorageClassRedefinition(..)
-            | ParserErrorType::ConstSpecifiedTwice
-            | ParserErrorType::VolatileSpecifiedTwice
-            | ParserErrorType::RestrictSpecifiedTwice
-            | ParserErrorType::InlineSpecifiedTwice
-            | ParserErrorType::StaticSpecifiedTwice
-            | ParserErrorType::ConflictingTypeSpecifiers(..)
-            | ParserErrorType::TypeSpecifierSpecifiedTwice(..)
-            | ParserErrorType::LongSpecifiedThrice
-            | ParserErrorType::LongLongDoubleSpecified
-            | ParserErrorType::PointerSpecifiedTwice
-            | ParserErrorType::MultipleBitfieldWidthsInStructDeclarator
-            | ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
-                ..,
-            )
-            | ParserErrorType::ExpectedClosingSquareBracket(..)
-            | ParserErrorType::PointerAfterAssignmentExpressionInArrayDirectDeclarator
-            | ParserErrorType::AssignmentExpressionAfterPointerInArrayDirectDeclarator =>
-                ErrorSeverity::Warning,
+            | Self::UnexpectedEndOfFrame { .. }
+            | Self::UnexpectedToken { .. }
+            | Self::FutureChildNotImplemented(..)
+            | Self::EmptyDeclarationSpecifiers(..)
+            | Self::NoTypeSpecifiersInDeclarationSpecifiers(..)
+            | Self::BothStaticAndPointerInArrayDirectDeclarator
+            | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator
+            | Self::EmptyStructDeclarator => ErrorSeverity::Error,
+            | Self::StorageClassRedefinition(..)
+            | Self::ConstSpecifiedTwice
+            | Self::VolatileSpecifiedTwice
+            | Self::RestrictSpecifiedTwice
+            | Self::InlineSpecifiedTwice
+            | Self::StaticSpecifiedTwice
+            | Self::ConflictingTypeSpecifiers(..)
+            | Self::TypeSpecifierSpecifiedTwice(..)
+            | Self::LongSpecifiedThrice
+            | Self::LongLongDoubleSpecified => ErrorSeverity::Warning,
         }
     }
 }
@@ -2661,131 +3620,79 @@ impl GetSeverity for ParserErrorType {
 impl Display for ParserErrorType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            | ParserErrorType::UnexpectedEndOfInput(message) =>
-                write!(f, "Unexpected end of input while {message}!"),
-            | ParserErrorType::ExpectedIdentifierInTypedef(tt) => write!(
-                f,
-                "Expected an identifier in typedef, found instead {tt:?}!",
-            ),
-            | ParserErrorType::ExpectedSemicolonOrOpeningCurlyBraceAfterFunctionDeclaration(tt) =>
+            | Self::UnexpectedEndOfFrame { frame, expected } => {
                 write!(
                     f,
-                    "Expected a semicolon or an opening curly brace after function declaration, \
-                     found instead {tt:?}!",
-                ),
-            | ParserErrorType::ExpectedSemicolonAfterTypedef(tt) => write!(
+                    "Unexpected end of input in {frame}; expected {expected}!"
+                )
+            },
+            | Self::UnexpectedToken {
+                frame,
+                expected,
+                found,
+            } => write!(
                 f,
-                "Expected a semicolon after typedef, found instead {tt:?}!"
+                "Unexpected token {found:?} in {frame}; expected {expected}!"
             ),
-            | ParserErrorType::StorageClassRedefinition(last, new) =>
-                write!(f, "Redefinition of storage class {last:?} with {new:?}!"),
-            | ParserErrorType::ConstSpecifiedTwice =>
-                write!(f, "`const` keyword specified twice in type declaration!"),
-            | ParserErrorType::VolatileSpecifiedTwice =>
-                write!(f, "`volatile` keyword specified twice in type declaration!"),
-            | ParserErrorType::RestrictSpecifiedTwice =>
-                write!(f, "`restrict` keyword specified twice in type declaration!"),
-            | ParserErrorType::InlineSpecifiedTwice => write!(
+            | Self::FutureChildNotImplemented(kind) => write!(
                 f,
-                "`inline` keyword specified twice in function declaration or definition!"
+                "The {} parser is not implemented yet; skipped this grammar child.",
+                kind.frame_name()
             ),
-            | ParserErrorType::StaticSpecifiedTwice => write!(
-                f,
-                "`static` keyword specified twice in array direct declarator!"
-            ),
-            | ParserErrorType::ConflictingTypeSpecifiers(specifiers, tt) =>
-                write!(f, "Conflicting type specifiers {specifiers:?} and {tt:?}!"),
-            | ParserErrorType::TypeSpecifierSpecifiedTwice(tt) =>
-                write!(f, "Type specifier {tt:?} specified twice!"),
-            | ParserErrorType::LongSpecifiedThrice =>
-                write!(f, "`long` keyword specified thrice in type declaration!"),
-            | ParserErrorType::LongLongDoubleSpecified => write!(
-                f,
-                "`long long` and `double` keywords specified together in type declaration!"
-            ),
-            | ParserErrorType::PointerSpecifiedTwice =>
-                write!(f, "Pointer specified twice in array direct declarator!"),
-            | ParserErrorType::TypeQualifiersWithoutDeclarator =>
-                write!(f, "Type qualifiers specified without a declarator!"),
-            | ParserErrorType::EmptyDeclarationSpecifiers(tt) => write!(
-                    f,
-                    "Empty declaration specifiers! Got instead: {tt:?}"
-                ),
-            | ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(tt) => write!(f, "No type specifiers in declaration specifiers! Got instead: {tt:?}"),
-            | ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList(tt) => write!(f,"Expected a closing curly brace in struct declaration list! Got instead: {tt:?}"),
-            | ParserErrorType::MultipleBitfieldWidthsInStructDeclarator =>
-                write!(f, "Multiple bitfield widths specified in struct declarator!"),
-            | ParserErrorType::EmptyStructDeclarator => write!(f, "Empty struct declarator specified in struct declaration!"),
-            | ParserErrorType::ExpectedCommaColonOrSemicolonInStructDeclarator(tt) => write!(f, "Expected a comma, colon, or semicolon in struct declarator! Got instead: {tt:?}"),
-            | ParserErrorType::EnumSpecifierWithoutNameAndBody(tt) => write!(f, "Enum specifier without name and body! Got instead: {tt:?}"),
-            | ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(tt) => write!(f, "Expected an enumeration constant or closing curly brace in enumerator list! Got instead: {tt:?}"),
-            | ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator =>
+            | Self::StorageClassRedefinition(last, new) => {
+                write!(f, "Redefinition of storage class {last:?} with {new:?}!")
+            },
+            | Self::ConstSpecifiedTwice => {
+                write!(f, "`const` keyword specified twice in type declaration!")
+            },
+            | Self::VolatileSpecifiedTwice => {
+                write!(f, "`volatile` keyword specified twice in type declaration!")
+            },
+            | Self::RestrictSpecifiedTwice => {
+                write!(f, "`restrict` keyword specified twice in type declaration!")
+            },
+            | Self::InlineSpecifiedTwice => {
                 write!(
                     f,
-                    "Expected a declarator after opening parenthesis in direct declarator!"
-                ),
-            | ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(tt) =>
+                    "`inline` keyword specified twice in function declaration!"
+                )
+            },
+            | Self::StaticSpecifiedTwice => {
+                write!(f, "`static` keyword specified twice in array declarator!")
+            },
+            | Self::ConflictingTypeSpecifiers(specifiers, token) => {
                 write!(
                     f,
-                    "Expected a closing parenthesis after parenthesized declarator! Got instead: \
-                     {tt:?}"
-                ),
-            | ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(tt) =>
+                    "Conflicting type specifiers {specifiers:?} and {token:?}!"
+                )
+            },
+            | Self::TypeSpecifierSpecifiedTwice(token) => {
+                write!(f, "Type specifier {token:?} specified twice!")
+            },
+            | Self::LongSpecifiedThrice => {
                 write!(
                     f,
-                    "Direct declarator must start with an identifier or an opening parenthesis! \
-                     Got instead: {tt:?}"
-                ),
-            | ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator => write!(
-                f,
-                "Both `static` and pointer specified in array direct declarator!"
-            ),
-            | ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(tt,) => write!(
-                f,
-                "Expected a closing square bracket after pointer in array direct declarator! Got \
-                 instead: {tt:?}"
-            ),
-            | ParserErrorType::ExpectedClosingSquareBracket(tt) =>
-                write!(f, "Expected a closing square bracket! Got instead: {tt:?}"),
-            | ParserErrorType::PointerAfterAssignmentExpressionInArrayDirectDeclarator => write!(
-                f,
-                "Pointer specified after assignment expression in array direct declarator!"
-            ),
-            | ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator =>
-                write!(
-                    f,
-                    "Expected an assignment expression after `static` in array direct declarator!"
-                ),
-            | ParserErrorType::AssignmentExpressionAfterPointerInArrayDirectDeclarator => write!(
-                f,
-                "Assignment expression specified after pointer in array direct declarator!"
-            ),
-            | ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator =>
-                write!(
-                    f,
-                    "Type qualifiers specified before pointer in array abstract declarator!"
-                ),
-            | ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator =>
-                write!(
-                    f,
-                    "Type qualifiers specified both before and after `static` in array direct \
-                     declarator!"
-                ),
-            | ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator =>
-                write!(
-                    f,
-                    "K&R function declarator mixed with modern declarator in function declarator!"
-                ),
-            | ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(tt) => write!(
-                f,
-                "Expected a comma or closing parenthesis in function declarator parameter list! \
-                    Got instead: {tt:?}"
-            ),
-            | ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(tt) => write!(
-                f,
-                "Expected a closing parenthesis after ellipsis in function declarator parameter \
-                    list! Got instead: {tt:?}"
-            ),
+                    "`long` keyword specified three times in type declaration!"
+                )
+            },
+            | Self::LongLongDoubleSpecified => {
+                write!(f, "`long long` and `double` cannot be combined!")
+            },
+            | Self::EmptyDeclarationSpecifiers(token) => {
+                write!(f, "Expected declaration specifiers, found {token:?}!")
+            },
+            | Self::NoTypeSpecifiersInDeclarationSpecifiers(token) => {
+                write!(f, "Expected a type specifier before {token:?}!")
+            },
+            | Self::BothStaticAndPointerInArrayDirectDeclarator => {
+                write!(f, "Both `static` and `*` appeared in one array declarator!")
+            },
+            | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator => {
+                write!(f, "Expected an assignment expression after `static`!")
+            },
+            | Self::EmptyStructDeclarator => {
+                write!(f, "Expected a declarator in the struct member declaration!")
+            },
         }
     }
 }
@@ -2794,6 +3701,424 @@ impl TranslationPhase for Parser {
     type Item = ExternalDeclaration;
 
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
-        self.parse_external_declaration(context)
+        self.drive(context)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::{
+        translation_phases::TranslationError,
+        util::shared::SharedVec,
+    };
+
+    struct Parsed {
+        parser:  Parser,
+        context: Context,
+        items:   Vec<ExternalDeclaration>,
+        errors:  Vec<TranslationError>,
+    }
+
+    fn parse(source: &str) -> Parsed {
+        let mut context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<parser-test>").into_boxed_path(),
+            source.to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let mut parser = Parser::new(preprocessor);
+        let mut items = Vec::new();
+        while let Some(item) = parser.next_item(&mut context) {
+            items.push(item);
+            assert!(
+                items.len() < 10_000,
+                "parser failed to make item-level progress"
+            );
+        }
+        let mut errors = Vec::new();
+        while let Some(error) = context.pop_pending_error() {
+            errors.push(error);
+        }
+        Parsed {
+            parser,
+            context,
+            items,
+            errors,
+        }
+    }
+
+    fn declaration(parsed: &Parsed, item: usize) -> &Declaration {
+        let ExternalDeclaration::Declaration(index) = parsed.items[item] else {
+            panic!("expected a declaration item")
+        };
+        &parsed.parser.syntax.declarations[index.0 as usize]
+    }
+
+    fn init_declarators<'a>(parsed: &'a Parsed, declaration: &Declaration) -> &'a [InitDeclarator] {
+        let start = declaration.init_declarators.start_index as usize;
+        let end = start + declaration.init_declarators.length as usize;
+        &parsed.parser.syntax.init_declarators[start..end]
+    }
+
+    fn identifier_name(parsed: &Parsed, declarator: Declarator) -> Option<String> {
+        parsed
+            .parser
+            .declarator_identifier(declarator)
+            .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
+    }
+
+    fn parser_errors(parsed: &Parsed) -> impl Iterator<Item = &ParserErrorType> {
+        parsed.errors.iter().filter_map(|error| match error {
+            | TranslationError::Parsing(error) => Some(&error.error_type),
+            | _ => None,
+        })
+    }
+
+    #[test]
+    fn specifier_only_declaration_runs_through_the_machine() {
+        let parsed = parse("int;\n");
+
+        assert_eq!(parsed.items.len(), 1);
+        let declaration = declaration(&parsed, 0);
+        assert_eq!(
+            declaration.declaration_specifiers.type_specifiers,
+            TypeSpecifiers::Int
+        );
+        assert_eq!(declaration.init_declarators.length, 0);
+        assert!(parser_errors(&parsed).next().is_none());
+        assert!(
+            parsed.parser.trace.iter().any(|event| {
+                event.frame == "declaration-specifiers" && event.action == "reduce"
+            })
+        );
+        assert!(
+            parsed
+                .parser
+                .trace
+                .iter()
+                .any(|event| { event.frame == "external-declaration" && event.action == "reduce" })
+        );
+    }
+
+    #[test]
+    fn ordinary_pointer_and_typedef_declarations_are_reachable() {
+        let parsed = parse(
+            "int x;\nint x2, y;\nconst unsigned long *p;\nint *const *volatile q;\ntypedef int \
+             T;\nT value;\n",
+        );
+
+        assert_eq!(parsed.items.len(), 6);
+        assert!(parser_errors(&parsed).next().is_none());
+        let names = parsed
+            .items
+            .iter()
+            .enumerate()
+            .flat_map(|(item, _)| init_declarators(&parsed, declaration(&parsed, item)))
+            .map(|init| identifier_name(&parsed, init.declarator).expect("named declarator"))
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["x", "x2", "y", "p", "q", "T", "value"]);
+        assert_eq!(
+            declaration(&parsed, 5)
+                .declaration_specifiers
+                .type_specifiers,
+            TypeSpecifiers::TypedefName(Identifier::new(
+                parsed
+                    .context
+                    .string_cache
+                    .get_id_from_string("T")
+                    .expect("interned T")
+            ))
+        );
+
+        let pointer_declaration = declaration(&parsed, 3);
+        let pointer = init_declarators(&parsed, pointer_declaration)[0]
+            .declarator
+            .pointer_declarator
+            .type_qualifiers_list;
+        let start = pointer.start_index as usize;
+        let end = start + pointer.length as usize;
+        assert_eq!(
+            &parsed.parser.syntax.type_qualifiers[start..end],
+            &[TypeQualifiers::CONST, TypeQualifiers::VOLATILE]
+        );
+    }
+
+    #[test]
+    fn name_classification_is_published_after_each_declarator() {
+        let parsed = parse("typedef int T, Prototype(T);\nint T, OldStyle(T);\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        assert!(parsed
+            .parser
+            .syntax
+            .direct_declarators
+            .iter()
+            .any(|direct| matches!(direct, DirectDeclarator::Function { parameter_list, .. } if parameter_list.length == 1)));
+        assert!(parsed
+            .parser
+            .syntax
+            .direct_declarators
+            .iter()
+            .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 1)));
+        let t = parsed
+            .context
+            .string_cache
+            .get_id_from_string("T")
+            .expect("interned T");
+        assert_eq!(
+            parsed.parser.scopes.file_scope.get(&t),
+            Some(&NameClass::Ordinary)
+        );
+    }
+
+    #[test]
+    fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
+        let parsed = parse(
+            "int a[];\nint matrix[][];\nint f(int, const char *, ...);\nint old(a,b);\nint \
+             (*factory(void))(int);\n",
+        );
+
+        assert_eq!(parsed.items.len(), 5);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .direct_declarators
+                .iter()
+                .any(|direct| {
+                    matches!(
+                        direct,
+                        DirectDeclarator::Array {
+                            assignment_expression: None,
+                            ..
+                        }
+                    )
+                })
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .direct_declarators
+                .iter()
+                .any(|direct| {
+                    matches!(
+                        direct,
+                        DirectDeclarator::Function {
+                            is_variadic: true,
+                            ..
+                        }
+                    )
+                })
+        );
+        assert!(parsed.parser.syntax.direct_declarators.iter().any(|direct| {
+            matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 2)
+        }));
+    }
+
+    #[test]
+    fn union_kind_and_enum_arena_slice_are_correct() {
+        let parsed = parse(
+            "struct S;\nunion U { int x; char y; };\nstruct Outer { union { int nested; } value; \
+             };\nenum E { A, B, };\n",
+        );
+
+        assert_eq!(parsed.items.len(), 4);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .struct_or_union_specifiers
+                .iter()
+                .any(|specifier| specifier.struct_or_union == StructOrUnion::Union)
+        );
+        let enum_specifier = parsed
+            .parser
+            .syntax
+            .enum_specifiers
+            .last()
+            .expect("enum specifier");
+        let enumeration_list = enum_specifier.enumeration_list.expect("enum body");
+        assert_eq!(enumeration_list.length, 2);
+        let start = enumeration_list.start_index as usize;
+        let names = parsed.parser.syntax.enumerators[start..start + 2]
+            .iter()
+            .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["A", "B"]);
+        assert_eq!(
+            parsed.parser.syntax.enumerator_sources.len(),
+            parsed.parser.syntax.enumerators.len()
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .enumerator_sources
+                .iter()
+                .all(|source| source.length > 0)
+        );
+        assert_eq!(
+            parsed.parser.syntax.struct_declaration_sources.len(),
+            parsed.parser.syntax.struct_declarations.len()
+        );
+        assert_eq!(
+            parsed.parser.syntax.struct_declarator_sources.len(),
+            parsed.parser.syntax.struct_declarators.len()
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .struct_declaration_sources
+                .iter()
+                .chain(&parsed.parser.syntax.struct_declarator_sources)
+                .all(|source| source.length > 0)
+        );
+    }
+
+    #[test]
+    fn specifier_combinations_and_conflicts_keep_legacy_diagnostics() {
+        let parsed = parse(
+            "extern const unsigned long int x;\ninline static double f(void);\nconst const int \
+             duplicate;\nlong long double conflict;\n",
+        );
+
+        assert_eq!(parsed.items.len(), 4);
+        assert_eq!(
+            declaration(&parsed, 0)
+                .declaration_specifiers
+                .type_specifiers,
+            TypeSpecifiers::UnsignedLongInt
+        );
+        assert!(
+            declaration(&parsed, 0)
+                .declaration_specifiers
+                .type_qualifiers
+                .contains(TypeQualifiers::CONST)
+        );
+        assert!(
+            declaration(&parsed, 1)
+                .declaration_specifiers
+                .function_specifiers
+                .is_inline
+        );
+        assert!(
+            parser_errors(&parsed)
+                .any(|error| { matches!(error, ParserErrorType::ConstSpecifiedTwice) })
+        );
+        assert!(
+            parser_errors(&parsed)
+                .any(|error| { matches!(error, ParserErrorType::LongLongDoubleSpecified) })
+        );
+    }
+
+    #[test]
+    fn expression_dependent_positions_use_typed_future_children() {
+        let parsed = parse(
+            "int bounded[4];\nstruct Bits { unsigned value:3; };\nenum Values { A=1, B };\nint \
+             initialized=42;\nint function(void) { return 0; }\nint after;\n",
+        );
+
+        assert_eq!(parsed.items.len(), 6);
+        let future_children = parser_errors(&parsed)
+            .filter_map(|error| match error {
+                | ParserErrorType::FutureChildNotImplemented(kind) => Some(*kind),
+                | _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            future_children,
+            [
+                FutureChildKind::FunctionBody,
+                FutureChildKind::Initializer,
+                FutureChildKind::EnumeratorValueExpression,
+                FutureChildKind::BitFieldWidthExpression,
+                FutureChildKind::ArrayBoundExpression,
+            ]
+        );
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 5))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
+    fn malformed_and_eof_paths_terminate_with_source_backed_diagnostics() {
+        for source in [
+            "int\n",
+            "int *\n",
+            "int (value\n",
+            "int array[\n",
+            "int function(int\n",
+            "struct S { int member\n",
+            "enum E { A\n",
+            "}\nint after;\n",
+        ] {
+            let parsed = parse(source);
+            let errors = parsed
+                .errors
+                .iter()
+                .filter_map(|error| match error {
+                    | TranslationError::Parsing(error) => Some(error),
+                    | _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !errors.is_empty(),
+                "missing parser diagnostic for {source:?}"
+            );
+            assert!(errors.iter().all(|error| error.source_vectors.length > 0));
+        }
+    }
+
+    #[test]
+    fn parenthesized_declarators_meet_the_c99_floor_and_stress_the_heap_stack() {
+        for depth in [63, 4_096] {
+            let source = format!("int {}deep{};\n", "(".repeat(depth), ")".repeat(depth));
+            let parsed = parse(&source);
+
+            assert_eq!(parsed.items.len(), 1);
+            assert!(
+                parser_errors(&parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert!(
+                parsed
+                    .parser
+                    .trace
+                    .iter()
+                    .map(|event| event.depth)
+                    .max()
+                    .expect("nonempty trace")
+                    > depth,
+                "grammar depth must be represented by heap-backed frames"
+            );
+        }
     }
 }
