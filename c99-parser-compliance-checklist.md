@@ -1,0 +1,243 @@
+# C99 Parser Compliance Checklist
+
+## Purpose and citation convention
+
+This document is the implementation inventory for the proposed non-recursive `ParserMachine`. It covers the C99 language-parser surface after preprocessing, not preprocessing directives or later code generation. The primary source is the repository-local [`c-spec.pdf`](./c-spec.pdf), identified in the document itself as WG14/N1256, ISO/IEC 9899:TC3 (C99 with Technical Corrigenda 1, 2, and 3). Citations give the exact clause or subclause, the printed standard page, and the 1-based PDF page. For example, “§6.5.1, p. 69; PDF p. 81” identifies both page-numbering systems.
+
+Checklist labels have these meanings:
+
+- **Syntax** - a normative grammar production that the parser must recognize.
+- **Constraint** - a normative requirement whose violation requires a diagnostic, but which should be checked after or alongside recognition rather than used to erase a valid grammar production.
+- **Semantics** - a normative rule that belongs primarily to name, type, constant-expression, control-flow, or object-initialization analysis after syntax parsing.
+- **Architecture** - a bcc-rust implementation requirement derived from the standard and the agreed `ParserMachine` design; it is not itself wording from the standard.
+
+The standard requires at least one diagnostic when a preprocessing translation unit or translation unit violates any syntax rule or constraint. It does not require one diagnostic per violation, and it permits an implementation to continue translating invalid input after diagnosis. (§5.1.1.3, p. 11; PDF p. 23)
+
+## Non-goals for v0
+
+- [ ] Do not accept GNU, Clang, MSVC, or other vendor grammar extensions as C99. No statement expressions, `typeof`, attributes, case ranges, computed `goto`, nested functions, `__declspec`, or extension-only declarator forms are in scope. A future extension dialect must be explicitly selected and must not change strict-C99 acceptance. This follows the v0 product decision; the standard permits extensions only when they do not alter the behavior of strictly conforming programs. (§4 paragraphs 5-8, pp. 7-8; PDF pp. 19-20)
+- [ ] Recognize `_Imaginary` as a reserved keyword, but do not accept it as a core type specifier: it appears in the keyword list, while the normative `type-specifier` grammar does not contain it. Annex G is informative and is not a v0 language-extension target. (§6.4.1, p. 50; PDF p. 62; §6.7.2, pp. 99-100; PDF pp. 111-112)
+- [ ] Do not move preprocessing grammar into `ParserMachine`. Translation phase 7 receives tokens only after directives and macros are processed, adjacent string literals are concatenated, whitespace becomes insignificant, and preprocessing tokens are converted to tokens. (§5.1.1.2 phases 4-7, pp. 9-10; PDF pp. 21-22)
+- [ ] Do not make full type compatibility, conversions, lvalue/modifiable-lvalue rules, linkage resolution, object layout, constant evaluation, or control-flow legality prerequisites for building the syntax tree. These are constraints or semantics to preserve for later analysis unless a small amount of name classification is necessary to choose a grammar production. (§6.5 paragraphs 1-8, pp. 67-68; PDF pp. 79-80; §6.7 paragraphs 2-7, pp. 97-98; PDF pp. 109-110)
+
+## Coverage matrix
+
+| Surface | Owning frame or service | Required v0 recognition | Required handoff/check | Priority | Standard |
+| --- | --- | --- | --- | --- | --- |
+| Translation unit | `TranslationUnitFrame`, `ExternalDeclarationFrame` | Nonempty sequence of declarations and function definitions | File-scope declarations and external-definition constraints | High | §6.9, p. 140; PDF p. 152 |
+| Lexical input | `ParserMachine` lookahead/token adapter | Identifier, keyword, constant, string-literal, and punctuator tokens only | Reject an unconvertible or grammatically unused token with provenance | High | §6.4, pp. 49-50; PDF pp. 61-62 |
+| Expressions | `ExpressionFrame` | Every primary, postfix, unary, cast, binary, conditional, assignment, and comma form | Operand/type/lvalue and constant-expression constraints | Critical | §6.5-§6.6, pp. 67-96; PDF pp. 79-108 |
+| Declarations | `DeclarationFrame` with internal specifier/tag phases | All declaration-specifier, init-declarator, struct/union, enum, and typedef forms | Legal specifier combinations, redeclarations, type construction | Critical | §6.7-§6.7.4, pp. 97-113; PDF pp. 109-125 |
+| Declarators | `DeclaratorFrame` with internal parameter-list phases | Named and abstract pointer/array/function forms, including VLA syntax and old-style identifier lists | Derived-type constraints and parameter adjustment | Critical | §6.7.5-§6.7.7, pp. 114-124; PDF pp. 126-136 |
+| Initializers | `InitializerFrame` with internal designation phases | Assignment expression, recursive brace lists, trailing comma, and chained designators | Current-object, brace-elision, type, and constant-expression rules | High | §6.7.8, pp. 125-130; PDF pp. 137-142 |
+| Statements | `StatementFrame` with internal compound/block-item phases | All six statement families and mixed block items | Label, jump, switch, return, and controlling-expression constraints | Critical | §6.8-§6.8.6.4, pp. 131-139; PDF pp. 143-151 |
+| Typedef/scope ambiguity | `ScopeState` owned by `ParserMachine` | Contextual typedef-name classification at every decision point | Ordinary/tag/member/label namespaces and precise scope transitions | Critical | §6.2.1-§6.2.3, pp. 29-31; PDF pp. 41-43; §6.7.5.3 paragraph 11, p. 119; PDF p. 131 |
+| Diagnostics/recovery | `DiagnosticState`, frame synchronization sets | Diagnose malformed syntax without recursion or nonprogress loops | Constraint diagnostics may be produced by later passes | High | §5.1.1.3, p. 11; PDF p. 23 |
+| Deep nesting | Explicit control stack and owned value stacks | Meet every parser-relevant minimum translation limit without relying on the Rust call stack | Stable, documented resource-limit diagnostic beyond supported limits | High | §5.2.4.1, pp. 20-21; PDF pp. 32-33 |
+
+## Parser input contract: lexical categories
+
+- [ ] **Syntax:** Accept only the five phase-7 token categories: keyword, identifier, constant, string literal, and punctuator. Treat header names, preprocessing numbers, character constants in preprocessing form, comments, whitespace, and placemarkers as upstream concerns; a preprocessing token converted to a token must have one of the five token forms. (§6.4 paragraphs 1-3, p. 49; PDF p. 61)
+- [ ] **Syntax:** Recognize the complete, case-sensitive C99 keyword set: `auto`, `break`, `case`, `char`, `const`, `continue`, `default`, `do`, `double`, `else`, `enum`, `extern`, `float`, `for`, `goto`, `if`, `inline`, `int`, `long`, `register`, `restrict`, `return`, `short`, `signed`, `sizeof`, `static`, `struct`, `switch`, `typedef`, `union`, `unsigned`, `void`, `volatile`, `while`, `_Bool`, `_Complex`, and `_Imaginary`. (§6.4.1, p. 50; PDF p. 62)
+- [ ] **Syntax:** Preserve an identifier as an identifier token even when it may later be classified as a typedef name, enumeration constant, object, function, member, tag, or label. Keyword recognition wins when a preprocessing token could be either a keyword or identifier. (§6.4.2.1 paragraphs 1-4, p. 51; PDF p. 63)
+- [ ] **Syntax:** Accept primary-expression constants supplied by the lexer as integer, floating, enumeration, or character constants. Enumeration constants have the lexical form of an identifier, so their value/category is a name-analysis result rather than a distinct spelling rule in `ExpressionFrame`. (§6.4.4, p. 54; PDF p. 66; §6.4.4.3, p. 59; PDF p. 71)
+- [ ] **Syntax:** Accept ordinary and wide character constants and ordinary and wide string literals through distinct token payloads where needed. Adjacent ordinary/wide string-literal token concatenation is translation phase 6 and must be complete before syntax analysis. (§6.4.4.4, pp. 59-61; PDF pp. 71-73; §6.4.5 paragraphs 1-5, pp. 62-63; PDF pp. 74-75; §5.1.1.2 phase 6, p. 10; PDF p. 22)
+- [ ] **Syntax:** Support every punctuator that participates in phrase grammar: `[ ] ( ) { } . -> ++ -- & * + - ~ ! / % << >> < > <= >= == != ^ | && || ? : ; ... = *= /= %= += -= <<= >>= &= ^= |= ,`. Treat `#` and `##` as punctuator tokens with no valid post-preprocessing phrase production, so they are diagnosed if they reach ordinary language syntax. (§6.4.6, pp. 63-64; PDF pp. 75-76)
+- [ ] **Syntax:** Treat digraph spellings `<:`, `:>`, `<%`, `%>`, `%:`, and `%:%:` exactly like `[`, `]`, `{`, `}`, `#`, and `##`, respectively, while retaining original source provenance for diagnostics. (§6.4.6 paragraph 3, p. 64; PDF p. 76)
+- [ ] **Architecture:** Carry each token's `SourceVectors` (and source-file/position data already modeled by bcc-rust) through lookahead, reductions, AST nodes, and error nodes. The standard requires diagnostics and intends implementations to identify the nature and, where possible, location of violations; preserving macro/include provenance is the repository's means of satisfying that goal. (§5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23)
+- [ ] **Semantics:** Model the implicit `static const char __func__[]` declaration immediately inside every function definition. Syntax may still represent `__func__` as an identifier, but name analysis must see the implicit binding in the function body. (§6.4.2.2, p. 52; PDF p. 64)
+
+## Expressions
+
+### Precedence, associativity, and complete operator inventory
+
+The syntax orders operator precedence by the order of §6.5's major subclauses, highest first. Associativity follows from each recursive production. Parentheses, subscripting, calls, and the conditional operator introduce the stated grammar exceptions. (§6.5 paragraph 3 and footnote 74, p. 67; PDF p. 79)
+
+| Level | Production and forms | Associativity / frame rule | Standard |
+| --- | --- | --- | --- |
+| Base | Primary: identifier, constant, string literal, `( expression )` | Atomic; parentheses push a full-expression child and preserve grouping | §6.5.1, p. 69; PDF p. 81 |
+| 1 | Postfix: `a[b]`, `f(args?)`, `a.member`, `p->member`, `a++`, `a--`, `(type-name){ initializer-list }`, and the trailing-comma compound-literal form | Left-to-right suffix chain; compound literal is a postfix base requiring `TypeNameFrame` and `InitializerFrame` | §6.5.2, pp. 69-70; PDF pp. 81-82 |
+| 2 | Unary: prefix `++ --`, unary `& * + - ~ !`, `sizeof unary-expression`, `sizeof(type-name)` | Right-to-left; unary-operator consumes a cast-expression, while prefix increment/decrement consumes a unary-expression | §6.5.3, p. 78; PDF p. 90 |
+| 2 | Cast: `( type-name ) cast-expression` | Right-to-left; distinguish from grouped expressions using contextual typedef-name classification | §6.5.4, p. 81; PDF p. 93 |
+| 3 | Multiplicative: `* / %` | Left-to-right | §6.5.5, p. 82; PDF p. 94 |
+| 4 | Additive: `+ -` | Left-to-right | §6.5.6, pp. 82-84; PDF pp. 94-96 |
+| 5 | Shift: `<< >>` | Left-to-right | §6.5.7, p. 84; PDF p. 96 |
+| 6 | Relational: `< > <= >=` | Left-to-right | §6.5.8, p. 85; PDF p. 97 |
+| 7 | Equality: `== !=` | Left-to-right | §6.5.9, p. 86; PDF p. 98 |
+| 8 | Bitwise AND: `&` | Left-to-right | §6.5.10, p. 87; PDF p. 99 |
+| 9 | Bitwise exclusive OR: `^` | Left-to-right | §6.5.11, p. 88; PDF p. 100 |
+| 10 | Bitwise inclusive OR: `|` | Left-to-right | §6.5.12, p. 88; PDF p. 100 |
+| 11 | Logical AND: `&&` | Left-to-right | §6.5.13, p. 89; PDF p. 101 |
+| 12 | Logical OR: `||` | Left-to-right | §6.5.14, p. 89; PDF p. 101 |
+| 13 | Conditional: `logical-or ? expression : conditional-expression` | Right-to-left on the third operand; the middle operand is a full `expression`, including comma | §6.5.15, pp. 90-91; PDF pp. 102-103 |
+| 14 | Assignment: `= *= /= %= += -= <<= >>= &= ^= |=` | Right-to-left; normative left operand production is `unary-expression`, not `conditional-expression` | §6.5.16 paragraph 1, p. 91; PDF p. 103 |
+| 15 | Comma: `expression , assignment-expression` | Left-to-right; enabled only in expression contexts, never by list-separator commas | §6.5.17, p. 94; PDF p. 106 |
+
+### ExpressionFrame actions
+
+- [ ] **Syntax:** Implement primary operands for identifiers, all constant tokens, string literals, and parenthesized full expressions. Do not require successful binding or type checking before constructing the primary-expression AST. (§6.5.1, p. 69; PDF p. 81)
+- [ ] **Diagnostic/Semantics:** Accept any identifier token in the primary-expression production, then require name resolution to diagnose one that does not designate a declared object or function. This is not a typedef-disambiguation decision and need not prevent construction of the expression AST. (§6.5.1 paragraph 2 and footnote 79, p. 69; PDF p. 81)
+- [ ] **Syntax:** Implement repeatable postfix suffix reduction for subscripting, calls with an optional comma-separated `assignment-expression` list, `.`/`->` followed by an identifier, and postfix increment/decrement. Member names remain identifiers even if their spelling is a visible typedef name. (§6.5.2, pp. 69-70; PDF pp. 81-82; §6.2.3, p. 31; PDF p. 43)
+- [ ] **Syntax:** Implement C99 compound literals, including `( type-name ) { initializer-list }` and the form with a trailing comma. Do not reduce `(type-name)` immediately as a completed cast until lookahead has ruled out `{`. (§6.5.2, p. 69; PDF p. 81; §6.5.2.5, pp. 75-77; PDF pp. 87-89)
+- [ ] **Syntax:** Implement both `sizeof unary-expression` and `sizeof ( type-name )`. The parenthesized form is a typedef-sensitive grammar decision; the operand form must still allow `sizeof ( expression )` through unary-expression -> postfix-expression -> primary-expression. (§6.5.3, p. 78; PDF p. 90)
+- [ ] **Syntax:** Preserve the asymmetric cast/unary grammar: a unary operator takes a cast-expression, prefix `++`/`--` takes a unary-expression, and a cast recursively takes a cast-expression. This affects inputs such as `-(T)x`, `++*p`, and chains of casts. (§6.5.3, p. 78; PDF p. 90; §6.5.4, p. 81; PDF p. 93)
+- [ ] **Syntax:** Configure the Double-E reducer with all binary precedence levels and associativity shown above. Reduction order must encode grammar grouping, not evaluation order; most operand evaluation order is unspecified by the standard. (§6.5 paragraph 3, p. 67; PDF p. 79)
+- [ ] **Syntax:** Represent `?` as a blocking unmatched question marker. On `:`, reduce the middle expression to the nearest question marker without crossing the current grouping boundary, then replace that marker in place with the completed right-associative conditional operator. Configure expression entry/stopping rules so the condition is limited to logical-OR precedence, the middle remains an unrestricted `expression`, and the third remains a `conditional-expression`; do not confuse the colon with a label, bit-field, or designator context. (§6.5.15, p. 90; PDF p. 102)
+- [ ] **Syntax:** Give assignments right associativity and accept exactly the eleven assignment operators. Preserve the unary-expression left-hand grammar even though whether it is a modifiable lvalue is a later constraint. (§6.5.16, p. 91; PDF p. 103)
+- [ ] **Syntax:** Parameterize `ExpressionFrame` by its stopping set/dialect so a comma is a real `BinaryOperator::Comma` node in `expression` but a separator in argument lists, initializer lists, declarator lists, enumerator lists, and parameter lists. The small Double-E evaluator demo intentionally supports only structural call-argument commas; its narrower language is not the C language-parser contract. (§6.5.17 paragraph 3, p. 94; PDF p. 106)
+- [ ] **Syntax:** Provide entry modes for `expression`, `assignment-expression`, and `constant-expression`. A constant-expression has the grammar of a conditional-expression, not a full expression. (§6.5.16, p. 91; PDF p. 103; §6.6 paragraph 1, p. 95; PDF p. 107)
+- [ ] **Constraint/Semantics:** Record enough AST form for later checks of operand types, scalar/arithmetic/integer requirements, pointer compatibility, lvalues, modifiable lvalues, member lookup, call arity/types, assignment compatibility, and sequence rules. These requirements must produce diagnostics where they are constraints but must not be simulated by dropping syntax alternatives. (§6.5-§6.5.17, pp. 67-94; PDF pp. 79-106)
+- [ ] **Constraint/Semantics:** Validate constant-expression restrictions later: assignment, increment, decrement, function call, and comma are forbidden except in unevaluated subexpressions; integer constant expressions have the restricted operand/cast set defined by §6.6. Keep the syntactic AST so the constant evaluator can diagnose the exact operator. (§6.6 paragraphs 3-11, pp. 95-96; PDF pp. 107-108)
+- [ ] **Semantics:** Mark full-expression boundaries for initializers, expression statements, selection and loop controls, all three `for` expressions, and optional return expressions. Those boundaries are sequence points and must survive syntax construction for later evaluation analysis. (§6.8 paragraph 4, p. 131; PDF p. 143)
+
+### Expression-context acceptance tests
+
+- [ ] Parse function arguments as zero or more `assignment-expression` values, so `f(a, b)` has two arguments while `f((a, b))` has one comma-expression argument. (§6.5.2, pp. 69-71; PDF pp. 81-83; §6.5.17 paragraph 3, p. 94; PDF p. 106)
+- [ ] Parse array subscripts and grouping parentheses with full `expression`, including comma expressions. (§6.5.1, p. 69; PDF p. 81; §6.5.2.1, p. 70; PDF p. 82)
+- [ ] Parse array declarator bounds as optional `assignment-expression`, but bit-field widths, enumerator values, case labels, and array designators as `constant-expression`. (§6.7.5, p. 114; PDF p. 126; §6.7.2.1, p. 101; PDF p. 113; §6.7.2.2, p. 105; PDF p. 117; §6.8.1, p. 131; PDF p. 143; §6.7.8, p. 125; PDF p. 137)
+- [ ] Parse initializer scalar expressions as `assignment-expression`, leaving a top-level comma to the surrounding initializer list. (§6.7.8, p. 125; PDF p. 137)
+
+## Declarations, declarators, type names, and initializers
+
+### Declarations and declaration specifiers
+
+- [ ] **Syntax:** Parse `declaration-specifiers init-declarator-list? ;`, with a nonempty sequence of storage-class specifiers, type specifiers, type qualifiers, and function specifiers in any grammar-permitted order. Parse each init-declarator as a declarator optionally followed by `=` and an initializer. (§6.7, p. 97; PDF p. 109)
+- [ ] **Constraint:** Diagnose a declaration that declares no declarator, tag, or enumeration member, even though an optional init-declarator list is grammatical. Preserve tag-only declarations such as `struct S;`. (§6.7 paragraph 2, p. 97; PDF p. 109)
+- [ ] **Syntax/Constraint:** Accept the storage-class spellings `typedef`, `extern`, `static`, `auto`, and `register`, but diagnose more than one storage-class specifier in one declaration. `typedef` is a storage-class specifier for syntactic convenience. (§6.7.1 paragraphs 1-3, p. 98; PDF p. 110)
+- [ ] **Syntax/Constraint:** Require at least one type specifier in every declaration-specifier or specifier-qualifier list; C99 has no implicit `int`. Accumulate specifiers in any order and diagnose every combination outside the exact sets listed by §6.7.2. (§6.7.2 paragraphs 1-3, pp. 99-100; PDF pp. 111-112)
+- [ ] **Syntax:** Accept core type specifiers `void`, `char`, `short`, `int`, `long`, `float`, `double`, `signed`, `unsigned`, `_Bool`, `_Complex`, struct/union specifiers, enum specifiers, and visible typedef names. Do not add `_Imaginary` to this production in strict mode. (§6.7.2, pp. 99-100; PDF pp. 111-112)
+- [ ] **Syntax:** Accept type qualifiers `const`, `restrict`, and `volatile` wherever the relevant production permits a type-qualifier or type-qualifier-list. Repetition is semantically equivalent to one occurrence and therefore must not be a syntax error. (§6.7.3 paragraphs 1-4, p. 108; PDF p. 120)
+- [ ] **Syntax/Constraint:** Accept `inline` as the sole function specifier, including repeated occurrences, while deferring/diagnosing the constraint that it applies only to a declared function and the hosted-`main` restrictions. (§6.7.4 paragraphs 1-5, p. 112; PDF p. 124)
+
+### Structure, union, and enumeration specifiers
+
+- [ ] **Syntax:** Parse both struct/union forms: `struct-or-union identifier? { struct-declaration-list }` and `struct-or-union identifier`. The member list is nonempty in the normative grammar. (§6.7.2.1, p. 101; PDF p. 113)
+- [ ] **Syntax:** Parse a struct-declaration as `specifier-qualifier-list struct-declarator-list ;`; its specifiers are type specifiers and qualifiers only, never storage-class or function specifiers. (§6.7.2.1, p. 101; PDF p. 113)
+- [ ] **Syntax:** Parse ordinary members, named bit-fields, and unnamed bit-fields using `declarator`, `declarator : constant-expression`, and `: constant-expression`. Keep the colon local to struct-declarator state. (§6.7.2.1, p. 101; PDF p. 113)
+- [ ] **Constraint/Semantics:** Defer member completeness/function/VLA restrictions, legal bit-field types, and width range/value checks while retaining enough syntax to diagnose them. (§6.7.2.1 paragraphs 2-4 and 8, pp. 101-102; PDF pp. 113-114)
+- [ ] **Syntax:** Parse all enum forms: a definition with optional tag, the same definition with a trailing comma, and a tag reference. Parse every enumerator as an enumeration-constant optionally followed by `= constant-expression`. (§6.7.2.2, p. 105; PDF p. 117)
+- [ ] **Architecture/Semantics:** Publish each enumerator as an ordinary-identifier binding immediately after its defining enumerator, and publish a tag just after the tag spelling appears. This timing is observable by later enumerators and nested declarations. (§6.2.1 paragraph 7, p. 30; PDF p. 42; §6.7.2.2 paragraphs 2-4, p. 105; PDF p. 117)
+- [ ] **Constraint/Semantics:** Defer integer-constant evaluation of enumerator values and tag redeclaration/completeness rules, but preserve whether a tag declaration is a definition, reference, or new incomplete struct/union declaration. (§6.7.2.2 paragraph 2, p. 105; PDF p. 117; §6.7.2.3, pp. 106-107; PDF pp. 118-119)
+
+### Named declarators and parameters
+
+- [ ] **Syntax:** Parse every declarator as an optional pointer chain followed by a direct declarator. A direct declarator starts with an identifier or parenthesized declarator and then accepts any sequence of array and function suffixes. Parentheses change declarator binding and cannot be flattened before the derived type is constructed. (§6.7.5 paragraphs 1-6, pp. 114-115; PDF pp. 126-127)
+- [ ] **Syntax:** Parse pointer chains recursively in grammar but iteratively in `DeclaratorFrame`: each `*` has its own optional type-qualifier-list and may be followed by another pointer level. (§6.7.5, p. 114; PDF p. 126; §6.7.5.1, p. 115; PDF p. 127)
+- [ ] **Syntax:** Parse all four array suffix families: `[ qualifiers? assignment-expression? ]`, `[ static qualifiers? assignment-expression ]`, `[ qualifiers static assignment-expression ]`, and `[ qualifiers? * ]`. Preserve qualifiers, `static` placement, omitted bounds, and star bounds in the AST. (§6.7.5, p. 114; PDF p. 126)
+- [ ] **Constraint/Semantics:** Later enforce that array `static`/qualifiers occur only in an outermost function-parameter array derivation, that `[*]` is limited to function-prototype scope, that bound expressions have integer type/positive constant values, and that element types are legal. (§6.7.5.2 paragraphs 1-5, pp. 116-117; PDF pp. 128-129)
+- [ ] **Syntax:** Parse function suffixes with either a `parameter-type-list` or an optional old-style `identifier-list`. A parameter-type-list is a comma-separated parameter-list optionally terminated by `, ...`; each parameter is declaration-specifiers plus a named declarator or optional abstract declarator. (§6.7.5, p. 114; PDF p. 126)
+- [ ] **Syntax:** Preserve the distinction among `(void)`, `()`, a prototype parameter list, an ellipsis-terminated prototype, and an old-style identifier list. Empty parentheses outside a definition specify no parameter information, not necessarily zero parameters. (§6.7.5.3 paragraphs 5-14, pp. 118-119; PDF pp. 130-131)
+- [ ] **Constraint/Semantics:** Defer illegal function return types, parameter storage classes, incomplete adjusted parameter types, parameter adjustments, and prototype compatibility. Syntax must retain array/function parameter declarators and all qualifier/static data for those checks. (§6.7.5.3 paragraphs 1-15, pp. 118-120; PDF pp. 130-132)
+
+### Type names and abstract declarators
+
+- [ ] **Syntax:** Parse a type-name as `specifier-qualifier-list abstract-declarator?`; it uses no storage-class or function specifier and contains no declared identifier. (§6.7.6, p. 122; PDF p. 134)
+- [ ] **Syntax:** Parse an abstract declarator as a pointer alone or an optional pointer followed by a direct abstract declarator. Support parenthesized abstract declarators and every array/function suffix form, including suffixes whose direct-abstract-declarator prefix is omitted. (§6.7.6, p. 122; PDF p. 134)
+- [ ] **Syntax:** In an abstract declarator, interpret `()` as a function with no parameter specification rather than redundant parentheses around an omitted identifier. (§6.7.6 paragraph 3 and footnote 128, p. 122; PDF p. 134)
+- [ ] **Architecture:** Make `TypeNameFrame` return a complete syntactic type-name value to `ExpressionFrame`, `DeclaratorFrame`, or `InitializerFrame` without invoking Rust recursion. It must be able to suspend on nested parameter lists, array bounds, and parenthesized abstract declarators. (§6.7.6, p. 122; PDF p. 134)
+
+### Typedef declarations
+
+- [ ] **Syntax/Semantics:** Parse `typedef-name` as an identifier, and after a successful `typedef` declarator publish the identifier as a typedef-name denoting that declarator's type. A typedef introduces a synonym, not a new type. (§6.7.7 paragraphs 1-3, p. 123; PDF p. 135)
+- [ ] **Architecture:** Commit or shadow ordinary-identifier classification after each full declarator, not only at the semicolon ending a comma-separated declaration. Identifier scope begins just after completion of its declarator. (§6.2.1 paragraph 7, p. 30; PDF p. 42)
+- [ ] **Constraint/Semantics:** Diagnose a typedef name for a variably modified type unless it has block scope; do not reject the typedef grammar while parsing it. (§6.7.7 paragraph 2, p. 123; PDF p. 135)
+
+### Initializers and designators
+
+- [ ] **Syntax:** Parse an initializer as an `assignment-expression`, `{ initializer-list }`, or `{ initializer-list , }`. Parse initializer lists recursively in grammar but iteratively in `InitializerFrame`. (§6.7.8, p. 125; PDF p. 137)
+- [ ] **Syntax:** Parse each initializer-list element as an optional designation followed by an initializer. A designation is one or more designators followed by `=`; each designator is `[ constant-expression ]` or `. identifier`, and mixed chains such as `[1].member[2] =` are valid syntax. (§6.7.8, p. 125; PDF p. 137)
+- [ ] **Syntax:** Accept arbitrary recursive brace nesting, trailing commas, designated and undesignated elements in the same list, and brace elision represented by scalar initializer entries. (§6.7.8 paragraphs 16-22, pp. 126-127; PDF pp. 138-139)
+- [ ] **Constraint/Semantics:** Preserve initializer ordering and brace boundaries so later analysis can implement the “current object,” designator traversal, override, implicit-zero, unknown-array-size, and brace-elision rules. These are not reasons for `InitializerFrame` to discard otherwise grammatical syntax. (§6.7.8 paragraphs 17-23, pp. 126-128; PDF pp. 138-140)
+- [ ] **Constraint/Semantics:** Later check initializer target type, VLA prohibition, static-storage constant-expression requirements, linkage restrictions, valid array indices/member names, scalar/aggregate compatibility, and excess initializers. (§6.7.8 paragraphs 2-7 and 11-16, pp. 125-126; PDF pp. 137-138)
+
+## Statements and block items
+
+- [ ] **Syntax:** Dispatch every statement to exactly one of labeled, compound, expression, selection, iteration, or jump statement. (§6.8, p. 131; PDF p. 143)
+- [ ] **Syntax:** Parse labeled statements as `identifier : statement`, `case constant-expression : statement`, or `default : statement`. A label prefixes a statement, not a declaration; a label before `}` therefore needs a null statement such as `label: ;`. (§6.8.1, pp. 131-132; PDF pp. 143-144; §6.8.3 paragraph 3, p. 132; PDF p. 144)
+- [ ] **Syntax:** Parse a compound statement as `{ block-item-list? }`, where block items are declarations or statements in any order. This is the C99 mixed-declarations-and-statements rule. (§6.8.2, p. 132; PDF p. 144)
+- [ ] **Architecture:** Push a scope on `{` and pop it on the matching `}`. Apply each declaration's binding updates before classifying subsequent block items. (§6.2.1 paragraphs 2-7, pp. 29-30; PDF pp. 41-42; §6.8.2, p. 132; PDF p. 144)
+- [ ] **Syntax:** Parse expression statements as `expression? ;`, preserving an explicit null statement node or equivalent source range for recovery/control-flow uses. (§6.8.3, p. 132; PDF p. 144)
+- [ ] **Syntax:** Parse `if ( expression ) statement`, `if ( expression ) statement else statement`, and `switch ( expression ) statement`. Associate `else` with the nearest preceding unmatched `if`. (§6.8.4, p. 133; PDF p. 145; §6.8.4.1 paragraph 3, p. 134; PDF p. 146)
+- [ ] **Architecture/Semantics:** Represent the selection statement and each substatement as nested block scopes even when braces are absent, because C99 defines those scopes explicitly. (§6.8.4 paragraph 3, p. 133; PDF p. 145)
+- [ ] **Syntax:** Parse all loop forms: `while ( expression ) statement`, `do statement while ( expression ) ;`, `for ( expression? ; expression? ; expression? ) statement`, and `for ( declaration expression? ; expression? ) statement`. (§6.8.5, p. 135; PDF p. 147)
+- [ ] **Architecture/Syntax:** At `for (` choose declaration versus expression using declaration-specifier lookahead, including visible typedef names. The `for` statement and its body each introduce the standard's nested block scopes; declarations in clause 1 remain visible through the rest of the loop. (§6.8.5 paragraphs 1 and 5, p. 135; PDF p. 147; §6.8.5.3, p. 136; PDF p. 148)
+- [ ] **Syntax:** Parse exactly `goto identifier ;`, `continue ;`, `break ;`, and `return expression? ;`. (§6.8.6, p. 136; PDF p. 148)
+- [ ] **Constraint/Semantics:** Track enough enclosing-function/switch/loop state to diagnose or hand off constraints for duplicate/function-scope labels, `case`/`default` placement and uniqueness, `continue`/`break` placement, `goto` targets and VLA-scope jumps, and return-expression compatibility. (§6.8.1 paragraphs 2-3, pp. 131-132; PDF pp. 143-144; §6.8.4.2, p. 134; PDF p. 146; §6.8.6.1-§6.8.6.4, pp. 137-139; PDF pp. 149-151)
+- [ ] **Constraint/Semantics:** Retain controlling expressions for later scalar/integer checks and retain the declaration form of `for` clause 1 for the `auto`/`register`-only constraint. (§6.8.4.1 paragraph 1, p. 133; PDF p. 145; §6.8.4.2 paragraph 1, p. 134; PDF p. 146; §6.8.5 paragraphs 2-3, p. 135; PDF p. 147)
+
+## Function definitions and translation units
+
+- [ ] **Syntax:** Parse a translation unit as a nonempty sequence of external declarations. In strict C99 mode, an empty post-preprocessing token stream does not match `translation-unit` and requires a syntax diagnostic. (§6.9 paragraph 1, p. 140; PDF p. 152; §5.1.1.3, p. 11; PDF p. 23)
+- [ ] **Syntax:** Parse every external declaration as either a function definition or a declaration. Share declaration-specifier and declarator parsing, then retain lookahead and declarator shape to decide whether the continuation is an initializer/declarator-list/semicolon, an old-style declaration list, or a compound-statement body. (§6.9, p. 140; PDF p. 152; §6.9.1, p. 141; PDF p. 153)
+- [ ] **Syntax:** Parse a function definition as `declaration-specifiers declarator declaration-list? compound-statement`. The optional declaration list is required for C99 old-style identifier-list definitions and must not be mistaken for block items before the opening brace. (§6.9.1, p. 141; PDF p. 153)
+- [ ] **Syntax:** Support both prototype-style definitions and identifier-list definitions. For prototype-style definitions no declaration list may follow; for identifier-list definitions, preserve the declaration list for later checks that every parameter is declared exactly as required. (§6.9.1 paragraphs 5-7, pp. 141-142; PDF pp. 153-154)
+- [ ] **Architecture:** Enter function scope before parsing parameter/body-dependent constructs, install parameter bindings at the head of the body, install the implicit `__func__` binding immediately after the opening brace, and leave function-scope labels resolvable across the entire function. (§6.2.1 paragraphs 3-4, pp. 29-30; PDF pp. 41-42; §6.4.2.2, p. 52; PDF p. 64; §6.9.1 paragraph 9, p. 142; PDF p. 154)
+- [ ] **Constraint/Semantics:** Defer or diagnose the function's function-type/return-type/storage-class rules, prototype parameter naming, old-style declaration-list restrictions, parameter adjustments, and external-definition/linkage rules. (§6.9 paragraphs 2-5, p. 140; PDF p. 152; §6.9.1 paragraphs 2-10, pp. 141-142; PDF pp. 153-154; §6.9.2, pp. 143-144; PDF pp. 155-156)
+- [ ] **Architecture:** Accept EOF only when the current external declaration and every child frame have completed; otherwise emit a localized unexpected-EOF diagnostic and unwind to an error external declaration rather than returning a partial success. This is the parser mechanism for enforcing the complete grammar and diagnostic requirement. (§6.9 paragraph 1, p. 140; PDF p. 152; §5.1.1.3, p. 11; PDF p. 23)
+
+## Typedef-name and scope ambiguities required during syntax parsing
+
+- [ ] Maintain contextual ordinary-identifier bindings that distinguish a visible typedef name from an object/function/enumerator binding at the current token position. A typedef name shares the ordinary-identifier namespace and can be shadowed by another ordinary declaration. (§6.2.3, p. 31; PDF p. 43; §6.7.7 paragraph 3, p. 123; PDF p. 135)
+- [ ] Do not permanently retag identifier tokens as typedef tokens. Query `ScopeState` at each grammar decision, because the same spelling can change classification within one translation unit and even within one declaration sequence. (§6.2.1 paragraphs 2-7, pp. 29-30; PDF pp. 41-42)
+- [ ] Start the scope of an ordinary declarator immediately after that declarator completes. This makes a newly declared ordinary identifier hide an outer typedef while parsing its initializer or later comma-separated declarators; typedef-name publication uses the same timing. (§6.2.1 paragraph 7, p. 30; PDF p. 42)
+- [ ] Start tag scope immediately after the tag spelling and enumerator scope immediately after the defining enumerator. Do not wait for the closing `}` or semicolon. (§6.2.1 paragraph 7, p. 30; PDF p. 42)
+- [ ] Implement four scope kinds: file, block, function, and function prototype. End prototype scope at the end of the function declarator, block scope at the associated block boundary, function scope at the end of the function, and file scope at the end of the translation unit. (§6.2.1 paragraphs 2-4, pp. 29-30; PDF pp. 41-42)
+- [ ] Maintain distinct namespaces for labels, tags, each struct/union's members, and ordinary identifiers. Only the ordinary namespace determines typedef-name classification. (§6.2.3, p. 31; PDF p. 43)
+- [ ] Resolve block-item declaration versus statement by treating an identifier as a declaration-specifier starter only when it is currently a typedef name. Apply the same rule to `for` clause 1. (§6.7.2, pp. 99-100; PDF pp. 111-112; §6.8.2, p. 132; PDF p. 144; §6.8.5, p. 135; PDF p. 147)
+- [ ] Resolve `( type-name )` versus `( expression )` in casts, `sizeof`, and compound literals using current typedef classification plus type-name grammar. Delay final choice long enough to detect a following `{` for a compound literal. (§6.5.1, p. 69; PDF p. 81; §6.5.2, p. 69; PDF p. 81; §6.5.3, p. 78; PDF p. 90; §6.5.4, p. 81; PDF p. 93)
+- [ ] Make any tentative type-name/declarator parse transactional: on failure, restore token position, provisional syntax nodes, and scope bindings before trying the expression alternative. This is the `ParserMachine` mechanism for the normative typedef-sensitive alternatives, not a new C grammar rule. (§6.5.1-§6.5.4, pp. 69-81; PDF pp. 81-93; §6.7.2, pp. 99-100; PDF pp. 111-112; §6.7.6, p. 122; PDF p. 134)
+- [ ] In a parameter declaration where an identifier could be parsed either as a typedef name or as the parameter's name, take it as a typedef name. This is a mandatory disambiguation rule, not a heuristic. (§6.7.5.3 paragraph 11, p. 119; PDF p. 131)
+- [ ] After `.` or `->`, after `goto`, and in a label prefix, consume the required identifier in the member/label namespace regardless of an ordinary typedef binding with the same spelling. (§6.5.2, p. 69; PDF p. 81; §6.8.1, p. 131; PDF p. 143; §6.8.6, p. 136; PDF p. 148; §6.2.3, p. 31; PDF p. 43)
+- [ ] Create implicit scopes for selection and iteration constructs and their substatements even without braces, so typedef shadowing and VLA-related scope rules observe C99 boundaries. (§6.8.4 paragraph 3, p. 133; PDF p. 145; §6.8.5 paragraph 5, p. 135; PDF p. 147)
+
+## Grammar-production-to-ParseFrame inventory
+
+These rows use the eight agreed `ParseFrame` families. Closely coupled subproductions are internal phases of their owning frame rather than additional top-level frame variants. No nested production may be handled by recursive Rust parser calls: child grammar work is requested with a `ParseAction::Push`, and typed results return as `ParseValue` values.
+
+| Frame | Normative productions owned | Child frames / returned values | Required synchronization | Standard |
+| --- | --- | --- | --- | --- |
+| `TranslationUnitFrame` | `translation-unit` | Push `ExternalDeclarationFrame`; accumulate external declarations | EOF, external-declaration starters | §6.9, p. 140; PDF p. 152 |
+| `ExternalDeclarationFrame` | `external-declaration`, function-definition continuation, declaration-list | Push specifiers, declarator, declaration, and compound statement; return external declaration | `;`, `{`, `}`, EOF | §6.9, p. 140; PDF p. 152; §6.9.1, p. 141; PDF p. 153 |
+| `DeclarationFrame` | `declaration`, specifier families, init-declarator lists, struct/union specifiers and members, enum specifiers/enumerators, and typedef-name publication | Push `DeclaratorFrame`, `InitializerFrame`, or constant `ExpressionFrame`; commit bindings after each declarator/enumerator; return declaration or specifier result | `,`, `;`, `)`, `}`, EOF | §6.7-§6.7.4, pp. 97-113; PDF pp. 109-125; §6.7.7, pp. 123-124; PDF pp. 135-136 |
+| `DeclaratorFrame` | `declarator`, `direct-declarator`, pointer/qualifier lists, parameter-type/list/declaration, and identifier-list | Push nested `DeclaratorFrame`, `DeclarationFrame` for parameter specifiers, or bound `ExpressionFrame`; return named declarator or parameter-list value | `,`, `;`, `=`, `)`, `]`, `{`, EOF | §6.7.5-§6.7.5.3, pp. 114-121; PDF pp. 126-133 |
+| `TypeNameFrame` | `type-name`, abstract-declarator, direct-abstract-declarator | Push specifier list, nested abstract declarator, bounds, parameter list; return type name | `)`, `]`, `,`, `{`, EOF | §6.7.6, p. 122; PDF p. 134 |
+| `InitializerFrame` | `initializer`, initializer-list, designation, designator-list, and designator | Push assignment/constant `ExpressionFrame` or nested `InitializerFrame`; return initializer/error node with designator paths | `=`, `,`, `}`, `;`, EOF | §6.7.8, pp. 125-130; PDF pp. 137-142 |
+| `StatementFrame` | all statement families plus compound-statement, block-item-list, and block-item | Push `ExpressionFrame`, `DeclarationFrame`, or child `StatementFrame` using typedef-sensitive choices; return statement/error node | `;`, `}`, label `:`, EOF | §6.8-§6.8.6, pp. 131-139; PDF pp. 143-151 |
+| `ExpressionFrame` | `expression`, assignment, conditional, every binary level, cast, unary, postfix, primary, constant-expression entry mode | Push type name and initializer for cast/compound literal; reduce owned operator/operand stacks; return expression | caller-provided stop set, `)`, `]`, `}`, `;`, `:`, EOF | §6.5-§6.6, pp. 67-96; PDF pp. 79-108 |
+
+## Diagnostics, source handling, and recovery
+
+- [ ] **Normative acceptance:** Accept every strictly conforming program that stays within the implementation's required environment and minimum limits. Extensions may not alter such a program's behavior. (§4 paragraphs 5-8, pp. 7-8; PDF pp. 19-20)
+- [ ] **Normative diagnostics:** Ensure a translation unit containing any syntax-rule or constraint violation produces at least one diagnostic. Syntax recovery must never convert malformed input into a silent success; later semantic passes must likewise report constraint violations. (§5.1.1.3 paragraph 1, p. 11; PDF p. 23)
+- [ ] **Architecture:** Attach the unexpected token (or EOF), expected category/set, active production/frame, and original `SourceVectors` to each parser diagnostic. This implements the standard's stated intent to identify the nature and, where possible, location of violations. (§5.1.1.3 footnote 8, p. 11; PDF p. 23)
+- [ ] **Architecture:** Guarantee progress: every recovery action must consume a token, complete/unwind a frame, or change state before reprocessing lookahead. This is not prescribed by C99, but is required to reliably diagnose malformed translation units under §5.1.1.3. (§5.1.1.3, p. 11; PDF p. 23)
+- [ ] **Architecture:** Use frame-specific synchronization sets derived from the owning grammar: declaration `;`/`}`, initializer `,`/`}`, parameter `,`/`)`, expression caller stop tokens, statement `;`/`}`, and external declaration `;`/`}`/EOF. Do not use one global scan-to-semicolon policy because semicolons can be nested in `for` headers and braces delimit initializers, compounds, and type specifiers. (Grammar boundaries: §6.7, p. 97; PDF p. 109; §6.7.8, p. 125; PDF p. 137; §6.8, pp. 131-136; PDF pp. 143-148; §6.9, pp. 140-141; PDF pp. 152-153)
+- [ ] **Architecture:** Emit typed error nodes/results so parent frames can retain list shape and provenance after recovery. The standard allows successful translation of an invalid program after a required diagnostic, so continued parsing is permitted but must remain explicitly marked invalid. (§5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23)
+- [ ] **Architecture:** Preserve delimiter ownership. A child frame may stop before a caller-owned delimiter and request lookahead reprocessing; it must not consume a comma, colon, closing bracket/parenthesis/brace, or semicolon that belongs to the parent production. (Normative production boundaries: §6.5-§6.9.1, pp. 67-141; PDF pp. 79-153)
+- [ ] **Architecture:** Test malformed input at every EOF-capable state, including after declaration specifiers, pointer stars, open delimiters, `?`, designator, `=`, `else`, `do` body, old-style parameter declarations, and between external declarations. Every path must terminate with a diagnostic and no panic/stack overflow. (§5.1.1.3, p. 11; PDF p. 23; relevant grammar §6.5-§6.9.1, pp. 67-141; PDF pp. 79-153)
+
+## Translation limits and deep-nesting tests
+
+The standard's list is a minimum capability floor: the implementation must be able to translate and execute at least one program containing an instance of every listed limit. Implementations should avoid fixed limits when possible. (`ParserMachine` tests need only translate/analyze at this stage.) (§5.2.4.1 paragraph 1 and footnote 13, pp. 20-21; PDF pp. 32-33)
+
+- [ ] Support at least 127 nesting levels of blocks with explicit control/scope stacks and no Rust call-stack recursion. (§5.2.4.1, p. 20; PDF p. 32)
+- [ ] Support at least 12 pointer, array, and function declarators in any combination modifying an arithmetic, structure, union, or incomplete type. (§5.2.4.1, p. 20; PDF p. 32)
+- [ ] Support at least 63 nesting levels of parenthesized declarators within one full declarator. (§5.2.4.1, p. 20; PDF p. 32)
+- [ ] Support at least 63 nesting levels of parenthesized expressions within one full expression. (§5.2.4.1, p. 20; PDF p. 32)
+- [ ] Support at least 127 parameters in one function definition and at least 127 arguments in one function call. (§5.2.4.1, pp. 20-21; PDF pp. 32-33)
+- [ ] Support at least 511 identifiers with block scope declared in one block and at least 4095 external identifiers in one translation unit without pathological scope-lookup behavior. (§5.2.4.1, pp. 20-21; PDF pp. 32-33)
+- [ ] Support at least 1023 `case` labels in one switch, excluding nested switches, while checking/recording the nearest enclosing switch. (§5.2.4.1, p. 21; PDF p. 33)
+- [ ] Support at least 1023 members in one structure or union and at least 1023 enumeration constants in one enumeration. (§5.2.4.1, p. 21; PDF p. 33)
+- [ ] Support at least 63 levels of nested structure or union definitions in a single struct-declaration-list. (§5.2.4.1, p. 21; PDF p. 33)
+- [ ] Include limit-boundary tests at `limit - 1`, `limit`, and a reasonable `limit + 1`, plus substantially deeper architecture stress tests. Any chosen resource ceiling above the normative floor must fail with a stable diagnostic, never a panic, uncontrolled allocation, or host-stack overflow. The numeric floors are normative; graceful behavior beyond them is a bcc-rust architecture requirement. (§5.2.4.1, pp. 20-21; PDF pp. 32-33; §5.1.1.3, p. 11; PDF p. 23)
+
+## Implementation-plan exit criteria
+
+- [ ] Each frame in the production inventory has an explicit state enum, owned partial results, child-result handling, delimiter ownership, EOF behavior, and synchronization set. This is the agreed non-recursive implementation of the clause 6 grammar and the diagnostic-progress obligation. (§5.1.1.3, p. 11; PDF p. 23; §6.5-§6.9.1, pp. 67-142; PDF pp. 79-154)
+- [ ] The expression precedence table is encoded once and tested with AST-shape assertions for every operator, equal-precedence chain, right-associative assignment/conditional chain, and parenthesized override. The normative grouping source is §6.5 paragraph 3 and footnote 74. (§6.5, p. 67; PDF p. 79)
+- [ ] Declaration/declarator golden tests cover every normative production, including repeated/mixed specifiers, bit-fields, trailing enum comma, all four array suffixes, prototypes, ellipsis, identifier lists, abstract declarators, and old-style function definitions. (§6.7-§6.9.1, pp. 97-142; PDF pp. 109-154)
+- [ ] Initializer golden tests cover nested braces, trailing comma, brace elision, array/member/mixed designator chains, overrides, and compound literals. Syntax tests assert shape; semantic tests separately assert current-object and excess-initializer diagnostics. (§6.5.2.5, pp. 75-77; PDF pp. 87-89; §6.7.8, pp. 125-130; PDF pp. 137-142)
+- [ ] Statement golden tests cover every production, dangling `else`, declaration-form and expression-form `for`, mixed block items, labels plus null statements, and context diagnostics for jumps/switch labels. (§6.8-§6.8.6.4, pp. 131-139; PDF pp. 143-151)
+- [ ] Typedef ambiguity tests update scope after each declarator and cover declaration-vs-expression, cast-vs-grouping, `sizeof(type)`-vs-operand, compound-literal-vs-cast, parameter typedef preference, shadowing, member names, tag names, labels, and implicit selection/iteration scopes. (§6.2.1-§6.2.3, pp. 29-31; PDF pp. 41-43; §6.7.5.3 paragraph 11, p. 119; PDF p. 131)
+- [ ] Constraint-invalid but grammatical fixtures reach a complete AST plus diagnostics rather than being rejected as unknown syntax; syntax-invalid fixtures produce error nodes and deterministic recovery. (§5.1.1.3, p. 11; PDF p. 23)
+- [ ] The deep-nesting/large-list suite meets every parser-relevant C99 minimum translation limit listed above under sanitizers or equivalent panic detection, with no recursive parser call path. (§5.2.4.1, pp. 20-21; PDF pp. 32-33)

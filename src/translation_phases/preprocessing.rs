@@ -44,6 +44,10 @@ use super::{
     },
 };
 use crate::{
+    configuration::{
+        CStandard,
+        ExtensionPolicy,
+    },
     float_parsing::{
         LongDouble,
         ParseFloatError,
@@ -55,6 +59,7 @@ use crate::{
     util::{
         HashMap,
         HashSet,
+        last_entry::last_entry,
         read_to_string_lossy,
         shared::{
             SharedString,
@@ -80,6 +85,187 @@ pub(crate) enum TokenizerFrameType {
         paren_depth:         usize,
         has_generated_token: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::{
+        configuration::CompilerConfiguration,
+        translation_phases::TranslationError,
+    };
+
+    fn preprocess_with_configuration(
+        source: &str,
+        configuration: CompilerConfiguration,
+    ) -> (Vec<String>, Vec<TranslationError>) {
+        let mut context = Context::with_configuration(configuration);
+        let mut preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<test>").into_boxed_path(),
+            source.to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let mut identifiers = Vec::new();
+        while let Some(token) = preprocessor.next_item(&mut context) {
+            if token.kind == TokenType::Identifier {
+                identifiers.push(context.string_cache.at(token.contents).to_owned());
+            }
+        }
+        let mut errors = Vec::new();
+        while let Some(error) = context.pop_pending_error() {
+            errors.push(error);
+        }
+        (identifiers, errors)
+    }
+
+    fn preprocess(source: &str) -> (Vec<String>, Vec<TranslationError>) {
+        preprocess_with_configuration(source, CompilerConfiguration::default())
+    }
+
+    fn strict_c99() -> CompilerConfiguration {
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny)
+    }
+
+    fn selected_identifier(expression: &str, identifier: &str) {
+        let source = format!("#if {expression}\n{identifier}\n#endif\n");
+        let (identifiers, errors) = preprocess(&source);
+
+        assert_eq!(identifiers, [identifier]);
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+    }
+
+    #[test]
+    fn middle_nested_conditional_pairs_with_the_nearest_question_mark() {
+        selected_identifier("(1 ? 0 ? 2 : 3 : 4) == 3", "MIDDLE_RESULT_3");
+    }
+
+    #[test]
+    fn right_nested_conditional_remains_right_associative() {
+        selected_identifier("(0 ? 1 : 1 ? 2 : 3) == 2", "RIGHT_RESULT_2");
+    }
+
+    #[test]
+    fn parentheses_are_a_conditional_pairing_boundary() {
+        selected_identifier("((1 ? 0 : 1) ? 2 : 3) == 3", "PAREN_RESULT_3");
+    }
+
+    #[test]
+    fn middle_expression_operators_reduce_before_colon() {
+        selected_identifier("(1 ? 1 + 2 : 4) == 3", "MIDDLE_ARITHMETIC_RESULT_3");
+    }
+
+    #[test]
+    fn unmatched_colon_reports_a_diagnostic_without_panicking() {
+        let (_, errors) = preprocess("#if 1 : 2\nUNREACHABLE\n#endif\n");
+
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
+                    ..
+                })
+            )),
+            "diagnostics: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn trailing_unmatched_colon_reports_a_diagnostic_without_panicking() {
+        let (_, errors) = preprocess("#if 1 :\nRECOVERED\n#endif\n");
+
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
+                    ..
+                })
+            )),
+            "diagnostics: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn default_extension_mode_evaluates_comma_to_rhs_without_a_diagnostic() {
+        let (identifiers, errors) = preprocess("#if (1, 0)\nUNREACHABLE\n#endif\n");
+
+        assert!(identifiers.is_empty());
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+    }
+
+    #[test]
+    fn strict_c99_diagnoses_an_evaluated_comma_after_reducing_to_rhs() {
+        let (identifiers, errors) =
+            preprocess_with_configuration("#if (0, 2)\nCOMMA_RESULT_2\n#endif\n", strict_c99());
+
+        assert_eq!(identifiers, ["COMMA_RESULT_2"]);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.severity() == ErrorSeverity::Error
+                    && matches!(
+                        error,
+                        TranslationError::Preprocessing(PreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
+                                    ExtensionPolicy::Deny
+                                ),
+                            ..
+                        })
+                    )),
+            "diagnostics: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn warning_policy_reports_an_evaluated_comma_as_a_warning() {
+        let configuration = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn);
+        let (identifiers, errors) =
+            preprocess_with_configuration("#if (0, 2)\nCOMMA_RESULT_2\n#endif\n", configuration);
+
+        assert_eq!(identifiers, ["COMMA_RESULT_2"]);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.severity() == ErrorSeverity::Warning
+                    && matches!(
+                        error,
+                        TranslationError::Preprocessing(PreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
+                                    ExtensionPolicy::Warn
+                                ),
+                            ..
+                        })
+                    )),
+            "diagnostics: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn strict_c99_does_not_diagnose_comma_in_short_circuited_rhs() {
+        let (identifiers, errors) = preprocess_with_configuration(
+            "#if 1 || (1, 2)\nSHORT_CIRCUIT_RESULT_1\n#endif\n",
+            strict_c99(),
+        );
+
+        assert_eq!(identifiers, ["SHORT_CIRCUIT_RESULT_1"]);
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+    }
+
+    #[test]
+    fn comma_in_unevaluated_conditional_middle_preserves_the_question_marker() {
+        let (identifiers, errors) =
+            preprocess_with_configuration("#if 0 ? 2, 3 : 0\nUNREACHABLE\n#endif\n", strict_c99());
+
+        assert!(identifiers.is_empty());
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -186,8 +372,9 @@ pub(crate) enum PreprocessorExpressionOperator {
     BitwiseOr,
     LogicalAnd,
     LogicalOr,
-    Ternary,
-    Else,
+    QuestionMark,
+    Conditional,
+    Comma,
 
     // Grouping
     OpeningParenthesis,
@@ -217,7 +404,8 @@ impl PreprocessorExpressionOperator {
             | Self::BitwiseOr => 10,
             | Self::LogicalAnd => 11,
             | Self::LogicalOr => 12,
-            | Self::Ternary | Self::Else => 13,
+            | Self::QuestionMark | Self::Conditional => 13,
+            | Self::Comma => 14,
             // OpeningParenthesis is not a normal operator. We only pop it off the stack when we
             // encounter a closing parenthesis.
             | Self::OpeningParenthesis => u32::MAX,
@@ -226,8 +414,8 @@ impl PreprocessorExpressionOperator {
 
     fn associativity(self) -> PreprocessorExpressionAssociativity {
         match self {
-            | Self::Ternary
-            | Self::Else
+            | Self::QuestionMark
+            | Self::Conditional
             | Self::UnaryPlus
             | Self::UnaryMinus
             | Self::BitwiseNot
@@ -250,6 +438,7 @@ impl PreprocessorExpressionOperator {
             | Self::BitwiseXor
             | Self::LogicalAnd
             | Self::LogicalOr
+            | Self::Comma
             | Self::OpeningParenthesis => PreprocessorExpressionAssociativity::Left,
         }
     }
@@ -265,7 +454,7 @@ impl PreprocessorExpressionOperator {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct PreprocessorExpressionParser {
     operator_stack: Vec<PreprocessorExpressionOperator>,
-    operand_stack:  Vec<PreprocessorExpressionOperand>,
+    operand_stack:  PreprocessorExpressionOperandStack,
     state:          PreprocessorExpressionParserState,
 }
 
@@ -328,11 +517,100 @@ impl PreprocessorExpressionOperand {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+struct EvaluatedPreprocessorExpressionOperand {
+    value:                    PreprocessorExpressionOperand,
+    contains_evaluated_comma: bool,
+}
+
+impl From<PreprocessorExpressionOperand> for EvaluatedPreprocessorExpressionOperand {
+    fn from(value: PreprocessorExpressionOperand) -> Self {
+        Self {
+            value,
+            contains_evaluated_comma: false,
+        }
+    }
+}
+
+impl EvaluatedPreprocessorExpressionOperand {
+    fn with_comma_liveness(
+        value: PreprocessorExpressionOperand,
+        contains_evaluated_comma: bool,
+    ) -> Self {
+        Self {
+            value,
+            contains_evaluated_comma,
+        }
+    }
+
+    fn as_signed(self) -> i64 {
+        self.value.as_signed()
+    }
+
+    fn as_unsigned(self) -> u64 {
+        self.value.as_unsigned()
+    }
+
+    fn is_signed(self) -> bool {
+        self.value.is_signed()
+    }
+
+    fn is_unsigned(self) -> bool {
+        self.value.is_unsigned()
+    }
+
+    fn set_signed(self, value: i64) -> Self {
+        Self::with_comma_liveness(self.value.set_signed(value), self.contains_evaluated_comma)
+    }
+
+    fn map_unsigned(self, f: impl FnOnce(u64) -> u64) -> Self {
+        Self::with_comma_liveness(self.value.map_unsigned(f), self.contains_evaluated_comma)
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Default)]
+struct PreprocessorExpressionOperandStack {
+    values:                  Vec<EvaluatedPreprocessorExpressionOperand>,
+    pending_evaluated_comma: bool,
+}
+
+impl PreprocessorExpressionOperandStack {
+    fn clear(&mut self) {
+        self.values.clear();
+        self.pending_evaluated_comma = false;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn push(&mut self, operand: impl Into<EvaluatedPreprocessorExpressionOperand>) {
+        let mut operand = operand.into();
+        operand.contains_evaluated_comma |= self.pending_evaluated_comma;
+        self.pending_evaluated_comma = false;
+        self.values.push(operand);
+    }
+
+    fn pop(&mut self) -> Option<EvaluatedPreprocessorExpressionOperand> {
+        let operand = self.values.pop()?;
+        self.pending_evaluated_comma |= operand.contains_evaluated_comma;
+        Some(operand)
+    }
+
+    fn pop_isolated(&mut self) -> Option<EvaluatedPreprocessorExpressionOperand> {
+        self.values.pop()
+    }
+}
+
 impl PreprocessorExpressionParser {
     fn new() -> Self {
         Self {
             operator_stack: Vec::new(),
-            operand_stack:  Vec::new(),
+            operand_stack:  PreprocessorExpressionOperandStack::default(),
             state:          PreprocessorExpressionParserState::Unary,
         }
     }
@@ -686,6 +964,7 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::RightShiftWithoutRhs
             | PreprocessorErrorType::TernaryOperatorWithoutRhs
             | PreprocessorErrorType::TernaryOperatorWithoutMhs
+            | PreprocessorErrorType::ColonWithoutMatchingQuestionMark
             | PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression
             | PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(_)
             | PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression
@@ -700,6 +979,14 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
+            | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy) =>
+                match policy {
+                    | ExtensionPolicy::Allow => unreachable!(
+                        "allowed extensions must not produce a comma diagnostic"
+                    ),
+                    | ExtensionPolicy::Warn => ErrorSeverity::Warning,
+                    | ExtensionPolicy::Deny => ErrorSeverity::Error,
+                },
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
             | PreprocessorErrorType::FloatLiteralOverflow(..)
@@ -779,6 +1066,8 @@ pub(crate) enum PreprocessorErrorType {
     LogicalOrWithoutRhs,
     TernaryOperatorWithoutMhs,
     TernaryOperatorWithoutRhs,
+    ColonWithoutMatchingQuestionMark,
+    CommaOperatorInPreprocessorExpression(ExtensionPolicy),
     BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(PreprocessorExpressionOperator),
     DivideByZero,
     ModuloByZero,
@@ -1061,8 +1350,9 @@ impl Display for PreprocessorErrorType {
                         | PreprocessorExpressionOperator::BitwiseOr => "|",
                         | PreprocessorExpressionOperator::LogicalAnd => "&&",
                         | PreprocessorExpressionOperator::LogicalOr => "||",
-                        | PreprocessorExpressionOperator::Ternary => "?",
-                        | PreprocessorExpressionOperator::Else => ":",
+                        | PreprocessorExpressionOperator::QuestionMark => "?",
+                        | PreprocessorExpressionOperator::Conditional => "?:",
+                        | PreprocessorExpressionOperator::Comma => ",",
                         | _ => unreachable!(),
                     }
                 )
@@ -1380,6 +1670,20 @@ impl Display for PreprocessorErrorType {
                      expression!"
                 )
             },
+            | Self::ColonWithoutMatchingQuestionMark => {
+                write!(
+                    f,
+                    "Colon without a matching question mark in the current parenthesis group in \
+                     preprocessor constant expression!"
+                )
+            },
+            | Self::CommaOperatorInPreprocessorExpression(_) => {
+                write!(
+                    f,
+                    "Comma operator is not permitted in an evaluated strict-C99 preprocessor \
+                     constant expression!"
+                )
+            },
             | Self::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(operator) => {
                 write!(
                     f,
@@ -1402,7 +1706,9 @@ impl Display for PreprocessorErrorType {
                         | PreprocessorExpressionOperator::BitwiseOr => "|",
                         | PreprocessorExpressionOperator::LogicalAnd => "&&",
                         | PreprocessorExpressionOperator::LogicalOr => "||",
-                        | PreprocessorExpressionOperator::Ternary => "?",
+                        | PreprocessorExpressionOperator::QuestionMark => "?",
+                        | PreprocessorExpressionOperator::Conditional => "?:",
+                        | PreprocessorExpressionOperator::Comma => ",",
                         | _ => unreachable!(),
                     }
                 )
@@ -3675,8 +3981,8 @@ impl Preprocessor {
             | PreprocessorTokenType::AmpersandAmpersand =>
                 PreprocessorExpressionOperator::LogicalAnd,
             | PreprocessorTokenType::PipePipe => PreprocessorExpressionOperator::LogicalOr,
-            | PreprocessorTokenType::QuestionMark => PreprocessorExpressionOperator::Ternary,
-            | PreprocessorTokenType::Colon => PreprocessorExpressionOperator::Else,
+            | PreprocessorTokenType::QuestionMark => PreprocessorExpressionOperator::QuestionMark,
+            | PreprocessorTokenType::Comma => PreprocessorExpressionOperator::Comma,
             | PreprocessorTokenType::Tilde => PreprocessorExpressionOperator::BitwiseNot,
             | PreprocessorTokenType::ExclamationMark => PreprocessorExpressionOperator::LogicalNot,
             | _ => unreachable!(),
@@ -4331,9 +4637,9 @@ impl Preprocessor {
                 let rhs = self
                     .expression_parser
                     .operand_stack
-                    .pop()
+                    .pop_isolated()
                     .expect("Compiler bug: LogicalAnd operator without lhs");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                let Some(lhs) = self.expression_parser.operand_stack.pop_isolated() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
                         self.source_file_index(),
@@ -4346,19 +4652,24 @@ impl Preprocessor {
                     self.expression_parser.operand_stack.push(rhs);
                     return;
                 };
-                self.expression_parser
-                    .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(i64::from(
-                        lhs.as_signed() != 0 && rhs.as_signed() != 0,
-                    )));
+                let lhs_is_true = lhs.as_signed() != 0;
+                self.expression_parser.operand_stack.push(
+                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
+                        PreprocessorExpressionOperand::Signed(i64::from(
+                            lhs_is_true && rhs.as_signed() != 0,
+                        )),
+                        lhs.contains_evaluated_comma
+                            || (lhs_is_true && rhs.contains_evaluated_comma),
+                    ),
+                );
             },
             | PreprocessorExpressionOperator::LogicalOr => {
                 let rhs = self
                     .expression_parser
                     .operand_stack
-                    .pop()
+                    .pop_isolated()
                     .expect("Compiler bug: LogicalOr operator without lhs");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
+                let Some(lhs) = self.expression_parser.operand_stack.pop_isolated() else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
                         self.source_file_index(),
@@ -4371,38 +4682,43 @@ impl Preprocessor {
                     self.expression_parser.operand_stack.push(rhs);
                     return;
                 };
-                self.expression_parser
-                    .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(i64::from(
-                        lhs.as_signed() != 0 || rhs.as_signed() != 0,
-                    )));
+                let lhs_is_true = lhs.as_signed() != 0;
+                self.expression_parser.operand_stack.push(
+                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
+                        PreprocessorExpressionOperand::Signed(i64::from(
+                            lhs_is_true || rhs.as_signed() != 0,
+                        )),
+                        lhs.contains_evaluated_comma
+                            || (!lhs_is_true && rhs.contains_evaluated_comma),
+                    ),
+                );
             },
-            | PreprocessorExpressionOperator::Else => assert!(
-                !self.expression_parser.operand_stack.is_empty(),
-                "Compiler bug: Else operator without lhs"
-            ),
-            | PreprocessorExpressionOperator::Ternary => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .expect("Compiler bug: Ternary operator without condition");
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    );
-                    context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
-                        source_vectors,
-                    });
-                    self.expression_parser
-                        .operand_stack
-                        .push(PreprocessorExpressionOperand::Signed(0));
+            | PreprocessorExpressionOperator::Comma => {
+                let Some(rhs) = self.expression_parser.operand_stack.pop_isolated() else {
                     return;
                 };
-                let Some(condition) = self.expression_parser.operand_stack.pop() else {
+                let Some(_lhs) = self.expression_parser.operand_stack.pop_isolated() else {
+                    self.expression_parser.operand_stack.push(rhs);
+                    return;
+                };
+                self.expression_parser.operand_stack.push(
+                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(rhs.value, true),
+                );
+            },
+            | PreprocessorExpressionOperator::QuestionMark => {
+                let source_vectors = context.create_source_vectors(
+                    self.position(context),
+                    self.source_file_index(),
+                    0,
+                );
+                context.preprocessor_error(PreprocessorError {
+                    error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
+                    source_vectors,
+                });
+            },
+            | PreprocessorExpressionOperator::Conditional => {
+                let Some(final_operand) = self.expression_parser.operand_stack.pop_isolated()
+                else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
                         self.source_file_index(),
@@ -4417,9 +4733,49 @@ impl Preprocessor {
                         .push(PreprocessorExpressionOperand::Signed(0));
                     return;
                 };
-                self.expression_parser
-                    .operand_stack
-                    .push(if condition.as_signed() != 0 { lhs } else { rhs });
+                let Some(middle_operand) = self.expression_parser.operand_stack.pop_isolated()
+                else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_index(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
+                        source_vectors,
+                    });
+                    self.expression_parser
+                        .operand_stack
+                        .push(PreprocessorExpressionOperand::Signed(0));
+                    return;
+                };
+                let Some(condition) = self.expression_parser.operand_stack.pop_isolated() else {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_index(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::TernaryOperatorWithoutRhs,
+                        source_vectors,
+                    });
+                    self.expression_parser
+                        .operand_stack
+                        .push(PreprocessorExpressionOperand::Signed(0));
+                    return;
+                };
+                let selected_operand = if condition.as_signed() != 0 {
+                    middle_operand
+                } else {
+                    final_operand
+                };
+                self.expression_parser.operand_stack.push(
+                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
+                        selected_operand.value,
+                        condition.contains_evaluated_comma
+                            || selected_operand.contains_evaluated_comma,
+                    ),
+                );
             },
             | PreprocessorExpressionOperator::OpeningParenthesis => {
                 let source_vectors = context.create_source_vectors(
@@ -4629,12 +4985,46 @@ impl Preprocessor {
                             source_vectors: token.source_vectors,
                         },
                     ),
+                    (PreprocessorTokenType::Colon, state) => {
+                        if state == UNARY {
+                            context.preprocessor_error(PreprocessorError {
+                                error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
+                                source_vectors: token.source_vectors,
+                            });
+                        }
+                        let mut matched_question_mark = false;
+                        while let Some(mut entry) =
+                            last_entry(&mut self.expression_parser.operator_stack)
+                        {
+                            match *entry.get() {
+                                | PreprocessorExpressionOperator::QuestionMark => {
+                                    _ = entry.insert(PreprocessorExpressionOperator::Conditional);
+                                    matched_question_mark = true;
+                                    break;
+                                },
+                                | PreprocessorExpressionOperator::OpeningParenthesis => break,
+                                | _ => {
+                                    let operator = entry.remove();
+                                    self.handle_expression_operator(context, operator);
+                                },
+                            }
+                        }
+                        if !matched_question_mark {
+                            context.preprocessor_error(PreprocessorError {
+                                error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
+                                source_vectors: token.source_vectors,
+                            });
+                        } else {
+                            self.expression_parser.state = UNARY;
+                        }
+                    },
                     (
                         | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
                         PreprocessorTokenType::GreaterThanGreaterThan | PreprocessorTokenType::LessThan | PreprocessorTokenType::LessThanEquals | PreprocessorTokenType::GreaterThan |
                         PreprocessorTokenType::GreaterThanEquals | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals |
                         PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
-                        PreprocessorTokenType::Colon, UNARY) => context.preprocessor_error(PreprocessorError {
+                        PreprocessorTokenType::Comma,
+                        UNARY) => context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(self.map_operator(context, token)),
                             source_vectors: token.source_vectors,
                         }),
@@ -4643,10 +5033,16 @@ impl Preprocessor {
                     PreprocessorTokenType::GreaterThanGreaterThan | PreprocessorTokenType::LessThan | PreprocessorTokenType::LessThanEquals | PreprocessorTokenType::GreaterThan |
                     PreprocessorTokenType::GreaterThanEquals | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals | PreprocessorTokenType::Ampersand |
                     PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
-                    PreprocessorTokenType::Colon, BINARY) => {
+                    PreprocessorTokenType::Comma,
+                    BINARY) => {
                         let token_op = self.map_operator(context, token);
                         while let Some(op) = self.expression_parser.operator_stack.pop() {
-                            if op.has_precedence_over(token_op) {
+                            if op == PreprocessorExpressionOperator::QuestionMark
+                                && token_op == PreprocessorExpressionOperator::Comma
+                            {
+                                self.expression_parser.operator_stack.push(op);
+                                break;
+                            } else if op.has_precedence_over(token_op) {
                                 self.handle_expression_operator(context, op);
                             } else {
                                 self.expression_parser.operator_stack.push(op);
@@ -4771,13 +5167,26 @@ impl Preprocessor {
             self.handle_expression_operator(context, op);
         }
         match self.expression_parser.operand_stack.len() {
-            | 1 =>
-                self.expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap()
-                    .as_signed()
-                    != 0,
+            | 1 => {
+                let operand = self.expression_parser.operand_stack.pop().unwrap();
+                let extension_policy = match context.configuration.standard() {
+                    | CStandard::C99 => context.configuration.extension_policy(),
+                };
+                if operand.contains_evaluated_comma && extension_policy != ExtensionPolicy::Allow {
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_index(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
+                            extension_policy,
+                        ),
+                        source_vectors,
+                    });
+                }
+                operand.as_signed() != 0
+            },
             | 0 => {
                 let source_vectors = context.create_source_vectors(
                     self.position(context),
