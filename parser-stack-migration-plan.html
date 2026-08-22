@@ -754,29 +754,29 @@
         <article class="phase">
           <div class="phase-number"><span>Phase</span><strong>02</strong><span>Kernel</span></div>
           <div class="phase-body">
-            <h3>Build the cursor, driver, action protocol, and one vertical slice.</h3>
-            <p class="phase-goal">Demonstrate nested push → reduce → resume → reprocess transitions before porting the C grammar.</p>
+            <h3>Phase 02 evidence: declaration grammar now runs on the stack machine.</h3>
+            <p class="phase-goal">Implemented on 22 August 2026: the cursor, owned-action driver, typed returns, declaration/declarator/parameter/tag frames, file-scope name classification, recovery, and future-child seams are reachable through <code>Parser::next_item</code>.</p>
             <div class="task-grid">
-              <div><h4>Change</h4><ul>
-                <li>Replace <code>pending_token</code> with <code>TokenCursor</code>.</li>
-                <li>Implement the owned <code>ParseAction</code> loop.</li>
-                <li>Add typed parent resumption.</li>
-                <li>Add root and sentinel frames.</li>
-                <li>Add recovery state with empty starter sets.</li>
+              <div><h4>Landed</h4><ul>
+                <li><code>TokenCursor</code> replaced parser pushback.</li>
+                <li><code>ParseAction</code>, <code>ParseValue</code>, and specialized phases drive all migrated grammar.</li>
+                <li>Declarations, pointer/direct/array/function declarators, parameters, structs, unions, and enums use frames only.</li>
+                <li>Array bounds, bit fields, enum values, initializers, and bodies use typed future-child frames.</li>
+                <li>The recursive declaration parser and empty legacy state enum were deleted.</li>
               </ul></div>
-              <div><h4>Prove</h4><ul>
-                <li>A synthetic nested grammar reaches depth 100,000.</li>
-                <li>No Rust call stack growth follows grammar depth.</li>
-                <li>A trace identifies token ownership.</li>
-                <li>Reprocess always follows a state change.</li>
-                <li>EOF completes or diagnoses every frame.</li>
+              <div><h4>Evidence</h4><ul>
+                <li>28 all-target tests pass, including 9 parser-interface cases.</li>
+                <li>Both 63 and 4,096 parenthesized declarator levels complete.</li>
+                <li>The private trace records frame, action, token, and depth.</li>
+                <li>Union kind, enum arena slices, and per-declarator typedef publication have regressions.</li>
+                <li>Malformed migrated paths terminate with source-backed diagnostics.</li>
               </ul></div>
             </div>
           </div>
           <aside class="phase-gate">
             <div class="gate-label">Exit gate</div>
-            <div class="gate">Nested frame demo passes at extreme depth</div>
-            <dl><dt>Duration</dt><dd>5–8 focused days</dd><dt>Test seam</dt><dd><code>cfg(test)</code> frame trace</dd><dt>Invariant</dt><dd>No frame holds machine borrows</dd></dl>
+            <div class="gate">Declaration-stack migration green through the parser interface</div>
+            <dl><dt>Status</dt><dd>Implemented</dd><dt>Stress depth</dt><dd>4,096</dd><dt>Remaining</dt><dd>Expression/type-name/initializer/statement frames</dd></dl>
           </aside>
         </article>
 

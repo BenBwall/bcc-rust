@@ -103,7 +103,7 @@ The syntax orders operator precedence by the order of §6.5's major subclauses, 
 
 - [ ] **Syntax:** Parse `declaration-specifiers init-declarator-list? ;`, with a nonempty sequence of storage-class specifiers, type specifiers, type qualifiers, and function specifiers in any grammar-permitted order. Parse each init-declarator as a declarator optionally followed by `=` and an initializer. (§6.7, p. 97; PDF p. 109)
 - [ ] **Constraint:** Diagnose a declaration that declares no declarator, tag, or enumeration member, even though an optional init-declarator list is grammatical. Preserve tag-only declarations such as `struct S;`. (§6.7 paragraph 2, p. 97; PDF p. 109)
-- [ ] **Syntax/Constraint:** Accept the storage-class spellings `typedef`, `extern`, `static`, `auto`, and `register`, but diagnose more than one storage-class specifier in one declaration. `typedef` is a storage-class specifier for syntactic convenience. (§6.7.1 paragraphs 1-3, p. 98; PDF p. 110)
+- [x] **Syntax/Constraint:** Accept the storage-class spellings `typedef`, `extern`, `static`, `auto`, and `register`, but diagnose more than one storage-class specifier in one declaration. `typedef` is a storage-class specifier for syntactic convenience. (§6.7.1 paragraphs 1-3, p. 98; PDF p. 110)
 - [ ] **Syntax/Constraint:** Require at least one type specifier in every declaration-specifier or specifier-qualifier list; C99 has no implicit `int`. Accumulate specifiers in any order and diagnose every combination outside the exact sets listed by §6.7.2. (§6.7.2 paragraphs 1-3, pp. 99-100; PDF pp. 111-112)
 - [ ] **Syntax:** Accept core type specifiers `void`, `char`, `short`, `int`, `long`, `float`, `double`, `signed`, `unsigned`, `_Bool`, `_Complex`, struct/union specifiers, enum specifiers, and visible typedef names. Do not add `_Imaginary` to this production in strict mode. (§6.7.2, pp. 99-100; PDF pp. 111-112)
 - [ ] **Syntax:** Accept type qualifiers `const`, `restrict`, and `volatile` wherever the relevant production permits a type-qualifier or type-qualifier-list. Repetition is semantically equivalent to one occurrence and therefore must not be a syntax error. (§6.7.3 paragraphs 1-4, p. 108; PDF p. 120)
@@ -112,7 +112,7 @@ The syntax orders operator precedence by the order of §6.5's major subclauses, 
 ### Structure, union, and enumeration specifiers
 
 - [ ] **Syntax:** Parse both struct/union forms: `struct-or-union identifier? { struct-declaration-list }` and `struct-or-union identifier`. The member list is nonempty in the normative grammar. (§6.7.2.1, p. 101; PDF p. 113)
-- [ ] **Syntax:** Parse a struct-declaration as `specifier-qualifier-list struct-declarator-list ;`; its specifiers are type specifiers and qualifiers only, never storage-class or function specifiers. (§6.7.2.1, p. 101; PDF p. 113)
+- [x] **Syntax:** Parse a struct-declaration as `specifier-qualifier-list struct-declarator-list ;`; its specifiers are type specifiers and qualifiers only, never storage-class or function specifiers. (§6.7.2.1, p. 101; PDF p. 113)
 - [ ] **Syntax:** Parse ordinary members, named bit-fields, and unnamed bit-fields using `declarator`, `declarator : constant-expression`, and `: constant-expression`. Keep the colon local to struct-declarator state. (§6.7.2.1, p. 101; PDF p. 113)
 - [ ] **Constraint/Semantics:** Defer member completeness/function/VLA restrictions, legal bit-field types, and width range/value checks while retaining enough syntax to diagnose them. (§6.7.2.1 paragraphs 2-4 and 8, pp. 101-102; PDF pp. 113-114)
 - [ ] **Syntax:** Parse all enum forms: a definition with optional tag, the same definition with a trailing comma, and a tag reference. Parse every enumerator as an enumeration-constant optionally followed by `= constant-expression`. (§6.7.2.2, p. 105; PDF p. 117)
@@ -121,12 +121,12 @@ The syntax orders operator precedence by the order of §6.5's major subclauses, 
 
 ### Named declarators and parameters
 
-- [ ] **Syntax:** Parse every declarator as an optional pointer chain followed by a direct declarator. A direct declarator starts with an identifier or parenthesized declarator and then accepts any sequence of array and function suffixes. Parentheses change declarator binding and cannot be flattened before the derived type is constructed. (§6.7.5 paragraphs 1-6, pp. 114-115; PDF pp. 126-127)
-- [ ] **Syntax:** Parse pointer chains recursively in grammar but iteratively in `DeclaratorFrame`: each `*` has its own optional type-qualifier-list and may be followed by another pointer level. (§6.7.5, p. 114; PDF p. 126; §6.7.5.1, p. 115; PDF p. 127)
+- [x] **Syntax:** Parse every declarator as an optional pointer chain followed by a direct declarator. A direct declarator starts with an identifier or parenthesized declarator and then accepts any sequence of array and function suffixes. Parentheses change declarator binding and cannot be flattened before the derived type is constructed. (§6.7.5 paragraphs 1-6, pp. 114-115; PDF pp. 126-127)
+- [x] **Syntax:** Parse pointer chains recursively in grammar but iteratively in `DeclaratorFrame`: each `*` has its own optional type-qualifier-list and may be followed by another pointer level. (§6.7.5, p. 114; PDF p. 126; §6.7.5.1, p. 115; PDF p. 127)
 - [ ] **Syntax:** Parse all four array suffix families: `[ qualifiers? assignment-expression? ]`, `[ static qualifiers? assignment-expression ]`, `[ qualifiers static assignment-expression ]`, and `[ qualifiers? * ]`. Preserve qualifiers, `static` placement, omitted bounds, and star bounds in the AST. (§6.7.5, p. 114; PDF p. 126)
 - [ ] **Constraint/Semantics:** Later enforce that array `static`/qualifiers occur only in an outermost function-parameter array derivation, that `[*]` is limited to function-prototype scope, that bound expressions have integer type/positive constant values, and that element types are legal. (§6.7.5.2 paragraphs 1-5, pp. 116-117; PDF pp. 128-129)
-- [ ] **Syntax:** Parse function suffixes with either a `parameter-type-list` or an optional old-style `identifier-list`. A parameter-type-list is a comma-separated parameter-list optionally terminated by `, ...`; each parameter is declaration-specifiers plus a named declarator or optional abstract declarator. (§6.7.5, p. 114; PDF p. 126)
-- [ ] **Syntax:** Preserve the distinction among `(void)`, `()`, a prototype parameter list, an ellipsis-terminated prototype, and an old-style identifier list. Empty parentheses outside a definition specify no parameter information, not necessarily zero parameters. (§6.7.5.3 paragraphs 5-14, pp. 118-119; PDF pp. 130-131)
+- [x] **Syntax:** Parse function suffixes with either a `parameter-type-list` or an optional old-style `identifier-list`. A parameter-type-list is a comma-separated parameter-list optionally terminated by `, ...`; each parameter is declaration-specifiers plus a named declarator or optional abstract declarator. (§6.7.5, p. 114; PDF p. 126)
+- [x] **Syntax:** Preserve the distinction among `(void)`, `()`, a prototype parameter list, an ellipsis-terminated prototype, and an old-style identifier list. Empty parentheses outside a definition specify no parameter information, not necessarily zero parameters. (§6.7.5.3 paragraphs 5-14, pp. 118-119; PDF pp. 130-131)
 - [ ] **Constraint/Semantics:** Defer illegal function return types, parameter storage classes, incomplete adjusted parameter types, parameter adjustments, and prototype compatibility. Syntax must retain array/function parameter declarators and all qualifier/static data for those checks. (§6.7.5.3 paragraphs 1-15, pp. 118-120; PDF pp. 130-132)
 
 ### Type names and abstract declarators
@@ -139,7 +139,7 @@ The syntax orders operator precedence by the order of §6.5's major subclauses, 
 ### Typedef declarations
 
 - [ ] **Syntax/Semantics:** Parse `typedef-name` as an identifier, and after a successful `typedef` declarator publish the identifier as a typedef-name denoting that declarator's type. A typedef introduces a synonym, not a new type. (§6.7.7 paragraphs 1-3, p. 123; PDF p. 135)
-- [ ] **Architecture:** Commit or shadow ordinary-identifier classification after each full declarator, not only at the semicolon ending a comma-separated declaration. Identifier scope begins just after completion of its declarator. (§6.2.1 paragraph 7, p. 30; PDF p. 42)
+- [x] **Architecture:** Commit or shadow ordinary-identifier classification after each full declarator, not only at the semicolon ending a comma-separated declaration. Identifier scope begins just after completion of its declarator. (§6.2.1 paragraph 7, p. 30; PDF p. 42)
 - [ ] **Constraint/Semantics:** Diagnose a typedef name for a variably modified type unless it has block scope; do not reject the typedef grammar while parsing it. (§6.7.7 paragraph 2, p. 123; PDF p. 135)
 
 ### Initializers and designators
@@ -222,7 +222,7 @@ The standard's list is a minimum capability floor: the implementation must be ab
 
 - [ ] Support at least 127 nesting levels of blocks with explicit control/scope stacks and no Rust call-stack recursion. (§5.2.4.1, p. 20; PDF p. 32)
 - [ ] Support at least 12 pointer, array, and function declarators in any combination modifying an arithmetic, structure, union, or incomplete type. (§5.2.4.1, p. 20; PDF p. 32)
-- [ ] Support at least 63 nesting levels of parenthesized declarators within one full declarator. (§5.2.4.1, p. 20; PDF p. 32)
+- [x] Support at least 63 nesting levels of parenthesized declarators within one full declarator. (§5.2.4.1, p. 20; PDF p. 32)
 - [ ] Support at least 63 nesting levels of parenthesized expressions within one full expression. (§5.2.4.1, p. 20; PDF p. 32)
 - [ ] Support at least 127 parameters in one function definition and at least 127 arguments in one function call. (§5.2.4.1, pp. 20-21; PDF pp. 32-33)
 - [ ] Support at least 511 identifiers with block scope declared in one block and at least 4095 external identifiers in one translation unit without pathological scope-lookup behavior. (§5.2.4.1, pp. 20-21; PDF pp. 32-33)

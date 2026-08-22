@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Human-readable Phase 02 plan for migrating bcc-rust's existing declaration parser onto the agreed explicit stack machine.">
+  <title>bcc-rust · Phase 02 parser migration</title>
+  <style>
+    :root {
+      --ink: #18211c;
+      --muted: #5d6961;
+      --paper: #f2eee5;
+      --surface: #fffdf8;
+      --surface-2: #ebe5d9;
+      --line: #d2ccbf;
+      --forest: #173c2a;
+      --forest-2: #245d42;
+      --lime: #d9ef76;
+      --mint: #cfe7d8;
+      --blue: #305e72;
+      --blue-soft: #d9e9ef;
+      --amber: #a96820;
+      --amber-soft: #f5e3bd;
+      --red: #9d4035;
+      --red-soft: #f2d8d2;
+      --shadow: 0 18px 48px rgb(24 33 28 / 9%);
+      --serif: Georgia, "Times New Roman", serif;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgb(23 60 42 / 3%) 1px, transparent 1px),
+        linear-gradient(90deg, rgb(23 60 42 / 3%) 1px, transparent 1px),
+        var(--paper);
+      background-size: 32px 32px;
+      font: 15px/1.58 var(--sans);
+    }
+
+    a { color: inherit; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2 { font-family: var(--serif); font-weight: 500; }
+    h2 { margin-bottom: 14px; font-size: clamp(30px, 4vw, 46px); line-height: 1.04; letter-spacing: -.035em; }
+    h3 { margin-bottom: 8px; font-size: 18px; line-height: 1.24; }
+    p:last-child { margin-bottom: 0; }
+    code, pre { font-family: var(--mono); }
+    code {
+      padding: .12em .35em;
+      border: 1px solid rgb(23 60 42 / 11%);
+      border-radius: 4px;
+      background: rgb(23 60 42 / 6%);
+      font-size: .9em;
+    }
+    pre {
+      margin: 0;
+      padding: 22px;
+      overflow-x: auto;
+      color: #eaf3ed;
+      background: #102d20;
+      border: 1px solid #0a2418;
+      border-radius: 12px;
+      font-size: 13px;
+      line-height: 1.62;
+    }
+
+    .shell { width: min(1180px, calc(100% - 36px)); margin: 0 auto; }
+    .hero {
+      margin-top: 18px;
+      overflow: hidden;
+      color: #f8f4ea;
+      background: var(--forest);
+      border: 1px solid #0f2b1d;
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+    }
+    .hero-bar {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 15px 22px;
+      color: #cbd9d0;
+      border-bottom: 1px solid rgb(255 255 255 / 14%);
+      font: 700 11px/1.4 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 9px;
+      border-radius: 50%;
+      background: var(--lime);
+      box-shadow: 0 0 0 5px rgb(217 239 118 / 12%);
+    }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(270px, .55fr); }
+    .hero-copy { padding: clamp(34px, 6vw, 72px); }
+    .eyebrow, .section-index, .label {
+      color: var(--forest-2);
+      font: 800 11px/1.4 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .13em;
+    }
+    .hero .eyebrow { color: var(--lime); }
+    h1 {
+      max-width: 800px;
+      margin: 14px 0 20px;
+      font-size: clamp(46px, 7vw, 86px);
+      line-height: .93;
+      letter-spacing: -.055em;
+    }
+    .lede { max-width: 740px; margin-bottom: 0; color: #d9e4dc; font-size: clamp(17px, 2vw, 21px); }
+    .hero-facts {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 28px 32px;
+      background: #102f21;
+      border-left: 1px solid rgb(255 255 255 / 14%);
+    }
+    .fact { padding: 18px 0; border-top: 1px solid rgb(255 255 255 / 14%); }
+    .fact:first-child { border-top: 0; }
+    .fact strong { display: block; color: var(--lime); font: 500 34px/1 var(--serif); }
+    .fact span { display: block; margin-top: 7px; color: #b9c8be; font-size: 12px; }
+
+    .nav {
+      position: sticky;
+      top: 10px;
+      z-index: 10;
+      display: flex;
+      gap: 7px;
+      margin-top: 14px;
+      padding: 10px;
+      overflow-x: auto;
+      background: rgb(255 253 248 / 91%);
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      box-shadow: 0 8px 24px rgb(24 33 28 / 7%);
+      backdrop-filter: blur(12px);
+    }
+    .nav a {
+      flex: 0 0 auto;
+      padding: 8px 10px;
+      color: var(--muted);
+      border-radius: 7px;
+      font: 800 10px/1 var(--mono);
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+    }
+    .nav a:hover { color: white; background: var(--forest); }
+
+    main { padding: 74px 0 110px; }
+    section { scroll-margin-top: 80px; }
+    .section { margin-top: 92px; }
+    .section:first-child { margin-top: 0; }
+    .section-head {
+      display: grid;
+      grid-template-columns: 130px minmax(0, 1fr);
+      gap: 26px;
+      align-items: start;
+      margin-bottom: 28px;
+    }
+    .section-head p { max-width: 780px; color: var(--muted); font-size: 17px; }
+
+    .decision {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr);
+      gap: 1px;
+      overflow: hidden;
+      background: #365844;
+      border: 1px solid #365844;
+      border-radius: 17px;
+      box-shadow: var(--shadow);
+    }
+    .decision-main { padding: clamp(28px, 5vw, 52px); color: white; background: var(--forest); }
+    .decision-main .label { color: var(--lime); }
+    .decision-main h3 { margin: 12px 0 16px; font: 500 clamp(29px, 4vw, 46px)/1.05 var(--serif); }
+    .decision-main p { max-width: 650px; color: #d5e1d9; font-size: 17px; }
+    .rules { margin: 0; padding: 25px 29px; list-style: none; background: #fbf8ef; }
+    .rules li { position: relative; padding: 13px 0 13px 25px; border-bottom: 1px solid var(--line); }
+    .rules li:last-child { border-bottom: 0; }
+    .rules li::before { position: absolute; left: 0; color: var(--forest-2); content: "◆"; font-size: 9px; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      margin-top: 22px;
+      overflow: hidden;
+      background: var(--line);
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      box-shadow: var(--shadow);
+    }
+    .metric { min-height: 150px; padding: 23px; background: var(--surface); }
+    .metric strong { display: block; margin: 13px 0 8px; font: 500 37px/1 var(--serif); }
+    .metric p { color: var(--muted); font-size: 13px; }
+    .metric.alert strong { color: var(--red); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 58px 1.35fr 58px 1fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .flow-card {
+      min-height: 235px;
+      padding: 24px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      box-shadow: 0 12px 30px rgb(24 33 28 / 5%);
+    }
+    .flow-card.focus { color: white; background: var(--forest); border-color: #0d2a1c; }
+    .flow-card h3 { margin: 28px 0 10px; font: 500 27px/1.08 var(--serif); }
+    .flow-card p, .flow-card ul { color: var(--muted); }
+    .flow-card.focus p, .flow-card.focus ul { color: #d5e1d9; }
+    .flow-card ul { margin: 14px 0 0; padding-left: 18px; }
+    .flow-card.focus .label { color: var(--lime); }
+    .arrow { display: grid; place-items: center; color: var(--forest-2); font: 500 30px/1 var(--serif); }
+
+    .scope-grid, .gate-grid, .done-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .scope-card, .gate-card, .done-card {
+      padding: 24px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 28px rgb(24 33 28 / 5%);
+    }
+    .scope-card.in { border-top: 5px solid var(--forest-2); }
+    .scope-card.later { border-top: 5px solid var(--amber); }
+    .scope-card ul, .gate-card ul { margin: 14px 0 0; padding-left: 19px; }
+    .scope-card li, .gate-card li { margin: 7px 0; }
+
+    .table-wrap {
+      overflow-x: auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+    }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { padding: 16px 18px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: white; background: var(--forest); font: 800 10px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:nth-child(even) td { background: rgb(23 60 42 / 2.5%); }
+    td:first-child { width: 44%; }
+
+    .timeline { position: relative; display: grid; gap: 18px; }
+    .timeline::before {
+      position: absolute;
+      top: 32px;
+      bottom: 32px;
+      left: 36px;
+      width: 2px;
+      background: var(--line);
+      content: "";
+    }
+    .step {
+      position: relative;
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 20px;
+    }
+    .step-num {
+      z-index: 1;
+      display: grid;
+      place-items: center;
+      width: 72px;
+      height: 72px;
+      color: var(--forest);
+      background: var(--lime);
+      border: 5px solid var(--paper);
+      border-radius: 50%;
+      font: 500 28px/1 var(--serif);
+    }
+    .step-card {
+      padding: 25px 27px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      box-shadow: 0 12px 30px rgb(24 33 28 / 5%);
+    }
+    .step-card h3 { font: 500 27px/1.1 var(--serif); }
+    .step-card > p { color: var(--muted); }
+    .step-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }
+    .step-box { padding: 17px; background: #f6f2e9; border: 1px solid var(--line); border-radius: 10px; }
+    .step-box strong { display: block; margin-bottom: 8px; color: var(--forest-2); font: 800 10px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+    .step-box ul { margin: 0; padding-left: 18px; }
+    .gate {
+      margin-top: 18px;
+      padding: 13px 15px;
+      color: #173221;
+      background: var(--mint);
+      border-left: 4px solid var(--forest-2);
+      border-radius: 5px;
+      font-weight: 700;
+    }
+    .delete { background: var(--red-soft); border-left-color: var(--red); }
+
+    .examples {
+      display: grid;
+      grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .example-note { padding: 25px; background: var(--amber-soft); border: 1px solid #dfc28b; border-radius: 14px; }
+    .example-note h3 { color: #69400f; }
+
+    .commit-list { display: grid; gap: 8px; counter-reset: commit; }
+    .commit {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    .commit::before {
+      counter-increment: commit;
+      content: counter(commit, decimal-leading-zero);
+      color: var(--forest-2);
+      font: 800 11px/1 var(--mono);
+    }
+    .commit code { width: fit-content; }
+    .commit span { color: var(--muted); font-size: 12px; }
+
+    .done-card { position: relative; padding-left: 52px; }
+    .done-card::before {
+      position: absolute;
+      top: 22px;
+      left: 20px;
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      color: white;
+      background: var(--forest-2);
+      border-radius: 50%;
+      content: "✓";
+      font-weight: 900;
+    }
+
+    .source-links { display: flex; flex-wrap: wrap; gap: 9px; }
+    .source-links a {
+      padding: 10px 12px;
+      color: var(--forest-2);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font: 700 12px/1.3 var(--mono);
+      text-decoration: none;
+    }
+    .source-links a:hover { color: white; background: var(--forest); }
+
+    footer { padding: 28px 0 44px; color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; }
+    footer .shell { display: flex; justify-content: space-between; gap: 20px; }
+
+    @media (max-width: 900px) {
+      .hero-grid, .decision, .examples { grid-template-columns: 1fr; }
+      .hero-facts { border-top: 1px solid rgb(255 255 255 / 14%); border-left: 0; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .flow { grid-template-columns: 1fr; }
+      .arrow { min-height: 36px; transform: rotate(90deg); }
+      .step-columns { grid-template-columns: 1fr; }
+      .commit { grid-template-columns: 34px minmax(0, 1fr); }
+      .commit span { grid-column: 2; }
+    }
+
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 22px, 1180px); }
+      .hero { border-radius: 14px; }
+      .hero-bar { align-items: flex-start; flex-direction: column; }
+      .hero-copy { padding: 34px 24px; }
+      h1 { font-size: clamp(43px, 15vw, 62px); }
+      main { padding-top: 56px; }
+      .section { margin-top: 70px; }
+      .section-head { grid-template-columns: 1fr; gap: 8px; }
+      .metrics, .scope-grid, .gate-grid, .done-grid { grid-template-columns: 1fr; }
+      .step { grid-template-columns: 50px minmax(0, 1fr); gap: 10px; }
+      .step-num { width: 50px; height: 50px; border-width: 4px; font-size: 21px; }
+      .timeline::before { left: 25px; }
+      .step-card { padding: 20px; }
+      .step-card h3 { font-size: 23px; }
+      .table-wrap { overflow: hidden; }
+      table { min-width: 0; }
+      thead { display: none; }
+      tbody, tr, td { display: block; }
+      tbody tr { border-bottom: 1px solid var(--line); }
+      tbody tr:last-child { border-bottom: 0; }
+      th, td { padding: 13px 16px; border-bottom: 0; }
+      td:first-child { width: auto; padding-bottom: 7px; }
+      td:last-child { padding-top: 7px; color: var(--forest-2); font-weight: 700; }
+      td::before {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--muted);
+        font: 800 9px/1.3 var(--mono);
+        text-transform: uppercase;
+        letter-spacing: .08em;
+      }
+      td:first-child::before { content: "Existing path"; }
+      td:last-child::before { content: "Stack-machine replacement"; }
+      footer .shell { flex-direction: column; }
+    }
+
+    @media print {
+      body { background: white; font-size: 11pt; }
+      .shell { width: 100%; }
+      .hero { margin-top: 0; box-shadow: none; }
+      .nav { display: none; }
+      main { padding: 30px 0; }
+      .section { margin-top: 45px; break-inside: avoid; }
+      .step-card, .scope-card, .gate-card, .done-card, .metric, .table-wrap { box-shadow: none; }
+      .step { break-inside: avoid; }
+      a { text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero shell">
+    <div class="hero-bar">
+      <span><span class="dot"></span>Phase 02 · Implementation plan</span>
+      <span>Baseline: PR #1 · <code>e022fa5</code></span>
+    </div>
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <div class="eyebrow">Replace · verify · delete</div>
+        <h1>Migrate the parser we already have.</h1>
+        <p class="lede">Move the existing declaration and declarator logic onto the agreed explicit stack machine—one reachable grammar path at a time, with no permanent second parser.</p>
+      </div>
+      <aside class="hero-facts" aria-label="Plan summary">
+        <div class="fact"><strong>10–15 days</strong><span>One agent, delivered as small green commits</span></div>
+        <div class="fact"><strong>5 migrations</strong><span>Kernel, specifiers, declarators, suffixes, tags</span></div>
+        <div class="fact"><strong>1 parser</strong><span>Every migrated recursive path is deleted</span></div>
+      </aside>
+    </div>
+  </header>
+
+  <nav class="nav shell" aria-label="Plan sections">
+    <a href="#decision">Decision</a>
+    <a href="#baseline">Baseline</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#scope">Scope</a>
+    <a href="#map">Migration map</a>
+    <a href="#roadmap">Roadmap</a>
+    <a href="#verification">Verification</a>
+    <a href="#done">Done</a>
+  </nav>
+
+  <main class="shell">
+    <section class="section" id="decision">
+      <div class="section-head">
+        <div class="section-index">01 / Decision</div>
+        <div>
+          <h2>Phase 02 is migration work, not a synthetic kernel.</h2>
+          <p>The older roadmap separated the machine kernel from declaration migration. This plan combines them: the kernel earns its place immediately by carrying existing parser behavior.</p>
+        </div>
+      </div>
+      <div class="decision">
+        <div class="decision-main">
+          <div class="label">Core rule</div>
+          <h3>Port a path. Prove it. Delete the old path.</h3>
+          <p>Each increment must be reachable through <code>Parser::next_item</code>. Tests cross the same parser interface as callers; private frames are implementation detail.</p>
+        </div>
+        <ul class="rules">
+          <li><strong>One control flow.</strong> No permanent legacy fallback.</li>
+          <li><strong>Owned actions.</strong> Frames never retain machine borrows.</li>
+          <li><strong>One delimiter owner.</strong> Token use is traceable.</li>
+          <li><strong>Green replacement.</strong> Characterize before moving.</li>
+          <li><strong>Sharing later.</strong> The preprocessor remains untouched.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" id="baseline">
+      <div class="section-head">
+        <div class="section-index">02 / Baseline</div>
+        <div>
+          <h2>Substantial code, unusable control flow.</h2>
+          <p>The declaration machinery contains real grammar knowledge, but the unfinished entry path and missing model/storage pieces prevent any of it from running through Cargo.</p>
+        </div>
+      </div>
+      <div class="metrics">
+        <article class="metric alert"><div class="label">Compile gate</div><strong>14</strong><p>Known errors in <code>parsing.rs</code>.</p></article>
+        <article class="metric"><div class="label">Method bodies</div><strong>27 / 30</strong><p>Mostly declaration and declarator code.</p></article>
+        <article class="metric"><div class="label">Specifiers</div><strong>~75%</strong><p>The strongest existing grammar path.</p></article>
+        <article class="metric"><div class="label">Declarators</div><strong>~60%</strong><p>Broad but recursive and untested.</p></article>
+      </div>
+      <div class="gate-grid" style="margin-top:16px">
+        <article class="gate-card">
+          <div class="label">Known structural defects</div>
+          <ul>
+            <li><code>pending_token</code> is an ad hoc pushback slot.</li>
+            <li>The declaration/function-definition routine stops mid-flow.</li>
+            <li>Declaration and function-definition stores are missing.</li>
+            <li>Expression-dependent branches call parser stubs.</li>
+          </ul>
+        </article>
+        <article class="gate-card">
+          <div class="label">Known AST defects</div>
+          <ul>
+            <li>Union nodes are hard-coded as <code>Struct</code>.</li>
+            <li>Enum slices use the identifier-arena start index.</li>
+            <li>Typedef lookup exists, but publication does not.</li>
+            <li>Normal declarations cannot complete end to end.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="architecture">
+      <div class="section-head">
+        <div class="section-index">03 / Architecture</div>
+        <div>
+          <h2>One driver, specialized resumable frames.</h2>
+          <p>The stack machine replaces recursive grammar calls. It does not turn the entire C grammar into one operator stack.</p>
+        </div>
+      </div>
+      <div class="flow" aria-label="Parser architecture flow">
+        <article class="flow-card">
+          <div class="label">Input</div>
+          <h3>TokenCursor</h3>
+          <p>Owns lookahead, consumption, and explicit reprocessing.</p>
+          <ul><li>Current token or EOF</li><li>Caller delimiters survive</li><li>No scattered pushback</li></ul>
+        </article>
+        <div class="arrow" aria-hidden="true">→</div>
+        <article class="flow-card focus">
+          <div class="label">Control</div>
+          <h3>Parser + frame stack</h3>
+          <p>Drives owned actions until one external declaration or EOF is produced.</p>
+          <ul><li>Consume</li><li>Push child</li><li>Reduce value</li><li>Reprocess</li><li>Recover</li></ul>
+        </article>
+        <div class="arrow" aria-hidden="true">→</div>
+        <article class="flow-card">
+          <div class="label">State + output</div>
+          <h3>SyntaxStore + ScopeStack</h3>
+          <p>Owns AST arenas, source provenance, file-scope name classes, and diagnostics.</p>
+        </article>
+      </div>
+      <div class="examples" style="margin-top:18px">
+        <pre><span style="color:#d9ef76">enum</span> ParseAction {
+    Consume,
+    Push(ParseFrame),
+    Reduce(ParseValue),
+    Reprocess,
+    Recover(SynchronizationSet),
+}</pre>
+        <div class="example-note">
+          <h3>Borrowing rule</h3>
+          <p>A frame returns an owned action. The driver applies it only after the frame borrow ends, so cursor, stack, stores, scopes, and diagnostics can change safely.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="scope">
+      <div class="section-head">
+        <div class="section-index">04 / Scope</div>
+        <div>
+          <h2>Move what exists; preserve the next child seam.</h2>
+          <p>Phase 02 ports expression-independent declaration grammar. Missing child grammars receive an explicit typed handoff and deterministic recovery—not a call into a stub.</p>
+        </div>
+      </div>
+      <div class="scope-grid">
+        <article class="scope-card in">
+          <div class="label">Migrates now</div>
+          <h3>Existing declaration machinery</h3>
+          <ul>
+            <li>External and ordinary declaration entry</li>
+            <li>Storage, type, qualifier, and function specifiers</li>
+            <li>Pointer, direct, parenthesized, array, function, abstract, and K&amp;R declarators</li>
+            <li>Parameter lists and variadics</li>
+            <li>Struct, union, and enum forms independent of expressions</li>
+            <li>File-scope typedef and ordinary-name classification</li>
+            <li>Arenas, diagnostics, provenance, and recovery</li>
+          </ul>
+        </article>
+        <article class="scope-card later">
+          <div class="label">Typed future children</div>
+          <h3>Implemented in later phases</h3>
+          <ul>
+            <li>Array-bound expressions</li>
+            <li>Bit-field widths and explicit enum values</li>
+            <li>Initializers</li>
+            <li>Function definitions and bodies</li>
+            <li>Expressions and statements</li>
+            <li>Nested scopes and full redeclaration constraints</li>
+            <li>Semantic analysis</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="map">
+      <div class="section-head">
+        <div class="section-index">05 / Migration map</div>
+        <div>
+          <h2>Every old path has a destination.</h2>
+          <p>The frame seam is used for resumable grammar state, child results, delimiter ownership, or recovery. Small token actions remain inside their owning frame.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Existing path</th><th>Stack-machine replacement</th></tr></thead>
+          <tbody>
+            <tr><td><code>pending_token</code>, <code>next_token</code>, token restoration</td><td><code>TokenCursor</code></td></tr>
+            <tr><td><code>parse_external_declaration</code></td><td><code>ExternalDeclarationFrame</code></td></tr>
+            <tr><td>Incomplete declaration/function-definition entry</td><td><code>DeclarationFrame</code></td></tr>
+            <tr><td><code>parse_declaration_specifiers</code> and <code>handle_*</code></td><td><code>DeclarationSpecifiersFrame</code> with private phases</td></tr>
+            <tr><td>Declarator, direct/base/nested declarator methods</td><td><code>DeclaratorFrame</code> with pointer, base, and suffix phases</td></tr>
+            <tr><td>Pointer and type-qualifier helpers</td><td>Private phases inside <code>DeclaratorFrame</code></td></tr>
+            <tr><td>Array, function, K&amp;R, and parameter methods</td><td>Declarator suffix phases + <code>ParameterListFrame</code></td></tr>
+            <tr><td>Struct/union parser</td><td><code>StructOrUnionSpecifierFrame</code></td></tr>
+            <tr><td>Enum parser</td><td><code>EnumSpecifierFrame</code></td></tr>
+            <tr><td>Identifier helpers</td><td>Token actions inside the owning frame</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="roadmap">
+      <div class="section-head">
+        <div class="section-index">06 / Roadmap</div>
+        <div>
+          <h2>Seven green steps.</h2>
+          <p>Each step ends with observable evidence. Migration steps also name the recursive code that must disappear.</p>
+        </div>
+      </div>
+      <div class="timeline">
+        <article class="step">
+          <div class="step-num">1</div>
+          <div class="step-card">
+            <h3>Characterize the old implementation</h3>
+            <p>Turn every implemented branch into a preserve, fix, or defer case before moving it.</p>
+            <div class="step-columns">
+              <div class="step-box"><strong>Capture</strong><ul><li>Specifier combinations</li><li>Every declarator family</li><li>Tags and parameters</li><li>Malformed and EOF paths</li></ul></div>
+              <div class="step-box"><strong>Red cases</strong><ul><li>Union kind</li><li>Enum arena slice</li><li>Missing-child dependencies</li><li>Compile diagnostic baseline</li></ul></div>
+            </div>
+            <div class="gate">Gate: every legacy branch has a case or an explicit missing-child dependency.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">2</div>
+          <div class="step-card">
+            <h3>Land the cursor and driver</h3>
+            <p>Prove the machine with the first real vertical path: <code>int;</code>.</p>
+            <div class="step-columns">
+              <div class="step-box"><strong>Build</strong><ul><li>TokenCursor</li><li>Owned action loop</li><li>Typed child return</li><li>Frame trace and recovery state</li></ul></div>
+              <div class="step-box"><strong>Vertical path</strong><ul><li>External declaration</li><li>Declaration</li><li>Declaration specifiers</li><li>Yielded AST</li></ul></div>
+            </div>
+            <div class="gate">Gate: specifier-only declarations yield through <code>TranslationPhase</code>.</div>
+            <div class="gate delete">Delete: legacy specifier parser and superseded <code>handle_*</code> helpers.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">3</div>
+          <div class="step-card">
+            <h3>Port ordinary declarators and declarations</h3>
+            <p>Add pointer, identifier, and parenthesized phases; complete comma-separated declarations without initializers.</p>
+            <div class="examples">
+              <pre>int x;
+int x, y;
+const unsigned long *p;
+int *const *volatile p;
+int (*p);
+typedef int T;
+T value;</pre>
+              <div class="step-box"><strong>Also lands</strong><ul><li>Declaration/init-declarator arenas</li><li>File-scope name classification</li><li>One owner for commas, parentheses, semicolons</li></ul></div>
+            </div>
+            <div class="gate">Gate: named and nested declarators parse end to end.</div>
+            <div class="gate delete">Delete: identifier, pointer, qualifier, direct-declarator, and old declaration methods.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">4</div>
+          <div class="step-card">
+            <h3>Port array and function declarators</h3>
+            <p>Move expression-independent suffix grammar and make expression positions explicit future child phases.</p>
+            <div class="step-columns">
+              <div class="step-box"><strong>Port now</strong><ul><li><code>[]</code> and <code>[*]</code></li><li>Qualifier/static syntax</li><li>Prototypes and abstract parameters</li><li>Variadics and K&amp;R lists</li></ul></div>
+              <div class="step-box"><strong>Recover explicitly</strong><ul><li>Array bounds await <code>ExpressionFrame</code></li><li>Recover at <code>]</code></li><li>No call into expression <code>todo!()</code></li></ul></div>
+            </div>
+            <div class="gate">Gate: all expression-independent declarator branches are frame-driven.</div>
+            <div class="gate delete">Delete: old array, function, K&amp;R, and parameter-list methods.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">5</div>
+          <div class="step-card">
+            <h3>Port struct, union, and enum specifiers</h3>
+            <p>Move tag grammar, fix the two known AST defects, and retain source-rich recovery.</p>
+            <div class="step-columns">
+              <div class="step-box"><strong>Preserve</strong><ul><li>Named and anonymous bodies</li><li>Nested tags</li><li>Member lists</li><li>Trailing enum comma</li></ul></div>
+              <div class="step-box"><strong>Fix / defer</strong><ul><li>Correct struct vs union kind</li><li>Correct enumerator slice arena</li><li>Future constant-expression children</li></ul></div>
+            </div>
+            <div class="gate">Gate: all expression-independent tag branches are frame-driven and both defects are green.</div>
+            <div class="gate delete">Delete: old struct, union, enum, and identifier helper methods.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">6</div>
+          <div class="step-card">
+            <h3>Remove legacy control flow</h3>
+            <p>Close the compile gate by deleting incomplete paths and retaining only explicit future grammar phases.</p>
+            <div class="step-columns">
+              <div class="step-box"><strong>Remove</strong><ul><li>Empty <code>State</code> enum</li><li>Obsolete pushback helpers</li><li>Unused expression/statement entry stubs</li><li>Incomplete declaration/function flow</li></ul></div>
+              <div class="step-box"><strong>Prove</strong><ul><li>No migrated <code>parse_*</code> remains</li><li>No fallback to legacy code</li><li>Remaining grammar gaps are typed</li><li><code>cargo check</code> passes</li></ul></div>
+            </div>
+            <div class="gate">Gate: one control-flow implementation remains and the crate builds.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">7</div>
+          <div class="step-card">
+            <h3>Verify, document, and hand off</h3>
+            <p>Run the full matrix, stress the frame stack, and make current-versus-future scope explicit in project docs.</p>
+            <div class="gate">Gate: checks are green, migrated/deferred branches are listed, and the handoff contains evidence.</div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="verification">
+      <div class="section-head">
+        <div class="section-index">07 / Verification</div>
+        <div>
+          <h2>Evidence at the parser interface.</h2>
+          <p>The frame stack is private. Verification feeds tokens through preprocessing and pulls external declarations through <code>Parser::next_item</code>.</p>
+        </div>
+      </div>
+      <div class="gate-grid">
+        <article class="gate-card">
+          <div class="label">Behavior</div>
+          <h3>Characterization matrix</h3>
+          <ul><li>Every migrated grammar branch</li><li>Malformed input and EOF per frame phase</li><li>Source vectors and diagnostics</li><li>Typedef publication across declarations</li><li>Preprocessor regression suite unchanged</li></ul>
+        </article>
+        <article class="gate-card">
+          <div class="label">Architecture</div>
+          <h3>Stack and ownership proof</h3>
+          <ul><li>Frame trace identifies every token owner</li><li>63 nested parenthesized declarators</li><li>Substantially deeper stress case</li><li>No Rust call-stack growth</li><li>No reprocess without a state change</li></ul>
+        </article>
+        <article class="gate-card">
+          <div class="label">Repository</div>
+          <h3>Verification evidence</h3>
+          <ul><li><code>cargo check</code>: pass</li><li><code>cargo test --all-targets</code>: 28 pass</li><li><code>cargo +nightly fmt --check</code>: pass</li><li><code>git diff --check</code>: pass</li><li>Strict repository Clippy: blocked by the pre-existing repository-wide warning backlog outside the migrated parser; the parser module is warning-free.</li></ul>
+        </article>
+        <article class="gate-card">
+          <div class="label">Cutover audit</div>
+          <h3>Deletion evidence</h3>
+          <ul><li><code>pending_token</code> absent</li><li>Mapped <code>parse_*</code> methods absent</li><li>No migrated fallback path</li><li>Compile gate closed</li><li>Remaining gaps represented explicitly</li></ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="commits">
+      <div class="section-head">
+        <div class="section-index">08 / Delivery</div>
+        <div>
+          <h2>Small commits with deletion built in.</h2>
+          <p>Each migration commit is green for its matrix and removes the path it replaced.</p>
+        </div>
+      </div>
+      <div class="commit-list">
+        <div class="commit"><code>test(parse): Characterize legacy declarations</code><span>Baseline</span></div>
+        <div class="commit"><code>feat(parse): Add the frame-machine driver</code><span>Kernel</span></div>
+        <div class="commit"><code>refactor(parse): Port declaration specifiers</code><span>First vertical</span></div>
+        <div class="commit"><code>refactor(parse): Port declarators</code><span>Core migration</span></div>
+        <div class="commit"><code>refactor(parse): Port tag specifiers</code><span>Tags</span></div>
+        <div class="commit"><code>refactor(parse): Remove legacy parser control flow</code><span>Cutover</span></div>
+        <div class="commit"><code>docs(parse): Record the migrated parser kernel</code><span>Evidence</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="done">
+      <div class="section-head">
+        <div class="section-index">09 / Done</div>
+        <div>
+          <h2>Phase 02 ends with one working parser path.</h2>
+          <p>Completion means executable declarations, deleted legacy control flow, and explicit future child seams—not enum coverage or a second parser.</p>
+        </div>
+      </div>
+      <div class="done-grid">
+        <article class="done-card"><h3>Frame-driven declarations</h3><p>Existing specifier, declarator, and tag logic runs on the explicit stack.</p></article>
+        <article class="done-card"><h3>End-to-end output</h3><p><code>Parser::next_item</code> yields the supported declarations.</p></article>
+        <article class="done-card"><h3>Legacy paths deleted</h3><p><code>pending_token</code> and replaced recursive methods are gone.</p></article>
+        <article class="done-card"><h3>Deep nesting is safe</h3><p>Declarator depth grows heap frames, not Rust stack frames.</p></article>
+        <article class="done-card"><h3>Known defects fixed</h3><p>Union kind and enum arena slicing have regressions.</p></article>
+        <article class="done-card"><h3>Future children are explicit</h3><p>Expression-dependent positions recover deterministically.</p></article>
+        <article class="done-card"><h3>Parser gates pass</h3><p>Check, tests, formatting, and diff checks are green; repository-wide strict Clippy still exposes pre-existing lint debt outside this migration.</p></article>
+        <article class="done-card"><h3>Preprocessor unchanged</h3><p>No shared parser seam is introduced during this phase.</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="sources">
+      <div class="section-head">
+        <div class="section-index">10 / Sources</div>
+        <div>
+          <h2>Implementation references.</h2>
+          <p>The Markdown brief is authoritative for agent execution. This page is its human-readable companion.</p>
+        </div>
+      </div>
+      <div class="source-links">
+        <a href="phase-02-legacy-parser-stack-migration-agent-brief.md">Agent brief</a>
+        <a href="parser-stack-migration-plan.html">Full migration plan</a>
+        <a href="parser-status-report.html">Parser audit</a>
+        <a href="double-e-integration-report.html">Architecture study</a>
+        <a href="c99-parser-compliance-checklist.md">C99 checklist</a>
+        <a href="CONTEXT.md">Project glossary</a>
+        <a href="https://github.com/BenBwall/bcc-rust/pull/1">Merged PR #1</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">
+      <span>bcc-rust · Phase 02 parser migration</span>
+      <span>Replacement plan · generated 22 August 2026</span>
+    </div>
+  </footer>
+</body>
+</html>
