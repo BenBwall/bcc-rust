@@ -326,6 +326,12 @@ Completion criterion: every command and result, migrated/deferred branch, old
 method deletion, stress-test result, and remaining limitation appears in the
 handoff.
 
+The repository-wide strict-Clippy command is an attribution gate for this
+phase, not authorization to change generated bindings, the preprocessor, or
+unrelated utilities. Phase 02 must remove parser-local regressions and document
+any remaining pre-existing failures; clearing unrelated lint debt belongs in a
+separate change so the preprocessor-preservation boundary remains enforceable.
+
 ## Commit sequence
 
 1. `test(parse): Characterize legacy declarations`
@@ -361,6 +367,8 @@ it replaces.
 - Union and enum arena defects have regressions and are fixed.
 - Expression-dependent grammar positions have typed future child phases and
   deterministic diagnostics.
-- `cargo check`, tests, formatting, and Clippy pass.
+- `cargo check`, tests, and formatting pass; strict-Clippy results are run and
+  attributed, with no broad parser lint suppression or unrelated subsystem
+  changes used to manufacture a green result.
 - Preprocessor behavior is unchanged and no shared parser seam is introduced.
 - Documentation states exactly what migrated and what remains.

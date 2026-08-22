@@ -760,7 +760,7 @@ T value;</pre>
         <article class="gate-card">
           <div class="label">Repository</div>
           <h3>Verification evidence</h3>
-          <ul><li><code>cargo check</code>: pass</li><li><code>cargo test --all-targets</code>: 28 pass</li><li><code>cargo +nightly fmt --check</code>: pass</li><li><code>git diff --check</code>: pass</li><li>Strict repository Clippy: blocked by the pre-existing repository-wide warning backlog outside the migrated parser; the parser module is warning-free.</li></ul>
+          <ul><li><code>cargo check</code>: pass</li><li><code>cargo test --all-targets</code>: 31 pass</li><li><code>cargo +nightly fmt --check</code>: pass</li><li><code>git diff --check</code>: pass</li><li>Strict repository Clippy is an attribution gate: pre-existing generated-binding, preprocessing, and utility lint debt remains outside this migration, while broad parser suppression is removed.</li></ul>
         </article>
         <article class="gate-card">
           <div class="label">Cutover audit</div>
@@ -804,7 +804,7 @@ T value;</pre>
         <article class="done-card"><h3>Deep nesting is safe</h3><p>Declarator depth grows heap frames, not Rust stack frames.</p></article>
         <article class="done-card"><h3>Known defects fixed</h3><p>Union kind and enum arena slicing have regressions.</p></article>
         <article class="done-card"><h3>Future children are explicit</h3><p>Expression-dependent positions recover deterministically.</p></article>
-        <article class="done-card"><h3>Parser gates pass</h3><p>Check, tests, formatting, and diff checks are green; repository-wide strict Clippy still exposes pre-existing lint debt outside this migration.</p></article>
+        <article class="done-card"><h3>Parser gates pass</h3><p>Check, tests, formatting, and diff checks are green; strict Clippy is run and attributed without altering the preserved preprocessor boundary.</p></article>
         <article class="done-card"><h3>Preprocessor unchanged</h3><p>No shared parser seam is introduced during this phase.</p></article>
       </div>
     </section>
