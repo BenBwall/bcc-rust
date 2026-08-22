@@ -1437,10 +1437,10 @@ impl Parser {
 
         while let Some(token) = self.cursor.current(context) {
             let at_top_level = parentheses == 0 && brackets == 0 && braces == 0;
-            let at_owning_array_bracket = matches!(set.kind, SynchronizationKind::ArrayBound)
-                && brackets == 0
-                && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket);
-            if at_owning_array_bracket || at_top_level && set.kind.stops_before(token.kind) {
+            let at_unambiguous_owning_delimiter =
+                set.kind.stops_before_despite_unbalanced_child(token.kind);
+            if at_unambiguous_owning_delimiter || at_top_level && set.kind.stops_before(token.kind)
+            {
                 break;
             }
 
@@ -1576,7 +1576,9 @@ impl SynchronizationKind {
             | Self::Declaration => matches!(
                 token,
                 TokenType::Operator(
-                    OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Semicolon
+                        | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
             | Self::Initializer => matches!(
@@ -1607,6 +1609,31 @@ impl SynchronizationKind {
                     OperatorTokenType::Comma | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
+            | Self::FunctionBody => false,
+        }
+    }
+
+    fn stops_before_despite_unbalanced_child(self, token: TokenType) -> bool {
+        match self {
+            | Self::Declaration => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                )
+            ),
+            | Self::Initializer => token == TokenType::Operator(OperatorTokenType::Semicolon),
+            | Self::ArrayBound =>
+                token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
+            | Self::Parameter | Self::VariadicParameterList =>
+                token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+            | Self::StructMember => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                )
+            ),
+            | Self::EnumeratorValue =>
+                token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
             | Self::FunctionBody => false,
         }
     }
@@ -4802,15 +4829,23 @@ mod tests {
 
     #[test]
     fn malformed_parameter_after_ellipsis_terminates() {
-        let parsed = parse("int f(int, ..., char trailing);\n");
+        let parsed = parse("int f(int, ..., char trailing);\nint after;\n");
 
-        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items.len(), 2);
         assert!(parser_errors(&parsed).any(|error| matches!(
             error,
             ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                 TokenType::Operator(OperatorTokenType::Comma)
             )
         )));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
     }
 
     #[test]
@@ -4832,6 +4867,60 @@ mod tests {
             )
             .as_deref(),
             Some("after")
+        );
+    }
+
+    #[test]
+    fn malformed_children_stop_at_unambiguous_owning_delimiters() {
+        for source in [
+            "int x = (1; int after;\n",
+            "enum E { A = (1, B }; int after;\n",
+            "int f(int x + (); int after;\n",
+            "struct S { int x + ( ; }; int after;\n",
+        ] {
+            let parsed = parse(source);
+
+            assert!(matches!(
+                parsed.items.first(),
+                Some(ExternalDeclaration::Error(_))
+            ));
+            assert!(matches!(
+                parsed.items.get(1),
+                Some(ExternalDeclaration::Declaration(_))
+            ));
+            assert_eq!(
+                identifier_name(
+                    &parsed,
+                    init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+                )
+                .as_deref(),
+                Some("after"),
+                "recovery swallowed the declaration after {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_declaration_recovery_stops_at_comma_and_keeps_next_declarator() {
+        let parsed = parse("int x +, y; int after;\n");
+
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(matches!(
+            parsed.items.get(1),
+            Some(ExternalDeclaration::Declaration(_))
+        ));
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .init_declarators
+                .iter()
+                .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
+                .collect::<Vec<_>>(),
+            ["x", "y", "after"]
         );
     }
 
