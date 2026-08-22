@@ -57,11 +57,13 @@ impl<'vector, T> LastEntry<'vector, T> {
 }
 ```
 
-The entry owns the mutable borrow of a non-empty vector. `insert` follows `hash_map::OccupiedEntry::insert`: replace the final element and return the old value. `remove` removes and returns the final element. Keep construction private and use no unsafe code.
+The entry owns the mutable borrow of a non-empty vector and retains a direct mutable reference to its final element at a stable address. `insert` follows `hash_map::OccupiedEntry::insert`: replace the final element and return the old value. `remove` removes and returns the final element.
+
+Keep construction private and confine the required unsafe code to this module. Obtain the element pointer from `Vec::as_mut_ptr` rather than deriving the stored reference through `last_mut`. While an entry exists, its exclusive vector borrow and deliberately narrow API must prevent length or capacity changes, reallocation, or movement of the final element. Removal must move the referenced value with `ptr::read` before shortening the vector with `set_len`; document every invariant at the unsafe operations.
 
 Add `pub(crate) mod last_entry;` to `src/util.rs`. Unit tests in the new module must cover empty, `get`, `get_mut`, `into_mut`, `insert`, and `remove`, and prove that every operation preserves all preceding elements.
 
-This step is complete when the full interface has focused passing tests and no parser or reducer type appears in the utility module.
+This step is complete when the full interface has focused passing tests, Miri accepts every operation and address-stability test, and no parser or reducer type appears in the utility module.
 
 If the bcc-rust compile gate prevents these self-contained tests from running through Cargo, run the module directly with `rustc --edition=2024 --test src/util/last_entry.rs` and report both the focused result and the separate crate-wide blocker.
 
