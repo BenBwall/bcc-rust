@@ -238,14 +238,24 @@ pub fn run() -> Result<(), MainError> {
 
 #[doc(hidden)]
 #[cfg(feature = "benchmarking-internals")]
-pub fn preprocess_one_million() {
-    let million_lines = include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c"));
+pub fn preprocess_one_million() -> usize {
+    let million_lines = one_million_lines();
     let iterator = PreprocessorIterator::new(
         box_path_from_str("<input>"),
         million_lines.to_owned().into(),
         SharedVec::default(),
         SharedVec::default(),
     );
-    let count = iterator.count();
-    eprintln!("{}{}", "Count: ".bright_yellow(), count);
+    iterator.count()
+}
+
+#[doc(hidden)]
+#[cfg(feature = "benchmarking-internals")]
+pub fn one_million_input_bytes() -> u64 {
+    u64::try_from(one_million_lines().len()).expect("benchmark input length must fit in u64")
+}
+
+#[cfg(feature = "benchmarking-internals")]
+fn one_million_lines() -> &'static str {
+    include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c"))
 }
