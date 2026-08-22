@@ -514,10 +514,6 @@ impl TypeSpecifiers {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained for the future semantic type builder.")
-    )]
     fn is_long_double(self) -> bool {
         match self {
             | TypeSpecifiers::LongDouble
@@ -1625,8 +1621,12 @@ impl SynchronizationKind {
             ),
             | Self::ArrayBound =>
                 token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
-            | Self::Parameter =>
-                token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+            | Self::Parameter => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma | OperatorTokenType::ClosingParenthesis
+                )
+            ),
             | Self::StructMember => matches!(
                 token,
                 TokenType::Operator(
@@ -2233,6 +2233,13 @@ impl DeclarationSpecifiersFrame {
             | KeywordTokenType::Unsigned => type_specifiers.make_unsigned(parser, context),
             | KeywordTokenType::Int => type_specifiers.make_int(parser, context),
             | KeywordTokenType::Short => type_specifiers.make_short(parser, context),
+            | KeywordTokenType::Long if type_specifiers.is_long_double() => {
+                parser.report(
+                    context,
+                    ParserErrorType::LongLongDoubleSpecified,
+                    Some(token),
+                );
+            },
             | KeywordTokenType::Long
                 if type_specifiers.is_long() && type_specifiers.is_long_long() =>
             {
@@ -4300,10 +4307,10 @@ mod tests {
     fn specifier_combinations_and_conflicts_keep_legacy_diagnostics() {
         let parsed = parse(
             "extern const unsigned long int x;\ninline static double f(void);\nconst const int \
-             duplicate;\nlong long double conflict;\n",
+             duplicate;\nlong long double conflict;\ndouble long long reordered;\n",
         );
 
-        assert_eq!(parsed.items.len(), 4);
+        assert_eq!(parsed.items.len(), 5);
         assert_eq!(
             declaration(&parsed, 0)
                 .declaration_specifiers
@@ -4326,9 +4333,11 @@ mod tests {
             parser_errors(&parsed)
                 .any(|error| { matches!(error, ParserErrorType::ConstSpecifiedTwice) })
         );
-        assert!(
+        assert_eq!(
             parser_errors(&parsed)
-                .any(|error| { matches!(error, ParserErrorType::LongLongDoubleSpecified) })
+                .filter(|error| matches!(error, ParserErrorType::LongLongDoubleSpecified))
+                .count(),
+            2
         );
         assert!(TypeSpecifiers::Long.is_long());
         assert!(TypeSpecifiers::LongDouble.is_long_double());
@@ -4393,6 +4402,44 @@ mod tests {
             ParserErrorType::EmptyDeclarationSpecifiers(..)
                 | ParserErrorType::UnexpectedToken { .. }
         )));
+    }
+
+    #[test]
+    fn malformed_parameter_recovery_stops_at_comma_and_keeps_the_next_parameter() {
+        let parsed = parse("int f(int x +, char y);\nint after;\n");
+
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(matches!(
+            parsed.items.get(1),
+            Some(ExternalDeclaration::Declaration(_))
+        ));
+        assert_eq!(parsed.parser.syntax.parameter_declarations.len(), 2);
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .parameter_sources
+                .iter()
+                .map(|source| sourced_text(&parsed, *source))
+                .collect::<Vec<_>>(),
+            ["intx", "chary"]
+        );
+        assert_eq!(
+            parsed.parser.syntax.parameter_declarations[1]
+                .declaration_specifiers
+                .type_specifiers,
+            TypeSpecifiers::Char
+        );
+        assert_eq!(
+            parsed.parser.syntax.parameter_declarations[1]
+                .declarator
+                .and_then(|declarator| identifier_name(&parsed, declarator))
+                .as_deref(),
+            Some("y")
+        );
     }
 
     #[test]
