@@ -4,7 +4,7 @@ use super::stack_queue::StackQueue;
 
 #[expect(
     dead_code,
-    reason = "This is currently unused, but I prove useful in the future."
+    reason = "This is currently unused, but it might prove to be useful in the future."
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum SmallQueue<T, const N: usize>
