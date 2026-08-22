@@ -40,6 +40,7 @@ use crate::{
         GetSeverity,
         GetSourceFileIndex,
         GetSourceVectors,
+        TranslationError,
         preprocessing::{
             CharacterTokenType,
             Preprocessor,
@@ -56,13 +57,15 @@ use crate::{
     },
 };
 
+pub(crate) mod configuration;
 pub(crate) mod float_parsing;
 pub(crate) mod translation_phases;
 pub(crate) mod util;
 
 struct PreprocessorIterator {
-    preprocessor: Preprocessor,
-    context:      Context,
+    preprocessor:  Preprocessor,
+    context:       Context,
+    pending_token: Option<Token>,
 }
 
 impl PreprocessorIterator {
@@ -83,16 +86,84 @@ impl PreprocessorIterator {
         Self {
             preprocessor,
             context,
+            pending_token: None,
         }
     }
 }
 
 impl Iterator for PreprocessorIterator {
-    type Item = Token;
+    type Item = Result<Token, TranslationError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(error) = self.context.pop_pending_error() {
+            return Some(Err(error));
+        }
+        if let Some(token) = self.pending_token.take() {
+            return Some(Ok(token));
+        }
+
         self.context.source_vectors.0.clear();
-        self.preprocessor.next_item(&mut self.context)
+        let token = self.preprocessor.next_item(&mut self.context);
+        if let Some(error) = self.context.pop_pending_error() {
+            self.pending_token = token;
+            Some(Err(error))
+        } else {
+            token.map(Ok)
+        }
+    }
+}
+
+#[cfg(test)]
+mod preprocessor_iterator_tests {
+    use super::*;
+    use crate::{
+        configuration::{
+            CStandard,
+            CompilerConfiguration,
+            ExtensionPolicy,
+        },
+        translation_phases::preprocessing::{
+            PreprocessorError,
+            PreprocessorErrorType,
+        },
+    };
+
+    #[test]
+    fn diagnostic_is_yielded_before_the_token_produced_alongside_it() {
+        let mut iterator = PreprocessorIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "#if (0, 2)\nCOMMA_RESULT_2\n#endif\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        iterator.context.configuration =
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny);
+
+        let error = iterator.next().unwrap().unwrap_err();
+        assert!(matches!(
+            &error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
+                    ExtensionPolicy::Deny
+                ),
+                ..
+            })
+        ));
+        let error_source_vectors = error.source_vectors(&mut iterator.context);
+        assert!(
+            !iterator
+                .context
+                .get_source_vectors(error_source_vectors)
+                .is_empty()
+        );
+
+        let token = iterator.next().unwrap().unwrap();
+        assert_eq!(token.kind, TokenType::Identifier);
+        assert_eq!(
+            iterator.context.string_cache.at(token.contents),
+            "COMMA_RESULT_2"
+        );
+        assert!(iterator.next().is_none());
     }
 }
 
@@ -165,48 +236,50 @@ pub fn run() -> Result<(), MainError> {
         args.quote_include.into(),
         args.system_include.into(),
     );
-    while let Some(token) = iterator.next() {
-        eprintln!(
-            "{}",
-            match token.kind {
-                | TokenType::Identifier => format!(
-                    "Identifier: {}",
-                    iterator.context.string_cache.at(token.contents)
-                ),
-                | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
-                | TokenType::String(sltt) => format!(
-                    "String-like token: {}",
-                    match sltt {
-                        | StringTokenType::WideString(s) | StringTokenType::String(s) => {
-                            iterator.context.string_cache.at(s).to_string()
-                        },
-                    }
-                ),
-                | TokenType::Character(c) => format!(
-                    "Character: {}",
-                    match c {
-                        | CharacterTokenType::WideChar(c) | CharacterTokenType::Char(c) => {
-                            format!("{c:#?}")
-                        },
-                    }
-                ),
-                | TokenType::Keyword(k) => format!("Keyword: {k:#?}"),
-                | TokenType::Integer(i) => format!("Integer: {i:#?}"),
-                | TokenType::Float(f) => format!("Float: {f:#?}"),
-            }
-            .bright_magenta()
-        );
-    }
-    while let Some(e) = iterator.context.pop_pending_error() {
-        let source_vectors = e.source_vectors(&mut iterator.context);
-        let file = iterator.preprocessor.source_file_index();
-        let vec = iterator.context.get_source_vectors(source_vectors);
-        eprintln!(
-            "{}: {e} at {:?}:{:?}",
-            e.severity(),
-            file,
-            vec.bright_blue(),
-        );
+    while let Some(item) = iterator.next() {
+        match item {
+            | Ok(token) => eprintln!(
+                "{}",
+                match token.kind {
+                    | TokenType::Identifier => format!(
+                        "Identifier: {}",
+                        iterator.context.string_cache.at(token.contents)
+                    ),
+                    | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
+                    | TokenType::String(sltt) => format!(
+                        "String-like token: {}",
+                        match sltt {
+                            | StringTokenType::WideString(s) | StringTokenType::String(s) => {
+                                iterator.context.string_cache.at(s).to_string()
+                            },
+                        }
+                    ),
+                    | TokenType::Character(c) => format!(
+                        "Character: {}",
+                        match c {
+                            | CharacterTokenType::WideChar(c) | CharacterTokenType::Char(c) => {
+                                format!("{c:#?}")
+                            },
+                        }
+                    ),
+                    | TokenType::Keyword(k) => format!("Keyword: {k:#?}"),
+                    | TokenType::Integer(i) => format!("Integer: {i:#?}"),
+                    | TokenType::Float(f) => format!("Float: {f:#?}"),
+                }
+                .bright_magenta()
+            ),
+            | Err(error) => {
+                let source_vectors = error.source_vectors(&mut iterator.context);
+                let file = iterator.preprocessor.source_file_index();
+                let vec = iterator.context.get_source_vectors(source_vectors);
+                eprintln!(
+                    "{}: {error} at {:?}:{:?}",
+                    error.severity(),
+                    file,
+                    vec.bright_blue(),
+                );
+            },
+        }
     }
 
     eprintln!(
