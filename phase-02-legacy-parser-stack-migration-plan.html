@@ -750,7 +750,7 @@ T value;</pre>
         <article class="gate-card">
           <div class="label">Behavior</div>
           <h3>Characterization matrix</h3>
-          <ul><li>Every migrated grammar branch</li><li>Malformed input and EOF per frame phase</li><li>Source vectors and diagnostics</li><li>Typedef publication across declarations</li><li>Preprocessor regression suite unchanged</li></ul>
+          <ul><li>Preserve/fix/defer classification recorded below</li><li>Malformed tokens and EOF assert exact diagnostic variants</li><li>Source vectors live on their syntax nodes</li><li>Typedef publication is checked after every declarator</li><li>Preprocessor regression suite remains unchanged</li></ul>
         </article>
         <article class="gate-card">
           <div class="label">Architecture</div>
@@ -760,13 +760,36 @@ T value;</pre>
         <article class="gate-card">
           <div class="label">Repository</div>
           <h3>Verification evidence</h3>
-          <ul><li><code>cargo check</code>: pass</li><li><code>cargo test --all-targets</code>: 34 pass</li><li><code>cargo +nightly fmt --check</code>: pass</li><li><code>git diff --check</code>: pass</li><li>Strict repository Clippy is an attribution gate: pre-existing generated-binding, preprocessing, and utility lint debt remains outside this migration, while broad parser suppression is removed.</li></ul>
+          <ul><li><code>cargo check</code>: pass</li><li><code>cargo test --all-targets</code>: 39 pass</li><li><code>cargo +nightly fmt --check</code>: pass</li><li><code>git diff --check</code>: pass</li><li>Strict repository Clippy is an attribution gate: pre-existing generated-binding, preprocessing, and utility lint debt remains outside this migration, while broad parser suppression is removed.</li></ul>
         </article>
         <article class="gate-card">
           <div class="label">Cutover audit</div>
           <h3>Deletion evidence</h3>
           <ul><li><code>pending_token</code> absent</li><li>Mapped <code>parse_*</code> methods absent</li><li>No migrated fallback path</li><li>Compile gate closed</li><li>Remaining gaps represented explicitly</li></ul>
         </article>
+      </div>
+      <div class="table-wrap" style="margin-top:18px">
+        <table>
+          <thead><tr><th>Legacy branch</th><th>Classification</th><th>Executable evidence or dependency</th></tr></thead>
+          <tbody>
+            <tr><td>Storage classes, qualifiers, <code>inline</code>, and primitive combinations</td><td>Preserve</td><td><code>specifier_combinations_and_conflicts_keep_legacy_diagnostics</code> asserts AST state plus duplicate/conflict variants.</td></tr>
+            <tr><td>Specifier-only declarations</td><td>Preserve</td><td><code>specifier_only_declaration_runs_through_the_machine</code> exercises <code>Parser::next_item</code>.</td></tr>
+            <tr><td>Identifiers, pointer levels, qualifiers, and parenthesized declarators</td><td>Preserve</td><td><code>ordinary_pointer_and_typedef_declarations_are_reachable</code> and exact node provenance assertions.</td></tr>
+            <tr><td>Comma-separated declarations and file-scope typedef/ordinary publication</td><td>Preserve</td><td><code>name_classification_is_published_after_each_declarator</code>.</td></tr>
+            <tr><td>Empty, pointer, qualified/static, and nested array declarators</td><td>Preserve</td><td>Array coverage plus dedicated <code>PointerSpecifiedTwice</code>, abstract-qualifier-before-pointer, closing-bracket, qualifier/static, malformed, and EOF assertions.</td></tr>
+            <tr><td>Array-bound assignment expressions and their pointer/expression ordering diagnostics</td><td>Defer</td><td><code>ArrayBoundExpressionNotImplemented</code> is a unique typed child diagnostic; recovery synchronizes at the owning <code>]</code>. Expression-order diagnostics remain with the future expression child rather than being guessed by the parent frame.</td></tr>
+            <tr><td>Prototype, abstract, variadic, and K&amp;R parameter lists</td><td>Preserve</td><td><code>arrays_functions_abstract_parameters_variadics_and_k_and_r_parse</code> plus the restored mixed-K&amp;R/prototype diagnostic.</td></tr>
+            <tr><td>Malformed parameter separators and tokens after <code>...</code></td><td>Fix</td><td>Exact separator variants plus <code>malformed_parameter_after_ellipsis_terminates</code>; recovery skips to the owning <code>)</code>.</td></tr>
+            <tr><td>Named/anonymous structs and unions with member declarators</td><td>Preserve</td><td>Tag coverage and node-owned provenance assertions.</td></tr>
+            <tr><td>Union kind hard-coded as struct</td><td>Fix</td><td><code>union_kind_and_enum_arena_slice_are_correct</code>.</td></tr>
+            <tr><td>Bit-field width expressions</td><td>Defer</td><td><code>BitFieldWidthExpressionNotImplemented</code> is unique and synchronizes within the struct member.</td></tr>
+            <tr><td>Named/anonymous enums, enumerators, and trailing commas</td><td>Preserve</td><td>Tag coverage plus exact enumerator-list malformed/EOF variants.</td></tr>
+            <tr><td>Enum slice sourced from the identifier arena</td><td>Fix</td><td><code>union_kind_and_enum_arena_slice_are_correct</code> checks the enumerator arena range.</td></tr>
+            <tr><td>Explicit enumerator values</td><td>Defer</td><td><code>EnumeratorValueExpressionNotImplemented</code> is a unique typed child diagnostic.</td></tr>
+            <tr><td>Initializers and function bodies</td><td>Defer</td><td>Separate <code>InitializerNotImplemented</code> and <code>FunctionBodyNotImplemented</code> variants preserve their grammar positions.</td></tr>
+            <tr><td>Malformed delimiters and EOF across migrated frame phases</td><td>Preserve/Fix</td><td><code>malformed_and_eof_paths_terminate_with_source_backed_diagnostics</code> maps each input to its exact variant and requires source-backed diagnostics.</td></tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
