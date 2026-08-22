@@ -56,6 +56,7 @@ pub(crate) struct Parser {
     pub(crate) type_names:                 Vec<TypeName>,
     pub(crate) pending_token:              Option<Token>,
     pub(crate) expressions:                Vec<Expression>,
+    pub(crate) expression_indices:         Vec<ExpressionIndex>,
     pub(crate) statements:                 Vec<Statement>,
     pub(crate) type_qualifiers:            Vec<TypeQualifiers>,
     pub(crate) direct_declarators:         Vec<DirectDeclarator>,
@@ -828,6 +829,7 @@ impl Parser {
             type_names: Vec::new(),
             pending_token: None,
             expressions: Vec::new(),
+            expression_indices: Vec::new(),
             statements: Vec::new(),
             type_qualifiers: Vec::new(),
             identifiers: Vec::new(),
@@ -2402,8 +2404,8 @@ pub(crate) enum ForInitializer {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Expression {
-    pub(crate) result_type: TypeIndex,
-    pub(crate) kind:        ExpressionType,
+    pub(crate) kind:           ExpressionType,
+    pub(crate) source_vectors: SourceVectors,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -2424,7 +2426,15 @@ pub(crate) enum ExpressionType {
     },
     Call {
         function_expression: ExpressionIndex,
-        arguments:           VectorSlice<Expression>,
+        arguments:           VectorSlice<ExpressionIndex>,
+    },
+    DirectMember {
+        base_expression: ExpressionIndex,
+        member:          Identifier,
+    },
+    IndirectMember {
+        base_expression: ExpressionIndex,
+        member:          Identifier,
     },
     CompoundLiteral {
         struct_type:      TypeName,
