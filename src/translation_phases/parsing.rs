@@ -55,7 +55,6 @@ pub(crate) struct Parser {
     returned:            Option<ParseValue>,
     syntax:              SyntaxStore,
     scopes:              ScopeStack,
-    recovered_sources:   Option<SourceVectors>,
     invalid_event_count: usize,
     #[cfg(test)]
     trace:               Vec<FrameTraceEvent>,
@@ -911,16 +910,38 @@ enum NameClass {
 
 #[derive(Default)]
 struct ScopeStack {
-    file_scope: HashMap<StringCacheId, NameClass>,
+    file_scope:    HashMap<StringCacheId, NameClass>,
+    nested_scopes: Vec<HashMap<StringCacheId, NameClass>>,
 }
 
 impl ScopeStack {
     fn is_typedef(&self, name: StringCacheId) -> bool {
-        self.file_scope.get(&name) == Some(&NameClass::Typedef)
+        self.nested_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&name))
+            .or_else(|| self.file_scope.get(&name))
+            == Some(&NameClass::Typedef)
     }
 
     fn publish(&mut self, name: StringCacheId, class: NameClass) {
-        _ = self.file_scope.insert(name, class);
+        if let Some(scope) = self.nested_scopes.last_mut() {
+            _ = scope.insert(name, class);
+        } else {
+            _ = self.file_scope.insert(name, class);
+        }
+    }
+
+    fn enter_scope(&mut self) {
+        self.nested_scopes.push(HashMap::default());
+    }
+
+    fn leave_scope(&mut self) {
+        drop(
+            self.nested_scopes
+                .pop()
+                .expect("a parser frame cannot leave file scope"),
+        );
     }
 }
 
@@ -1032,8 +1053,9 @@ impl FutureChildKind {
 
 #[derive(Debug, Clone, Copy)]
 struct FutureChildFrame {
-    kind:  FutureChildKind,
-    phase: FutureChildPhase,
+    kind:                     FutureChildKind,
+    phase:                    FutureChildPhase,
+    recovered_source_vectors: Option<SourceVectors>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1047,6 +1069,7 @@ impl FutureChildFrame {
         Self {
             kind,
             phase: FutureChildPhase::Start,
+            recovered_source_vectors: None,
         }
     }
 }
@@ -1354,7 +1377,6 @@ impl Parser {
             returned:            None,
             syntax:              SyntaxStore::default(),
             scopes:              ScopeStack::default(),
-            recovered_sources:   None,
             invalid_event_count: 0,
             #[cfg(test)]
             trace:               Vec::new(),
@@ -1422,7 +1444,8 @@ impl Parser {
                         matches!(set.target, RecoveryTarget::CurrentFrame),
                         "every recovery set must identify a legal unwind target"
                     );
-                    self.recovered_sources = self.recover(context, set);
+                    let recovered_source_vectors = self.recover(context, set);
+                    frame.merge_recovered_sources(context, recovered_source_vectors);
                     self.frames.push(frame);
                 },
             }
@@ -1437,8 +1460,12 @@ impl Parser {
 
         while let Some(token) = self.cursor.current(context) {
             let at_top_level = parentheses == 0 && brackets == 0 && braces == 0;
-            let at_unambiguous_owning_delimiter =
-                set.kind.stops_before_despite_unbalanced_child(token.kind);
+            let at_unambiguous_owning_delimiter = set.kind.stops_before_despite_unbalanced_child(
+                token.kind,
+                parentheses,
+                brackets,
+                braces,
+            );
             if at_unambiguous_owning_delimiter || at_top_level && set.kind.stops_before(token.kind)
             {
                 break;
@@ -1613,27 +1640,27 @@ impl SynchronizationKind {
         }
     }
 
-    fn stops_before_despite_unbalanced_child(self, token: TokenType) -> bool {
+    fn stops_before_despite_unbalanced_child(
+        self,
+        token: TokenType,
+        parentheses: usize,
+        brackets: usize,
+        braces: usize,
+    ) -> bool {
         match self {
-            | Self::Declaration => matches!(
-                token,
-                TokenType::Operator(
-                    OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
-                )
-            ),
+            | Self::Declaration | Self::StructMember =>
+                token == TokenType::Operator(OperatorTokenType::Semicolon)
+                    || braces == 0
+                        && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
             | Self::Initializer => token == TokenType::Operator(OperatorTokenType::Semicolon),
             | Self::ArrayBound =>
-                token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
+                brackets == 0
+                    && token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
             | Self::Parameter | Self::VariadicParameterList =>
-                token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
-            | Self::StructMember => matches!(
-                token,
-                TokenType::Operator(
-                    OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
-                )
-            ),
+                parentheses == 0
+                    && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
             | Self::EnumeratorValue =>
-                token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
+                braces == 0 && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
             | Self::FunctionBody => false,
         }
     }
@@ -1644,6 +1671,24 @@ fn is_operator(token: Option<Token>, operator: OperatorTokenType) -> bool {
 }
 
 impl ParseFrame {
+    fn merge_recovered_sources(&mut self, context: &mut Context, recovered: Option<SourceVectors>) {
+        let Some(recovered) = recovered else {
+            return;
+        };
+        let destination = match self {
+            | Self::ExternalDeclaration(_) | Self::DeclarationSpecifiers(_) => return,
+            | Self::Declaration(frame) => &mut frame.source_vectors,
+            | Self::Declarator(frame) => &mut frame.source_vectors,
+            | Self::ParameterList(frame) => &mut frame.source_vectors,
+            | Self::StructOrUnionSpecifier(frame) => &mut frame.source_vectors,
+            | Self::EnumSpecifier(frame) => &mut frame.source_vectors,
+            | Self::FutureChild(frame) => &mut frame.recovered_source_vectors,
+        };
+        *destination = Some(destination.map_or(recovered, |existing| {
+            context.merge_vectors(existing, recovered)
+        }));
+    }
+
     fn step(
         &mut self,
         parser: &mut Parser,
@@ -1720,7 +1765,7 @@ impl FutureChildFrame {
             | FutureChildPhase::Recovered =>
                 ParseAction::Reduce(ParseValue::FutureChild(FutureChildResult {
                     kind:           self.kind,
-                    source_vectors: parser.recovered_sources.take().unwrap_or_default(),
+                    source_vectors: self.recovered_source_vectors.take().unwrap_or_default(),
                 })),
         }
     }
@@ -2826,6 +2871,7 @@ impl ParameterListFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                parser.scopes.enter_scope();
                 if self.allow_k_and_r
                     && token.is_some_and(|token| {
                         token.kind == TokenType::Identifier
@@ -3088,6 +3134,7 @@ impl ParameterListFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                parser.scopes.leave_scope();
                 let start = parser.syntax.identifiers.len().to_u32();
                 parser.syntax.identifiers.append(&mut self.identifiers);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {
@@ -3105,6 +3152,7 @@ impl ParameterListFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                parser.scopes.leave_scope();
                 let start = parser.syntax.parameter_declarations.len().to_u32();
                 parser
                     .syntax
@@ -3264,10 +3312,19 @@ impl StructOrUnionSpecifierFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                self.phase = StructOrUnionPhase::AwaitMemberDeclarator;
-                ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
-                    DeclaratorMode::Named,
-                )))
+                if is_operator(token, OperatorTokenType::Colon) {
+                    let token = token.expect("colon token exists");
+                    parser.merge_source(context, &mut self.member_source, token);
+                    parser.merge_source(context, &mut self.current_member_declarator_source, token);
+                    self.member_declarator = None;
+                    self.phase = StructOrUnionPhase::PushBitFieldWidth;
+                    ParseAction::Consume
+                } else {
+                    self.phase = StructOrUnionPhase::AwaitMemberDeclarator;
+                    ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        DeclaratorMode::Named,
+                    )))
+                }
             },
             | StructOrUnionPhase::AwaitMemberDeclarator => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
@@ -4875,7 +4932,7 @@ mod tests {
         for source in [
             "int x = (1; int after;\n",
             "enum E { A = (1, B }; int after;\n",
-            "int f(int x + (); int after;\n",
+            "int f(int x + [); int after;\n",
             "struct S { int x + ( ; }; int after;\n",
         ] {
             let parsed = parse(source);
@@ -4921,6 +4978,121 @@ mod tests {
                 .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
                 .collect::<Vec<_>>(),
             ["x", "y", "after"]
+        );
+    }
+
+    #[test]
+    fn direct_recovery_sources_are_retained_by_the_error_node() {
+        let parsed = parse("int x +;\n");
+        let Some(ExternalDeclaration::Error(source_vectors)) = parsed.items.first() else {
+            panic!("malformed declaration should reduce to an error node")
+        };
+
+        assert_eq!(sourced_text(&parsed, *source_vectors), "intx+;");
+    }
+
+    #[test]
+    fn unnamed_bit_field_after_member_comma_does_not_require_a_declarator() {
+        let parsed = parse("struct S { int named, : 3; };\n");
+
+        assert!(!parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
+        )));
+        assert_eq!(parsed.parser.syntax.struct_declarators.len(), 2);
+        assert!(
+            parsed.parser.syntax.struct_declarators[1]
+                .declarator
+                .is_none()
+        );
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .struct_declarators
+                .iter()
+                .map(|declarator| sourced_text(&parsed, declarator.source_vectors))
+                .collect::<Vec<_>>(),
+            ["named", ":3"]
+        );
+    }
+
+    #[test]
+    fn prototype_enumerators_stop_hiding_file_scope_typedefs_at_the_closing_parenthesis() {
+        let parsed = parse("typedef int A; int f(enum { A } x); A y;\n");
+
+        assert_eq!(parsed.items.len(), 3);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        let a = parsed
+            .context
+            .string_cache
+            .get_id_from_string("A")
+            .expect("interned A");
+        assert_eq!(
+            parsed.parser.scopes.file_scope.get(&a),
+            Some(&NameClass::Typedef)
+        );
+        assert_eq!(
+            declaration(&parsed, 2)
+                .declaration_specifiers
+                .type_specifiers,
+            TypeSpecifiers::TypedefName(Identifier::new(a))
+        );
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 2))[0].declarator
+            )
+            .as_deref(),
+            Some("y")
+        );
+    }
+
+    #[test]
+    fn array_recovery_consumes_nested_brackets_before_the_owning_bracket() {
+        let parsed = parse("int a[sizeof(int[2])][*];\n");
+        let declarator = parsed.parser.syntax.init_declarators[0].declarator;
+        let start = declarator.kind.start_index as usize;
+        let end = start + declarator.kind.length as usize;
+
+        assert_eq!(
+            parsed.parser.syntax.direct_declarators[start..end]
+                .iter()
+                .filter(|direct| matches!(direct, DirectDeclarator::Array { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn parameter_recovery_consumes_nested_parentheses_before_the_owning_separator() {
+        let parsed = parse("int f(int x + (1), char y);\nint after;\n");
+
+        assert_eq!(parsed.parser.syntax.parameter_declarations.len(), 2);
+        assert_eq!(
+            parsed.parser.syntax.parameter_declarations[1]
+                .declaration_specifiers
+                .type_specifiers,
+            TypeSpecifiers::Char
+        );
+        assert_eq!(
+            parsed.parser.syntax.parameter_declarations[1]
+                .declarator
+                .and_then(|declarator| identifier_name(&parsed, declarator))
+                .as_deref(),
+            Some("y")
+        );
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
         );
     }
 
