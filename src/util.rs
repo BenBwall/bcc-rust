@@ -1,10 +1,9 @@
 use std::{
     borrow::Cow,
-    hash::BuildHasherDefault,
     path::Path,
 };
 
-use rustc_hash::FxHasher;
+use rustc_hash::FxBuildHasher;
 
 pub(crate) mod dedup_arena;
 pub(crate) mod shared;
@@ -13,8 +12,8 @@ pub(crate) mod stack_queue;
 pub(crate) mod string_cache;
 pub(crate) mod vector_slice;
 
-pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
-pub(crate) type HashSet<K> = hashbrown::HashSet<K, BuildHasherDefault<FxHasher>>;
+pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, FxBuildHasher>;
+pub(crate) type HashSet<K> = hashbrown::HashSet<K, FxBuildHasher>;
 
 #[expect(
     dead_code,

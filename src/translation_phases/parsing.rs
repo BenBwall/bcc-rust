@@ -121,19 +121,19 @@ pub(crate) enum Initializer {
     InitializerList(VectorSlice<Initializer>),
 }
 
-bitfield::bitfield! {
-    #[derive(PartialEq, Eq, Hash, Clone, Copy, Default)]
+bitflags::bitflags! {
+    #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
     /// type-qualifier:
     /// - const
     /// - restrict
     /// - volatile
     ///
-    /// Represents all the type-qualifiers in a declaration. For example, the declaration `const volatile int foo;` would be represented as `TypeQualifiers(Const | Volatile)`.
-    pub(crate) struct TypeQualifiers(u8);
-    impl Debug;
-    pub is_const, set_is_const: 0;
-    pub is_volatile, set_is_volatile: 1;
-    pub is_restrict, set_is_restrict: 2;
+    /// Represents all the type-qualifiers in a declaration. For example, the declaration `const volatile int foo;` would be represented as `TypeQualifiers::CONST | TypeQualifiers::VOLATILE`.
+    pub(crate) struct TypeQualifiers: u8 {
+        const CONST = 1 << 0;
+        const VOLATILE = 1 << 1;
+        const RESTRICT = 1 << 2;
+    }
 }
 
 /// type-specifier:
@@ -722,7 +722,7 @@ impl DeclarationSpecifiers {
     const fn new() -> Self {
         Self {
             storage_class:       StorageClass::Auto,
-            type_qualifiers:     TypeQualifiers(0),
+            type_qualifiers:     TypeQualifiers::empty(),
             type_specifiers:     TypeSpecifiers::Empty,
             function_specifiers: FunctionSpecifiers { is_inline: false },
         }
@@ -735,8 +735,8 @@ impl DeclarationSpecifiers {
 ///
 /// Each element in the type_qualifiers_list represents the type qualifiers for
 /// one level of indirection. For example, this declaration: `*const *volatile
-/// *x` would be parsed as: `[TypeQualifiers(const), TypeQualifiers(volatile),
-/// TypeQualifiers(0)]`
+/// *x` would be parsed as: `[TypeQualifiers::CONST,
+/// TypeQualifiers::VOLATILE, TypeQualifiers::empty()]`
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct PointerDeclarator {
     /// Each element represents the type qualifiers for one level of
@@ -936,7 +936,7 @@ impl Parser {
         let struct_declarations_start_index = self.struct_declarations.len().to_u32();
         'struct_declaration_list: loop {
             let struct_declarators_start_index = self.struct_declarators.len().to_u32();
-            let mut type_qualifiers = TypeQualifiers(0);
+            let mut type_qualifiers = TypeQualifiers::empty();
             let mut type_specifiers = TypeSpecifiers::Empty;
             // Parse specifiers-qualifier-list:
             loop {
@@ -964,7 +964,7 @@ impl Parser {
             }
             // If type_specifiers and type_qualifiers are both empty, we must have reached
             // the end of the struct-declaration-list.
-            if type_specifiers == TypeSpecifiers::Empty && type_qualifiers == TypeQualifiers(0) {
+            if type_specifiers == TypeSpecifiers::Empty && type_qualifiers.is_empty() {
                 let Some(closing_curly_brace) = self.next_token(context) else {
                     let source_vectors = context.create_source_vectors(
                         self.position(context),
@@ -1560,31 +1560,31 @@ impl Parser {
     ) -> Option<()> {
         match token.kind {
             | TokenType::Keyword(KeywordTokenType::Const) => {
-                if type_qualifiers.is_const() {
+                if type_qualifiers.contains(TypeQualifiers::CONST) {
                     context.parser_error(ParserError {
                         error_type:     ParserErrorType::ConstSpecifiedTwice,
                         source_vectors: token.source_vectors,
                     });
                 }
-                type_qualifiers.set_is_const(true);
+                type_qualifiers.insert(TypeQualifiers::CONST);
             },
             | TokenType::Keyword(KeywordTokenType::Volatile) => {
-                if type_qualifiers.is_volatile() {
+                if type_qualifiers.contains(TypeQualifiers::VOLATILE) {
                     context.parser_error(ParserError {
                         error_type:     ParserErrorType::VolatileSpecifiedTwice,
                         source_vectors: token.source_vectors,
                     });
                 }
-                type_qualifiers.set_is_volatile(true);
+                type_qualifiers.insert(TypeQualifiers::VOLATILE);
             },
             | TokenType::Keyword(KeywordTokenType::Restrict) => {
-                if type_qualifiers.is_restrict() {
+                if type_qualifiers.contains(TypeQualifiers::RESTRICT) {
                     context.parser_error(ParserError {
                         error_type:     ParserErrorType::RestrictSpecifiedTwice,
                         source_vectors: token.source_vectors,
                     });
                 }
-                type_qualifiers.set_is_restrict(true);
+                type_qualifiers.insert(TypeQualifiers::RESTRICT);
             },
             | _ => {
                 self.pending_token = Some(token);
@@ -1778,7 +1778,7 @@ impl Parser {
     ) -> Option<()> {
         let mut is_static = false;
         let mut is_pointer = false;
-        let mut type_qualifiers = TypeQualifiers(0);
+        let mut type_qualifiers = TypeQualifiers::empty();
         let mut type_qualifiers_before_static = false;
         let mut assignment_expression = None;
         macro_rules! push {
@@ -1818,7 +1818,7 @@ impl Parser {
                     is_static = true;
                 },
                 | TokenType::Keyword(KeywordTokenType::Const) => {
-                    if type_qualifiers.is_const() {
+                    if type_qualifiers.contains(TypeQualifiers::CONST) {
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::ConstSpecifiedTwice,
                             source_vectors: token.source_vectors,
@@ -1833,10 +1833,10 @@ impl Parser {
                     if !is_static {
                         type_qualifiers_before_static = true;
                     }
-                    type_qualifiers.set_is_const(true);
+                    type_qualifiers.insert(TypeQualifiers::CONST);
                 },
                 | TokenType::Keyword(KeywordTokenType::Volatile) => {
-                    if type_qualifiers.is_volatile() {
+                    if type_qualifiers.contains(TypeQualifiers::VOLATILE) {
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::VolatileSpecifiedTwice,
                             source_vectors: token.source_vectors,
@@ -1851,10 +1851,10 @@ impl Parser {
                     if !is_static {
                         type_qualifiers_before_static = true;
                     }
-                    type_qualifiers.set_is_volatile(true);
+                    type_qualifiers.insert(TypeQualifiers::VOLATILE);
                 },
                 | TokenType::Keyword(KeywordTokenType::Restrict) => {
-                    if type_qualifiers.is_restrict() {
+                    if type_qualifiers.contains(TypeQualifiers::RESTRICT) {
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::RestrictSpecifiedTwice,
                             source_vectors: token.source_vectors,
@@ -1869,7 +1869,7 @@ impl Parser {
                     if !is_static {
                         type_qualifiers_before_static = true;
                     }
-                    type_qualifiers.set_is_restrict(true);
+                    type_qualifiers.insert(TypeQualifiers::RESTRICT);
                 },
                 | TokenType::Operator(OperatorTokenType::Asterisk) => {
                     if is_pointer {
@@ -1891,8 +1891,7 @@ impl Parser {
                             source_vectors: token.source_vectors,
                         });
                     }
-                    if type_qualifiers != TypeQualifiers(0) && IS_ABSTRACT == IS_ABSTRACT_DECLARATOR
-                    {
+                    if !type_qualifiers.is_empty() && IS_ABSTRACT == IS_ABSTRACT_DECLARATOR {
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
                             source_vectors: token.source_vectors,
@@ -2245,38 +2244,38 @@ impl Parser {
     }
 
     fn parse_type_qualifiers(&mut self, context: &mut Context) -> TypeQualifiers {
-        let mut ret = TypeQualifiers(0);
+        let mut ret = TypeQualifiers::empty();
         loop {
             let Some(token) = self.next_token(context) else {
                 break;
             };
             match token.kind {
                 | TokenType::Keyword(KeywordTokenType::Const) => {
-                    if ret.is_const() {
+                    if ret.contains(TypeQualifiers::CONST) {
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::ConstSpecifiedTwice,
                             source_vectors: token.source_vectors,
                         });
                     }
-                    ret.set_is_const(true);
+                    ret.insert(TypeQualifiers::CONST);
                 },
                 | TokenType::Keyword(KeywordTokenType::Volatile) => {
-                    if ret.is_volatile() {
+                    if ret.contains(TypeQualifiers::VOLATILE) {
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::VolatileSpecifiedTwice,
                             source_vectors: token.source_vectors,
                         });
                     }
-                    ret.set_is_volatile(true);
+                    ret.insert(TypeQualifiers::VOLATILE);
                 },
                 | TokenType::Keyword(KeywordTokenType::Restrict) => {
-                    if ret.is_restrict() {
+                    if ret.contains(TypeQualifiers::RESTRICT) {
                         context.parser_error(ParserError {
                             error_type:     ParserErrorType::RestrictSpecifiedTwice,
                             source_vectors: token.source_vectors,
                         });
                     }
-                    ret.set_is_restrict(true);
+                    ret.insert(TypeQualifiers::RESTRICT);
                 },
                 | _ => {
                     self.pending_token = Some(token);
