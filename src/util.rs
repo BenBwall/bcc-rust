@@ -1,11 +1,9 @@
-use std::{
-    borrow::Cow,
-    path::Path,
-};
+use std::{borrow::Cow, path::Path};
 
 use rustc_hash::FxBuildHasher;
 
 pub(crate) mod dedup_arena;
+pub(crate) mod last_entry;
 pub(crate) mod shared;
 pub(crate) mod small_queue;
 pub(crate) mod stack_queue;
