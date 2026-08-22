@@ -8,10 +8,7 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
-    hash::{
-        BuildHasherDefault,
-        Hash,
-    },
+    hash::Hash,
     path::Path,
 };
 
@@ -71,7 +68,7 @@ impl GetSourceVectors for TranslationError {
 }
 
 use owo_colors::OwoColorize;
-use rustc_hash::FxHasher;
+use rustc_hash::FxBuildHasher;
 use smallstr::SmallString;
 use thiserror::Error;
 
@@ -382,7 +379,7 @@ pub(crate) struct Context {
     is_tokenizing_include_string: bool,
     ignore_tokenizer_errors:      bool,
     pending_errors:               Vec<TranslationError>,
-    pub(crate) source_files:      DedupArena<Box<Path>, BuildHasherDefault<FxHasher>>,
+    pub(crate) source_files:      DedupArena<Box<Path>, FxBuildHasher>,
 }
 
 impl Context {

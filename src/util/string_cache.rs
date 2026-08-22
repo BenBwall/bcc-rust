@@ -6,18 +6,15 @@ use std::{
         Display,
         Formatter,
     },
-    hash::{
-        BuildHasher,
-        BuildHasherDefault,
-    },
+    hash::BuildHasher,
     num::NonZeroU32,
 };
 
 use hashbrown::{
-    HashMap,
-    hash_map::RawEntryMut,
+    HashTable,
+    hash_table::Entry,
 };
-use rustc_hash::FxHasher;
+use rustc_hash::FxBuildHasher;
 #[expect(
     clippy::assertions_on_constants,
     reason = "Clippy is giving a false positive here, the value of usize::BITS will vary \
@@ -30,10 +27,9 @@ const _: () = assert!(
 
 #[derive(Debug, Clone)]
 pub(crate) struct StringCache {
-    ends:   Vec<u32>,
-    data:   String,
-    dedup:  HashMap<StringCacheId, (), ()>,
-    hasher: BuildHasherDefault<FxHasher>,
+    ends:  Vec<u32>,
+    data:  String,
+    dedup: HashTable<StringCacheId>,
 }
 
 impl PartialEq<StringCache> for StringCache {
@@ -107,10 +103,9 @@ impl StringCache {
     /// Creates a new empty `StringCache`. Does not allocate.
     pub(crate) fn new() -> Self {
         Self {
-            ends:   vec![0],
-            data:   String::new(),
-            dedup:  HashMap::default(),
-            hasher: BuildHasherDefault::default(),
+            ends:  vec![0],
+            data:  String::new(),
+            dedup: HashTable::new(),
         }
     }
 
@@ -135,50 +130,39 @@ impl StringCache {
     /// the string cache.
     pub(crate) fn intern(&mut self, s: impl AsRef<str>) -> StringCacheId {
         fn inner(interner: &mut StringCache, s: &str) -> StringCacheId {
-            let hash = interner.hasher.hash_one(s);
-            let entry = interner.dedup.raw_entry_mut().from_hash(hash, |id| {
-                // SAFETY: This is safe because we only operate on id that have been previously
-                // interned.
-                s == unsafe {
-                    StringCache::get_impl(&interner.data, &interner.ends, *id).unwrap_unchecked()
-                }
-            });
-            let (&mut symbol, &mut ()) = match entry {
-                | RawEntryMut::Occupied(occupied) => occupied.into_key_value(),
-                | RawEntryMut::Vacant(vacant) => {
+            let hash = FxBuildHasher.hash_one(s);
+            match interner.dedup.entry(
+                hash,
+                |id| s == StringCache::at_impl(&interner.data, &interner.ends, *id),
+                |id| {
+                    FxBuildHasher.hash_one(StringCache::at_impl(
+                        &interner.data,
+                        &interner.ends,
+                        *id,
+                    ))
+                },
+            ) {
+                | Entry::Occupied(entry) => *entry.get(),
+                | Entry::Vacant(entry) => {
                     let symbol =
                         StringCache::intern_impl(&mut interner.data, &mut interner.ends, s);
-                    vacant.insert_with_hasher(hash, symbol, (), |id| {
-                        // SAFETY: This is safe because we only operate on symbols that
-                        //         we receive from our backend making them valid.
-                        let string = unsafe {
-                            StringCache::get_impl(&interner.data, &interner.ends, *id)
-                                .unwrap_unchecked()
-                        };
-                        interner.hasher.hash_one(string)
-                    })
+                    _ = entry.insert(symbol);
+                    symbol
                 },
-            };
-            symbol
+            }
         }
         inner(self, s.as_ref())
     }
 
     pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
         fn inner(interner: &StringCache, s: &str) -> Option<StringCacheId> {
-            let hash = interner.hasher.hash_one(s);
+            let hash = FxBuildHasher.hash_one(s);
             interner
                 .dedup
-                .raw_entry()
-                .from_hash(hash, |symbol| {
-                    // SAFETY: This is safe because we only operate on id that have been previously
-                    // interned.
-                    s == unsafe {
-                        StringCache::get_impl(&interner.data, &interner.ends, *symbol)
-                            .unwrap_unchecked()
-                    }
+                .find(hash, |symbol| {
+                    s == StringCache::at_impl(&interner.data, &interner.ends, *symbol)
                 })
-                .map(|(&id, &())| id)
+                .copied()
         }
         inner(self, s.as_ref())
     }
@@ -231,31 +215,24 @@ impl StringCache {
     pub(crate) fn end_str(&mut self) -> StringCacheId {
         self.ends.push(self.data.len() as u32);
         let id = StringCacheId::from_u32(self.ends.len() as u32 - 1);
-        // SAFETY: We're know that the ID is valid because we just created it.
-        let s = unsafe { Self::get_impl(&self.data, &self.ends, id).unwrap_unchecked() };
-        let hash = self.hasher.hash_one(s);
-        let entry = self.dedup.raw_entry_mut().from_hash(hash, |id| {
-            // SAFETY: This is safe because we only operate on id that have been previously
-            // interned.
-            s == unsafe { Self::get_impl(&self.data, &self.ends, *id).unwrap_unchecked() }
-        });
-        let (&mut symbol, &mut ()) = match entry {
-            | RawEntryMut::Occupied(occupied) => {
+        let s = Self::at_impl(&self.data, &self.ends, id);
+        let hash = FxBuildHasher.hash_one(s);
+        match self.dedup.entry(
+            hash,
+            |stored_id| s == Self::at_impl(&self.data, &self.ends, *stored_id),
+            |stored_id| FxBuildHasher.hash_one(Self::at_impl(&self.data, &self.ends, *stored_id)),
+        ) {
+            | Entry::Occupied(entry) => {
+                let symbol = *entry.get();
                 _ = self.ends.pop();
                 Self::undo_str_impl(&mut self.data, &self.ends);
-                occupied.into_key_value()
+                symbol
             },
-            | RawEntryMut::Vacant(vacant) => {
-                vacant.insert_with_hasher(hash, id, (), |id| {
-                    // SAFETY: This is safe because we only operate on symbols that
-                    //         we receive from our backend making them valid.
-                    let string =
-                        unsafe { Self::get_impl(&self.data, &self.ends, *id).unwrap_unchecked() };
-                    self.hasher.hash_one(string)
-                })
+            | Entry::Vacant(entry) => {
+                _ = entry.insert(id);
+                id
             },
-        };
-        symbol
+        }
     }
 
     pub(crate) fn undo_str(&mut self) {
@@ -278,17 +255,18 @@ impl StringCache {
         Some(slice)
     }
 
+    fn at_impl<'a>(data: &'a str, ends: &[u32], id: StringCacheId) -> &'a str {
+        Self::get_impl(data, ends, id)
+            .unwrap_or_else(|| panic!("Compiler bug: StringCacheId is out of bounds: {id:#?}"))
+    }
+
     pub(crate) fn at(&self, id: impl Into<StringCacheId>) -> &str {
-        fn inner(interner: &StringCache, id: StringCacheId) -> &str {
-            interner
-                .get(id)
-                .unwrap_or_else(|| panic!("Compiler bug: StringCacheId is out of bounds: {id:#?}"))
-        }
-        inner(self, id.into())
+        Self::at_impl(&self.data, &self.ends, id.into())
     }
 
     pub(crate) fn clear(&mut self) {
         self.ends.truncate(1);
         self.data.clear();
+        self.dedup.clear();
     }
 }

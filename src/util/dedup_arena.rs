@@ -7,7 +7,10 @@ use std::{
     ops::Deref,
 };
 
-use hashbrown::raw::RawTable;
+use hashbrown::{
+    HashTable,
+    hash_table::Entry,
+};
 
 #[expect(
     dead_code,
@@ -15,7 +18,7 @@ use hashbrown::raw::RawTable;
               reimplement it."
 )]
 pub(crate) struct DedupArena<T, H> {
-    indices: RawTable<u32>,
+    indices: HashTable<u32>,
     data:    Vec<T>,
     hasher:  H,
 }
@@ -23,7 +26,7 @@ pub(crate) struct DedupArena<T, H> {
 impl<T, H> DedupArena<T, H> {
     pub(crate) fn with_hasher(hasher: H) -> Self {
         Self {
-            indices: RawTable::new(),
+            indices: HashTable::new(),
             data: Vec::new(),
             hasher,
         }
@@ -38,7 +41,7 @@ impl<T, H> DedupArena<T, H> {
 
     pub(crate) fn with_capacity_and_hasher(capacity: usize, hasher: H) -> Self {
         Self {
-            indices: RawTable::with_capacity(capacity),
+            indices: HashTable::with_capacity(capacity),
             data: Vec::with_capacity(capacity),
             hasher,
         }
@@ -64,21 +67,15 @@ impl<T, H> DedupArena<T, H> {
         let hash = self.hasher.hash_one(&value);
         let index = u32::try_from(self.data.len()).expect("DedupArena: Too many values.");
 
-        match self.indices.find_or_find_insert_slot(
+        match self.indices.entry(
             hash,
-            |x| self.data[*x as usize] == value,
-            |x| self.hasher.hash_one(&self.data[*x as usize]),
+            |&stored_index| self.data[stored_index as usize] == value,
+            |&stored_index| self.hasher.hash_one(&self.data[stored_index as usize]),
         ) {
-            | Ok(bucket) =>
-            // SAFETY: The bucket is guaranteed to be valid because it was returned by
-            // `find_or_find_insert_slot`.
-            unsafe { Err(*bucket.as_ref()) },
-            // SAFETY:
-            // Based on the implementation of HashMap in hashbrown. Inserting into the slot
-            // is valid because it was returned by `find_or_find_insert_slot`.
-            | Err(slot) => unsafe {
+            | Entry::Occupied(entry) => Err(*entry.get()),
+            | Entry::Vacant(entry) => {
                 self.data.push(value);
-                _ = self.indices.insert_in_slot(hash, slot, index);
+                _ = entry.insert(index);
                 Ok(index)
             },
         }
