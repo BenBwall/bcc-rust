@@ -1326,6 +1326,9 @@ enum ExpressionTerminator {
 enum SynchronizationKind {
     /// Stop before a declarator separator, terminator, or enclosing brace.
     Declaration,
+    /// Stop before a `for` header's closing parenthesis as well as declaration
+    /// separators.
+    ForInitializer,
     /// Stop before an initializer separator or declaration boundary.
     Initializer,
     /// Stop before the owning `]` or an enclosing declaration boundary.
@@ -2495,7 +2498,7 @@ impl StatementFrame {
                         ParserErrorType::ExpectedStatement(token.map(|token| token.kind)),
                         token,
                     );
-                    if stray_else {
+                    if stray_else && !self.leave_else_unconsumed {
                         self.merge_token(parser, context, token.expect("else token exists"));
                         self.phase = StatementPhase::Finish(StatementType::Null);
                         return ParseAction::Consume;
@@ -2795,10 +2798,12 @@ impl StatementFrame {
             | StatementPhase::PushHeaderBody(kind, expression) => {
                 debug_assert!(returned.is_none());
                 self.phase = StatementPhase::AwaitHeaderBody(kind, expression);
-                ParseAction::Push(ParseFrame::Statement(StatementFrame::new(
-                    parser.hard_error_count,
-                    Some(kind.scope_kind()),
-                )))
+                let frame = if kind == HeaderKind::If {
+                    StatementFrame::for_if_then(parser.hard_error_count, Some(kind.scope_kind()))
+                } else {
+                    StatementFrame::new(parser.hard_error_count, Some(kind.scope_kind()))
+                };
+                ParseAction::Push(ParseFrame::Statement(frame))
             },
             | StatementPhase::AwaitHeaderBody(kind, expression) => {
                 let Some(ParseValue::Statement(body)) = returned else {
@@ -3520,12 +3525,13 @@ enum StatementPhase {
 
 #[derive(Debug)]
 struct StatementFrame {
-    phase:                StatementPhase,
-    source_vectors:       Option<SourceVectors>,
-    starting_error_count: usize,
-    entry_scope_depth:    Option<usize>,
-    implicit_scope:       Option<ScopeKind>,
-    owns_switch_scope:    bool,
+    phase:                 StatementPhase,
+    source_vectors:        Option<SourceVectors>,
+    starting_error_count:  usize,
+    entry_scope_depth:     Option<usize>,
+    implicit_scope:        Option<ScopeKind>,
+    owns_switch_scope:     bool,
+    leave_else_unconsumed: bool,
 }
 
 impl StatementFrame {
@@ -3537,6 +3543,14 @@ impl StatementFrame {
             entry_scope_depth: None,
             implicit_scope,
             owns_switch_scope: false,
+            leave_else_unconsumed: false,
+        }
+    }
+
+    fn for_if_then(starting_error_count: usize, implicit_scope: Option<ScopeKind>) -> Self {
+        Self {
+            leave_else_unconsumed: true,
+            ..Self::new(starting_error_count, implicit_scope)
         }
     }
 }
@@ -4028,6 +4042,15 @@ impl SynchronizationKind {
                         | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
+            | Self::ForInitializer => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Semicolon
+                        | OperatorTokenType::ClosingParenthesis
+                        | OperatorTokenType::ClosingCurlyBrace
+                )
+            ),
             | Self::Initializer => matches!(
                 token,
                 TokenType::Operator(
@@ -4079,39 +4102,41 @@ impl SynchronizationKind {
                         | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
-            | Self::StatementExpression(terminator) => match terminator {
-                | ExpressionTerminator::Semicolon => matches!(
-                    token,
-                    TokenType::Operator(
-                        OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
-                    )
-                ),
-                | ExpressionTerminator::ForSemicolon => matches!(
-                    token,
-                    TokenType::Operator(
-                        OperatorTokenType::Semicolon
-                            | OperatorTokenType::ClosingParenthesis
-                            | OperatorTokenType::ClosingCurlyBrace
-                    )
-                ),
-                | ExpressionTerminator::ClosingParenthesis => matches!(
-                    token,
-                    TokenType::Operator(
-                        OperatorTokenType::ClosingParenthesis
-                            | OperatorTokenType::Semicolon
-                            | OperatorTokenType::OpeningCurlyBrace
-                            | OperatorTokenType::ClosingCurlyBrace
-                    )
-                ),
-                | ExpressionTerminator::Colon => matches!(
-                    token,
-                    TokenType::Operator(
-                        OperatorTokenType::Colon
-                            | OperatorTokenType::Semicolon
-                            | OperatorTokenType::ClosingCurlyBrace
-                    )
-                ),
-            },
+            | Self::StatementExpression(terminator) =>
+                is_statement_keyword(token)
+                    || match terminator {
+                        | ExpressionTerminator::Semicolon => matches!(
+                            token,
+                            TokenType::Operator(
+                                OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                            )
+                        ),
+                        | ExpressionTerminator::ForSemicolon => matches!(
+                            token,
+                            TokenType::Operator(
+                                OperatorTokenType::Semicolon
+                                    | OperatorTokenType::ClosingParenthesis
+                                    | OperatorTokenType::ClosingCurlyBrace
+                            )
+                        ),
+                        | ExpressionTerminator::ClosingParenthesis => matches!(
+                            token,
+                            TokenType::Operator(
+                                OperatorTokenType::ClosingParenthesis
+                                    | OperatorTokenType::Semicolon
+                                    | OperatorTokenType::OpeningCurlyBrace
+                                    | OperatorTokenType::ClosingCurlyBrace
+                            )
+                        ),
+                        | ExpressionTerminator::Colon => matches!(
+                            token,
+                            TokenType::Operator(
+                                OperatorTokenType::Colon
+                                    | OperatorTokenType::Semicolon
+                                    | OperatorTokenType::ClosingCurlyBrace
+                            )
+                        ),
+                    },
             | Self::Statement => matches!(
                 token,
                 TokenType::Operator(
@@ -4139,6 +4164,16 @@ impl SynchronizationKind {
                             OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
                         )
                     ),
+            | Self::ForInitializer =>
+                braces == 0
+                    && matches!(
+                        token,
+                        TokenType::Operator(
+                            OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                        )
+                    )
+                    || parentheses == 0
+                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
             | Self::EnumeratorValue =>
                 braces == 0
                     && matches!(
@@ -4237,6 +4272,28 @@ impl SynchronizationKind {
 /// C99: punctuators are §6.4.6, pp. 63-64; PDF pp. 75-76.
 fn is_operator(token: Option<Token>, operator: OperatorTokenType) -> bool {
     token.is_some_and(|token| token.kind == TokenType::Operator(operator))
+}
+
+/// Returns whether a token begins a statement production rather than an
+/// expression that the deferred expression frame could consume.
+fn is_statement_keyword(token: TokenType) -> bool {
+    matches!(
+        token,
+        TokenType::Keyword(
+            KeywordTokenType::Break
+                | KeywordTokenType::Case
+                | KeywordTokenType::Continue
+                | KeywordTokenType::Default
+                | KeywordTokenType::Do
+                | KeywordTokenType::Else
+                | KeywordTokenType::For
+                | KeywordTokenType::Goto
+                | KeywordTokenType::If
+                | KeywordTokenType::Return
+                | KeywordTokenType::Switch
+                | KeywordTokenType::While
+        )
+    )
 }
 
 impl ParseFrame {
@@ -4488,7 +4545,11 @@ impl DeclarationFrame {
                     );
                     self.phase = DeclarationPhase::AfterMissingDeclarator;
                     return ParseAction::Recover(SynchronizationSet {
-                        kind:   SynchronizationKind::Declaration,
+                        kind:   if self.context == DeclarationContext::ForInitializer {
+                            SynchronizationKind::ForInitializer
+                        } else {
+                            SynchronizationKind::Declaration
+                        },
                         target: ParseFrameKind::Declaration,
                     });
                 };
@@ -4609,6 +4670,11 @@ impl DeclarationFrame {
                     self.is_function_definition_head = true;
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Reprocess
+                } else if self.context == DeclarationContext::ForInitializer
+                    && is_operator(token, OperatorTokenType::ClosingParenthesis)
+                {
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
                     parser.report(
                         context,
@@ -4654,7 +4720,11 @@ impl DeclarationFrame {
                     );
                     self.phase = DeclarationPhase::AfterDeclarator;
                     ParseAction::Recover(SynchronizationSet {
-                        kind:   SynchronizationKind::Declaration,
+                        kind:   if self.context == DeclarationContext::ForInitializer {
+                            SynchronizationKind::ForInitializer
+                        } else {
+                            SynchronizationKind::Declaration
+                        },
                         target: ParseFrameKind::Declaration,
                     })
                 }
@@ -8193,6 +8263,32 @@ mod tests {
     }
 
     #[test]
+    fn missing_if_body_leaves_else_for_its_enclosing_if() {
+        let parsed = parse("int f(void) { if (condition) else value; }\n");
+        let [BlockItem::Statement(if_statement)] =
+            block_items(&parsed, function_definition(&parsed, 0).body)
+        else {
+            panic!("expected one if statement")
+        };
+        let StatementType::If {
+            then_statement,
+            else_statement: Some(else_statement),
+            ..
+        } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+        else {
+            panic!("expected a recovered if statement with an else branch")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+            StatementType::Null
+        ));
+        assert!(matches!(
+            parsed.parser.syntax.statements[else_statement.0 as usize].kind,
+            StatementType::Expression(ExpressionSlot::FutureChild(_))
+        ));
+    }
+
+    #[test]
     fn case_recovery_distinguishes_a_conditional_colon_from_the_label_colon() {
         let parsed = parse("int f(void) { switch (value) { case a ? b : c: ; } }\n");
         let [BlockItem::Statement(switch)] =
@@ -8392,6 +8488,56 @@ mod tests {
             parser_errors(&parsed)
                 .all(|error| !matches!(error, ParserErrorType::StatementExpressionNotImplemented))
         );
+    }
+
+    #[test]
+    fn expression_recovery_preserves_following_statement_keywords() {
+        let parsed = parse("int f(void) { return value break; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::FutureChild(_)))
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
+        )));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedSemicolonInStatement("return statement", Some(_))
+        )));
+    }
+
+    #[test]
+    fn malformed_for_declaration_recovery_preserves_the_header_close() {
+        let parsed = parse("int f(void) { for (int i) ; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 2);
+        let BlockItem::Statement(for_statement) = items[0] else {
+            panic!("expected a for statement")
+        };
+        let StatementType::For {
+            initializer: Some(ForInitializer::Declaration(_)),
+            condition_expression: None,
+            iteration_expression: None,
+            body_statement,
+        } = parsed.parser.syntax.statements[for_statement.0 as usize].kind
+        else {
+            panic!("expected a recovered declaration-form for statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+            StatementType::Null
+        ));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
     }
 
     #[test]
