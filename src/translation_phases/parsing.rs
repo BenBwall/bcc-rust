@@ -1361,17 +1361,25 @@ struct RecoveryState {
     active: Option<ActiveRecovery>,
 }
 
+/// Delimiter depth at which a conditional question mark was consumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DelimiterDepth {
+    parentheses: usize,
+    brackets:    usize,
+    braces:      usize,
+}
+
 /// Delimiter depth and policy for one active recovery scan.
 ///
 /// C99: delimiter ownership follows the productions of §6.5-§6.9,
 /// pp. 67-144; PDF pp. 79-156. Depth tracking is an implementation mechanism.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 struct ActiveRecovery {
     set:         SynchronizationSet,
     parentheses: usize,
     brackets:    usize,
     braces:      usize,
-    questions:   usize,
+    questions:   Vec<DelimiterDepth>,
 }
 
 impl RecoveryState {
@@ -1383,13 +1391,13 @@ impl RecoveryState {
             parentheses: 0,
             brackets: 0,
             braces: 0,
-            questions: 0,
+            questions: Vec::new(),
         });
     }
 
     /// Returns the active scan; callers use this to decide whether to stop.
-    fn active(&self) -> ActiveRecovery {
-        self.active.expect("a recovery scan is active")
+    fn active(&self) -> &ActiveRecovery {
+        self.active.as_ref().expect("a recovery scan is active")
     }
 
     /// Records one consumed token for balanced recovery.
@@ -1417,10 +1425,25 @@ impl RecoveryState {
                 state.braces -= 1;
             },
             | TokenType::Operator(OperatorTokenType::QuestionMark) => {
-                state.questions += 1;
+                state.questions.push(DelimiterDepth {
+                    parentheses: state.parentheses,
+                    brackets:    state.brackets,
+                    braces:      state.braces,
+                });
             },
-            | TokenType::Operator(OperatorTokenType::Colon) if state.questions > 0 => {
-                state.questions -= 1;
+            | TokenType::Operator(OperatorTokenType::Colon) => {
+                let depth = DelimiterDepth {
+                    parentheses: state.parentheses,
+                    brackets:    state.brackets,
+                    braces:      state.braces,
+                };
+                if state
+                    .questions
+                    .last()
+                    .is_some_and(|question| *question == depth)
+                {
+                    _ = state.questions.pop();
+                }
             },
             | _ => {},
         }
@@ -1428,7 +1451,7 @@ impl RecoveryState {
 
     /// Completes the active scan and restores normal parser execution.
     fn finish(&mut self) {
-        _ = self.active.take().expect("a recovery scan is active");
+        drop(self.active.take().expect("a recovery scan is active"));
     }
 }
 
@@ -2461,17 +2484,22 @@ impl StatementFrame {
                         | _ => {},
                     }
                 }
+                let stray_else = token
+                    .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Else));
                 if token.is_none()
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
-                    || token.is_some_and(|token| {
-                        matches!(token.kind, TokenType::Keyword(KeywordTokenType::Else))
-                    })
+                    || stray_else
                 {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedStatement(token.map(|token| token.kind)),
                         token,
                     );
+                    if stray_else {
+                        self.merge_token(parser, context, token.expect("else token exists"));
+                        self.phase = StatementPhase::Finish(StatementType::Null);
+                        return ParseAction::Consume;
+                    }
                     return self.finish(parser, StatementType::Null);
                 }
                 self.phase = StatementPhase::AwaitExpression;
@@ -3668,18 +3696,28 @@ impl Parser {
 
         while let Some(token) = self.cursor.current(context) {
             let state = self.recovery.active();
+            let recovery_set = state.set;
             let at_top_level = state.parentheses == 0 && state.brackets == 0 && state.braces == 0;
-            let colon_matches_conditional =
-                state.questions > 0 && token.kind == TokenType::Operator(OperatorTokenType::Colon);
+            let delimiter_depth = DelimiterDepth {
+                parentheses: state.parentheses,
+                brackets:    state.brackets,
+                braces:      state.braces,
+            };
+            let colon_matches_conditional = token.kind
+                == TokenType::Operator(OperatorTokenType::Colon)
+                && state
+                    .questions
+                    .last()
+                    .is_some_and(|question| *question == delimiter_depth);
             let at_unambiguous_owning_delimiter = !colon_matches_conditional
-                && state.set.kind.stops_before_despite_unbalanced_child(
+                && recovery_set.kind.stops_before_despite_unbalanced_child(
                     token.kind,
                     state.parentheses,
                     state.brackets,
                     state.braces,
                 );
             let stops_at_initial_declaration = matches!(
-                (state.set.kind, state.set.target),
+                (recovery_set.kind, recovery_set.target),
                 |(SynchronizationKind::Declaration | SynchronizationKind::Parameter, _)| (
                     SynchronizationKind::StructMember,
                     ParseFrameKind::StructOrUnionSpecifier
@@ -3689,7 +3727,7 @@ impl Parser {
                 )
             );
             let stops_at_declaration_after_malformed_prefix = matches!(
-                state.set.kind,
+                recovery_set.kind,
                 SynchronizationKind::Initializer
                     | SynchronizationKind::ArrayBound
                     | SynchronizationKind::VariadicParameterList
@@ -3701,21 +3739,22 @@ impl Parser {
                 && at_top_level
                 && self.declaration_starter(token);
             let at_next_k_and_r_identifier =
-                matches!(state.set.kind, SynchronizationKind::KAndRParameter)
+                matches!(recovery_set.kind, SynchronizationKind::KAndRParameter)
                     && at_top_level
                     && token.kind == TokenType::Identifier
                     && !self.scopes.is_typedef(token.contents);
-            let at_next_enumerator = matches!(state.set.kind, SynchronizationKind::EnumeratorValue)
-                && at_top_level
-                && state.set.target == ParseFrameKind::EnumSpecifier
-                && token.kind == TokenType::Identifier;
+            let at_next_enumerator =
+                matches!(recovery_set.kind, SynchronizationKind::EnumeratorValue)
+                    && at_top_level
+                    && recovery_set.target == ParseFrameKind::EnumSpecifier
+                    && token.kind == TokenType::Identifier;
             if at_unambiguous_owning_delimiter
                 || at_next_declaration
                 || at_next_k_and_r_identifier
                 || at_next_enumerator
                 || at_top_level
                     && !colon_matches_conditional
-                    && state.set.kind.stops_before(token.kind)
+                    && recovery_set.kind.stops_before(token.kind)
             {
                 break;
             }
@@ -3882,8 +3921,8 @@ impl Parser {
         self.declarator_function_binding(declarator) == Some(true)
     }
 
-    /// Walks parenthesized declarators to determine the suffix bound directly
-    /// to the declared identifier.
+    /// Walks parenthesized declarators to find the function suffix bound to the
+    /// declared identifier rather than a function type returned by it.
     ///
     /// C99: parenthesized declarator binding follows §6.7.5 paragraph 4,
     /// p. 114; PDF p. 126.
@@ -3939,20 +3978,21 @@ impl Parser {
     }
 
     fn function_suffix(&self, mut declarator: Declarator) -> Option<DirectDeclarator> {
+        let mut suffix = None;
         loop {
             let start = declarator.kind.start_index as usize;
             let end = start + declarator.kind.length as usize;
             let direct = &self.syntax.direct_declarators[start..end];
-            if let Some(suffix) = direct.get(1).copied()
+            if let Some(candidate) = direct.get(1).copied()
                 && matches!(
-                    suffix,
+                    candidate,
                     DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
                 )
             {
-                return Some(suffix);
+                suffix = Some(candidate);
             }
             let Some(DirectDeclarator::Parenthesized(nested)) = direct.first() else {
-                return None;
+                return suffix;
             };
             declarator = *nested;
         }
@@ -8092,6 +8132,43 @@ mod tests {
     }
 
     #[test]
+    fn function_definition_publishes_identifier_bound_parameters() {
+        let old_style = parse("int (*legacy(a))(int) int a; { return; }\n");
+        let definition = function_definition(&old_style, 0);
+        assert_eq!(definition.old_style_declarations.length, 1);
+        assert!(!definition.recovered);
+        assert!(
+            parser_errors(&old_style).next().is_none(),
+            "{:#?}",
+            old_style.errors
+        );
+
+        let nested = parse("typedef int Y;\nint (*nested(int x))(int Y) { Y value; return 0; }\n");
+        let definition = function_definition(&nested, 1);
+        let items = block_items(&nested, definition.body);
+        assert!(matches!(items[0], BlockItem::Declaration(_)));
+        assert_eq!(
+            identifier_name(
+                &nested,
+                init_declarators(
+                    &nested,
+                    &nested.parser.syntax.declarations[match items[0] {
+                        | BlockItem::Declaration(index) => index.0 as usize,
+                        | BlockItem::Statement(_) => unreachable!(),
+                    }],
+                )[0]
+                .declarator,
+            )
+            .as_deref(),
+            Some("value")
+        );
+        assert!(
+            parser_errors(&nested)
+                .all(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
+        );
+    }
+
+    #[test]
     fn dangling_else_binds_to_the_nearest_unmatched_if() {
         let parsed = parse("int f(void) { if (outer) if (inner) ; else ; }\n");
         let definition = function_definition(&parsed, 0);
@@ -8141,6 +8218,66 @@ mod tests {
         assert!(
             parser_errors(&parsed)
                 .all(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
+        );
+    }
+
+    #[test]
+    fn case_recovery_does_not_steal_a_colon_after_a_closed_conditional_delimiter() {
+        let parsed = parse("int f(void) { switch (value) { case (a ? b) : ; } }\n");
+        let [BlockItem::Statement(switch)] =
+            block_items(&parsed, function_definition(&parsed, 0).body)
+        else {
+            panic!("expected one switch statement")
+        };
+        let StatementType::Switch { body_statement, .. } =
+            parsed.parser.syntax.statements[switch.0 as usize].kind
+        else {
+            panic!("expected switch syntax")
+        };
+        let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
+            panic!("expected one case label")
+        };
+        let StatementType::Case(ExpressionSlot::FutureChild(expression), _) =
+            parsed.parser.syntax.statements[case.0 as usize].kind
+        else {
+            panic!("expected a deferred case expression")
+        };
+
+        assert_eq!(sourced_text(&parsed, expression), "(a?b)");
+        assert!(
+            parser_errors(&parsed)
+                .all(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
+        );
+    }
+
+    #[test]
+    fn stray_else_consumes_its_token_and_preserves_following_items() {
+        let parsed = parse("int f(void) { else; return; }\nint after;\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Statement(first) if matches!(
+            parsed.parser.syntax.statements[first.0 as usize].kind,
+            StatementType::Null
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(second) if matches!(
+            parsed.parser.syntax.statements[second.0 as usize].kind,
+            StatementType::Null
+        )));
+        assert!(matches!(items[2], BlockItem::Statement(third) if matches!(
+            parsed.parser.syntax.statements[third.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedStatement(Some(TokenType::Keyword(KeywordTokenType::Else)))
+        )));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator,
+            )
+            .as_deref(),
+            Some("after")
         );
     }
 
