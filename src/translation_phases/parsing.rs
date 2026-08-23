@@ -3828,25 +3828,42 @@ impl Parser {
                     && at_top_level
                     && recovery_set.target == ParseFrameKind::EnumSpecifier
                     && token.kind == TokenType::Identifier;
-            let at_next_identifier_label = matches!(
-                recovery_set.kind,
-                SynchronizationKind::StatementExpression(ExpressionTerminator::Semicolon)
-            ) && at_top_level
-                && token.kind == TokenType::Identifier
-                && is_operator(self.cursor.following(context), OperatorTokenType::Colon);
-            let at_statement_body_brace = matches!(
-                recovery_set.kind,
-                SynchronizationKind::StatementExpression(ExpressionTerminator::ClosingParenthesis)
-            ) && at_top_level
-                && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-                && state.last_token
-                    != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis));
+            let has_pending_conditional_at_depth = state
+                .questions
+                .iter()
+                .any(|question| *question == delimiter_depth);
+            let at_next_identifier_label =
+                (matches!(
+                    recovery_set.kind,
+                    SynchronizationKind::StatementExpression(ExpressionTerminator::Semicolon)
+                ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration))
+                    && at_top_level
+                    && !has_pending_conditional_at_depth
+                    && token.kind == TokenType::Identifier
+                    && is_operator(self.cursor.following(context), OperatorTokenType::Colon);
+            let at_statement_body_brace =
+                (matches!(
+                    recovery_set.kind,
+                    SynchronizationKind::StatementExpression(
+                        ExpressionTerminator::ClosingParenthesis | ExpressionTerminator::Semicolon
+                    )
+                ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration))
+                    && at_top_level
+                    && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    && state.last_token
+                        != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis));
+            let at_next_statement_keyword =
+                matches!(recovery_set.kind, SynchronizationKind::Statement)
+                    && consumed_tokens > 0
+                    && at_top_level
+                    && is_statement_keyword(token.kind);
             if at_unambiguous_owning_delimiter
                 || at_next_declaration
                 || at_next_k_and_r_identifier
                 || at_next_enumerator
                 || at_next_identifier_label
                 || at_statement_body_brace
+                || at_next_statement_keyword
                 || at_top_level
                     && !colon_matches_conditional
                     && recovery_set.kind.stops_before(token.kind)
@@ -4883,6 +4900,23 @@ impl DeclarationFrame {
                         || self.context == DeclarationContext::Block
                             && is_statement_keyword(token.kind)
                 }) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Reprocess
+                } else if self.context == DeclarationContext::Block
+                    && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
+                        || token.is_some_and(|token| token.kind == TokenType::Identifier)
+                            && is_operator(
+                                parser.cursor.following(context),
+                                OperatorTokenType::Colon,
+                            ))
+                {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
@@ -8906,6 +8940,96 @@ mod tests {
         assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn conditional_operands_are_not_recovered_as_identifier_labels() {
+        let parsed = parse("int f(int c, int x, int y) { c ? x : y; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2);
+        let BlockItem::Statement(expression) = items[0] else {
+            panic!("expected an expression statement")
+        };
+        let StatementType::Expression(ExpressionSlot::FutureChild(source)) =
+            parsed.parser.syntax.statements[expression.0 as usize].kind
+        else {
+            panic!("expected a deferred expression")
+        };
+        assert_eq!(sourced_text(&parsed, source), "c?x:y");
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn block_declaration_recovery_preserves_following_identifier_labels() {
+        let parsed = parse("int f(void) { int value label: ; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Declaration(_)));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Label(_, _)
+        )));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn malformed_block_items_preserve_following_compound_statements() {
+        for source in [
+            "int f(void) { int x { return; } break; }\n",
+            "int f(void) { value { return; } break; }\n",
+        ] {
+            let parsed = parse(source);
+            let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+            assert_eq!(items.len(), 3, "{items:#?}");
+            let BlockItem::Statement(compound) = items[1] else {
+                panic!("expected a preserved compound statement: {items:#?}")
+            };
+            let nested_items = block_items(&parsed, compound);
+            assert!(
+                matches!(nested_items, [BlockItem::Statement(index)] if matches!(
+                    parsed.parser.syntax.statements[index.0 as usize].kind,
+                    StatementType::Return(None)
+                ))
+            );
+            assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+                parsed.parser.syntax.statements[index.0 as usize].kind,
+                StatementType::Break
+            )));
+        }
+    }
+
+    #[test]
+    fn statement_recovery_preserves_following_statement_keywords() {
+        let parsed = parse("int f(void) { if (x) int y return; break; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 3);
+        let BlockItem::Statement(if_statement) = items[0] else {
+            panic!("expected an if statement")
+        };
+        let StatementType::If { then_statement, .. } =
+            parsed.parser.syntax.statements[if_statement.0 as usize].kind
+        else {
+            panic!("expected an if statement")
+        };
+        assert!(parsed.parser.syntax.statements[then_statement.0 as usize].recovered);
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
         )));
     }
 
