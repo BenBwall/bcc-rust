@@ -1328,6 +1328,8 @@ enum SynchronizationKind {
     Declaration,
     /// Stop before a block statement keyword as well as declaration boundaries.
     BlockDeclaration,
+    /// Stop before the function body of an old-style definition.
+    OldStyleParameter,
     /// Stop before a `for` header's closing parenthesis as well as declaration
     /// separators.
     ForInitializer,
@@ -2869,9 +2871,10 @@ impl StatementFrame {
             | StatementPhase::PushElse(expression, then_statement) => {
                 debug_assert!(returned.is_none());
                 self.phase = StatementPhase::AwaitElse(expression, then_statement);
-                ParseAction::Push(ParseFrame::Statement(StatementFrame::new(
+                ParseAction::Push(ParseFrame::Statement(StatementFrame::with_else_ownership(
                     parser.hard_error_count,
                     Some(ScopeKind::ImplicitSelection),
+                    self.leave_else_unconsumed,
                 )))
             },
             | StatementPhase::AwaitElse(expression, then_statement) => {
@@ -3761,6 +3764,7 @@ impl Parser {
                 |(
                     SynchronizationKind::Declaration
                     | SynchronizationKind::BlockDeclaration
+                    | SynchronizationKind::OldStyleParameter
                     | SynchronizationKind::Parameter,
                     _,
                 )| (
@@ -4083,6 +4087,15 @@ impl SynchronizationKind {
                                 | OperatorTokenType::ClosingCurlyBrace
                         )
                     ),
+            | Self::OldStyleParameter => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Semicolon
+                        | OperatorTokenType::OpeningCurlyBrace
+                        | OperatorTokenType::ClosingCurlyBrace
+                )
+            ),
             | Self::ForInitializer => matches!(
                 token,
                 TokenType::Operator(
@@ -4213,6 +4226,18 @@ impl SynchronizationKind {
                             OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
                         )
                     ),
+            | Self::OldStyleParameter =>
+                braces == 0
+                    && matches!(
+                        token,
+                        TokenType::Operator(
+                            OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                        )
+                    )
+                    || parentheses == 0
+                        && brackets == 0
+                        && braces == 0
+                        && token == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace),
             | Self::ForInitializer =>
                 braces == 0
                     && matches!(
@@ -4535,8 +4560,8 @@ impl DeclarationFrame {
         match self.context {
             | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
             | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
-            | DeclarationContext::External | DeclarationContext::OldStyleParameter =>
-                SynchronizationKind::Declaration,
+            | DeclarationContext::External => SynchronizationKind::Declaration,
+            | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
         }
     }
 
@@ -4544,8 +4569,8 @@ impl DeclarationFrame {
         match self.context {
             | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
             | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
-            | DeclarationContext::External | DeclarationContext::OldStyleParameter =>
-                SynchronizationKind::Initializer,
+            | DeclarationContext::External => SynchronizationKind::Initializer,
+            | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
         }
     }
 
@@ -4738,6 +4763,18 @@ impl DeclarationFrame {
                 } else if self.context == DeclarationContext::ForInitializer
                     && is_operator(token, OperatorTokenType::ClosingParenthesis)
                 {
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Reprocess
+                } else if self.context == DeclarationContext::OldStyleParameter
+                    && is_operator(token, OperatorTokenType::OpeningCurlyBrace)
+                {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
@@ -8305,6 +8342,31 @@ mod tests {
     }
 
     #[test]
+    fn old_style_parameter_recovery_preserves_the_function_body() {
+        for source in [
+            "int f(a) int a { return; }\n",
+            "int f(a) int a = value { return; }\n",
+        ] {
+            let parsed = parse(source);
+            let definition = function_definition(&parsed, 0);
+            assert_eq!(definition.old_style_declarations.length, 1);
+            let [BlockItem::Statement(statement)] = block_items(&parsed, definition.body) else {
+                panic!("expected the recovered function body to retain its return statement")
+            };
+            assert!(matches!(
+                parsed.parser.syntax.statements[statement.0 as usize].kind,
+                StatementType::Return(None)
+            ));
+            assert!(parser_errors(&parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
+                    TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                ))
+            )));
+        }
+    }
+
+    #[test]
     fn dangling_else_binds_to_the_nearest_unmatched_if() {
         let parsed = parse("int f(void) { if (outer) if (inner) ; else ; }\n");
         let definition = function_definition(&parsed, 0);
@@ -8381,6 +8443,39 @@ mod tests {
         ));
         assert!(matches!(
             parsed.parser.syntax.statements[else_statement.0 as usize].kind,
+            StatementType::Expression(ExpressionSlot::FutureChild(_))
+        ));
+    }
+
+    #[test]
+    fn missing_else_body_leaves_a_later_else_for_its_enclosing_if() {
+        let parsed = parse("int f(void) { if (outer) if (inner) ; else else value; }\n");
+        let [BlockItem::Statement(if_statement)] =
+            block_items(&parsed, function_definition(&parsed, 0).body)
+        else {
+            panic!("expected one if statement")
+        };
+        let StatementType::If {
+            then_statement,
+            else_statement: Some(outer_else),
+            ..
+        } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+        else {
+            panic!("expected the outer if to retain its else branch")
+        };
+        let StatementType::If {
+            else_statement: Some(inner_else),
+            ..
+        } = parsed.parser.syntax.statements[then_statement.0 as usize].kind
+        else {
+            panic!("expected the inner if to retain its first else branch")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.statements[inner_else.0 as usize].kind,
+            StatementType::Null
+        ));
+        assert!(matches!(
+            parsed.parser.syntax.statements[outer_else.0 as usize].kind,
             StatementType::Expression(ExpressionSlot::FutureChild(_))
         ));
     }
