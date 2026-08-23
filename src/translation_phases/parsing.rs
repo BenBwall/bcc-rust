@@ -1129,6 +1129,7 @@ enum DeclarationPhase {
     Start,
     AwaitSpecifiers,
     AwaitDeclarator,
+    AfterMissingDeclarator,
     AfterDeclarator,
     PushInitializer,
     AwaitInitializer,
@@ -2020,7 +2021,7 @@ impl DeclarationFrame {
                         ),
                         token,
                     );
-                    self.phase = DeclarationPhase::AfterDeclarator;
+                    self.phase = DeclarationPhase::AfterMissingDeclarator;
                     return ParseAction::Recover(SynchronizationSet {
                         kind:   SynchronizationKind::Declaration,
                         target: RecoveryTarget::CurrentFrame,
@@ -2053,6 +2054,31 @@ impl DeclarationFrame {
                 }
                 self.phase = DeclarationPhase::AfterDeclarator;
                 ParseAction::Reprocess
+            },
+            | DeclarationPhase::AfterMissingDeclarator => {
+                debug_assert!(
+                    returned.is_none(),
+                    "this frame phase cannot receive a child value"
+                );
+                if is_operator(token, OperatorTokenType::Comma) {
+                    let token = token.expect("comma token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = DeclarationPhase::BeforeNextDeclarator;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    let token = token.expect("semicolon token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
+                    let token = token.expect("closing-curly-brace token exists");
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Consume
+                } else {
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Reprocess
+                }
             },
             | DeclarationPhase::AfterDeclarator => {
                 debug_assert!(
@@ -3281,6 +3307,16 @@ impl ParameterListFrame {
                         None,
                     );
                     self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Reprocess
+                } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = ParameterListPhase::PrototypeParameter;
                     ParseAction::Reprocess
                 } else {
                     parser.report(
@@ -5264,6 +5300,35 @@ mod tests {
     }
 
     #[test]
+    fn missing_declarators_skip_post_declarator_diagnostics() {
+        for source in ["int", "int + int after;\n"] {
+            let parsed = parse(source);
+
+            assert!(
+                parser_errors(&parsed).any(|error| matches!(
+                    error,
+                    ParserErrorType::ExpectedDeclaratorInDeclaration(_)
+                ))
+            );
+            assert!(!parser_errors(&parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(_)
+            )));
+        }
+
+        let parsed = parse("int + int after;\n");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
     fn malformed_parameter_recovery_stops_at_comma_and_keeps_the_next_parameter() {
         let parsed = parse("int f(int x +, char y);\nint after;\n");
 
@@ -5298,6 +5363,31 @@ mod tests {
                 .and_then(|declarator| identifier_name(&parsed, declarator))
                 .as_deref(),
             Some("y")
+        );
+    }
+
+    #[test]
+    fn omitted_parameter_comma_reprocesses_the_next_declaration_starter() {
+        let parsed = parse("int f(int a int b);\n");
+
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
+                Some(TokenType::Keyword(KeywordTokenType::Int))
+            )
+        )));
+        assert_eq!(parsed.parser.syntax.parameter_declarations.len(), 2);
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .parameter_declarations
+                .iter()
+                .filter_map(|parameter| parameter
+                    .declarator
+                    .and_then(|declarator| identifier_name(&parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["a", "b"]
         );
     }
 
