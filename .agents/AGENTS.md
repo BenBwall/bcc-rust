@@ -54,7 +54,7 @@ Pull upstream with:
 git subtree pull --prefix=vendor/mattpocock-skills https://github.com/mattpocock/skills.git main --squash
 ```
 
-Refresh the OpenAI snapshot from the repository and path recorded in `vendor/openai-codex-skills/.source.json`, replace only the `babysit-pr/` directory, and update the recorded revision in the same change.
+Refresh the OpenAI snapshot from the repository and path recorded in `vendor/openai-codex-skills/.source.json`, replace only the `babysit-pr/` directory, and update the recorded revision in the same change. Invoke the repository-local `.agents/scripts/babysit_pr_watch.py` adapter for PR monitoring; it imports the pinned snapshot at runtime and owns repository-specific compatibility behavior without patching the vendored files.
 
 After an update, expose every vendored skill in both client directories and verify that the name sets match and all links resolve. Keep upstream customization outside the vendored directories. `.claude/CLAUDE.md` imports `../.agents/AGENTS.md` with Claude's `@` syntax; edit this file as the single agent-guide source.
 
