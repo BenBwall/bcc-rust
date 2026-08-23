@@ -31,9 +31,9 @@ git diff --check
 
 - `src/translation_phases.rs` owns shared phase, provenance, context, and diagnostic concepts. Its phase modules proceed from `initial_processing.rs` through `preprocessor_tokenizer.rs`, `preprocessing.rs`, and the incomplete `parsing.rs`.
 - `src/lib.rs` currently drives only the preprocessor and prints tokens. There is no parser invocation, semantic-analysis pipeline, or backend/code-generation path.
-- `parsing.rs` does not currently compile. At the 22 August 2026 baseline, `cargo test --all-targets` reports 14 parser errors and executes no tests; re-run it before quoting that count.
-- Existing parser structures are uneven: declaration specifiers and declarators are the most developed paths, while type names, expressions, statements, initializers, function definitions, AST ownership, diagnostics/recovery, and return paths have material gaps. Three direct parser methods still use `todo!()`.
-- The current `typedef_names` map is not a complete scoped symbol model. Declaration-versus-expression and cast-versus-grouping decisions require explicit scope transitions and typedef lookup.
+- `parsing.rs` now compiles and its Phase 02 declaration subset runs through `Parser::next_item`. Re-run the canonical checks before quoting test counts or gate status.
+- External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, and typed future-child frames are implemented. Type names, expressions, statements, initializers, and complete function definitions remain future work.
+- `ScopeStack` implements file-scope typedef/ordinary-name classification and parser-visible prototype scopes needed by the migrated subset. Complete nested-scope and redeclaration handling remains future work.
 - Preserve source provenance and structured diagnostics across phase changes. Malformed user input should reduce to diagnostics/error nodes and synchronization, not compiler panics.
 
 ## Agreed parser direction
@@ -42,7 +42,7 @@ The whole language parser is to use one explicit control stack of specialized, r
 
 Double-E is the precedence reducer inside the expression frame and may inspire a declarator-construction reducer. Declaration, declarator, type-name, initializer, statement, function, and translation-unit frames remain phase/state machines. Frames return small owned actions so the machine can push, reduce, reprocess lookahead, or recover without retaining mutable borrows. The existing preprocessor evaluator is the architectural precedent; extract a dialect-neutral core before sharing it with language-AST parsing, and add nested-conditional regression coverage while doing so.
 
-This is intended architecture, not current behavior. Keep current-status claims and proposed-design claims visibly separate.
+The Phase 02 declaration subset implements this architecture. The remaining whole-language frames and shared expression reducer are intended design, not current behavior; keep current-status claims and proposed-design claims visibly separate.
 
 ## Vendored Matt Pocock skills
 
