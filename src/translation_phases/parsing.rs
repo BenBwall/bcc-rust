@@ -1583,17 +1583,29 @@ impl Parser {
         }
     }
 
-    fn declarator_has_function_suffix(&self, declarator: Declarator) -> bool {
+    fn declarator_declares_function(&self, declarator: Declarator) -> bool {
+        self.declarator_function_binding(declarator) == Some(true)
+    }
+
+    fn declarator_function_binding(&self, declarator: Declarator) -> Option<bool> {
         let start = declarator.kind.start_index as usize;
         let end = start + declarator.kind.length as usize;
-        self.syntax.direct_declarators[start..end]
-            .iter()
-            .any(|direct| {
-                matches!(
-                    direct,
-                    DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
-                )
-            })
+        let direct = &self.syntax.direct_declarators[start..end];
+
+        if let Some(DirectDeclarator::Parenthesized(nested)) = direct.first()
+            && let Some(binding) = self.declarator_function_binding(*nested)
+        {
+            return Some(binding);
+        }
+
+        if let Some(suffix) = direct.get(1) {
+            return Some(matches!(
+                suffix,
+                DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
+            ));
+        }
+
+        (declarator.pointer.type_qualifiers_list.length > 0).then_some(false)
     }
 }
 
@@ -1947,10 +1959,10 @@ impl DeclarationFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                let has_function_suffix = self
+                let declares_function = self
                     .last_init_index
                     .and_then(|index| parser.syntax.init_declarators.get(index as usize))
-                    .is_some_and(|init| parser.declarator_has_function_suffix(init.declarator));
+                    .is_some_and(|init| parser.declarator_declares_function(init.declarator));
                 if is_operator(token, OperatorTokenType::Comma) {
                     if let Some(token) = token {
                         parser.merge_source(context, &mut self.source_vectors, token);
@@ -1971,7 +1983,7 @@ impl DeclarationFrame {
                     self.phase = DeclarationPhase::PushInitializer;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::OpeningCurlyBrace)
-                    && has_function_suffix
+                    && declares_function
                 {
                     self.phase = DeclarationPhase::AwaitFunctionBody;
                     ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
@@ -4976,6 +4988,42 @@ mod tests {
             identifier_name(
                 &parsed,
                 init_declarators(&parsed, declaration(&parsed, after_item))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
+    fn function_body_dispatch_follows_parenthesized_pointer_binding() {
+        let function = parse("int (f()) { return 0; } int after;\n");
+        assert!(
+            parser_errors(&function)
+                .any(|error| matches!(error, ParserErrorType::FunctionBodyNotImplemented))
+        );
+        assert!(!parser_errors(&function).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
+                TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+            ))
+        )));
+
+        let pointer = parse("int (*fp)(void) { int swallowed; } int after;\n");
+        assert!(
+            !parser_errors(&pointer)
+                .any(|error| matches!(error, ParserErrorType::FunctionBodyNotImplemented))
+        );
+        assert!(parser_errors(&pointer).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
+                TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+            ))
+        )));
+        let after_item = pointer.items.len() - 1;
+        assert_eq!(
+            identifier_name(
+                &pointer,
+                init_declarators(&pointer, declaration(&pointer, after_item))[0].declarator
             )
             .as_deref(),
             Some("after")
