@@ -1694,15 +1694,19 @@ impl SynchronizationKind {
         braces: usize,
     ) -> bool {
         match self {
-            | Self::Declaration | Self::StructMember | Self::EnumeratorValue =>
+            | Self::Declaration
+            | Self::Initializer
+            | Self::StructMember
+            | Self::EnumeratorValue =>
                 token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || braces == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
-            | Self::Initializer => token == TokenType::Operator(OperatorTokenType::Semicolon),
             | Self::ArrayBound =>
                 token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || brackets == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
+                        && token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    || braces == 0
+                        && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
             | Self::Parameter | Self::VariadicParameterList =>
                 braces == 0 && token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || parentheses == 0
@@ -2777,6 +2781,7 @@ impl DeclaratorFrame {
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Comma)
                     || is_operator(token, OperatorTokenType::Semicolon)
+                    || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     if !self.array_is_pointer {
                         parser.report(
@@ -5185,6 +5190,25 @@ mod tests {
     }
 
     #[test]
+    fn initializer_recovery_preserves_an_enclosing_brace_despite_unbalanced_children() {
+        let parsed = parse("int x = (1 } int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
     fn array_recovery_unwinds_at_the_enclosing_declaration_semicolon() {
         let parsed = parse("int a[1; int after;\n");
 
@@ -5229,6 +5253,26 @@ mod tests {
                 TokenType::Operator(OperatorTokenType::Comma)
             ))
         )));
+    }
+
+    #[test]
+    fn array_recovery_preserves_an_enclosing_closing_brace() {
+        let parsed = parse("struct S { int a[1 } int after;\n");
+
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .init_declarators
+                .iter()
+                .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
+                .collect::<Vec<_>>(),
+            ["after"]
+        );
     }
 
     #[test]
