@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 
-MODULE_PATH = Path(__file__).with_name("babysit_pr_watch.py")
+MODULE_PATH = Path(__file__).resolve().with_name("babysit_pr_watch.py")
 MODULE_SPEC = importlib.util.spec_from_file_location("babysit_pr_watch", MODULE_PATH)
 assert MODULE_SPEC.loader is not None
 babysit_pr_watch = importlib.util.module_from_spec(MODULE_SPEC)
