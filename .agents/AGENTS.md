@@ -34,7 +34,7 @@ git diff --check
 - `parsing.rs` now compiles and its Phase 02 declaration subset runs through `Parser::next_item`. Re-run the canonical checks before quoting test counts or gate status.
 - External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, and typed future-child frames are implemented. Type names, expressions, statements, initializers, and complete function definitions remain future work.
 - `ScopeStack` implements file-scope typedef/ordinary-name classification and parser-visible prototype scopes needed by the migrated subset. Complete nested-scope and redeclaration handling remains future work.
-- Preserve source provenance and structured diagnostics across phase changes. Malformed user input should reduce to diagnostics/error nodes and synchronization, not compiler panics.
+- Preserve source provenance and structured diagnostics across phase changes. Malformed user input should reduce to diagnostics plus explicitly recovered syntax (or an error node when no meaningful syntax survives) and synchronization, not compiler panics.
 
 ## Agreed parser direction
 
