@@ -1335,6 +1335,8 @@ enum SynchronizationKind {
     ForInitializer,
     /// Stop before an initializer separator or declaration boundary.
     Initializer,
+    /// Balance a block initializer while retaining following block-item starts.
+    BlockInitializer,
     /// Stop before the owning `]` or an enclosing declaration boundary.
     ArrayBound,
     /// Stop before a prototype parameter separator or enclosing boundary.
@@ -3820,6 +3822,7 @@ impl Parser {
             let stops_at_declaration_after_malformed_prefix = matches!(
                 recovery_set.kind,
                 SynchronizationKind::Initializer
+                    | SynchronizationKind::BlockInitializer
                     | SynchronizationKind::ArrayBound
                     | SynchronizationKind::VariadicParameterList
                     | SynchronizationKind::StructMember
@@ -3848,9 +3851,11 @@ impl Parser {
                 (matches!(
                     recovery_set.kind,
                     SynchronizationKind::StatementExpression(ExpressionTerminator::Semicolon)
-                ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration)
-                    || matches!(recovery_set.kind, SynchronizationKind::Statement)
-                        && consumed_tokens > 0)
+                ) || matches!(
+                    recovery_set.kind,
+                    SynchronizationKind::BlockDeclaration | SynchronizationKind::BlockInitializer
+                ) || matches!(recovery_set.kind, SynchronizationKind::Statement)
+                    && consumed_tokens > 0)
                     && at_top_level
                     && !has_pending_conditional_at_depth
                     && token.kind == TokenType::Identifier
@@ -3867,11 +3872,12 @@ impl Parser {
                     && (state.last_token
                         != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
                         || !state.last_closed_parenthesis_was_type_name);
-            let at_next_statement_keyword =
-                matches!(recovery_set.kind, SynchronizationKind::Statement)
-                    && consumed_tokens > 0
-                    && at_top_level
-                    && is_statement_keyword(token.kind);
+            let at_next_statement_keyword = matches!(
+                recovery_set.kind,
+                SynchronizationKind::Statement | SynchronizationKind::BlockInitializer
+            ) && consumed_tokens > 0
+                && at_top_level
+                && is_statement_keyword(token.kind);
             if at_unambiguous_owning_delimiter
                 || at_next_declaration
                 || at_next_k_and_r_identifier
@@ -3888,6 +3894,7 @@ impl Parser {
 
             let opens_type_name = token.kind
                 == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                && state.last_token != Some(TokenType::Keyword(KeywordTokenType::Sizeof))
                 && self
                     .cursor
                     .following(context)
@@ -4229,7 +4236,7 @@ impl SynchronizationKind {
                         | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
-            | Self::Initializer => matches!(
+            | Self::Initializer | Self::BlockInitializer => matches!(
                 token,
                 TokenType::Operator(
                     OperatorTokenType::Comma
@@ -4333,7 +4340,7 @@ impl SynchronizationKind {
         braces: usize,
     ) -> bool {
         match self {
-            | Self::Declaration | Self::Initializer =>
+            | Self::Declaration | Self::Initializer | Self::BlockInitializer =>
                 braces == 0
                     && matches!(
                         token,
@@ -4689,7 +4696,7 @@ impl DeclarationFrame {
 
     fn initializer_recovery_kind(&self) -> SynchronizationKind {
         match self.context {
-            | DeclarationContext::Block => SynchronizationKind::Initializer,
+            | DeclarationContext::Block => SynchronizationKind::BlockInitializer,
             | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
             | DeclarationContext::External => SynchronizationKind::Initializer,
             | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
@@ -9056,8 +9063,49 @@ mod tests {
     }
 
     #[test]
+    fn block_initializer_recovery_preserves_following_statement_keywords() {
+        let parsed = parse("int f(void) { int x = 1 return; break; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Declaration(_)));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
+        )));
+    }
+
+    #[test]
     fn call_parentheses_do_not_hide_a_following_statement_body() {
         let parsed = parse("int f(void) { if (foo() { return; } break; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2);
+        let BlockItem::Statement(if_statement) = items[0] else {
+            panic!("expected an if statement")
+        };
+        let StatementType::If { then_statement, .. } =
+            parsed.parser.syntax.statements[if_statement.0 as usize].kind
+        else {
+            panic!("expected an if statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+            StatementType::Compound { .. }
+        ));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
+        )));
+    }
+
+    #[test]
+    fn sizeof_type_parentheses_do_not_hide_a_following_statement_body() {
+        let parsed = parse("int f(void) { if (sizeof(int) { return; } break; }\n");
         let items = block_items(&parsed, function_definition(&parsed, 0).body);
 
         assert_eq!(items.len(), 2);
