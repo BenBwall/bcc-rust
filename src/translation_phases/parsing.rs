@@ -1455,7 +1455,8 @@ impl Parser {
                         matches!(set.target, RecoveryTarget::CurrentFrame),
                         "every recovery set must identify a legal unwind target"
                     );
-                    let recovered_source_vectors = self.recover(context, set);
+                    let depth = self.frames.len() + 1;
+                    let recovered_source_vectors = self.recover(context, set, frame_name, depth);
                     frame.merge_recovered_sources(context, recovered_source_vectors);
                     self.frames.push(frame);
                 },
@@ -1463,13 +1464,22 @@ impl Parser {
         }
     }
 
-    fn recover(&mut self, context: &mut Context, set: SynchronizationSet) -> Option<SourceVectors> {
+    fn recover(
+        &mut self,
+        context: &mut Context,
+        set: SynchronizationSet,
+        frame_name: &'static str,
+        depth: usize,
+    ) -> Option<SourceVectors> {
+        #[cfg(not(test))]
+        let _ = (frame_name, depth);
         let mut parentheses = 0usize;
         let mut brackets = 0usize;
         let mut braces = 0usize;
         let mut source_vectors = None;
 
         while let Some(token) = self.cursor.current(context) {
+            let mut finishes_function_body = false;
             let at_top_level = parentheses == 0 && brackets == 0 && braces == 0;
             let at_unambiguous_owning_delimiter = set.kind.stops_before_despite_unbalanced_child(
                 token.kind,
@@ -1506,16 +1516,24 @@ impl Parser {
                 | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) if braces > 0 => {
                     braces -= 1;
                     if matches!(set.kind, SynchronizationKind::FunctionBody) && braces == 0 {
-                        self.merge_source(context, &mut source_vectors, token);
-                        self.cursor.consume();
-                        break;
+                        finishes_function_body = true;
                     }
                 },
                 | _ => {},
             }
 
+            #[cfg(test)]
+            self.trace.push(FrameTraceEvent {
+                frame: frame_name,
+                action: "recover-consume",
+                token: Some(token.kind),
+                depth,
+            });
             self.merge_source(context, &mut source_vectors, token);
             self.cursor.consume();
+            if finishes_function_body {
+                break;
+            }
         }
         source_vectors
     }
@@ -5586,6 +5604,31 @@ mod tests {
     }
 
     #[test]
+    fn recovery_trace_identifies_the_owner_of_every_consumed_token() {
+        let parsed = parse("int x + (1);\n");
+        let recovery = parsed
+            .parser
+            .trace
+            .iter()
+            .filter(|event| event.action == "recover-consume")
+            .collect::<Vec<_>>();
+
+        assert!(recovery.iter().all(|event| event.frame == "declaration"));
+        assert_eq!(
+            recovery
+                .iter()
+                .filter_map(|event| event.token)
+                .collect::<Vec<_>>(),
+            [
+                TokenType::Operator(OperatorTokenType::Plus),
+                TokenType::Operator(OperatorTokenType::OpeningParenthesis),
+                TokenType::Integer(IntegerTokenType::Int(1)),
+                TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+            ]
+        );
+    }
+
+    #[test]
     fn unnamed_bit_field_after_member_comma_does_not_require_a_declarator() {
         let parsed = parse("struct S { int named, : 3; };\n");
 
@@ -6020,6 +6063,10 @@ mod tests {
                     .expect("nonempty trace")
                     > depth,
                 "grammar depth must be represented by heap-backed frames"
+            );
+            assert!(
+                parsed.context.source_vectors.0.len() <= depth * 8 + 32,
+                "source provenance must grow linearly with grammar depth"
             );
         }
     }
