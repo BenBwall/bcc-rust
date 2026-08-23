@@ -1647,7 +1647,9 @@ impl SynchronizationKind {
             | Self::EnumeratorValue => matches!(
                 token,
                 TokenType::Operator(
-                    OperatorTokenType::Comma | OperatorTokenType::ClosingCurlyBrace
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Semicolon
+                        | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
             | Self::FunctionBody => false,
@@ -1662,7 +1664,7 @@ impl SynchronizationKind {
         braces: usize,
     ) -> bool {
         match self {
-            | Self::Declaration | Self::StructMember =>
+            | Self::Declaration | Self::StructMember | Self::EnumeratorValue =>
                 token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || braces == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
@@ -1673,8 +1675,6 @@ impl SynchronizationKind {
             | Self::Parameter | Self::VariadicParameterList =>
                 parentheses == 0
                     && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
-            | Self::EnumeratorValue =>
-                braces == 0 && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
             | Self::FunctionBody => false,
         }
     }
@@ -3661,6 +3661,16 @@ impl EnumSpecifierFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = EnumPhase::AfterEnumeratorName;
                     ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = EnumPhase::FinishBody;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -3750,6 +3760,16 @@ impl EnumSpecifierFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = EnumPhase::FinishBody;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -5086,6 +5106,34 @@ mod tests {
             .as_deref(),
             Some("after")
         );
+    }
+
+    #[test]
+    fn enum_recovery_unwinds_at_the_enclosing_declaration_semicolon() {
+        for source in ["enum E { A; int after;\n", "enum E { A = (1; int after;\n"] {
+            let parsed = parse(source);
+
+            assert_eq!(parsed.items.len(), 2);
+            assert!(matches!(
+                parsed.items.first(),
+                Some(ExternalDeclaration::Error(_))
+            ));
+            assert!(parser_errors(&parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(
+                    TokenType::Operator(OperatorTokenType::Semicolon)
+                ))
+            )));
+            assert_eq!(
+                identifier_name(
+                    &parsed,
+                    init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+                )
+                .as_deref(),
+                Some("after"),
+                "enum recovery swallowed the declaration after {source:?}"
+            );
+        }
     }
 
     #[test]
