@@ -1417,6 +1417,7 @@ impl RecoveryState {
             | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if state.parentheses > 0 =>
             {
                 state.parentheses -= 1;
+                Self::discard_closed_questions(state);
             },
             | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
                 state.brackets += 1;
@@ -1424,12 +1425,14 @@ impl RecoveryState {
             | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) if state.brackets > 0 =>
             {
                 state.brackets -= 1;
+                Self::discard_closed_questions(state);
             },
             | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
                 state.braces += 1;
             },
             | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) if state.braces > 0 => {
                 state.braces -= 1;
+                Self::discard_closed_questions(state);
             },
             | TokenType::Operator(OperatorTokenType::QuestionMark) => {
                 state.questions.push(DelimiterDepth {
@@ -1444,16 +1447,29 @@ impl RecoveryState {
                     brackets:    state.brackets,
                     braces:      state.braces,
                 };
-                if state
+                if let Some(index) = state
                     .questions
-                    .last()
-                    .is_some_and(|question| *question == depth)
+                    .iter()
+                    .rposition(|question| *question == depth)
                 {
-                    _ = state.questions.pop();
+                    _ = state.questions.remove(index);
                 }
             },
             | _ => {},
         }
+    }
+
+    fn discard_closed_questions(state: &mut ActiveRecovery) {
+        let depth = DelimiterDepth {
+            parentheses: state.parentheses,
+            brackets:    state.brackets,
+            braces:      state.braces,
+        };
+        state.questions.retain(|question| {
+            question.parentheses <= depth.parentheses
+                && question.brackets <= depth.brackets
+                && question.braces <= depth.braces
+        });
     }
 
     /// Completes the active scan and restores normal parser execution.
@@ -3750,8 +3766,9 @@ impl Parser {
                 == TokenType::Operator(OperatorTokenType::Colon)
                 && state
                     .questions
-                    .last()
-                    .is_some_and(|question| *question == delimiter_depth);
+                    .iter()
+                    .rev()
+                    .any(|question| *question == delimiter_depth);
             let at_unambiguous_owning_delimiter = !colon_matches_conditional
                 && recovery_set.kind.stops_before_despite_unbalanced_child(
                     token.kind,
@@ -3782,6 +3799,7 @@ impl Parser {
                     | SynchronizationKind::VariadicParameterList
                     | SynchronizationKind::StructMember
                     | SynchronizationKind::EnumeratorValue
+                    | SynchronizationKind::StatementExpression(_)
             );
             let at_next_declaration = (stops_at_initial_declaration
                 || consumed_tokens > 0 && stops_at_declaration_after_malformed_prefix)
@@ -4178,7 +4196,6 @@ impl SynchronizationKind {
                             TokenType::Operator(
                                 OperatorTokenType::ClosingParenthesis
                                     | OperatorTokenType::Semicolon
-                                    | OperatorTokenType::OpeningCurlyBrace
                                     | OperatorTokenType::ClosingCurlyBrace
                             )
                         ),
@@ -4312,7 +4329,6 @@ impl SynchronizationKind {
                             TokenType::Operator(
                                 OperatorTokenType::ClosingParenthesis
                                     | OperatorTokenType::Semicolon
-                                    | OperatorTokenType::OpeningCurlyBrace
                                     | OperatorTokenType::ClosingCurlyBrace
                             )
                         ),
@@ -8539,6 +8555,31 @@ mod tests {
     }
 
     #[test]
+    fn case_recovery_matches_an_outer_question_after_closed_inner_nesting() {
+        let parsed = parse("int f(void) { switch (value) { case a ? (b ? c) : d : ; } }\n");
+        let [BlockItem::Statement(switch)] =
+            block_items(&parsed, function_definition(&parsed, 0).body)
+        else {
+            panic!("expected one switch statement")
+        };
+        let StatementType::Switch { body_statement, .. } =
+            parsed.parser.syntax.statements[switch.0 as usize].kind
+        else {
+            panic!("expected switch syntax")
+        };
+        let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
+            panic!("expected one case label")
+        };
+        let StatementType::Case(ExpressionSlot::FutureChild(expression), _) =
+            parsed.parser.syntax.statements[case.0 as usize].kind
+        else {
+            panic!("expected a deferred case expression")
+        };
+
+        assert_eq!(sourced_text(&parsed, expression), "a?(b?c):d");
+    }
+
+    #[test]
     fn stray_else_consumes_its_token_and_preserves_following_items() {
         let parsed = parse("int f(void) { else; return; }\nint after;\n");
         let items = block_items(&parsed, function_definition(&parsed, 0).body);
@@ -8746,6 +8787,50 @@ mod tests {
             ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
                 TokenType::Keyword(KeywordTokenType::Return)
             ))
+        )));
+    }
+
+    #[test]
+    fn expression_recovery_preserves_following_declarations() {
+        let parsed = parse("int f(void) { value int saved; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Expression(ExpressionSlot::FutureChild(_))
+        )));
+        assert!(matches!(items[1], BlockItem::Declaration(_)));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn compound_literals_survive_deferred_parenthesized_expression_recovery() {
+        let parsed =
+            parse("struct S { int x; };\nint f(void) { if ((struct S){0}.x) ; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 1).body);
+        assert_eq!(items.len(), 2);
+        let BlockItem::Statement(if_statement) = items[0] else {
+            panic!("expected an if statement")
+        };
+        let StatementType::If {
+            condition_expression: ExpressionSlot::FutureChild(expression),
+            then_statement,
+            else_statement: None,
+        } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+        else {
+            panic!("expected a deferred if condition without an else branch")
+        };
+        assert!(sourced_text(&parsed, expression).contains("{0}"));
+        assert!(matches!(
+            parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+            StatementType::Null
+        ));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
         )));
     }
 
