@@ -2963,8 +2963,9 @@ impl DeclaratorFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                let allow_k_and_r = self.has_named_direct_declarator(parser);
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    let direct = if self.mode == DeclaratorMode::Named {
+                    let direct = if allow_k_and_r {
                         DirectDeclarator::KAndRStyleFunction {
                             parameters: VectorSlice::empty(),
                         }
@@ -2991,7 +2992,7 @@ impl DeclaratorFrame {
                 } else {
                     self.phase = DeclaratorPhase::AwaitParameterList;
                     ParseAction::Push(ParseFrame::ParameterList(ParameterListFrame::new(
-                        self.mode == DeclaratorMode::Named,
+                        allow_k_and_r,
                     )))
                 }
             },
@@ -3069,6 +3070,15 @@ impl DeclaratorFrame {
         self.array_qualifiers_before_static = false;
         self.array_is_static = false;
         self.array_is_pointer = false;
+    }
+
+    fn has_named_direct_declarator(&self, parser: &Parser) -> bool {
+        self.direct_declarators.iter().any(|direct| match direct {
+            | DirectDeclarator::Identifier(_) => true,
+            | DirectDeclarator::Parenthesized(declarator) =>
+                parser.declarator_identifier(*declarator).is_some(),
+            | _ => false,
+        })
     }
 }
 
@@ -5455,6 +5465,37 @@ mod tests {
                 .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
                 .collect::<Vec<_>>(),
             ["A", "B", "C"]
+        );
+    }
+
+    #[test]
+    fn named_parameter_declarators_retain_nested_k_and_r_identifier_lists() {
+        let parsed = parse("int outer(int callback(arg));\n");
+
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        let callback = parsed.parser.syntax.parameter_declarations[0]
+            .declarator
+            .expect("named callback declarator");
+        let start = callback.kind.start_index as usize;
+        let end = start + callback.kind.length as usize;
+        let parameters = parsed.parser.syntax.direct_declarators[start..end]
+            .iter()
+            .find_map(|direct| match direct {
+                | DirectDeclarator::KAndRStyleFunction { parameters } => Some(*parameters),
+                | _ => None,
+            })
+            .expect("callback retains a K&R identifier-list suffix");
+        assert_eq!(parameters.length, 1);
+        assert_eq!(
+            parsed
+                .context
+                .string_cache
+                .at(parsed.parser.syntax.identifiers[parameters.start_index as usize].name),
+            "arg"
         );
     }
 
