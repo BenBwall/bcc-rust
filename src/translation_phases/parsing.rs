@@ -280,15 +280,14 @@ macro_rules! map_fn {
             }
         }
 
-        fn $map_fn_name(self, parser: &mut Parser, context: &mut Context) -> Self {
+        fn $map_fn_name(
+            self,
+            context: &mut Context,
+            source_vectors: SourceVectors,
+        ) -> Self {
             match self {
                 $($map_match_pattern $(if $map_guard)? => $map_result,)+
                 | type_specifier => {
-                    let source_vectors = context.create_source_vectors(
-                        parser.position(context),
-                        parser.source_file_index(),
-                        0,
-                    );
                     context.parser_error(ParserError {
                         error_type: ParserErrorType::ConflictingTypeSpecifiers(
                             type_specifier,
@@ -301,8 +300,12 @@ macro_rules! map_fn {
             }
         }
 
-        fn $make_fn_name(&mut self, parser: &mut Parser, context: &mut Context) {
-            *self = self.$map_fn_name(parser, context);
+        fn $make_fn_name(
+            &mut self,
+            context: &mut Context,
+            source_vectors: SourceVectors,
+        ) {
+            *self = self.$map_fn_name(context, source_vectors);
         }
     }
 }
@@ -536,24 +539,19 @@ impl TypeSpecifiers {
 
     fn map_struct_or_union(
         self,
-        parser: &mut Parser,
         context: &mut Context,
         index: StructOrUnionSpecifierIndex,
+        token: Token,
     ) -> Self {
         match self {
             | TypeSpecifiers::Empty => TypeSpecifiers::StructOrUnion(index),
             | type_specifiers => {
-                let source_vectors = context.create_source_vectors(
-                    parser.position(context),
-                    parser.source_file_index(),
-                    0,
-                );
                 context.parser_error(ParserError {
-                    error_type: ParserErrorType::ConflictingTypeSpecifiers(
+                    error_type:     ParserErrorType::ConflictingTypeSpecifiers(
                         type_specifiers,
-                        TokenType::Keyword(KeywordTokenType::Struct),
+                        token.kind,
                     ),
-                    source_vectors,
+                    source_vectors: token.source_vectors,
                 });
                 type_specifiers
             },
@@ -562,11 +560,11 @@ impl TypeSpecifiers {
 
     fn make_struct_or_union(
         &mut self,
-        parser: &mut Parser,
         context: &mut Context,
         index: StructOrUnionSpecifierIndex,
+        token: Token,
     ) {
-        *self = self.map_struct_or_union(parser, context, index);
+        *self = self.map_struct_or_union(context, index, token);
     }
 
     #[cfg_attr(
@@ -580,34 +578,24 @@ impl TypeSpecifiers {
         }
     }
 
-    fn map_enum(
-        self,
-        parser: &mut Parser,
-        context: &mut Context,
-        index: EnumSpecifierIndex,
-    ) -> Self {
+    fn map_enum(self, context: &mut Context, index: EnumSpecifierIndex, token: Token) -> Self {
         match self {
             | TypeSpecifiers::Empty => TypeSpecifiers::Enum(index),
             | type_specifiers => {
-                let source_vectors = context.create_source_vectors(
-                    parser.position(context),
-                    parser.source_file_index(),
-                    0,
-                );
                 context.parser_error(ParserError {
-                    error_type: ParserErrorType::ConflictingTypeSpecifiers(
+                    error_type:     ParserErrorType::ConflictingTypeSpecifiers(
                         type_specifiers,
                         TokenType::Keyword(KeywordTokenType::Enum),
                     ),
-                    source_vectors,
+                    source_vectors: token.source_vectors,
                 });
                 type_specifiers
             },
         }
     }
 
-    fn make_enum(&mut self, parser: &mut Parser, context: &mut Context, index: EnumSpecifierIndex) {
-        *self = self.map_enum(parser, context, index);
+    fn make_enum(&mut self, context: &mut Context, index: EnumSpecifierIndex, token: Token) {
+        *self = self.map_enum(context, index, token);
     }
 
     #[cfg_attr(
@@ -1159,12 +1147,13 @@ enum SpecifierMode {
 
 #[derive(Debug, Clone, Copy)]
 struct DeclarationSpecifiersFrame {
-    phase:          DeclarationSpecifiersPhase,
-    mode:           SpecifierMode,
-    specifiers:     DeclarationSpecifiers,
-    consumed:       bool,
-    storage_seen:   bool,
-    source_vectors: Option<SourceVectors>,
+    phase:                  DeclarationSpecifiersPhase,
+    mode:                   SpecifierMode,
+    specifiers:             DeclarationSpecifiers,
+    consumed:               bool,
+    storage_seen:           bool,
+    pending_type_specifier: Option<Token>,
+    source_vectors:         Option<SourceVectors>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1182,6 +1171,7 @@ impl DeclarationSpecifiersFrame {
             specifiers: DeclarationSpecifiers::new(),
             consumed: false,
             storage_seen: false,
+            pending_type_specifier: None,
             source_vectors: None,
         }
     }
@@ -2259,9 +2249,13 @@ impl DeclarationSpecifiersFrame {
                 let Some(ParseValue::StructOrUnionSpecifier(index)) = returned else {
                     panic!("struct specifier returned an unexpected value: {returned:?}");
                 };
+                let token = self
+                    .pending_type_specifier
+                    .take()
+                    .expect("struct-or-union child follows its keyword");
                 self.specifiers
                     .type_specifiers
-                    .make_struct_or_union(parser, context, index);
+                    .make_struct_or_union(context, index, token);
                 if let Some(source_vectors) = parser
                     .syntax
                     .struct_or_union_specifiers
@@ -2281,9 +2275,13 @@ impl DeclarationSpecifiersFrame {
                 let Some(ParseValue::EnumSpecifier(index)) = returned else {
                     panic!("enum specifier returned an unexpected value: {returned:?}");
                 };
+                let token = self
+                    .pending_type_specifier
+                    .take()
+                    .expect("enum child follows its keyword");
                 self.specifiers
                     .type_specifiers
-                    .make_enum(parser, context, index);
+                    .make_enum(context, index, token);
                 if let Some(source_vectors) = parser
                     .syntax
                     .enum_specifiers
@@ -2330,12 +2328,14 @@ impl DeclarationSpecifiersFrame {
             token.kind,
             TokenType::Keyword(KeywordTokenType::Struct | KeywordTokenType::Union)
         ) {
+            self.pending_type_specifier = Some(token);
             self.phase = DeclarationSpecifiersPhase::AwaitStructOrUnion;
             return ParseAction::Push(ParseFrame::StructOrUnionSpecifier(
                 StructOrUnionSpecifierFrame::new(),
             ));
         }
         if token.kind == TokenType::Keyword(KeywordTokenType::Enum) {
+            self.pending_type_specifier = Some(token);
             self.phase = DeclarationSpecifiersPhase::AwaitEnum;
             return ParseAction::Push(ParseFrame::EnumSpecifier(EnumSpecifierFrame::new()));
         }
@@ -2447,7 +2447,7 @@ impl DeclarationSpecifiersFrame {
                         Some(token),
                     );
                 } else {
-                    type_specifiers.$apply(parser, context);
+                    type_specifiers.$apply(context, token.source_vectors);
                 }
             };
         }
@@ -2469,7 +2469,8 @@ impl DeclarationSpecifiersFrame {
             {
                 parser.report(context, ParserErrorType::LongSpecifiedThrice, Some(token));
             },
-            | PrimitiveTypeSpecifier::Long => type_specifiers.make_long(parser, context),
+            | PrimitiveTypeSpecifier::Long =>
+                type_specifiers.make_long(context, token.source_vectors),
             | PrimitiveTypeSpecifier::Char => apply_once!(is_char, make_char),
             | PrimitiveTypeSpecifier::Float => apply_once!(is_float, make_float),
             | PrimitiveTypeSpecifier::Double if type_specifiers.is_double() => {
@@ -2486,7 +2487,8 @@ impl DeclarationSpecifiersFrame {
                     Some(token),
                 );
             },
-            | PrimitiveTypeSpecifier::Double => type_specifiers.make_double(parser, context),
+            | PrimitiveTypeSpecifier::Double =>
+                type_specifiers.make_double(context, token.source_vectors),
             | PrimitiveTypeSpecifier::Void => apply_once!(is_void, make_void),
             | PrimitiveTypeSpecifier::Bool => apply_once!(is_bool, make_bool),
             | PrimitiveTypeSpecifier::Complex => apply_once!(is_complex, make_complex),
@@ -4974,6 +4976,30 @@ mod tests {
             .as_deref(),
             Some("x")
         );
+    }
+
+    #[test]
+    fn conflicting_type_specifiers_are_anchored_to_the_conflicting_token() {
+        let parsed = parse(
+            "int float primitive; int struct S { int member; } tagged; int union U { int member; \
+             } united; int enum E { A } enumerated;\n",
+        );
+
+        let mut conflict_sources = parsed
+            .errors
+            .iter()
+            .filter_map(|error| match error {
+                | TranslationError::Parsing(error)
+                    if matches!(
+                        error.error_type,
+                        ParserErrorType::ConflictingTypeSpecifiers(..)
+                    ) =>
+                    Some(sourced_text(&parsed, error.source_vectors)),
+                | _ => None,
+            })
+            .collect::<Vec<_>>();
+        conflict_sources.sort_unstable();
+        assert_eq!(conflict_sources, ["enum", "float", "struct", "union"]);
     }
 
     #[test]
