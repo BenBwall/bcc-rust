@@ -38,6 +38,12 @@ _Avoid_: Source file
 **External declaration**:
 A top-level declaration or function definition within a translation unit.
 
+**Function definition**:
+An external declaration consisting of declaration specifiers, a function
+declarator, an optional old-style parameter declaration list, and a compound
+statement body. A function prototype ending in a semicolon remains a
+declaration.
+
 **Declaration**:
 A construct that introduces or describes identifiers, types, storage duration, or linkage through declaration specifiers and optional init-declarators.
 _Avoid_: Declarator
@@ -58,6 +64,15 @@ The expression or brace-enclosed initializer list associated with an object decl
 
 **Statement**:
 A function-body construct controlling evaluation, selection, iteration, jumps, labels, or compound sequencing.
+
+**Compound statement**:
+A brace-delimited statement containing an ordered sequence of block items and
+introducing block scope.
+_Avoid_: Block statement
+
+**Block item**:
+One declaration or statement in a compound statement. Block items preserve
+source order because C99 permits declarations and statements to interleave.
 
 **Expression**:
 A syntax tree for operators and operands that may compute a value, designate an object or function, or produce side effects.
@@ -100,14 +115,18 @@ One policy layer over shared precedence reduction. The preprocessing dialect eva
 
 ## Parser stack-machine vocabulary
 
-The Phase 02 declaration subset implements this vocabulary in `parsing.rs`. Frames for expressions, type names, initializers, statements, and complete function definitions remain future work.
+The Phase 02 declaration subset implements this vocabulary in `parsing.rs`.
+The authoritative sequence for the remaining frame families is
+`parser-roadmap.md`: Phase 03 adds structural statements and function
+definitions, Phase 04 adds expressions and type names, and Phase 05 adds
+initializers and expression-dependent declaration branches.
 
 **ParserMachine** *(partially implemented as `Parser`)*:
 The single driver that owns the buffered token cursor, control stack, typed child return, syntax arenas, file-scope name classification, and diagnostic/recovery state for language parsing.
 _Avoid_: Recursive-descent parser
 
 **ParseFrame** *(partially implemented)*:
-A resumable state machine for one grammar family. External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, and typed future-child frames are implemented. Later frame families cover type names, full initializers, statements, and expressions.
+A resumable state machine for one grammar family. External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, and typed future-child frames are implemented. Later frame families cover function definitions, compound statements, statements, expressions, type names, and full initializers.
 _Avoid_: Grammar call
 
 **ExpressionFrame** *(future)*:
@@ -117,7 +136,7 @@ The parse frame that owns the Double-E operator and operand stacks for a languag
 A small owned instruction returned by a frame to the driver: consume input, push a child frame, reduce a value, reprocess lookahead, or recover at a synchronization set.
 
 **ParseValue** *(partially implemented)*:
-The typed result passed from a completed child frame to its parent. The current variants cover migrated declaration grammar and typed markers for deferred expression, initializer, and statement children.
+The typed result passed from a completed child frame to its parent. The current variants cover migrated declaration grammar and typed markers for deferred expression, initializer, and function-body children.
 
 **Synchronization set** *(implemented for migrated frames)*:
 The tokens at which a particular frame can safely resume or unwind after malformed input, paired with a legal recovery target.

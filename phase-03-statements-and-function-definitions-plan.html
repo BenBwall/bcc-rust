@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Human-readable Phase 03 plan for parsing C99 statements, compound statements, and function definitions in bcc-rust.">
+  <title>bcc-rust · Phase 03 statements and function definitions</title>
+  <style>
+    :root {
+      --ink: #18211c;
+      --muted: #5d6961;
+      --paper: #f2eee5;
+      --surface: #fffdf8;
+      --surface-2: #ebe5d9;
+      --line: #d2ccbf;
+      --forest: #173c2a;
+      --forest-2: #245d42;
+      --lime: #d9ef76;
+      --mint: #cfe7d8;
+      --blue: #305e72;
+      --blue-soft: #d9e9ef;
+      --amber: #a96820;
+      --amber-soft: #f5e3bd;
+      --red: #9d4035;
+      --red-soft: #f2d8d2;
+      --shadow: 0 18px 48px rgb(24 33 28 / 9%);
+      --serif: Georgia, "Times New Roman", serif;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgb(23 60 42 / 3%) 1px, transparent 1px),
+        linear-gradient(90deg, rgb(23 60 42 / 3%) 1px, transparent 1px),
+        var(--paper);
+      background-size: 32px 32px;
+      font: 15px/1.58 var(--sans);
+    }
+
+    a { color: inherit; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2 { font-family: var(--serif); font-weight: 500; }
+    h2 { margin-bottom: 14px; font-size: clamp(30px, 4vw, 46px); line-height: 1.04; letter-spacing: -.035em; }
+    h3 { margin-bottom: 8px; font-size: 18px; line-height: 1.24; }
+    p:last-child { margin-bottom: 0; }
+    code, pre { font-family: var(--mono); }
+    code {
+      padding: .12em .35em;
+      border: 1px solid rgb(23 60 42 / 11%);
+      border-radius: 4px;
+      background: rgb(23 60 42 / 6%);
+      font-size: .9em;
+    }
+    pre {
+      margin: 0;
+      padding: 22px;
+      overflow-x: auto;
+      color: #eaf3ed;
+      background: #102d20;
+      border: 1px solid #0a2418;
+      border-radius: 12px;
+      font-size: 13px;
+      line-height: 1.62;
+    }
+
+    .shell { width: min(1180px, calc(100% - 36px)); margin: 0 auto; }
+    .hero {
+      margin-top: 18px;
+      overflow: hidden;
+      color: #f8f4ea;
+      background: var(--forest);
+      border: 1px solid #0f2b1d;
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+    }
+    .hero-bar {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 15px 22px;
+      color: #cbd9d0;
+      border-bottom: 1px solid rgb(255 255 255 / 14%);
+      font: 700 11px/1.4 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .1em;
+    }
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 9px;
+      border-radius: 50%;
+      background: var(--lime);
+      box-shadow: 0 0 0 5px rgb(217 239 118 / 12%);
+    }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(270px, .55fr); }
+    .hero-copy { padding: clamp(34px, 6vw, 72px); }
+    .eyebrow, .section-index, .label {
+      color: var(--forest-2);
+      font: 800 11px/1.4 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .13em;
+    }
+    .hero .eyebrow { color: var(--lime); }
+    h1 {
+      max-width: 840px;
+      margin: 14px 0 20px;
+      font-size: clamp(46px, 7vw, 86px);
+      line-height: .93;
+      letter-spacing: -.055em;
+    }
+    .lede { max-width: 740px; margin-bottom: 0; color: #d9e4dc; font-size: clamp(17px, 2vw, 21px); }
+    .hero-facts {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 28px 32px;
+      background: #102f21;
+      border-left: 1px solid rgb(255 255 255 / 14%);
+    }
+    .fact { padding: 18px 0; border-top: 1px solid rgb(255 255 255 / 14%); }
+    .fact:first-child { border-top: 0; }
+    .fact strong { display: block; color: var(--lime); font: 500 34px/1 var(--serif); }
+    .fact span { display: block; margin-top: 7px; color: #b9c8be; font-size: 12px; }
+
+    .nav {
+      position: sticky;
+      top: 10px;
+      z-index: 10;
+      display: flex;
+      gap: 7px;
+      margin-top: 14px;
+      padding: 10px;
+      overflow-x: auto;
+      background: rgb(255 253 248 / 91%);
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      box-shadow: 0 8px 24px rgb(24 33 28 / 7%);
+      backdrop-filter: blur(12px);
+    }
+    .nav a {
+      flex: 0 0 auto;
+      padding: 8px 10px;
+      color: var(--muted);
+      border-radius: 7px;
+      font: 800 10px/1 var(--mono);
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+    }
+    .nav a:hover { color: white; background: var(--forest); }
+
+    main { padding: 74px 0 110px; }
+    section { scroll-margin-top: 80px; }
+    .section { margin-top: 92px; }
+    .section:first-child { margin-top: 0; }
+    .section-head {
+      display: grid;
+      grid-template-columns: 130px minmax(0, 1fr);
+      gap: 26px;
+      align-items: start;
+      margin-bottom: 28px;
+    }
+    .section-head p { max-width: 800px; color: var(--muted); font-size: 17px; }
+
+    .decision {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr);
+      gap: 1px;
+      overflow: hidden;
+      background: #365844;
+      border: 1px solid #365844;
+      border-radius: 17px;
+      box-shadow: var(--shadow);
+    }
+    .decision-main { padding: clamp(28px, 5vw, 52px); color: white; background: var(--forest); }
+    .decision-main .label { color: var(--lime); }
+    .decision-main h3 { margin: 12px 0 16px; font: 500 clamp(29px, 4vw, 46px)/1.05 var(--serif); }
+    .decision-main p { max-width: 650px; color: #d5e1d9; font-size: 17px; }
+    .rules { margin: 0; padding: 25px 29px; list-style: none; background: #fbf8ef; }
+    .rules li { position: relative; padding: 13px 0 13px 25px; border-bottom: 1px solid var(--line); }
+    .rules li:last-child { border-bottom: 0; }
+    .rules li::before { position: absolute; left: 0; color: var(--forest-2); content: "◆"; font-size: 9px; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      overflow: hidden;
+      background: var(--line);
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      box-shadow: var(--shadow);
+    }
+    .metric { min-height: 150px; padding: 23px; background: var(--surface); }
+    .metric strong { display: block; margin: 13px 0 8px; font: 500 37px/1 var(--serif); }
+    .metric p { color: var(--muted); font-size: 13px; }
+    .metric.alert strong { color: var(--red); }
+
+    .scope-grid, .gate-grid, .done-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .scope-card, .gate-card, .done-card {
+      padding: 24px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 28px rgb(24 33 28 / 5%);
+    }
+    .scope-card.in { border-top: 5px solid var(--forest-2); }
+    .scope-card.later { border-top: 5px solid var(--amber); }
+    .scope-card ul, .gate-card ul { margin: 14px 0 0; padding-left: 19px; }
+    .scope-card li, .gate-card li { margin: 7px 0; }
+
+    .dependency {
+      display: grid;
+      grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+    .dependency-note { padding: 27px; color: #69400f; background: var(--amber-soft); border: 1px solid #dfc28b; border-radius: 14px; }
+    .dependency-note h3 { font: 500 28px/1.08 var(--serif); }
+    .contract { padding: 27px; color: white; background: var(--forest); border: 1px solid #0d2a1c; border-radius: 14px; }
+    .contract .label { color: var(--lime); }
+    .contract ul { margin: 18px 0 0; padding-left: 19px; color: #d5e1d9; }
+    .contract li { margin: 8px 0; }
+
+    .table-wrap {
+      overflow-x: auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+    }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { padding: 16px 18px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: white; background: var(--forest); font: 800 10px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:nth-child(even) td { background: rgb(23 60 42 / 2.5%); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 48px 1fr 48px 1fr;
+      gap: 10px;
+      align-items: stretch;
+    }
+    .flow-card {
+      min-height: 220px;
+      padding: 23px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      box-shadow: 0 12px 30px rgb(24 33 28 / 5%);
+    }
+    .flow-card.focus { color: white; background: var(--forest); border-color: #0d2a1c; }
+    .flow-card h3 { margin: 28px 0 10px; font: 500 25px/1.08 var(--serif); }
+    .flow-card p { color: var(--muted); }
+    .flow-card.focus p { color: #d5e1d9; }
+    .flow-card.focus .label { color: var(--lime); }
+    .arrow { display: grid; place-items: center; color: var(--forest-2); font: 500 30px/1 var(--serif); }
+
+    .timeline { position: relative; display: grid; gap: 18px; }
+    .timeline::before {
+      position: absolute;
+      top: 32px;
+      bottom: 32px;
+      left: 36px;
+      width: 2px;
+      background: var(--line);
+      content: "";
+    }
+    .step {
+      position: relative;
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 20px;
+    }
+    .step-num {
+      z-index: 1;
+      display: grid;
+      place-items: center;
+      width: 72px;
+      height: 72px;
+      color: var(--forest);
+      background: var(--lime);
+      border: 5px solid var(--paper);
+      border-radius: 50%;
+      font: 500 28px/1 var(--serif);
+    }
+    .step-card {
+      padding: 25px 27px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      box-shadow: 0 12px 30px rgb(24 33 28 / 5%);
+    }
+    .step-card h3 { font: 500 27px/1.1 var(--serif); }
+    .step-card > p { color: var(--muted); }
+    .step-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }
+    .step-box { padding: 17px; background: #f6f2e9; border: 1px solid var(--line); border-radius: 10px; }
+    .step-box strong { display: block; margin-bottom: 8px; color: var(--forest-2); font: 800 10px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+    .step-box ul { margin: 0; padding-left: 18px; }
+    .gate {
+      margin-top: 18px;
+      padding: 13px 15px;
+      color: #173221;
+      background: var(--mint);
+      border-left: 4px solid var(--forest-2);
+      border-radius: 5px;
+      font-weight: 700;
+    }
+
+    .commit-list { display: grid; gap: 8px; counter-reset: commit; }
+    .commit {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    .commit::before {
+      counter-increment: commit;
+      content: counter(commit, decimal-leading-zero);
+      color: var(--forest-2);
+      font: 800 11px/1 var(--mono);
+    }
+    .commit code { width: fit-content; }
+
+    .done-card { position: relative; padding-left: 52px; }
+    .done-card::before {
+      position: absolute;
+      top: 22px;
+      left: 20px;
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      color: white;
+      background: var(--forest-2);
+      border-radius: 50%;
+      content: "✓";
+      font-weight: 900;
+    }
+
+    .source-links { display: flex; flex-wrap: wrap; gap: 9px; }
+    .source-links a {
+      padding: 10px 12px;
+      color: var(--forest-2);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font: 700 12px/1.3 var(--mono);
+      text-decoration: none;
+    }
+    .source-links a:hover { color: white; background: var(--forest); }
+
+    footer { padding: 28px 0 44px; color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; }
+    footer .shell { display: flex; justify-content: space-between; gap: 20px; }
+
+    @media (max-width: 900px) {
+      .hero-grid, .decision, .dependency { grid-template-columns: 1fr; }
+      .hero-facts { border-top: 1px solid rgb(255 255 255 / 14%); border-left: 0; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .flow { grid-template-columns: 1fr; }
+      .arrow { min-height: 36px; transform: rotate(90deg); }
+      .step-columns { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 22px, 1180px); }
+      .hero { border-radius: 14px; }
+      .hero-bar { align-items: flex-start; flex-direction: column; }
+      .hero-copy { padding: 34px 24px; }
+      h1 { font-size: clamp(43px, 15vw, 62px); }
+      main { padding-top: 56px; }
+      .section { margin-top: 70px; }
+      .section-head { grid-template-columns: 1fr; gap: 8px; }
+      .metrics, .scope-grid, .gate-grid, .done-grid { grid-template-columns: 1fr; }
+      .step { grid-template-columns: 50px minmax(0, 1fr); gap: 10px; }
+      .step-num { width: 50px; height: 50px; border-width: 4px; font-size: 21px; }
+      .timeline::before { left: 25px; }
+      .step-card { padding: 20px; }
+      .step-card h3 { font-size: 23px; }
+      .table-wrap { overflow: hidden; }
+      table { min-width: 0; }
+      thead { display: none; }
+      tbody, tr, td { display: block; }
+      tbody tr { border-bottom: 1px solid var(--line); }
+      tbody tr:last-child { border-bottom: 0; }
+      th, td { padding: 13px 16px; border-bottom: 0; }
+      td::before { display: block; margin-bottom: 5px; color: var(--muted); font: 800 9px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+      td:first-child::before { content: "Owner"; }
+      td:last-child::before { content: "Responsibility"; }
+      footer .shell { flex-direction: column; }
+    }
+
+    @media print {
+      body { background: white; font-size: 11pt; }
+      .shell { width: 100%; }
+      .hero { margin-top: 0; box-shadow: none; }
+      .nav { display: none; }
+      main { padding: 30px 0; }
+      .section { margin-top: 45px; break-inside: avoid; }
+      .step-card, .scope-card, .gate-card, .done-card, .metric, .table-wrap { box-shadow: none; }
+      .step { break-inside: avoid; }
+      a { text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero shell">
+    <div class="hero-bar">
+      <span><span class="dot"></span>Phase 03 · Implementation plan</span>
+      <span>Planning baseline · 23 August 2026</span>
+    </div>
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <div class="eyebrow">Enter bodies · own blocks · parse control flow</div>
+        <h1>Turn function bodies into syntax.</h1>
+        <p class="lede">Extend the explicit parser stack from declarations into C99 function definitions, ordered block items, and the complete statement grammar.</p>
+      </div>
+      <aside class="hero-facts" aria-label="Plan summary">
+        <div class="fact"><strong>12–20 days</strong><span>One agent, delivered as small green commits</span></div>
+        <div class="fact"><strong>9 steps</strong><span>Model, ownership, scopes, blocks, statements, bodies</span></div>
+        <div class="fact"><strong>2 later phases</strong><span>Expressions in Phase 04; initializers in Phase 05</span></div>
+      </aside>
+    </div>
+  </header>
+
+  <nav class="nav shell" aria-label="Plan sections">
+    <a href="#decision">Decision</a>
+    <a href="#baseline">Baseline</a>
+    <a href="#dependency">Boundary</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#scope">Scope</a>
+    <a href="#ownership">Ownership</a>
+    <a href="#roadmap">Roadmap</a>
+    <a href="#verification">Verification</a>
+    <a href="#done">Done</a>
+  </nav>
+
+  <main class="shell">
+    <section class="section" id="decision">
+      <div class="section-head">
+        <div class="section-index">01 / Decision</div>
+        <div>
+          <h2>Definitions are not declarations with skipped braces.</h2>
+          <p>Phase 02 already knows how to parse function declarators. Phase 03 gives the body, its block items, and its statements real owners and real syntax nodes.</p>
+        </div>
+      </div>
+      <div class="decision">
+        <div class="decision-main">
+          <div class="label">Core rule</div>
+          <h3>Choose once. Transfer ownership. Parse the whole body.</h3>
+          <p><code>ExternalDeclarationFrame</code> distinguishes declarations from definitions. From there, every brace, delimiter, scope, and child result has one traceable owner.</p>
+        </div>
+        <ul class="rules">
+          <li><strong>Prototypes stay declarations.</strong> No duplicate function-declaration model.</li>
+          <li><strong>Blocks contain block items.</strong> Declarations and statements remain ordered.</li>
+          <li><strong>Scopes unwind exactly.</strong> Success, recovery, and EOF restore entry depth.</li>
+          <li><strong>Expressions are typed children.</strong> No statement-local expression parser.</li>
+          <li><strong>Recovery is local.</strong> The smallest inexact node is marked recovered.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" id="baseline">
+      <div class="section-head">
+        <div class="section-index">02 / Baseline</div>
+        <div>
+          <h2>The parser reaches the body, then skips it.</h2>
+          <p>Function declarations and complex declarators are already substantial. The missing seam begins where a completed function binding meets a left brace.</p>
+        </div>
+      </div>
+      <div class="metrics">
+        <article class="metric"><div class="label">Function declarations</div><strong>Working</strong><p>Ordinary declarations, including prototypes and function pointers.</p></article>
+        <article class="metric alert"><div class="label">Function bodies</div><strong>Skipped</strong><p>Balanced braces plus <code>FunctionBodyNotImplemented</code>.</p></article>
+        <article class="metric alert"><div class="label">Statement frames</div><strong>0</strong><p>No reachable compound or statement frame.</p></article>
+        <article class="metric"><div class="label">CLI inspection</div><strong>Ready</strong><p>Syntax storage by default; tokens through <code>--tokens</code>.</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="dependency">
+      <div class="section-head">
+        <div class="section-index">03 / Phase boundary</div>
+        <div>
+          <h2>Structural progress can finish independently.</h2>
+          <p>Statements own expression positions, but they do not duplicate expression grammar. Phase 03 preserves each present expression as an explicit typed deferred child for Phase 04.</p>
+        </div>
+      </div>
+      <div class="dependency">
+        <article class="dependency-note">
+          <div class="label">Do not blur this line</div>
+          <h3>Deferred children are a phase contract.</h3>
+          <p>Preserve the grammar position, source provenance, focused diagnostic, and parent delimiter explicitly. Syntactic absence remains distinct from a present-but-deferred expression.</p>
+        </article>
+        <article class="contract">
+          <div class="label">Required child contract</div>
+          <ul>
+            <li><code>expression</code> stops before its parent-owned delimiter.</li>
+            <li><code>constant-expression</code> serves <code>case</code> labels.</li>
+            <li>Optional expressions are represented by the parent.</li>
+            <li>Block and <code>for</code> declarations retain the Phase 02 initializer seam.</li>
+            <li>Phase 04 replaces statement-expression slots; Phase 05 removes initializer seams.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="architecture">
+      <div class="section-head">
+        <div class="section-index">04 / Architecture</div>
+        <div>
+          <h2>A deep path from file item to statement.</h2>
+          <p>Each module absorbs a substantial grammar responsibility while callers continue to see the stable <code>Parser::next_item</code> interface and syntax-store indices.</p>
+        </div>
+      </div>
+      <div class="flow" aria-label="Parser ownership flow">
+        <article class="flow-card">
+          <div class="label">File item</div>
+          <h3>External declaration</h3>
+          <p>Reuses specifier and declarator frames, then decides declaration versus definition from the completed binding shape.</p>
+        </article>
+        <div class="arrow" aria-hidden="true">→</div>
+        <article class="flow-card focus">
+          <div class="label">Function</div>
+          <h3>Definition + compound</h3>
+          <p>Owns old-style declaration lists, function scope, body braces, block scope, and the ordered block-item arena.</p>
+        </article>
+        <div class="arrow" aria-hidden="true">→</div>
+        <article class="flow-card">
+          <div class="label">Body item</div>
+          <h3>Statement or declaration</h3>
+          <p>Label lookahead wins first; declaration classification follows; everything else enters the statement grammar.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="scope">
+      <div class="section-head">
+        <div class="section-index">05 / Scope</div>
+        <div>
+          <h2>Broad syntax work, narrow semantic ambition.</h2>
+          <p>The phase completes grammar structure and parser ownership. Type rules and control-flow constraints remain later passes.</p>
+        </div>
+      </div>
+      <div class="scope-grid">
+        <article class="scope-card in">
+          <div class="label">In Phase 03</div>
+          <ul>
+            <li>Function-definition nodes and external-item variants</li>
+            <li>Prototype-style and old-style definitions</li>
+            <li>Compound statements with mixed block items</li>
+            <li>All C99 statement productions</li>
+            <li>Function, prototype, block, implicit, and label scopes</li>
+            <li>Delimiter recovery, EOF, and translation-limit tests</li>
+          </ul>
+        </article>
+        <article class="scope-card later">
+          <div class="label">Later work</div>
+          <ul>
+            <li>Phase 04 expression or Phase 05 initializer implementation</li>
+            <li>Type checking and return-type validation</li>
+            <li>Full control-flow and label constraint analysis</li>
+            <li>GNU statement expressions and other extensions</li>
+            <li>Backend lowering and code generation</li>
+            <li>An aggregate translation-unit frame without caller demand</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="ownership">
+      <div class="section-head">
+        <div class="section-index">06 / Ownership</div>
+        <div>
+          <h2>Every decision and delimiter has one owner.</h2>
+          <p>This map is the review shorthand for detecting token theft, duplicated grammar, and scope leaks.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Owner</th><th>Responsibility</th></tr></thead>
+          <tbody>
+            <tr><td><code>ExternalDeclarationFrame</code></td><td>Declaration-versus-definition choice after completed specifiers and declarator.</td></tr>
+            <tr><td><code>DeclarationFrame</code></td><td>Semicolon declarations at file, block, <code>for</code>, and old-style positions.</td></tr>
+            <tr><td><code>FunctionDefinitionFrame</code></td><td>Optional old-style declaration list, function-scope setup, and body child.</td></tr>
+            <tr><td><code>CompoundStatementFrame</code></td><td>Both braces, block scope, recovery at the owning brace, and ordered block items.</td></tr>
+            <tr><td><code>StatementFrame</code></td><td>Statement keywords, punctuation, dangling <code>else</code>, and nested statement children.</td></tr>
+            <tr><td>Parent statement phase</td><td>Expression terminators such as <code>;</code>, <code>)</code>, and <code>:</code>.</td></tr>
+            <tr><td>Scope-owning frame</td><td>Restore recorded entry depth on success, recovery, and EOF.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="roadmap">
+      <div class="section-head">
+        <div class="section-index">07 / Roadmap</div>
+        <div>
+          <h2>Nine vertical, checkable increments.</h2>
+          <p>Every step ends at a parser-interface gate. The full action lists and exhaustive completion criteria live in the authoritative Markdown brief.</p>
+        </div>
+      </div>
+      <div class="timeline">
+        <article class="step">
+          <div class="step-num">1</div>
+          <div class="step-card">
+            <h3>Freeze the baseline and grammar matrix</h3>
+            <p>Characterize prototypes, function pointers, skipped bodies, old-style failures, every statement production, malformed delimiters, and EOF.</p>
+            <div class="step-columns">
+              <div class="step-box"><strong>Lock in</strong><ul><li>Yielded item</li><li>Syntax-store shape</li><li>Diagnostics and spans</li></ul></div>
+              <div class="step-box"><strong>Classify</strong><ul><li>Phase 03</li><li>Phase 04/05 seam</li><li>Semantic or later</li></ul></div>
+            </div>
+            <div class="gate">Gate: every production and recovery edge has a named case and owner.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">2</div>
+          <div class="step-card">
+            <h3>Repair the syntax model and storage</h3>
+            <p>Add ordered <code>BlockItem</code> storage, source-backed/recoverable statements, missing variants, optional returns, null statements, and function-definition arenas.</p>
+            <div class="gate">Gate: every form is representable and absent versus deferred expression positions are unambiguous.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">3</div>
+          <div class="step-card">
+            <h3>Separate declarations from definitions</h3>
+            <p>Move the choice into <code>ExternalDeclarationFrame</code>. Accept a body only after one uninitialized declarator whose completed binding is a function.</p>
+            <div class="step-columns">
+              <div class="step-box"><strong>Remain declarations</strong><ul><li>Prototypes</li><li>Function pointers</li><li>Comma lists</li></ul></div>
+              <div class="step-box"><strong>Transfer to definition</strong><ul><li>Prototype-style head + body</li><li>Old-style head + declaration list</li></ul></div>
+            </div>
+            <div class="gate">Gate: legal heads transfer; illegal brace starts diagnose; declaration behavior stays green.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">4</div>
+          <div class="step-card">
+            <h3>Make scope lifetimes explicit</h3>
+            <p>Add file, function, function-prototype, and block kinds; republish parameters; install <code>__func__</code>; add the label namespace; restore entry depth on every exit.</p>
+            <div class="gate">Gate: name classification is correct and malformed parses leak no scopes.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">5</div>
+          <div class="step-card">
+            <h3>Parse compounds and block items</h3>
+            <p>Own both braces, enter block scope, and preserve arbitrary C99 declaration/statement interleaving. Label lookahead precedes typedef classification.</p>
+            <div class="gate">Gate: mixed items remain ordered, 127 nested blocks stay heap-backed, and recovery respects the enclosing brace.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">6</div>
+          <div class="step-card">
+            <h3>Parse the statement grammar</h3>
+            <p>Land structural and jump statements, then selection, iteration, and expression-bearing forms. Preserve dangling-<code>else</code> association and every independent <code>for</code> slot.</p>
+            <div class="step-columns">
+              <div class="step-box"><strong>Families</strong><ul><li>Labels and compounds</li><li>Null, expression, jumps</li><li>Selection and iteration</li></ul></div>
+              <div class="step-box"><strong>Critical edges</strong><ul><li>Nearest unmatched <code>if</code></li><li><code>case</code> constant expressions</li><li>Parent-owned delimiters</li></ul></div>
+            </div>
+            <div class="gate">Gate: every C99 production yields a structural node and each present expression is an explicit deferred child, never ad hoc token-skipped.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">7</div>
+          <div class="step-card">
+            <h3>Build complete function definitions</h3>
+            <p>Combine the head, optional old-style declarations, and compound result into one valid or recovered function-definition item.</p>
+            <div class="gate">Gate: real body nodes replace <code>FunctionBodyNotImplemented</code> for prototype and old-style definitions.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">8</div>
+          <div class="step-card">
+            <h3>Harden recovery and limits</h3>
+            <p>Exercise every parenthesis, semicolon, colon, brace, statement start, and EOF phase. Prove continued file-item parsing after a recovered body.</p>
+            <div class="gate">Gate: malformed input terminates, diagnostics stay local, scopes restore, and nesting never overflows the Rust call stack.</div>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-num">9</div>
+          <div class="step-card">
+            <h3>Verify, document, and hand off</h3>
+            <p>Run formatting, tests, changed-file Clippy attribution, and manual CLI inspection. Record exact remaining expression, initializer, semantic, and extension gaps.</p>
+            <div class="gate">Gate: no ambiguous owner, untyped child path, or undocumented Phase 04/05 seam remains.</div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="verification">
+      <div class="section-head">
+        <div class="section-index">08 / Verification</div>
+        <div>
+          <h2>Test shape, ownership, recovery, and reachability.</h2>
+          <p>Passing examples are necessary but insufficient. The phase proves exact syntax storage, scope cleanup, delimiter traces, and recovery into later file items.</p>
+        </div>
+      </div>
+      <div class="gate-grid">
+        <article class="gate-card"><div class="label">Grammar</div><h3>Every production</h3><ul><li>Prototype and old-style definitions</li><li>All statement families</li><li>Every <code>for</code> form</li><li>Mixed block items</li></ul></article>
+        <article class="gate-card"><div class="label">Names and scopes</div><h3>Every lifetime</h3><ul><li>Parameters and <code>__func__</code></li><li>Typedef shadowing</li><li>Label/typedef collisions</li><li>Nested and implicit scopes</li></ul></article>
+        <article class="gate-card"><div class="label">Recovery</div><h3>Every delimiter</h3><ul><li>Semicolon, parenthesis, colon, brace</li><li>EOF in every phase</li><li>Later external item still parses</li><li>Smallest node marked recovered</li></ul></article>
+        <article class="gate-card"><div class="label">Limits and tooling</div><h3>Every delivery gate</h3><ul><li>127 nested blocks</li><li>127 parameters</li><li><code>cargo fmt --check</code></li><li>All-target tests and changed-file Clippy</li></ul></article>
+      </div>
+      <div style="margin-top: 18px">
+        <pre><code>cargo fmt --check
+cargo test --all-targets
+cargo clippy --all-targets --all-features -- -D warnings</code></pre>
+      </div>
+    </section>
+
+    <section class="section" id="delivery">
+      <div class="section-head">
+        <div class="section-index">09 / Delivery</div>
+        <div>
+          <h2>Small green commits expose every seam.</h2>
+          <p>The Phase 03 deferred-expression seam stays isolated so Phase 04 can replace it without redesigning statement frames or delimiter ownership.</p>
+        </div>
+      </div>
+      <div class="commit-list">
+        <div class="commit"><code>test(parser): characterize phase 3 grammar and recovery</code></div>
+        <div class="commit"><code>refactor(parser): add statement and function definition syntax storage</code></div>
+        <div class="commit"><code>refactor(parser): split declarations from function definitions</code></div>
+        <div class="commit"><code>feat(parser): add function and block scope lifetimes</code></div>
+        <div class="commit"><code>feat(parser): parse compound statements and block items</code></div>
+        <div class="commit"><code>feat(parser): parse structural and jump statements</code></div>
+        <div class="commit"><code>feat(parser): parse selection and iteration statements</code></div>
+        <div class="commit"><code>feat(parser): preserve deferred expression statement children</code></div>
+        <div class="commit"><code>feat(parser): parse prototype and old-style function definitions</code></div>
+        <div class="commit"><code>test(parser): harden statement recovery and translation limits</code></div>
+        <div class="commit"><code>docs(parser): record phase 3 completion and remaining gaps</code></div>
+      </div>
+    </section>
+
+    <section class="section" id="done">
+      <div class="section-head">
+        <div class="section-index">10 / Done</div>
+        <div>
+          <h2>Phase 03 ends with reachable, inspectable bodies.</h2>
+          <p>These gates are conjunctive. Structural scaffolding is valuable progress, but it is not completion.</p>
+        </div>
+      </div>
+      <div class="done-grid">
+        <article class="done-card"><strong>Definitions are real items.</strong><p>Prototype and old-style forms yield function-definition nodes with reachable bodies.</p></article>
+        <article class="done-card"><strong>Blocks preserve source order.</strong><p>Declarations and statements coexist as ordered block items.</p></article>
+        <article class="done-card"><strong>Statements are structurally complete.</strong><p>Every C99 statement has a distinct source-backed node, including expression-bearing forms.</p></article>
+        <article class="done-card"><strong>Deferred seams are typed.</strong><p>Every expression and initializer gap retains provenance, a stable diagnostic, and its parent-owned delimiter.</p></article>
+        <article class="done-card"><strong>Scopes and recovery are exact.</strong><p>All exit paths restore scope depth and later file items survive recoverable errors.</p></article>
+        <article class="done-card"><strong>Tooling is green and honest.</strong><p>Formatting and tests pass; changed files are Clippy-clean; remaining debt is attributed.</p></article>
+        <article class="done-card"><strong>Nesting is heap-backed.</strong><p>Translation-limit cases do not recurse on the Rust call stack.</p></article>
+        <article class="done-card"><strong>The CLI shows the result.</strong><p>Representative syntax and diagnostics are easy to inspect manually.</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="sources">
+      <div class="section-head">
+        <div class="section-index">11 / Sources</div>
+        <div>
+          <h2>The Markdown brief is authoritative.</h2>
+          <p>This page is the human-readable companion. Exact action lists, test requirements, scope boundaries, and completion criteria live in the Markdown file.</p>
+        </div>
+      </div>
+      <div class="source-links">
+        <a href="parser-roadmap.md">Authoritative parser roadmap</a>
+        <a href="phase-03-statements-and-function-definitions-plan.md">Phase 03 Markdown brief</a>
+        <a href="phase-02-legacy-parser-stack-migration-agent-brief.md">Phase 02 Markdown brief</a>
+        <a href="phase-02-legacy-parser-stack-migration-plan.html">Phase 02 HTML plan</a>
+        <a href="phase-01a-conditional-expression-foundations-agent-brief.md">Phase 01 brief</a>
+        <a href="CONTEXT.md">Parser architecture context</a>
+        <a href="c99-parser-compliance-checklist.md">C99 compliance checklist</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">
+      <span>bcc-rust · Phase 03 parser plan</span>
+      <span>Statements · compounds · function definitions</span>
+    </div>
+  </footer>
+</body>
+</html>
