@@ -3,7 +3,9 @@
 
 import importlib.util
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -182,6 +184,11 @@ vendored.get_pr_checks = get_pr_checks
 
 
 def main():
+    if not sys.flags.utf8_mode:
+        os.execv(
+            sys.executable,
+            [sys.executable, "-X", "utf8", str(Path(__file__).resolve()), *sys.argv[1:]],
+        )
     return vendored.main()
 
 

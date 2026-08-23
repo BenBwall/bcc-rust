@@ -41,31 +41,28 @@ Accept any of the following:
 
 ## Commands
 
-Always invoke the watcher with Python's UTF-8 mode enabled (`-X utf8`). This is required to avoid
-console encoding and decoding failures on Windows.
-
 ### One-shot snapshot
 
 ```bash
-python3 -X utf8 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --once
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --once
 ```
 
 ### Continuous watch (JSONL)
 
 ```bash
-python3 -X utf8 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --watch
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --watch
 ```
 
 ### Trigger flaky retry cycle (only when watcher indicates)
 
 ```bash
-python3 -X utf8 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --retry-failed-now
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --retry-failed-now
 ```
 
 ### Explicit PR target
 
 ```bash
-python3 -X utf8 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr <number-or-url> --once
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr <number-or-url> --once
 ```
 
 ## CI Failure Classification
