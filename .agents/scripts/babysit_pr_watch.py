@@ -2,6 +2,8 @@
 """Repository-local compatibility adapter for the vendored PR watcher."""
 
 import importlib.util
+import json
+import subprocess
 from pathlib import Path
 
 
@@ -113,7 +115,6 @@ def fetch_resolved_review_comment_ids(repo, pr_number):
 
 _vendored_fetch_new_review_items = vendored.fetch_new_review_items
 _vendored_normalize_review_comments = vendored.normalize_review_comments
-_vendored_get_pr_checks = vendored.get_pr_checks
 
 
 def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
@@ -140,12 +141,40 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
 
 
 def get_pr_checks(pr_spec, repo):
+    parsed = vendored.parse_pr_spec(pr_spec)
+    command = ["gh"]
+    if repo:
+        command.extend(["-R", repo])
+    command.extend(["pr", "checks"])
+    if parsed["value"] is not None:
+        command.append(parsed["value"])
+    command.extend(["--json", vendored.checks_fields()])
     try:
-        return _vendored_get_pr_checks(pr_spec, repo)
-    except vendored.GhCommandError as err:
-        if "no checks reported" in str(err).lower():
+        completed = subprocess.run(command, capture_output=True, text=True)
+    except FileNotFoundError as err:
+        raise vendored.GhCommandError("`gh` command not found") from err
+
+    if completed.returncode not in (0, 8):
+        if "no checks reported" in completed.stderr.lower():
             return []
-        raise
+        error = subprocess.CalledProcessError(
+            completed.returncode,
+            command,
+            output=completed.stdout,
+            stderr=completed.stderr,
+        )
+        raise vendored.GhCommandError(vendored._format_gh_error(command, error)) from error
+
+    raw = completed.stdout.strip()
+    if not raw:
+        return []
+    try:
+        checks = json.loads(raw)
+    except json.JSONDecodeError as err:
+        raise vendored.GhCommandError("Failed to parse JSON from gh pr checks") from err
+    if not isinstance(checks, list):
+        raise vendored.GhCommandError("Unexpected payload from gh pr checks")
+    return checks
 
 
 vendored.fetch_new_review_items = fetch_new_review_items

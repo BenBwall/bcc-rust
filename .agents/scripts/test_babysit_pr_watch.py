@@ -1,5 +1,7 @@
 import importlib.util
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -116,22 +118,43 @@ def test_resolved_review_threads_do_not_surface_on_fresh_state(monkeypatch):
 
 def test_no_configured_checks_are_an_empty_check_set(monkeypatch):
     monkeypatch.setattr(
-        babysit_pr_watch,
-        "_vendored_get_pr_checks",
-        lambda *args: (_ for _ in ()).throw(
-            babysit_pr_watch.vendored.GhCommandError("no checks reported on the branch")
+        babysit_pr_watch.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="no checks reported on the branch",
         ),
     )
 
     assert babysit_pr_watch.get_pr_checks("2", "openai/codex") == []
 
 
+def test_pending_check_exit_code_preserves_the_json_payload(monkeypatch):
+    pending_checks = [{"name": "tests", "state": "IN_PROGRESS", "bucket": "pending"}]
+
+    def fake_run(command, **kwargs):
+        assert command[:5] == ["gh", "-R", "openai/codex", "pr", "checks"]
+        assert "2" in command
+        return SimpleNamespace(
+            returncode=8,
+            stdout=json.dumps(pending_checks),
+            stderr="",
+        )
+
+    monkeypatch.setattr(babysit_pr_watch.subprocess, "run", fake_run)
+
+    assert babysit_pr_watch.get_pr_checks("2", "openai/codex") == pending_checks
+
+
 def test_other_check_failures_are_not_hidden(monkeypatch):
     monkeypatch.setattr(
-        babysit_pr_watch,
-        "_vendored_get_pr_checks",
-        lambda *args: (_ for _ in ()).throw(
-            babysit_pr_watch.vendored.GhCommandError("authentication failed")
+        babysit_pr_watch.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="authentication failed",
         ),
     )
 
