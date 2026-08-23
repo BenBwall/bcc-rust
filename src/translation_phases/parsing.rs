@@ -3707,6 +3707,17 @@ impl StructOrUnionSpecifierFrame {
                     self.finish_member(parser, context);
                     self.phase = StructOrUnionPhase::FinishBody;
                     ParseAction::Reprocess
+                } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.finish_member(parser, context);
+                    self.phase = StructOrUnionPhase::MemberStart;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -4009,6 +4020,16 @@ impl EnumSpecifierFrame {
                         token,
                     );
                     self.phase = EnumPhase::FinishBody;
+                    ParseAction::Reprocess
+                } else if token.is_some_and(|token| token.kind == TokenType::Identifier) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = EnumPhase::EnumeratorOrClose;
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
@@ -5388,6 +5409,52 @@ mod tests {
                     .and_then(|declarator| identifier_name(&parsed, declarator)))
                 .collect::<Vec<_>>(),
             ["a", "b"]
+        );
+    }
+
+    #[test]
+    fn omitted_struct_member_semicolon_reprocesses_the_next_declaration_starter() {
+        let parsed = parse("struct S { int first int second; };\n");
+
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(Some(
+                TokenType::Keyword(KeywordTokenType::Int)
+            ))
+        )));
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .struct_declarators
+                .iter()
+                .filter_map(|declarator| declarator
+                    .declarator
+                    .and_then(|declarator| identifier_name(&parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+    }
+
+    #[test]
+    fn omitted_enumerator_comma_reprocesses_the_next_identifier() {
+        let parsed = parse("enum E { A B, C };\n");
+
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(
+                TokenType::Identifier
+            ))
+        )));
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .enumerators
+                .iter()
+                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>(),
+            ["A", "B", "C"]
         );
     }
 

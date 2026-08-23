@@ -13,6 +13,20 @@ babysit_pr_watch = importlib.util.module_from_spec(MODULE_SPEC)
 MODULE_SPEC.loader.exec_module(babysit_pr_watch)
 
 
+def test_codex_watcher_entrypoint_routes_through_the_repository_adapter():
+    repository_root = MODULE_PATH.resolve().parents[2]
+    exposed_watcher = (
+        repository_root
+        / ".codex"
+        / "skills"
+        / "babysit-pr"
+        / "scripts"
+        / "gh_pr_watch.py"
+    )
+
+    assert exposed_watcher.resolve() == MODULE_PATH.resolve()
+
+
 def sample_pr():
     return {
         "number": 123,
