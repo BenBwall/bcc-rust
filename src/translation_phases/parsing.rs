@@ -1014,6 +1014,7 @@ enum SynchronizationKind {
     Initializer,
     ArrayBound,
     Parameter,
+    KAndRParameter,
     VariadicParameterList,
     StructMember,
     EnumeratorValue,
@@ -1486,8 +1487,12 @@ impl Parser {
                 brackets,
                 braces,
             );
-            let at_next_declaration = matches!(set.kind, SynchronizationKind::Declaration)
-                && at_top_level
+            let at_next_declaration = matches!(
+                set.kind,
+                SynchronizationKind::Declaration
+                    | SynchronizationKind::Parameter
+                    | SynchronizationKind::StructMember
+            ) && at_top_level
                 && self.declaration_starter(token);
             if at_unambiguous_owning_delimiter
                 || at_next_declaration
@@ -1711,7 +1716,7 @@ impl SynchronizationKind {
                         | OperatorTokenType::Semicolon
                 )
             ),
-            | Self::Parameter => matches!(
+            | Self::Parameter | Self::KAndRParameter => matches!(
                 token,
                 TokenType::Operator(
                     OperatorTokenType::Comma
@@ -1794,7 +1799,7 @@ impl SynchronizationKind {
                         && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                     || braces == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
-            | Self::Parameter | Self::VariadicParameterList =>
+            | Self::Parameter | Self::KAndRParameter | Self::VariadicParameterList =>
                 braces == 0 && token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || parentheses == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
@@ -3135,7 +3140,7 @@ impl ParameterListFrame {
                     );
                     self.phase = ParameterListPhase::KAndRSeparator;
                     return ParseAction::Recover(SynchronizationSet {
-                        kind:   SynchronizationKind::Parameter,
+                        kind:   SynchronizationKind::KAndRParameter,
                         target: RecoveryTarget::CurrentFrame,
                     });
                 }
@@ -3149,7 +3154,7 @@ impl ParameterListFrame {
                     );
                     self.phase = ParameterListPhase::KAndRSeparator;
                     return ParseAction::Recover(SynchronizationSet {
-                        kind:   SynchronizationKind::Parameter,
+                        kind:   SynchronizationKind::KAndRParameter,
                         target: RecoveryTarget::CurrentFrame,
                     });
                 }
@@ -3196,6 +3201,18 @@ impl ParameterListFrame {
                     );
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Reprocess
+                } else if token.is_some_and(|token| {
+                    token.kind == TokenType::Identifier && !parser.scopes.is_typedef(token.contents)
+                }) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = ParameterListPhase::KAndRIdentifier;
+                    ParseAction::Reprocess
                 } else {
                     parser.report(
                         context,
@@ -3205,7 +3222,7 @@ impl ParameterListFrame {
                         token,
                     );
                     ParseAction::Recover(SynchronizationSet {
-                        kind:   SynchronizationKind::Parameter,
+                        kind:   SynchronizationKind::KAndRParameter,
                         target: RecoveryTarget::CurrentFrame,
                     })
                 }
@@ -5522,6 +5539,59 @@ mod tests {
                 .string_cache
                 .at(parsed.parser.syntax.identifiers[parameters.start_index as usize].name),
             "arg"
+        );
+    }
+
+    #[test]
+    fn nested_recovery_stops_before_declaration_starters() {
+        let parsed = parse("int f(int a + int b);\n");
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .parameter_declarations
+                .iter()
+                .filter_map(|parameter| parameter
+                    .declarator
+                    .and_then(|declarator| identifier_name(&parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+
+        let parsed = parse("struct S { int first + int second; };\n");
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .struct_declarators
+                .iter()
+                .filter_map(|declarator| declarator
+                    .declarator
+                    .and_then(|declarator| identifier_name(&parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+    }
+
+    #[test]
+    fn omitted_k_and_r_comma_reprocesses_the_next_identifier() {
+        let parsed = parse("int f(a b, c);\n");
+
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
+                Some(TokenType::Identifier)
+            )
+        )));
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .identifiers
+                .iter()
+                .map(|identifier| parsed.context.string_cache.at(identifier.name))
+                .collect::<Vec<_>>(),
+            ["a", "b", "c"]
         );
     }
 
