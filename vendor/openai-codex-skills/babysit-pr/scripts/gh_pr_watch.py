@@ -431,6 +431,59 @@ def gh_api_list_paginated(endpoint, repo=None, per_page=100):
     return items
 
 
+def fetch_resolved_review_comment_ids(repo, pr_number):
+    try:
+        owner, name = repo.split("/", 1)
+    except ValueError as err:
+        raise GhCommandError(f"Invalid repository slug: {repo}") from err
+
+    query = (
+        "query($owner:String!,$name:String!,$number:Int!,$cursor:String){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){"
+        "reviewThreads(first:100,after:$cursor){"
+        "nodes{isResolved comments(first:100){nodes{databaseId}}}"
+        "pageInfo{hasNextPage endCursor}}}}}"
+    )
+    resolved_ids = set()
+    cursor = None
+    while True:
+        args = [
+            "api",
+            "graphql",
+            "-f",
+            f"query={query}",
+            "-F",
+            f"owner={owner}",
+            "-F",
+            f"name={name}",
+            "-F",
+            f"number={pr_number}",
+        ]
+        if cursor:
+            args.extend(["-F", f"cursor={cursor}"])
+        payload = gh_json(args)
+        try:
+            threads = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
+        except (KeyError, TypeError) as err:
+            raise GhCommandError("Unexpected review-thread payload from gh api graphql") from err
+
+        for thread in threads.get("nodes") or []:
+            if not isinstance(thread, dict) or not thread.get("isResolved"):
+                continue
+            comments = thread.get("comments") or {}
+            for comment in comments.get("nodes") or []:
+                if isinstance(comment, dict) and comment.get("databaseId") not in (None, ""):
+                    resolved_ids.add(str(comment["databaseId"]))
+
+        page_info = threads.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            raise GhCommandError("Review-thread pagination omitted endCursor")
+    return resolved_ids
+
+
 def normalize_issue_comments(items):
     out = []
     for item in items:
@@ -537,6 +590,9 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
     issue_payload = gh_api_list_paginated(endpoints["issue_comment"], repo=repo)
     review_comment_payload = gh_api_list_paginated(endpoints["review_comment"], repo=repo)
     review_payload = gh_api_list_paginated(endpoints["review"], repo=repo)
+    resolved_review_comment_ids = (
+        fetch_resolved_review_comment_ids(repo, pr_number) if review_comment_payload else set()
+    )
 
     issue_items = normalize_issue_comments(issue_payload)
     review_states = {
@@ -554,7 +610,11 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
         and item.get("id") not in (None, "")
         and str(item.get("pull_request_review_id") or "") in pending_review_ids
     }
-    review_comment_items = normalize_review_comments(review_comment_payload, review_states)
+    review_comment_items = [
+        item
+        for item in normalize_review_comments(review_comment_payload, review_states)
+        if item["id"] not in resolved_review_comment_ids
+    ]
     review_items = normalize_reviews(review_payload)
     all_items = issue_items + review_comment_items + review_items
 
