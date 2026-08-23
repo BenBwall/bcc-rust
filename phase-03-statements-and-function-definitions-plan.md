@@ -1,5 +1,22 @@
 # Phase 03: Parse statements and function definitions
 
+## Implementation status
+
+Completed on 23 August 2026. `Parser::next_item` now reaches prototype-style
+and old-style function definitions, ordered compound block items, and every
+structural C99 statement family through heap-backed frames. Function,
+prototype, block, implicit selection/iteration, label, and switch lifetimes are
+covered by recovery and translation-floor tests; valid definitions no longer
+use a function-body future-child seam.
+
+Phase 04 still owns `StatementExpression` and
+`StatementConstantExpression` deferred slots and will replace their source
+provenance with expression indices. Phase 05 still owns initializer, array
+bound, bit-field width, and enumerator-value seams. The completion run has 99
+passing all-target tests and a clean nightly formatting check. Strict Clippy
+continues to report 84 existing error lines in generated bindings and
+non-parser modules; no diagnostic points at `parsing.rs`.
+
 ## Objective
 
 Extend the explicit parser stack from file-scope declarations into C99
