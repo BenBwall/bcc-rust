@@ -1957,6 +1957,9 @@ impl DeclarationFrame {
                         ),
                         token,
                     );
+                    if let Some(token) = token {
+                        parser.merge_source(context, &mut self.source_vectors, token);
+                    }
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Consume
                 } else if token.is_none() {
@@ -5162,12 +5165,22 @@ mod tests {
 
     #[test]
     fn direct_recovery_sources_are_retained_by_the_error_node() {
-        let parsed = parse("int x +;\n");
-        let Some(ExternalDeclaration::Error(source_vectors)) = parsed.items.first() else {
-            panic!("malformed declaration should reduce to an error node")
-        };
+        for (source, expected) in [
+            ("int x +;\n", "intx+;"),
+            ("}\nint after;\n", "}"),
+            ("int x }\nint after;\n", "intx}"),
+        ] {
+            let parsed = parse(source);
+            let Some(ExternalDeclaration::Error(source_vectors)) = parsed.items.first() else {
+                panic!("malformed declaration should reduce to an error node")
+            };
 
-        assert_eq!(sourced_text(&parsed, *source_vectors), "intx+;");
+            assert_eq!(
+                sourced_text(&parsed, *source_vectors),
+                expected,
+                "error-node provenance did not retain all owned tokens for {source:?}"
+            );
+        }
     }
 
     #[test]
