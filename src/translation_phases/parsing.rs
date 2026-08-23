@@ -2042,6 +2042,7 @@ impl Parser {
             let at_next_declaration = matches!(
                 state.set.kind,
                 SynchronizationKind::Declaration
+                    | SynchronizationKind::Initializer
                     | SynchronizationKind::Parameter
                     | SynchronizationKind::StructMember
             ) && at_top_level
@@ -6643,6 +6644,25 @@ mod tests {
                 "recovery swallowed the declaration after {source:?}"
             );
         }
+    }
+
+    #[test]
+    fn malformed_initializer_recovery_preserves_the_next_declaration() {
+        let parsed = parse("int x = + int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::RecoveredDeclaration(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
     }
 
     #[test]
