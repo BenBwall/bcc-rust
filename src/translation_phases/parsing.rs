@@ -1694,15 +1694,20 @@ impl SynchronizationKind {
         braces: usize,
     ) -> bool {
         match self {
-            | Self::Declaration
-            | Self::Initializer
-            | Self::StructMember
-            | Self::EnumeratorValue =>
+            | Self::Declaration =>
                 token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || braces == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
+            | Self::Initializer | Self::StructMember | Self::EnumeratorValue =>
+                braces == 0
+                    && matches!(
+                        token,
+                        TokenType::Operator(
+                            OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                        )
+                    ),
             | Self::ArrayBound =>
-                token == TokenType::Operator(OperatorTokenType::Semicolon)
+                braces == 0 && token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || brackets == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
                     || braces == 0
@@ -5162,6 +5167,62 @@ mod tests {
                 "recovery swallowed the declaration after {source:?}"
             );
         }
+    }
+
+    #[test]
+    fn deferred_expression_recovery_keeps_semicolons_inside_nested_braces() {
+        for source in [
+            "int array[sizeof(struct Inner { int member; })], after;\n",
+            "int initialized = sizeof(struct Inner { int member; }), after;\n",
+        ] {
+            let parsed = parse(source);
+
+            assert_eq!(
+                parsed
+                    .parser
+                    .syntax
+                    .init_declarators
+                    .iter()
+                    .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
+                    .collect::<Vec<_>>(),
+                if source.starts_with("int array") {
+                    vec!["array", "after"]
+                } else {
+                    vec!["initialized", "after"]
+                },
+                "nested member semicolon escaped recovery for {source:?}"
+            );
+        }
+
+        let parsed = parse("enum E { A = sizeof(struct Inner { int member; }), B };\n");
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .enumerators
+                .iter()
+                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+
+        let parsed = parse(
+            "struct Outer { unsigned width : sizeof(struct Inner { int member; }); int after; };\n",
+        );
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .struct_declarators
+                .iter()
+                .filter_map(|declarator| {
+                    declarator
+                        .declarator
+                        .and_then(|declarator| identifier_name(&parsed, declarator))
+                })
+                .collect::<Vec<_>>(),
+            ["width", "after"]
+        );
     }
 
     #[test]
