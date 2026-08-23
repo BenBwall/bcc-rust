@@ -1162,8 +1162,8 @@ enum ParseValue {
     ParameterList(ParameterListResult),
     /// Arena handle for a completed struct or union specifier.
     StructOrUnionSpecifier(StructOrUnionSpecifierIndex),
-    /// Arena handle for a completed enum specifier.
-    EnumSpecifier(EnumSpecifierIndex),
+    /// Completed enum specifier and its recovery handoff.
+    EnumSpecifier(EnumSpecifierResult),
     /// Arena handle for a completed declaration.
     Declaration(DeclarationIndex),
     /// External item ready to be yielded by the translation-phase seam.
@@ -1183,6 +1183,15 @@ struct ParameterListResult {
     direct_declarator: DirectDeclarator,
     /// Exact source provenance owned by the parameter-list frame.
     source_vectors:    SourceVectors,
+}
+
+/// Enum child result before its type specifier is merged into the parent.
+#[derive(Debug, Clone, Copy)]
+struct EnumSpecifierResult {
+    /// Arena handle for the completed enum specifier.
+    index: EnumSpecifierIndex,
+    /// Whether recovery stopped before a following declaration.
+    stopped_before_declaration: bool,
 }
 
 /// Result of diagnosing and synchronizing a deferred grammar child.
@@ -1851,6 +1860,8 @@ struct EnumSpecifierFrame {
     current_enumerator: Option<Identifier>,
     /// Whether `{` was consumed, distinguishing a reference from a definition.
     body_started: bool,
+    /// Whether malformed-body recovery stopped before an outer declaration.
+    stopped_before_declaration: bool,
     /// Provenance accumulated across the complete enum specifier.
     source_vectors: Option<SourceVectors>,
     /// Provenance for the enumerator currently being built.
@@ -1890,6 +1901,7 @@ impl EnumSpecifierFrame {
             enumerators: Vec::new(),
             current_enumerator: None,
             body_started: false,
+            stopped_before_declaration: false,
             source_vectors: None,
             current_enumerator_source: None,
         }
@@ -2046,10 +2058,21 @@ impl Parser {
                     | SynchronizationKind::ArrayBound
                     | SynchronizationKind::Parameter
                     | SynchronizationKind::StructMember
+                    | SynchronizationKind::EnumeratorValue
             ) && at_top_level
                 && self.declaration_starter(token);
+            let at_next_k_and_r_identifier =
+                matches!(state.set.kind, SynchronizationKind::KAndRParameter)
+                    && at_top_level
+                    && token.kind == TokenType::Identifier
+                    && !self.scopes.is_typedef(token.contents);
+            let at_next_enumerator = matches!(state.set.kind, SynchronizationKind::EnumeratorValue)
+                && at_top_level
+                && token.kind == TokenType::Identifier;
             if at_unambiguous_owning_delimiter
                 || at_next_declaration
+                || at_next_k_and_r_identifier
+                || at_next_enumerator
                 || at_top_level && state.set.kind.stops_before(token.kind)
             {
                 break;
@@ -2877,7 +2900,11 @@ impl DeclarationSpecifiersFrame {
                 return ParseAction::Reprocess;
             },
             | DeclarationSpecifiersPhase::AwaitEnum => {
-                let Some(ParseValue::EnumSpecifier(index)) = returned else {
+                let Some(ParseValue::EnumSpecifier(EnumSpecifierResult {
+                    index,
+                    stopped_before_declaration,
+                })) = returned
+                else {
                     panic!("enum specifier returned an unexpected value: {returned:?}");
                 };
                 let token = self
@@ -2901,6 +2928,10 @@ impl DeclarationSpecifiersFrame {
                         }));
                 }
                 self.consumed = true;
+                if stopped_before_declaration {
+                    self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
+                    return ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers));
+                }
                 self.phase = DeclarationSpecifiersPhase::Collect;
                 return ParseAction::Reprocess;
             },
@@ -4780,6 +4811,17 @@ impl EnumSpecifierFrame {
                     );
                     self.phase = EnumPhase::EnumeratorOrClose;
                     ParseAction::Reprocess
+                } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.stopped_before_declaration = true;
+                    self.phase = EnumPhase::FinishBody;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -4837,7 +4879,10 @@ impl EnumSpecifierFrame {
             enumeration_list,
             source_vectors: self.source_vectors.unwrap_or_default(),
         });
-        ParseAction::Reduce(ParseValue::EnumSpecifier(EnumSpecifierIndex(index)))
+        ParseAction::Reduce(ParseValue::EnumSpecifier(EnumSpecifierResult {
+            index: EnumSpecifierIndex(index),
+            stopped_before_declaration: self.stopped_before_declaration,
+        }))
     }
 }
 
@@ -6523,7 +6568,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_recovery_stops_before_declaration_starters() {
+    fn nested_recovery_stops_before_grammar_starters() {
         let parsed = parse("int f(int a + int b);\n");
         assert_eq!(
             parsed
@@ -6550,6 +6595,41 @@ mod tests {
                     .and_then(|declarator| identifier_name(&parsed, declarator)))
                 .collect::<Vec<_>>(),
             ["first", "second"]
+        );
+
+        let parsed = parse("enum E { A + B, C };\n");
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .enumerators
+                .iter()
+                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>(),
+            ["A", "B", "C"]
+        );
+
+        let parsed = parse("int f(a + b, c);\n");
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .identifiers
+                .iter()
+                .map(|identifier| parsed.context.string_cache.at(identifier.name))
+                .collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+
+        let parsed = parse("enum E { A = + int after;\n");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
         );
     }
 
