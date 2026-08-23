@@ -1387,6 +1387,7 @@ struct ActiveRecovery {
     brackets:    usize,
     braces:      usize,
     questions:   Vec<DelimiterDepth>,
+    last_token:  Option<TokenType>,
 }
 
 impl RecoveryState {
@@ -1399,6 +1400,7 @@ impl RecoveryState {
             brackets: 0,
             braces: 0,
             questions: Vec::new(),
+            last_token: None,
         });
     }
 
@@ -1457,6 +1459,7 @@ impl RecoveryState {
             },
             | _ => {},
         }
+        state.last_token = Some(token);
     }
 
     fn discard_closed_questions(state: &mut ActiveRecovery) {
@@ -2125,12 +2128,30 @@ impl FunctionDefinitionFrame {
                             }
                             let start = parameter_list.start_index as usize;
                             let end = start + parameter_list.length as usize;
-                            let names = parser.syntax.parameter_declarations[start..end]
-                                .iter()
-                                .filter_map(|parameter| parameter.declarator)
-                                .filter_map(|declarator| parser.declarator_identifier(declarator))
-                                .map(|identifier| identifier.name)
-                                .collect::<Vec<_>>();
+                            let mut names = Vec::new();
+                            for parameter in &parser.syntax.parameter_declarations[start..end] {
+                                if let TypeSpecifiers::Enum(index) =
+                                    parameter.declaration_specifiers.type_specifiers
+                                    && let Some(enumeration_list) = parser.syntax.enum_specifiers
+                                        [index.0 as usize]
+                                        .enumeration_list
+                                {
+                                    let start = enumeration_list.start_index as usize;
+                                    let end = start + enumeration_list.length as usize;
+                                    names.extend(
+                                        parser.syntax.enumerators[start..end]
+                                            .iter()
+                                            .map(|enumerator| enumerator.name.name),
+                                    );
+                                }
+                                if let Some(name) = parameter
+                                    .declarator
+                                    .and_then(|declarator| parser.declarator_identifier(declarator))
+                                    .map(|identifier| identifier.name)
+                                {
+                                    names.push(name);
+                                }
+                            }
                             for name in names {
                                 parser.scopes.publish(name, NameClass::Ordinary);
                             }
@@ -2571,7 +2592,9 @@ impl StatementFrame {
                     self.merge_token(parser, context, token.expect("semicolon exists"));
                     self.phase = StatementPhase::Finish(StatementType::Return(None));
                     ParseAction::Consume
-                } else if Self::at_expression_boundary(token, ExpressionTerminator::Semicolon) {
+                } else if Self::at_expression_boundary(token, ExpressionTerminator::Semicolon)
+                    || token.is_some_and(|token| parser.declaration_starter(token))
+                {
                     self.phase = StatementPhase::ReturnSemicolon(None);
                     ParseAction::Reprocess
                 } else {
@@ -3815,10 +3838,25 @@ impl Parser {
                     && at_top_level
                     && recovery_set.target == ParseFrameKind::EnumSpecifier
                     && token.kind == TokenType::Identifier;
+            let at_next_identifier_label = matches!(
+                recovery_set.kind,
+                SynchronizationKind::StatementExpression(ExpressionTerminator::Semicolon)
+            ) && at_top_level
+                && token.kind == TokenType::Identifier
+                && is_operator(self.cursor.following(context), OperatorTokenType::Colon);
+            let at_statement_body_brace = matches!(
+                recovery_set.kind,
+                SynchronizationKind::StatementExpression(ExpressionTerminator::ClosingParenthesis)
+            ) && at_top_level
+                && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                && state.last_token
+                    != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis));
             if at_unambiguous_owning_delimiter
                 || at_next_declaration
                 || at_next_k_and_r_identifier
                 || at_next_enumerator
+                || at_next_identifier_label
+                || at_statement_body_brace
                 || at_top_level
                     && !colon_matches_conditional
                     && recovery_set.kind.stops_before(token.kind)
@@ -8769,6 +8807,22 @@ mod tests {
     }
 
     #[test]
+    fn bare_return_recovery_preserves_following_declarations() {
+        let parsed = parse("int f(void) { return int saved; break; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+        assert!(matches!(items[1], BlockItem::Declaration(_)));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
+        )));
+    }
+
+    #[test]
     fn block_declaration_recovery_preserves_following_statement_keywords() {
         let parsed = parse("int f(void) { int value return; break; }\n");
         let items = block_items(&parsed, function_definition(&parsed, 0).body);
@@ -8807,6 +8861,25 @@ mod tests {
     }
 
     #[test]
+    fn expression_recovery_preserves_following_identifier_labels() {
+        let parsed = parse("int f(void) { value label: ; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Expression(ExpressionSlot::FutureChild(_))
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Label(_, _)
+        )));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+    }
+
+    #[test]
     fn compound_literals_survive_deferred_parenthesized_expression_recovery() {
         let parsed =
             parse("struct S { int x; };\nint f(void) { if ((struct S){0}.x) ; return; }\n");
@@ -8831,6 +8904,32 @@ mod tests {
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn malformed_condition_preserves_the_following_body_brace() {
+        let parsed = parse("int f(void) { if (value { return; } break; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 2);
+        let BlockItem::Statement(if_statement) = items[0] else {
+            panic!("expected an if statement")
+        };
+        let StatementType::If {
+            then_statement,
+            else_statement: None,
+            ..
+        } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+        else {
+            panic!("expected a recovered if statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+            StatementType::Compound { .. }
+        ));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
         )));
     }
 
@@ -10658,6 +10757,22 @@ mod tests {
             .as_deref(),
             Some("y")
         );
+    }
+
+    #[test]
+    fn definition_parameter_enumerators_are_visible_in_the_function_body() {
+        let parsed = parse("typedef int A; int f(enum { A } x) { A; return 0; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 1).body);
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Expression(ExpressionSlot::FutureChild(_))
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::FutureChild(_)))
+        )));
     }
 
     #[test]
