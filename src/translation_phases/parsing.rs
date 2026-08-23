@@ -1326,6 +1326,8 @@ enum ExpressionTerminator {
 enum SynchronizationKind {
     /// Stop before a declarator separator, terminator, or enclosing brace.
     Declaration,
+    /// Stop before a block statement keyword as well as declaration boundaries.
+    BlockDeclaration,
     /// Stop before a `for` header's closing parenthesis as well as declaration
     /// separators.
     ForInitializer,
@@ -1523,6 +1525,8 @@ struct FutureChildFrame {
     recovered_source_vectors: Option<SourceVectors>,
     /// Caller-selected stop token for statement expressions.
     expression_terminator:    Option<ExpressionTerminator>,
+    /// Optional caller-selected synchronization policy for deferred children.
+    recovery_kind:            Option<SynchronizationKind>,
 }
 
 /// Lifecycle of a deferred child frame.
@@ -1544,6 +1548,14 @@ impl FutureChildFrame {
             phase: FutureChildPhase::Start,
             recovered_source_vectors: None,
             expression_terminator: None,
+            recovery_kind: None,
+        }
+    }
+
+    fn with_recovery(kind: FutureChildKind, recovery_kind: SynchronizationKind) -> Self {
+        Self {
+            recovery_kind: Some(recovery_kind),
+            ..Self::new(kind)
         }
     }
 
@@ -1560,6 +1572,7 @@ impl FutureChildFrame {
             phase: FutureChildPhase::Start,
             recovered_source_vectors: None,
             expression_terminator: Some(terminator),
+            recovery_kind: None,
         }
     }
 }
@@ -2540,9 +2553,7 @@ impl StatementFrame {
                     self.merge_token(parser, context, token.expect("semicolon exists"));
                     self.phase = StatementPhase::Finish(StatementType::Return(None));
                     ParseAction::Consume
-                } else if token.is_none()
-                    || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
-                {
+                } else if Self::at_expression_boundary(token, ExpressionTerminator::Semicolon) {
                     self.phase = StatementPhase::ReturnSemicolon(None);
                     ParseAction::Reprocess
                 } else {
@@ -2692,9 +2703,10 @@ impl StatementFrame {
             | StatementPhase::PushLabeled(prefix) => {
                 debug_assert!(returned.is_none());
                 self.phase = StatementPhase::AwaitLabeled(prefix);
-                ParseAction::Push(ParseFrame::Statement(StatementFrame::new(
+                ParseAction::Push(ParseFrame::Statement(StatementFrame::with_else_ownership(
                     parser.hard_error_count,
                     None,
+                    self.leave_else_unconsumed,
                 )))
             },
             | StatementPhase::AwaitLabeled(prefix) => {
@@ -2801,7 +2813,11 @@ impl StatementFrame {
                 let frame = if kind == HeaderKind::If {
                     StatementFrame::for_if_then(parser.hard_error_count, Some(kind.scope_kind()))
                 } else {
-                    StatementFrame::new(parser.hard_error_count, Some(kind.scope_kind()))
+                    StatementFrame::with_else_ownership(
+                        parser.hard_error_count,
+                        Some(kind.scope_kind()),
+                        self.leave_else_unconsumed,
+                    )
                 };
                 ParseAction::Push(ParseFrame::Statement(frame))
             },
@@ -2875,9 +2891,10 @@ impl StatementFrame {
             | StatementPhase::DoPushBody => {
                 debug_assert!(returned.is_none());
                 self.phase = StatementPhase::DoAwaitBody;
-                ParseAction::Push(ParseFrame::Statement(StatementFrame::new(
+                ParseAction::Push(ParseFrame::Statement(StatementFrame::with_else_ownership(
                     parser.hard_error_count,
                     Some(ScopeKind::ImplicitIteration),
+                    self.leave_else_unconsumed,
                 )))
             },
             | StatementPhase::DoAwaitBody => {
@@ -3189,9 +3206,10 @@ impl StatementFrame {
             | StatementPhase::ForPushBody(initializer, condition, iteration) => {
                 debug_assert!(returned.is_none());
                 self.phase = StatementPhase::ForAwaitBody(initializer, condition, iteration);
-                ParseAction::Push(ParseFrame::Statement(StatementFrame::new(
+                ParseAction::Push(ParseFrame::Statement(StatementFrame::with_else_ownership(
                     parser.hard_error_count,
                     Some(ScopeKind::ImplicitIteration),
+                    self.leave_else_unconsumed,
                 )))
             },
             | StatementPhase::ForAwaitBody(initializer, condition, iteration) => {
@@ -3547,11 +3565,19 @@ impl StatementFrame {
         }
     }
 
-    fn for_if_then(starting_error_count: usize, implicit_scope: Option<ScopeKind>) -> Self {
+    fn with_else_ownership(
+        starting_error_count: usize,
+        implicit_scope: Option<ScopeKind>,
+        leave_else_unconsumed: bool,
+    ) -> Self {
         Self {
-            leave_else_unconsumed: true,
+            leave_else_unconsumed,
             ..Self::new(starting_error_count, implicit_scope)
         }
+    }
+
+    fn for_if_then(starting_error_count: usize, implicit_scope: Option<ScopeKind>) -> Self {
+        Self::with_else_ownership(starting_error_count, implicit_scope, true)
     }
 }
 
@@ -3732,7 +3758,12 @@ impl Parser {
                 );
             let stops_at_initial_declaration = matches!(
                 (recovery_set.kind, recovery_set.target),
-                |(SynchronizationKind::Declaration | SynchronizationKind::Parameter, _)| (
+                |(
+                    SynchronizationKind::Declaration
+                    | SynchronizationKind::BlockDeclaration
+                    | SynchronizationKind::Parameter,
+                    _,
+                )| (
                     SynchronizationKind::StructMember,
                     ParseFrameKind::StructOrUnionSpecifier
                 ) | (
@@ -4042,6 +4073,16 @@ impl SynchronizationKind {
                         | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
+            | Self::BlockDeclaration =>
+                is_statement_keyword(token)
+                    || matches!(
+                        token,
+                        TokenType::Operator(
+                            OperatorTokenType::Comma
+                                | OperatorTokenType::Semicolon
+                                | OperatorTokenType::ClosingCurlyBrace
+                        )
+                    ),
             | Self::ForInitializer => matches!(
                 token,
                 TokenType::Operator(
@@ -4157,6 +4198,14 @@ impl SynchronizationKind {
     ) -> bool {
         match self {
             | Self::Declaration | Self::Initializer =>
+                braces == 0
+                    && matches!(
+                        token,
+                        TokenType::Operator(
+                            OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                        )
+                    ),
+            | Self::BlockDeclaration =>
                 braces == 0
                     && matches!(
                         token,
@@ -4399,7 +4448,9 @@ impl FutureChildFrame {
                     | FutureChildKind::BitFieldWidthExpression => SynchronizationKind::StructMember,
                     | FutureChildKind::EnumeratorValueExpression =>
                         SynchronizationKind::EnumeratorValue,
-                    | FutureChildKind::Initializer => SynchronizationKind::Initializer,
+                    | FutureChildKind::Initializer => self
+                        .recovery_kind
+                        .unwrap_or(SynchronizationKind::Initializer),
                     | FutureChildKind::StatementExpression
                     | FutureChildKind::StatementConstantExpression =>
                         SynchronizationKind::StatementExpression(
@@ -4480,6 +4531,24 @@ impl ExternalDeclarationFrame {
 }
 
 impl DeclarationFrame {
+    fn recovery_kind(&self) -> SynchronizationKind {
+        match self.context {
+            | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
+            | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
+            | DeclarationContext::External | DeclarationContext::OldStyleParameter =>
+                SynchronizationKind::Declaration,
+        }
+    }
+
+    fn initializer_recovery_kind(&self) -> SynchronizationKind {
+        match self.context {
+            | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
+            | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
+            | DeclarationContext::External | DeclarationContext::OldStyleParameter =>
+                SynchronizationKind::Initializer,
+        }
+    }
+
     fn step(
         &mut self,
         parser: &mut Parser,
@@ -4545,11 +4614,7 @@ impl DeclarationFrame {
                     );
                     self.phase = DeclarationPhase::AfterMissingDeclarator;
                     return ParseAction::Recover(SynchronizationSet {
-                        kind:   if self.context == DeclarationContext::ForInitializer {
-                            SynchronizationKind::ForInitializer
-                        } else {
-                            SynchronizationKind::Declaration
-                        },
+                        kind:   self.recovery_kind(),
                         target: ParseFrameKind::Declaration,
                     });
                 };
@@ -4692,7 +4757,11 @@ impl DeclarationFrame {
                     } else {
                         ParseAction::Reprocess
                     }
-                } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                } else if token.is_some_and(|token| {
+                    parser.declaration_starter(token)
+                        || self.context == DeclarationContext::Block
+                            && is_statement_keyword(token.kind)
+                }) {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
@@ -4720,11 +4789,7 @@ impl DeclarationFrame {
                     );
                     self.phase = DeclarationPhase::AfterDeclarator;
                     ParseAction::Recover(SynchronizationSet {
-                        kind:   if self.context == DeclarationContext::ForInitializer {
-                            SynchronizationKind::ForInitializer
-                        } else {
-                            SynchronizationKind::Declaration
-                        },
+                        kind:   self.recovery_kind(),
                         target: ParseFrameKind::Declaration,
                     })
                 }
@@ -4735,8 +4800,9 @@ impl DeclarationFrame {
                     "this frame phase cannot receive a child value"
                 );
                 self.phase = DeclarationPhase::AwaitInitializer;
-                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
+                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::with_recovery(
                     FutureChildKind::Initializer,
+                    self.initializer_recovery_kind(),
                 )))
             },
             | DeclarationPhase::AwaitInitializer => {
@@ -8289,6 +8355,37 @@ mod tests {
     }
 
     #[test]
+    fn nested_missing_if_body_leaves_else_for_its_enclosing_if() {
+        let parsed = parse("int f(void) { if (outer) while (inner) else value; }\n");
+        let [BlockItem::Statement(if_statement)] =
+            block_items(&parsed, function_definition(&parsed, 0).body)
+        else {
+            panic!("expected one if statement")
+        };
+        let StatementType::If {
+            then_statement,
+            else_statement: Some(else_statement),
+            ..
+        } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+        else {
+            panic!("expected a recovered if statement with an else branch")
+        };
+        let StatementType::While { body_statement, .. } =
+            parsed.parser.syntax.statements[then_statement.0 as usize].kind
+        else {
+            panic!("expected the if then-branch to be a while statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+            StatementType::Null
+        ));
+        assert!(matches!(
+            parsed.parser.syntax.statements[else_statement.0 as usize].kind,
+            StatementType::Expression(ExpressionSlot::FutureChild(_))
+        ));
+    }
+
+    #[test]
     fn case_recovery_distinguishes_a_conditional_colon_from_the_label_colon() {
         let parsed = parse("int f(void) { switch (value) { case a ? b : c: ; } }\n");
         let [BlockItem::Statement(switch)] =
@@ -8514,6 +8611,50 @@ mod tests {
     }
 
     #[test]
+    fn bare_return_recovery_preserves_following_statement_keywords() {
+        let parsed = parse("int f(void) { return break; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
+        )));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedSemicolonInStatement(
+                "return statement",
+                Some(TokenType::Keyword(KeywordTokenType::Break))
+            )
+        )));
+    }
+
+    #[test]
+    fn block_declaration_recovery_preserves_following_statement_keywords() {
+        let parsed = parse("int f(void) { int value return; break; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Declaration(_)));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
+        )));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
+                TokenType::Keyword(KeywordTokenType::Return)
+            ))
+        )));
+    }
+
+    #[test]
     fn malformed_for_declaration_recovery_preserves_the_header_close() {
         let parsed = parse("int f(void) { for (int i) ; return; }\n");
         let items = block_items(&parsed, function_definition(&parsed, 0).body);
@@ -8530,6 +8671,39 @@ mod tests {
         else {
             panic!("expected a recovered declaration-form for statement")
         };
+        assert!(matches!(
+            parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+            StatementType::Null
+        ));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn malformed_for_initializer_recovery_preserves_the_header_close() {
+        let parsed = parse("int f(void) { for (int i = value) ; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 2);
+        let BlockItem::Statement(for_statement) = items[0] else {
+            panic!("expected a for statement")
+        };
+        let StatementType::For {
+            initializer: Some(ForInitializer::Declaration(declaration)),
+            condition_expression: None,
+            iteration_expression: None,
+            body_statement,
+        } = parsed.parser.syntax.statements[for_statement.0 as usize].kind
+        else {
+            panic!("expected a recovered declaration-form for statement")
+        };
+        assert_eq!(
+            parsed.parser.syntax.declarations[declaration.0 as usize]
+                .init_declarators
+                .length,
+            1
+        );
         assert!(matches!(
             parsed.parser.syntax.statements[body_statement.0 as usize].kind,
             StatementType::Null
