@@ -1382,12 +1382,14 @@ struct DelimiterDepth {
 /// pp. 67-144; PDF pp. 79-156. Depth tracking is an implementation mechanism.
 #[derive(Debug)]
 struct ActiveRecovery {
-    set:         SynchronizationSet,
+    set: SynchronizationSet,
     parentheses: usize,
-    brackets:    usize,
-    braces:      usize,
-    questions:   Vec<DelimiterDepth>,
-    last_token:  Option<TokenType>,
+    brackets: usize,
+    braces: usize,
+    questions: Vec<DelimiterDepth>,
+    last_token: Option<TokenType>,
+    parenthesized_type_names: Vec<bool>,
+    last_closed_parenthesis_was_type_name: bool,
 }
 
 impl RecoveryState {
@@ -1401,6 +1403,8 @@ impl RecoveryState {
             braces: 0,
             questions: Vec::new(),
             last_token: None,
+            parenthesized_type_names: Vec::new(),
+            last_closed_parenthesis_was_type_name: false,
         });
     }
 
@@ -1410,15 +1414,23 @@ impl RecoveryState {
     }
 
     /// Records one consumed token for balanced recovery.
-    fn consume(&mut self, token: TokenType) {
+    fn consume(&mut self, token: TokenType, opens_type_name: bool) {
         let state = self.active.as_mut().expect("a recovery scan is active");
+        state.last_closed_parenthesis_was_type_name = false;
         match token {
             | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
                 state.parentheses += 1;
+                state.parenthesized_type_names.push(opens_type_name);
             },
             | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if state.parentheses > 0 =>
             {
                 state.parentheses -= 1;
+                let closed_type_name = state.parenthesized_type_names.pop().unwrap_or(false);
+                state.last_closed_parenthesis_was_type_name = closed_type_name;
+                if closed_type_name && let Some(parent) = state.parenthesized_type_names.last_mut()
+                {
+                    *parent = true;
+                }
                 Self::discard_closed_questions(state);
             },
             | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
@@ -3836,7 +3848,9 @@ impl Parser {
                 (matches!(
                     recovery_set.kind,
                     SynchronizationKind::StatementExpression(ExpressionTerminator::Semicolon)
-                ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration))
+                ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration)
+                    || matches!(recovery_set.kind, SynchronizationKind::Statement)
+                        && consumed_tokens > 0)
                     && at_top_level
                     && !has_pending_conditional_at_depth
                     && token.kind == TokenType::Identifier
@@ -3850,8 +3864,9 @@ impl Parser {
                 ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration))
                     && at_top_level
                     && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-                    && state.last_token
-                        != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis));
+                    && (state.last_token
+                        != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
+                        || !state.last_closed_parenthesis_was_type_name);
             let at_next_statement_keyword =
                 matches!(recovery_set.kind, SynchronizationKind::Statement)
                     && consumed_tokens > 0
@@ -3871,7 +3886,13 @@ impl Parser {
                 break;
             }
 
-            self.recovery.consume(token.kind);
+            let opens_type_name = token.kind
+                == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                && self
+                    .cursor
+                    .following(context)
+                    .is_some_and(|following| self.declaration_starter(following));
+            self.recovery.consume(token.kind, opens_type_name);
 
             #[cfg(test)]
             self.trace.push(FrameTraceEvent {
@@ -4668,7 +4689,7 @@ impl DeclarationFrame {
 
     fn initializer_recovery_kind(&self) -> SynchronizationKind {
         match self.context {
-            | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
+            | DeclarationContext::Block => SynchronizationKind::Initializer,
             | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
             | DeclarationContext::External => SynchronizationKind::Initializer,
             | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
@@ -9006,6 +9027,72 @@ mod tests {
                 StatementType::Break
             )));
         }
+    }
+
+    #[test]
+    fn block_brace_initializers_remain_in_the_declaration() {
+        let parsed = parse("int f(void) { int x = { 1 }; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2);
+        let BlockItem::Declaration(declaration) = items[0] else {
+            panic!("expected a block declaration")
+        };
+        let initializer = init_declarators(
+            &parsed,
+            &parsed.parser.syntax.declarations[declaration.0 as usize],
+        )[0]
+        .initializer
+        .as_ref()
+        .expect("deferred initializer");
+        let Initializer::FutureChild(source) = initializer else {
+            panic!("expected a deferred initializer")
+        };
+        assert_eq!(sourced_text(&parsed, *source), "={1}");
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn call_parentheses_do_not_hide_a_following_statement_body() {
+        let parsed = parse("int f(void) { if (foo() { return; } break; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2);
+        let BlockItem::Statement(if_statement) = items[0] else {
+            panic!("expected an if statement")
+        };
+        let StatementType::If { then_statement, .. } =
+            parsed.parser.syntax.statements[if_statement.0 as usize].kind
+        else {
+            panic!("expected an if statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+            StatementType::Compound { .. }
+        ));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
+        )));
+    }
+
+    #[test]
+    fn statement_recovery_preserves_following_identifier_labels() {
+        let parsed = parse("int f(void) { if (x) int y label: ; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Label(_, _)
+        )));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
     }
 
     #[test]
