@@ -452,6 +452,24 @@ impl Context {
         reason = "We are performing a overflow check after we've pushed everything."
     )]
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
+        if v1.length == 0 {
+            return v2;
+        }
+        if v2.length == 0 {
+            return v1;
+        }
+        let v1_end = v1
+            .start_index
+            .checked_add(v1.length)
+            .expect("overflow in merge_vectors");
+        if v1_end == v2.start_index {
+            let end_index = v2
+                .start_index
+                .checked_add(v2.length)
+                .expect("overflow in merge_vectors");
+            return SourceVectors::new(v1.start_index, end_index);
+        }
+
         let start_index = self.source_vectors.0.len() as u32;
         for i in v1.start_index..v1.start_index + v1.length {
             self.source_vectors

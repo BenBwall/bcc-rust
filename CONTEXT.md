@@ -98,33 +98,44 @@ A non-recursive precedence reducer that alternates operand-expected and operator
 **Expression dialect**:
 One policy layer over shared precedence reduction. The preprocessing dialect evaluates integer values, while the proposed language dialect constructs C expression AST nodes and accepts the full language operator set.
 
-## Proposed parser vocabulary
+## Parser stack-machine vocabulary
 
-The terms in this section name the agreed whole-parser stack-machine design. None is implemented as a complete language-parser architecture yet.
+The Phase 02 declaration subset implements this vocabulary in `parsing.rs`. Frames for expressions, type names, initializers, statements, and complete function definitions remain future work.
 
-**ParserMachine** *(proposed)*:
-The single driver that owns token lookahead, the control stack, syntax arenas, scope state, and diagnostic/recovery state for language parsing.
+**ParserMachine** *(partially implemented as `Parser`)*:
+The single driver that owns the buffered token cursor, control stack, typed child return, syntax arenas, file-scope name classification, and diagnostic/recovery state for language parsing.
 _Avoid_: Recursive-descent parser
 
-**ParseFrame** *(proposed)*:
-A resumable state machine for one grammar family. Frame families cover translation units, external declarations, declarations, declarators, type names, initializers, statements, and expressions.
+**ParseFrame** *(partially implemented)*:
+A resumable state machine for one grammar family. External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, and typed future-child frames are implemented. Later frame families cover type names, full initializers, statements, and expressions.
 _Avoid_: Grammar call
 
-**ExpressionFrame** *(proposed)*:
+**ExpressionFrame** *(future)*:
 The parse frame that owns the Double-E operator and operand stacks for a language expression and returns an expression result to its parent frame.
 
-**ParseAction** *(proposed)*:
+**ParseAction** *(implemented)*:
 A small owned instruction returned by a frame to the driver: consume input, push a child frame, reduce a value, reprocess lookahead, or recover at a synchronization set.
 
-**ParseValue** *(proposed)*:
-The typed result passed from a completed child frame to its parent, such as an expression, statement, declaration, declarator, type name, initializer, or list.
+**ParseValue** *(partially implemented)*:
+The typed result passed from a completed child frame to its parent. The current variants cover migrated declaration grammar and typed markers for deferred expression, initializer, and statement children.
 
-**Synchronization set** *(proposed)*:
-The tokens at which a particular frame can safely resume or unwind after malformed input.
+**Synchronization set** *(implemented for migrated frames)*:
+The tokens at which a particular frame can safely resume or unwind after malformed input, paired with a legal recovery target.
 _Avoid_: Global recovery point
 
-**Error node** *(proposed)*:
-A syntax placeholder representing malformed input after a diagnostic, allowing parent frames to retain a valid shape and parsing to continue.
+**Recovered declaration** *(implemented at the external-declaration boundary)*:
+A declaration AST retained after one or more hard syntax diagnostics and local
+repair. Migrated frames finish synchronization and provenance collection, then
+yield `ExternalDeclaration::RecoveredDeclaration` with the declaration's arena
+handle. Later analysis may inspect the repaired tree to find additional
+problems, while the distinct variant prevents it from being mistaken for fully
+valid syntax.
+
+**Error node** *(reserved)*:
+A provenance-only syntax placeholder for malformed input from which no
+meaningful AST can be recovered. Current declaration recovery always constructs
+a recovered declaration, so `ExternalDeclaration::Error` is reserved for a
+future unrecoverable grammar path.
 
 ## Compiler boundaries
 

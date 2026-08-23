@@ -5,3 +5,5 @@
 *.out
 flamegraph.svg
 profile.coz
+__pycache__/
+*.py[cod]
