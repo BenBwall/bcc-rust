@@ -1627,13 +1627,16 @@ impl SynchronizationKind {
                 TokenType::Operator(
                     OperatorTokenType::Comma
                         | OperatorTokenType::ClosingParenthesis
+                        | OperatorTokenType::ClosingCurlyBrace
                         | OperatorTokenType::Semicolon
                 )
             ),
             | Self::VariadicParameterList => matches!(
                 token,
                 TokenType::Operator(
-                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::Semicolon
+                    OperatorTokenType::ClosingParenthesis
+                        | OperatorTokenType::ClosingCurlyBrace
+                        | OperatorTokenType::Semicolon
                 )
             ),
             | Self::StructMember => matches!(
@@ -1670,11 +1673,14 @@ impl SynchronizationKind {
                         && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
             | Self::Initializer => token == TokenType::Operator(OperatorTokenType::Semicolon),
             | Self::ArrayBound =>
-                brackets == 0
-                    && token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
+                token == TokenType::Operator(OperatorTokenType::Semicolon)
+                    || brackets == 0
+                        && token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
             | Self::Parameter | Self::VariadicParameterList =>
                 parentheses == 0
-                    && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+                    && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                    || braces == 0
+                        && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
             | Self::FunctionBody => false,
         }
     }
@@ -2736,22 +2742,28 @@ impl DeclaratorFrame {
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon) {
-                    parser.report(
-                        context,
-                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
-                            token.map(|token| token.kind),
-                        ),
-                        token,
-                    );
+                    if !self.array_is_pointer {
+                        parser.report(
+                            context,
+                            ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
+                                token.map(|token| token.kind),
+                            ),
+                            token,
+                        );
+                    }
                     self.push_array();
                     self.phase = DeclaratorPhase::Finish;
                     ParseAction::Reprocess
                 } else if token.is_none() {
-                    parser.report(
-                        context,
-                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(None),
-                        None,
-                    );
+                    if !self.array_is_pointer {
+                        parser.report(
+                            context,
+                            ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
+                                None,
+                            ),
+                            None,
+                        );
+                    }
                     self.push_array();
                     self.phase = DeclaratorPhase::Finish;
                     ParseAction::Reprocess
@@ -2834,9 +2846,7 @@ impl DeclaratorFrame {
                 if self.mode == DeclaratorMode::Named && !self.has_direct_declarator {
                     parser.report(
                         context,
-                        ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
-                            token.map(|token| token.kind),
-                        ),
+                        ParserErrorType::TypeQualifiersWithoutDeclarator,
                         token,
                     );
                     return ParseAction::Reduce(ParseValue::Declarator(None));
@@ -2975,7 +2985,9 @@ impl ParameterListFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                } else if is_operator(token, OperatorTokenType::Semicolon)
+                    || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
+                {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
@@ -3054,6 +3066,11 @@ impl ParameterListFrame {
                     panic!("parameter declarator returned an unexpected value: {returned:?}");
                 };
                 let declarator_source = declarator.map(|declarator| declarator.source_vectors);
+                if let Some(identifier) =
+                    declarator.and_then(|declarator| parser.declarator_identifier(declarator))
+                {
+                    parser.scopes.publish(identifier.name, NameClass::Ordinary);
+                }
                 let parameter_source = match (self.pending_source.take(), declarator_source) {
                     | (Some(specifiers), Some(declarator)) =>
                         context.merge_vectors(specifiers, declarator),
@@ -3092,7 +3109,9 @@ impl ParameterListFrame {
                     }
                     self.phase = ParameterListPhase::AfterComma;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                } else if is_operator(token, OperatorTokenType::Semicolon)
+                    || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
+                {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
@@ -3153,8 +3172,10 @@ impl ParameterListFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon) {
-                    let token = token.expect("semicolon token exists");
+                } else if is_operator(token, OperatorTokenType::Semicolon)
+                    || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
+                {
+                    let token = token.expect("unwind token exists");
                     parser.report(
                         context,
                         ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
@@ -4143,6 +4164,7 @@ pub(crate) enum ParserErrorType {
     ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(TokenType),
     UnexpectedEndOfArrayDeclaratorAfterPointer,
     PointerSpecifiedTwice,
+    TypeQualifiersWithoutDeclarator,
     TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
     KAndRFunctionDeclaratorMixedWithModernDeclarator,
     ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(TokenType),
@@ -4187,6 +4209,7 @@ impl GetSeverity for ParserErrorType {
             | Self::BothStaticAndPointerInArrayDirectDeclarator
             | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator
             | Self::UnexpectedEndOfArrayDeclaratorAfterPointer
+            | Self::TypeQualifiersWithoutDeclarator
             | Self::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                 ..,
             )
@@ -4412,6 +4435,9 @@ impl Display for ParserErrorType {
                     f,
                     "Pointer marker `*` specified twice in an array declarator."
                 )
+            },
+            | Self::TypeQualifiersWithoutDeclarator => {
+                write!(f, "Type qualifiers specified without a declarator.")
             },
             | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator => write!(
                 f,
@@ -5087,6 +5113,25 @@ mod tests {
     }
 
     #[test]
+    fn array_recovery_unwinds_at_semicolons_despite_unbalanced_children() {
+        let parsed = parse("int a[(1; int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
     fn parameter_recovery_unwinds_at_the_enclosing_declaration_semicolon() {
         let parsed = parse("int f(int x; int after;\n");
 
@@ -5099,6 +5144,31 @@ mod tests {
             error,
             ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
                 Some(TokenType::Operator(OperatorTokenType::Semicolon))
+            )
+        )));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
+    fn parameter_recovery_preserves_an_enclosing_closing_brace() {
+        let parsed = parse("int f(int x } int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
+                Some(TokenType::Operator(OperatorTokenType::ClosingCurlyBrace))
             )
         )));
         assert_eq!(
@@ -5245,6 +5315,23 @@ mod tests {
     }
 
     #[test]
+    fn named_parameters_hide_typedefs_for_later_prototype_parameters() {
+        let parsed = parse("typedef int T; int f(int T, T x);\n");
+
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(TokenType::Identifier)
+        )));
+        assert_eq!(parsed.parser.syntax.parameter_declarations.len(), 2);
+        assert_eq!(
+            parsed.parser.syntax.parameter_declarations[1]
+                .declaration_specifiers
+                .type_specifiers,
+            TypeSpecifiers::Empty
+        );
+    }
+
+    #[test]
     fn array_recovery_consumes_nested_brackets_before_the_owning_bracket() {
         let parsed = parse("int a[sizeof(int[2])][*];\n");
         let declarator = parsed.parser.syntax.init_declarators[0].declarator;
@@ -5298,6 +5385,63 @@ mod tests {
                 TokenType::Identifier
             )
         )));
+    }
+
+    #[test]
+    fn pointer_array_specific_diagnostics_do_not_fall_through_to_generic_recovery() {
+        let at_semicolon = parse("int array[*;\n");
+        assert!(matches!(
+            at_semicolon.items.first(),
+            Some(ExternalDeclaration::Declaration(_))
+        ));
+        assert!(parser_errors(&at_semicolon).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
+                TokenType::Operator(OperatorTokenType::Semicolon)
+            )
+        )));
+        assert!(!parser_errors(&at_semicolon).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(..)
+        )));
+
+        let at_eof = parse("int array[*");
+        assert!(parser_errors(&at_eof).any(|error| matches!(
+            error,
+            ParserErrorType::UnexpectedEndOfArrayDeclaratorAfterPointer
+        )));
+        assert!(!parser_errors(&at_eof).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(..)
+        )));
+    }
+
+    #[test]
+    fn pointer_without_direct_declarator_keeps_the_legacy_diagnostic() {
+        for source in ["int *;\n", "int *\n"] {
+            let parsed = parse(source);
+
+            assert_eq!(
+                parser_errors(&parsed)
+                    .filter(|error| matches!(
+                        error,
+                        ParserErrorType::TypeQualifiersWithoutDeclarator
+                    ))
+                    .count(),
+                1,
+                "missing pointer-without-declarator diagnostic for {source:?}"
+            );
+            assert_eq!(
+                parser_errors(&parsed)
+                    .filter(|error| matches!(
+                        error,
+                        ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
+                    ))
+                    .count(),
+                1,
+                "generic direct-declarator diagnostic count changed for {source:?}"
+            );
+        }
     }
 
     #[test]
