@@ -2020,8 +2020,18 @@ impl Parser {
                         set.target == frame_kind,
                         "a recovery set must target the frame that requested it"
                     );
-                    let depth = self.frames.len() + 1;
-                    let recovered_source_vectors = self.recover(context, set, depth);
+
+                    let recovered_source_vectors = {
+                        #[cfg(test)]
+                        {
+                            let depth = self.frames.len() + 1;
+                            self.recover(context, set, depth)
+                        }
+                        #[cfg(not(test))]
+                        {
+                            self.recover(context, set)
+                        }
+                    };
                     frame.merge_recovered_sources(context, recovered_source_vectors);
                     self.frames.push(frame);
                 },
@@ -2039,10 +2049,8 @@ impl Parser {
         &mut self,
         context: &mut Context,
         set: SynchronizationSet,
-        depth: usize,
+        #[cfg(test)] depth: usize,
     ) -> Option<SourceVectors> {
-        #[cfg(not(test))]
-        let _ = depth;
         let mut source_vectors = None;
         let mut consumed_tokens = 0_usize;
         self.recovery.begin(set);
@@ -5701,8 +5709,9 @@ impl Display for ParserErrorType {
                 f,
                 "Expected a struct declaration before `}}` in a struct or union body."
             ),
-            | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList =>
-                write!(f, "Expected `;` before `}}` in a struct declarator list."),
+            | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList => {
+                write!(f, "Expected `;` before `}}` in a struct declarator list.")
+            },
             | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(found) =>
                 write_expected(f, "struct declarator list", "`,` or `;`", *found),
             | Self::ExpectedEnumKeyword(found) =>
@@ -5716,8 +5725,9 @@ impl Display for ParserErrorType {
                     "an enumeration constant or `}`",
                     *found,
                 ),
-            | Self::ExpectedEnumeratorBeforeClosingCurlyBrace =>
-                write!(f, "Expected an enumerator before `}}` in an enum body."),
+            | Self::ExpectedEnumeratorBeforeClosingCurlyBrace => {
+                write!(f, "Expected an enumerator before `}}` in an enum body.")
+            },
             | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(found) => write_expected(
                 f,
                 "enumerator list",
@@ -5780,12 +5790,13 @@ impl Display for ParserErrorType {
             | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator => {
                 write!(f, "Expected an assignment expression after `static`!")
             },
-            | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(found) =>
+            | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(found) => {
                 write!(
                     f,
                     "Expected `]` immediately after `*` in an array direct declarator; found \
                      {found:?}."
-                ),
+                )
+            },
             | Self::UnexpectedEndOfArrayDeclaratorAfterPointer => write!(
                 f,
                 "Unexpected end of input after `*` in an array direct declarator; expected `]`."
