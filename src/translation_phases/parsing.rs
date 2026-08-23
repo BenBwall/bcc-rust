@@ -2043,6 +2043,7 @@ impl Parser {
                 state.set.kind,
                 SynchronizationKind::Declaration
                     | SynchronizationKind::Initializer
+                    | SynchronizationKind::ArrayBound
                     | SynchronizationKind::Parameter
                     | SynchronizationKind::StructMember
             ) && at_top_level
@@ -3571,6 +3572,7 @@ impl DeclaratorFrame {
                     || is_operator(token, OperatorTokenType::Semicolon)
                     || is_operator(token, OperatorTokenType::ClosingParenthesis)
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
+                    || token.is_some_and(|token| parser.declaration_starter(token))
                 {
                     // These tokens belong to an enclosing production. Repair
                     // the absent `]`, finish this declarator, and reprocess the
@@ -6649,6 +6651,25 @@ mod tests {
     #[test]
     fn malformed_initializer_recovery_preserves_the_next_declaration() {
         let parsed = parse("int x = + int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::RecoveredDeclaration(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
+    fn malformed_array_bound_recovery_preserves_the_next_declaration() {
+        let parsed = parse("int a[+ int after;\n");
 
         assert_eq!(parsed.items.len(), 2);
         assert!(matches!(
