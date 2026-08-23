@@ -2,5 +2,8 @@
   "repository": "https://github.com/openai/codex.git",
   "path": ".codex/skills/babysit-pr",
   "ref": "main",
-  "revision": "1e6185e52214a879a8b94f3743f47f57135dc64b"
+  "revision": "1e6185e52214a879a8b94f3743f47f57135dc64b",
+  "local_patches": [
+    "Exclude comments from resolved review threads when collecting watcher feedback"
+  ]
 }
