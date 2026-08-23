@@ -22,6 +22,7 @@ git diff --check
 ## Context pointers
 
 - **Parser or domain-model work:** read [`../CONTEXT.md`](../CONTEXT.md) before changing terminology, AST boundaries, typedef handling, or the proposed machine protocol. Update that glossary only when a durable domain meaning changes.
+- **Parser phase planning or implementation:** read [`../parser-roadmap.md`](../parser-roadmap.md) for authoritative phase boundaries. For Phase 03, also follow [`../phase-03-statements-and-function-definitions-plan.md`](../phase-03-statements-and-function-definitions-plan.md).
 - **Non-recursive parsing or Double-E work:** read [`../double-e-integration-report.html`](../double-e-integration-report.html), then revalidate its dated findings against [`../src/translation_phases/parsing.rs`](../src/translation_phases/parsing.rs) and [`../src/translation_phases/preprocessing.rs`](../src/translation_phases/preprocessing.rs).
 - **Repository orientation or public behavior:** read [`../README.md`](../README.md). Keep human setup/status there instead of copying it into this guide.
 - **Commits:** follow the authoritative message and hook policy in [`../CONTRIBUTING.md`](../CONTRIBUTING.md) whenever creating commits.
@@ -30,9 +31,9 @@ git diff --check
 ## Code map and cautions
 
 - `src/translation_phases.rs` owns shared phase, provenance, context, and diagnostic concepts. Its phase modules proceed from `initial_processing.rs` through `preprocessor_tokenizer.rs`, `preprocessing.rs`, and the incomplete `parsing.rs`.
-- `src/lib.rs` currently drives only the preprocessor and prints tokens. There is no parser invocation, semantic-analysis pipeline, or backend/code-generation path.
+- `src/lib.rs` drives the parser inspection CLI by default and retains the preprocessing-token dump behind `--tokens`. There is no semantic-analysis pipeline or backend/code-generation path.
 - `parsing.rs` now compiles and its Phase 02 declaration subset runs through `Parser::next_item`. Re-run the canonical checks before quoting test counts or gate status.
-- External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, and typed future-child frames are implemented. Type names, expressions, statements, initializers, and complete function definitions remain future work.
+- External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, and typed future-child frames are implemented. Phase 03 owns structural statements and function definitions; Phases 04 and 05 own expressions/type names and initializers/expression-dependent declarations respectively.
 - `ScopeStack` implements file-scope typedef/ordinary-name classification and parser-visible prototype scopes needed by the migrated subset. Complete nested-scope and redeclaration handling remains future work.
 - Preserve source provenance and structured diagnostics across phase changes. Malformed user input should reduce to diagnostics plus explicitly recovered syntax (or an error node when no meaningful syntax survives) and synchronization, not compiler panics.
 
