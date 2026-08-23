@@ -2715,10 +2715,15 @@ impl DeclarationFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                let declares_function = self
-                    .last_init_index
-                    .and_then(|index| parser.syntax.init_declarators.get(index as usize))
-                    .is_some_and(|init| parser.declarator_declares_function(init.declarator));
+                let has_sole_uninitialized_function_declarator =
+                    parser.syntax.init_declarators.len().to_u32() == self.init_declarator_start + 1
+                        && self
+                            .last_init_index
+                            .and_then(|index| parser.syntax.init_declarators.get(index as usize))
+                            .is_some_and(|init| {
+                                init.initializer.is_none()
+                                    && parser.declarator_declares_function(init.declarator)
+                            });
                 // The same prefix can continue as another init-declarator, an
                 // initializer, a completed declaration, or a function body.
                 // Declarator binding decides whether `{` is legal here.
@@ -2742,7 +2747,7 @@ impl DeclarationFrame {
                     self.phase = DeclarationPhase::PushInitializer;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::OpeningCurlyBrace)
-                    && declares_function
+                    && has_sole_uninitialized_function_declarator
                 {
                     self.phase = DeclarationPhase::AwaitFunctionBody;
                     ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
@@ -6420,6 +6425,27 @@ mod tests {
             identifier_name(
                 &parsed,
                 init_declarators(&parsed, declaration(&parsed, after_item))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+
+        let parsed = parse("int object, f() { int swallowed; } int after;\n");
+        assert!(
+            !parser_errors(&parsed)
+                .any(|error| matches!(error, ParserErrorType::FunctionBodyNotImplemented))
+        );
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
+                TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+            ))
+        )));
+        assert_eq!(init_declarators(&parsed, declaration(&parsed, 0)).len(), 2);
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
             )
             .as_deref(),
             Some("after")
