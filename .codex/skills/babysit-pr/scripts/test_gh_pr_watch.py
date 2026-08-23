@@ -1,1 +1,1 @@
-../../../../vendor/openai-codex-skills/babysit-pr/scripts/test_gh_pr_watch.py
+../../../../.agents/scripts/test_babysit_pr_watch.py
