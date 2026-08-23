@@ -1001,7 +1001,7 @@ impl TokenCursor {
 /// C99: the stored language syntax spans expressions through external
 /// definitions, §6.5-§6.9, pp. 67-144; PDF pp. 79-156. Arena storage is an
 /// implementation strategy, not a normative C concept.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct SyntaxStore {
     #[expect(dead_code, reason = "Owned by the future type-name frame.")]
     type_names:                 Vec<TypeName>,
@@ -1945,6 +1945,15 @@ impl Parser {
             #[cfg(test)]
             trace: Vec::new(),
         }
+    }
+
+    /// Returns the complete arena-backed syntax store for diagnostic output.
+    ///
+    /// External declarations contain compact handles, so the CLI prints this
+    /// view after the item stream to make those handles manually inspectable
+    /// without exposing parser storage as part of the parser interface.
+    pub(crate) fn syntax_debug(&self) -> impl Debug + '_ {
+        &self.syntax
     }
 
     /// Runs owned frame actions until one external declaration reduces or EOF
@@ -5862,14 +5871,6 @@ impl TranslationPhase for Parser {
         self.drive(context)
     }
 }
-
-// Keep the internal production entry points type-checked before a later phase
-// wires the parser into the CLI pipeline. These signature guards make the
-// implemented kernel reachable to dead-code analysis without suppressing the
-// module wholesale.
-const _: fn(Preprocessor) -> Parser = Parser::new;
-const _: fn(&mut Parser, &mut Context) -> Option<ExternalDeclaration> =
-    <Parser as TranslationPhase>::next_item;
 
 #[cfg(test)]
 mod tests {

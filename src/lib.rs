@@ -29,6 +29,10 @@ use owo_colors::OwoColorize;
 use thiserror::Error;
 use translation_phases::{
     TranslationPhase,
+    parsing::{
+        ExternalDeclaration,
+        Parser as LanguageParser,
+    },
     preprocessing::Token,
 };
 
@@ -113,8 +117,58 @@ impl Iterator for PreprocessorIterator {
     }
 }
 
+struct ParserIterator {
+    parser:       LanguageParser,
+    context:      Context,
+    pending_item: Option<ExternalDeclaration>,
+}
+
+impl ParserIterator {
+    fn new(
+        source_filename: Box<Path>,
+        input_string: SharedString,
+        quote_include: SharedVec<PathBuf>,
+        system_include: SharedVec<PathBuf>,
+    ) -> Self {
+        let mut context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            source_filename,
+            input_string,
+            quote_include,
+            system_include,
+        );
+        Self {
+            parser: LanguageParser::new(preprocessor),
+            context,
+            pending_item: None,
+        }
+    }
+}
+
+impl Iterator for ParserIterator {
+    type Item = Result<ExternalDeclaration, TranslationError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(error) = self.context.pop_pending_error() {
+            return Some(Err(error));
+        }
+        if let Some(item) = self.pending_item.take() {
+            return Some(Ok(item));
+        }
+
+        let item = self.parser.next_item(&mut self.context);
+        if let Some(error) = self.context.pop_pending_error() {
+            self.pending_item = item;
+            Some(Err(error))
+        } else {
+            item.map(Ok)
+        }
+    }
+}
+
 #[cfg(test)]
-mod preprocessor_iterator_tests {
+mod pipeline_iterator_tests {
     use super::*;
     use crate::{
         configuration::{
@@ -165,6 +219,54 @@ mod preprocessor_iterator_tests {
         );
         assert!(iterator.next().is_none());
     }
+
+    #[test]
+    fn parser_iterator_yields_declarations_and_exposes_the_syntax_store() {
+        let mut iterator = ParserIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "int value;\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        assert!(matches!(
+            iterator.next().unwrap().unwrap(),
+            ExternalDeclaration::Declaration(_)
+        ));
+        assert!(iterator.next().is_none());
+        assert!(
+            format!("{:#?}", iterator.parser.syntax_debug()).contains("declarations:"),
+            "the debug view should expose the arena referenced by parser output"
+        );
+    }
+
+    #[test]
+    fn parser_iterator_yields_a_diagnostic_before_its_recovered_item() {
+        use crate::translation_phases::parsing::{
+            ParserError,
+            ParserErrorType,
+        };
+
+        let mut iterator = ParserIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "int value = 1;\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
+            TranslationError::Parsing(ParserError {
+                error_type: ParserErrorType::InitializerNotImplemented,
+                ..
+            })
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap(),
+            ExternalDeclaration::RecoveredDeclaration(_)
+        ));
+        assert!(iterator.next().is_none());
+    }
 }
 
 #[derive(Parser)]
@@ -178,22 +280,20 @@ struct Cli {
     /// Add directory to system include search path.
     #[clap(short = 's', long = "isystem")]
     system_include: Vec<PathBuf>,
+    /// Print preprocessor tokens instead of parser output.
+    #[clap(long)]
+    tokens:         bool,
 }
 
 #[derive(Args)]
 #[group(required = true, multiple = false)]
 struct CliInput {
-    /// Input string to be preprocessed.
+    /// Input string to be parsed.
     #[clap(short, long, conflicts_with = "input_file")]
     input:      Option<String>,
-    /// Input file to be preprocessed.
+    /// Input file to be parsed.
     #[clap(conflicts_with = "input")]
     input_file: Option<PathBuf>,
-}
-
-enum ParsedInput {
-    String(SharedString),
-    File(SharedString),
 }
 
 #[doc(hidden)]
@@ -217,25 +317,48 @@ fn parse_include_env_var(env_var: &str, vec: &mut Vec<PathBuf>) {
 #[doc(hidden)]
 pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
-    eprintln!("{}", "Printing all generated tokens:".bright_green());
-    let parsed_input = if args.input.input.is_some() {
-        ParsedInput::String(args.input.input.unwrap().into())
-    } else {
-        ParsedInput::File(read_to_string_lossy(args.input.input_file.as_ref().unwrap())?.into())
-    };
-    let (input_string, source_filename) = match parsed_input {
-        | ParsedInput::String(s) => (s, PathBuf::from("<input>").into_boxed_path()),
-        | ParsedInput::File(s) => (s, args.input.input_file.unwrap().into_boxed_path()),
-    };
+    let (input_string, source_filename) =
+        match (args.input.input.take(), args.input.input_file.take()) {
+            | (Some(input), None) => (
+                SharedString::from(input),
+                PathBuf::from("<input>").into_boxed_path(),
+            ),
+            | (None, Some(input_file)) => (
+                SharedString::from(read_to_string_lossy(&input_file)?),
+                input_file.into_boxed_path(),
+            ),
+            | _ => unreachable!("clap requires exactly one input source"),
+        };
     parse_include_env_var("CPATH", &mut args.system_include);
     parse_include_env_var("C_INCLUDE_PATH", &mut args.system_include);
 
-    let mut iterator = PreprocessorIterator::new(
-        source_filename,
-        input_string,
-        args.quote_include.into(),
-        args.system_include.into(),
-    );
+    if args.tokens {
+        print_preprocessor_output(
+            source_filename,
+            input_string,
+            args.quote_include.into(),
+            args.system_include.into(),
+        );
+    } else {
+        print_parser_output(
+            source_filename,
+            input_string,
+            args.quote_include.into(),
+            args.system_include.into(),
+        );
+    }
+    Ok(())
+}
+
+fn print_preprocessor_output(
+    source_filename: Box<Path>,
+    input_string: SharedString,
+    quote_include: SharedVec<PathBuf>,
+    system_include: SharedVec<PathBuf>,
+) {
+    eprintln!("{}", "Printing all generated tokens:".bright_green());
+    let mut iterator =
+        PreprocessorIterator::new(source_filename, input_string, quote_include, system_include);
     while let Some(item) = iterator.next() {
         match item {
             | Ok(token) => eprintln!(
@@ -268,17 +391,11 @@ pub fn run() -> Result<(), MainError> {
                 }
                 .bright_magenta()
             ),
-            | Err(error) => {
-                let source_vectors = error.source_vectors(&mut iterator.context);
-                let file = iterator.preprocessor.source_file_index();
-                let vec = iterator.context.get_source_vectors(source_vectors);
-                eprintln!(
-                    "{}: {error} at {:?}:{:?}",
-                    error.severity(),
-                    file,
-                    vec.bright_blue(),
-                );
-            },
+            | Err(error) => print_translation_error(
+                &error,
+                &mut iterator.context,
+                iterator.preprocessor.source_file_index(),
+            ),
         }
     }
 
@@ -306,7 +423,62 @@ pub fn run() -> Result<(), MainError> {
         "Source vectors: ".bright_green(),
         iterator.context.source_vectors.bright_green()
     );
-    Ok(())
+}
+
+fn print_parser_output(
+    source_filename: Box<Path>,
+    input_string: SharedString,
+    quote_include: SharedVec<PathBuf>,
+    system_include: SharedVec<PathBuf>,
+) {
+    eprintln!("{}", "Printing all parser output:".bright_green());
+    let mut iterator =
+        ParserIterator::new(source_filename, input_string, quote_include, system_include);
+    while let Some(item) = iterator.next() {
+        match item {
+            | Ok(item) => eprintln!(
+                "{}",
+                format!("External declaration: {item:#?}").bright_magenta()
+            ),
+            | Err(error) => print_translation_error(
+                &error,
+                &mut iterator.context,
+                iterator.parser.source_file_index(),
+            ),
+        }
+    }
+
+    eprintln!("{}", "Finished printing all parser output.".bright_green());
+    eprintln!(
+        "{}{}",
+        "Parser syntax store: ".bright_cyan(),
+        format!("{:#?}", iterator.parser.syntax_debug()).bright_cyan()
+    );
+    eprintln!(
+        "{}{}",
+        "String cache contents: ".bright_yellow(),
+        iterator.context.string_cache.bright_yellow()
+    );
+    eprintln!(
+        "{}{}",
+        "Source vectors: ".bright_green(),
+        iterator.context.source_vectors.bright_green()
+    );
+}
+
+fn print_translation_error(
+    error: &TranslationError,
+    context: &mut Context,
+    source_file_index: u32,
+) {
+    let source_vectors = error.source_vectors(context);
+    let vectors = context.get_source_vectors(source_vectors);
+    eprintln!(
+        "{}: {error} at {:?}:{:?}",
+        error.severity(),
+        source_file_index,
+        vectors.bright_blue(),
+    );
 }
 
 #[doc(hidden)]
