@@ -1704,21 +1704,23 @@ impl DeclaratorFrame {
 #[derive(Debug)]
 struct ParameterListFrame {
     /// Current prototype/K&R transition.
-    phase:              ParameterListPhase,
+    phase: ParameterListPhase,
     /// Whether this syntactic position permits a K&R identifier list.
-    allow_k_and_r:      bool,
+    allow_k_and_r: bool,
     /// Prototype parameters accumulated before arena insertion.
-    parameters:         Vec<ParameterDeclaration>,
+    parameters: Vec<ParameterDeclaration>,
     /// K&R identifiers accumulated before arena insertion.
-    identifiers:        Vec<Identifier>,
+    identifiers: Vec<Identifier>,
     /// Specifiers retained while an optional parameter declarator runs.
     pending_specifiers: Option<DeclarationSpecifiers>,
     /// Specifier provenance retained for parameter-source construction.
-    pending_source:     Option<SourceVectors>,
+    pending_source: Option<SourceVectors>,
     /// Whether `...` terminated the prototype parameter list.
-    is_variadic:        bool,
+    is_variadic: bool,
+    /// Whether variadic recovery may unwind at a later declaration starter.
+    can_unwind_variadic_recovery: bool,
     /// Provenance accumulated across the entire parenthesized suffix.
-    source_vectors:     Option<SourceVectors>,
+    source_vectors: Option<SourceVectors>,
 }
 
 /// State transitions for prototype and K&R parameter-list forms.
@@ -1760,6 +1762,7 @@ impl ParameterListFrame {
             pending_specifiers: None,
             pending_source: None,
             is_variadic: false,
+            can_unwind_variadic_recovery: false,
             source_vectors: None,
         }
     }
@@ -2041,6 +2044,7 @@ impl Parser {
         #[cfg(not(test))]
         let _ = depth;
         let mut source_vectors = None;
+        let mut consumed_tokens = 0_usize;
         self.recovery.begin(set);
 
         while let Some(token) = self.cursor.current(context) {
@@ -2061,9 +2065,13 @@ impl Parser {
                     | SynchronizationKind::Parameter
                     | SynchronizationKind::StructMember
                     | SynchronizationKind::EnumeratorValue
-                    | SynchronizationKind::VariadicParameterList
             ) && at_top_level
                 && self.declaration_starter(token);
+            let at_next_variadic_declaration =
+                matches!(state.set.kind, SynchronizationKind::VariadicParameterList)
+                    && consumed_tokens > 0
+                    && at_top_level
+                    && self.declaration_starter(token);
             let at_next_k_and_r_identifier =
                 matches!(state.set.kind, SynchronizationKind::KAndRParameter)
                     && at_top_level
@@ -2075,6 +2083,7 @@ impl Parser {
                 && token.kind == TokenType::Identifier;
             if at_unambiguous_owning_delimiter
                 || at_next_declaration
+                || at_next_variadic_declaration
                 || at_next_k_and_r_identifier
                 || at_next_enumerator
                 || at_top_level && state.set.kind.stops_before(token.kind)
@@ -2093,6 +2102,7 @@ impl Parser {
             });
             self.merge_source(context, &mut source_vectors, token);
             self.cursor.consume();
+            consumed_tokens += 1;
             if finishes_function_body {
                 break;
             }
@@ -4131,6 +4141,7 @@ impl ParameterListFrame {
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Reprocess
                 } else if let Some(token) = token
+                    && self.can_unwind_variadic_recovery
                     && parser.declaration_starter(token)
                 {
                     parser.report(
@@ -4158,8 +4169,10 @@ impl ParameterListFrame {
                         ),
                         Some(token),
                     );
+                    let follows_comma = is_operator(Some(token), OperatorTokenType::Comma);
+                    self.can_unwind_variadic_recovery = !follows_comma;
                     ParseAction::Recover(SynchronizationSet {
-                        kind:   if is_operator(Some(token), OperatorTokenType::Comma) {
+                        kind:   if follows_comma {
                             SynchronizationKind::VariadicTrailingParameter
                         } else {
                             SynchronizationKind::VariadicParameterList
@@ -6669,6 +6682,25 @@ mod tests {
 
         let parsed = parse("int f(int a, ... + int after;\n");
         assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+
+        let parsed = parse("int f(int a, ... int b);\nint after;\n");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 0))[0].declarator
+            )
+            .as_deref(),
+            Some("f")
+        );
         assert_eq!(
             identifier_name(
                 &parsed,
