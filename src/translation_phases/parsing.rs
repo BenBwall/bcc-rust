@@ -1626,10 +1626,10 @@ impl Parser {
         ) {
             index += 1;
         }
-        self.cursor.lookahead(context, index).is_some_and(|token| {
-            token.kind == TokenType::Identifier
-                || token.kind == TokenType::Operator(OperatorTokenType::Asterisk)
-        })
+        is_operator(
+            self.cursor.lookahead(context, index),
+            OperatorTokenType::Asterisk,
+        )
     }
 
     fn declarator_identifier(&self, declarator: Declarator) -> Option<Identifier> {
@@ -1751,6 +1751,7 @@ impl SynchronizationKind {
                 TokenType::Operator(
                     OperatorTokenType::Comma
                         | OperatorTokenType::Semicolon
+                        | OperatorTokenType::ClosingParenthesis
                         | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
@@ -1766,7 +1767,7 @@ impl SynchronizationKind {
         braces: usize,
     ) -> bool {
         match self {
-            | Self::Declaration | Self::Initializer | Self::EnumeratorValue =>
+            | Self::Declaration | Self::Initializer =>
                 braces == 0
                     && matches!(
                         token,
@@ -1774,6 +1775,16 @@ impl SynchronizationKind {
                             OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
                         )
                     ),
+            | Self::EnumeratorValue =>
+                braces == 0
+                    && matches!(
+                        token,
+                        TokenType::Operator(
+                            OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                        )
+                    )
+                    || parentheses == 0
+                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
             | Self::StructMember =>
                 braces == 0
                     && matches!(
@@ -3844,6 +3855,16 @@ impl EnumSpecifierFrame {
                     );
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
+                } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = EnumPhase::FinishBody;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -3934,6 +3955,16 @@ impl EnumSpecifierFrame {
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = EnumPhase::FinishBody;
+                    ParseAction::Reprocess
+                } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
@@ -4928,6 +4959,28 @@ mod tests {
     }
 
     #[test]
+    fn parenthesized_identifier_lists_preserve_typedef_shadowing() {
+        let parsed = parse("typedef int T; unsigned T (x); T y;\n");
+
+        assert_eq!(parsed.items.len(), 3);
+        assert_eq!(
+            [declaration(&parsed, 0), declaration(&parsed, 1)]
+                .into_iter()
+                .flat_map(|declaration| init_declarators(&parsed, declaration))
+                .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
+                .collect::<Vec<_>>(),
+            ["T", "T"]
+        );
+        assert!(matches!(parsed.items[2], ExternalDeclaration::Error(_)));
+        let typedef_name = parsed
+            .context
+            .string_cache
+            .get_id_from_string("T")
+            .expect("interned typedef name");
+        assert!(!parsed.parser.scopes.is_typedef(typedef_name));
+    }
+
+    #[test]
     fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
         let parsed = parse(
             "int a[];\nint matrix[][];\nint f(int, const char *, ...);\nint old(a,b);\nint \
@@ -5659,6 +5712,25 @@ mod tests {
                 "enum recovery swallowed the declaration after {source:?}"
             );
         }
+    }
+
+    #[test]
+    fn enum_recovery_preserves_an_enclosing_closing_parenthesis() {
+        let parsed = parse("int f(enum E { A + ) int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
     }
 
     #[test]
