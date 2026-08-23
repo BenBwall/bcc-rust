@@ -1610,18 +1610,32 @@ impl SynchronizationKind {
             ),
             | Self::Initializer => matches!(
                 token,
-                TokenType::Operator(OperatorTokenType::Comma | OperatorTokenType::Semicolon)
+                TokenType::Operator(
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Semicolon
+                        | OperatorTokenType::ClosingCurlyBrace
+                )
             ),
-            | Self::ArrayBound =>
-                token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
+            | Self::ArrayBound => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::ClosingSquareBracket | OperatorTokenType::Semicolon
+                )
+            ),
             | Self::Parameter => matches!(
                 token,
                 TokenType::Operator(
-                    OperatorTokenType::Comma | OperatorTokenType::ClosingParenthesis
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::ClosingParenthesis
+                        | OperatorTokenType::Semicolon
                 )
             ),
-            | Self::VariadicParameterList =>
-                token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+            | Self::VariadicParameterList => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::Semicolon
+                )
+            ),
             | Self::StructMember => matches!(
                 token,
                 TokenType::Operator(
@@ -2718,6 +2732,17 @@ impl DeclaratorFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.push_array();
+                    self.phase = DeclaratorPhase::Finish;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -2947,6 +2972,16 @@ impl ParameterListFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = ParameterListPhase::FinishKAndR;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -3054,6 +3089,16 @@ impl ParameterListFrame {
                     }
                     self.phase = ParameterListPhase::AfterComma;
                     ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -3105,6 +3150,17 @@ impl ParameterListFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    let token = token.expect("semicolon token exists");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
+                            token.kind,
+                        ),
+                        Some(token),
+                    );
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -4955,6 +5011,81 @@ mod tests {
                 "recovery swallowed the declaration after {source:?}"
             );
         }
+    }
+
+    #[test]
+    fn initializer_recovery_unwinds_at_a_top_level_closing_brace() {
+        let parsed = parse("int x = 1 } int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
+                TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+            ))
+        )));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
+    fn array_recovery_unwinds_at_the_enclosing_declaration_semicolon() {
+        let parsed = parse("int a[1; int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(Some(
+                TokenType::Operator(OperatorTokenType::Semicolon)
+            ))
+        )));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
+    fn parameter_recovery_unwinds_at_the_enclosing_declaration_semicolon() {
+        let parsed = parse("int f(int x; int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
+                Some(TokenType::Operator(OperatorTokenType::Semicolon))
+            )
+        )));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
     }
 
     #[test]
