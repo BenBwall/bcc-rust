@@ -44,9 +44,9 @@ Double-E is the precedence reducer inside the expression frame and may inspire a
 
 The Phase 02 declaration subset implements this architecture. The remaining whole-language frames and shared expression reducer are intended design, not current behavior; keep current-status claims and proposed-design claims visibly separate.
 
-## Vendored Matt Pocock skills
+## Vendored skills
 
-`vendor/mattpocock-skills/` is a squashed Git subtree from `https://github.com/mattpocock/skills.git` `main` and the source of truth for upstream skill content. Every vendored directory containing `SKILL.md` is exposed through matching tracked symlinks under both `.agents/skills/<name>` and `.claude/skills/<name>`.
+`vendor/mattpocock-skills/` is a squashed Git subtree from `https://github.com/mattpocock/skills.git` `main` and the source of truth for those upstream skills. `vendor/openai-codex-skills/babysit-pr/` is a narrow snapshot of `.codex/skills/babysit-pr/` from `https://github.com/openai/codex.git`; its adjacent `.source.json` records the pinned revision. Every vendored directory containing `SKILL.md` is exposed through matching tracked symlinks under both `.agents/skills/<name>` and `.claude/skills/<name>`.
 
 Pull upstream with:
 
@@ -54,11 +54,13 @@ Pull upstream with:
 git subtree pull --prefix=vendor/mattpocock-skills https://github.com/mattpocock/skills.git main --squash
 ```
 
-After an update, expose every vendored skill in both client directories and verify that the name sets match and all links resolve. Keep upstream customization outside `vendor/mattpocock-skills/`. `.claude/CLAUDE.md` imports `../.agents/AGENTS.md` with Claude's `@` syntax; edit this file as the single agent-guide source.
+Refresh the OpenAI snapshot from the repository and path recorded in `vendor/openai-codex-skills/.source.json`, replace only the `babysit-pr/` directory, and update the recorded revision in the same change.
+
+After an update, expose every vendored skill in both client directories and verify that the name sets match and all links resolve. Keep upstream customization outside the vendored directories. `.claude/CLAUDE.md` imports `../.agents/AGENTS.md` with Claude's `@` syntax; edit this file as the single agent-guide source.
 
 For a newly vendored skill, add both links:
 
 ```sh
-ln -s ../../vendor/mattpocock-skills/skills/<category>/<name> .agents/skills/<name>
-ln -s ../../vendor/mattpocock-skills/skills/<category>/<name> .claude/skills/<name>
+ln -s ../../vendor/<dependency>/<path-to-skill> .agents/skills/<name>
+ln -s ../../vendor/<dependency>/<path-to-skill> .claude/skills/<name>
 ```
