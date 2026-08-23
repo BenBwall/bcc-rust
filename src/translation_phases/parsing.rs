@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     fmt::{
         Debug,
         Display,
@@ -851,11 +852,10 @@ pub(crate) struct TypeName {
 }
 
 struct TokenCursor {
-    preprocessor:    Preprocessor,
-    current:         Option<Token>,
-    following:       Option<Token>,
-    after_following: Option<Token>,
-    reached_eof:     bool,
+    preprocessor: Preprocessor,
+    current:      Option<Token>,
+    lookahead:    VecDeque<Token>,
+    reached_eof:  bool,
 }
 
 impl TokenCursor {
@@ -863,8 +863,7 @@ impl TokenCursor {
         Self {
             preprocessor,
             current: None,
-            following: None,
-            after_following: None,
+            lookahead: VecDeque::new(),
             reached_eof: false,
         }
     }
@@ -878,27 +877,24 @@ impl TokenCursor {
     }
 
     fn following(&mut self, context: &mut Context) -> Option<Token> {
-        let _ = self.current(context)?;
-        if self.following.is_none() && !self.reached_eof {
-            self.following = self.preprocessor.next_item(context);
-            self.reached_eof = self.following.is_none();
-        }
-        self.following
+        self.lookahead(context, 0)
     }
 
-    fn after_following(&mut self, context: &mut Context) -> Option<Token> {
-        let _ = self.following(context)?;
-        if self.after_following.is_none() && !self.reached_eof {
-            self.after_following = self.preprocessor.next_item(context);
-            self.reached_eof = self.after_following.is_none();
+    fn lookahead(&mut self, context: &mut Context, index: usize) -> Option<Token> {
+        let _ = self.current(context)?;
+        while self.lookahead.len() <= index && !self.reached_eof {
+            let next = self.preprocessor.next_item(context);
+            self.reached_eof = next.is_none();
+            if let Some(next) = next {
+                self.lookahead.push_back(next);
+            }
         }
-        self.after_following
+        self.lookahead.get(index).copied()
     }
 
     fn consume(&mut self) {
         debug_assert!(self.current.is_some(), "cannot consume parser EOF");
-        self.current = self.following.take();
-        self.following = self.after_following.take();
+        self.current = self.lookahead.pop_front();
     }
 }
 
@@ -1618,12 +1614,22 @@ impl Parser {
         };
         following.kind == TokenType::Identifier
             || is_operator(Some(following), OperatorTokenType::Asterisk)
-            || is_operator(Some(following), OperatorTokenType::OpeningParenthesis)
-                && is_operator(
-                    self.cursor.after_following(context),
-                    OperatorTokenType::Asterisk,
-                )
+            || self.parenthesized_declarator_follows_typedef(context)
             || self.declaration_starter(following)
+    }
+
+    fn parenthesized_declarator_follows_typedef(&mut self, context: &mut Context) -> bool {
+        let mut index = 0;
+        while is_operator(
+            self.cursor.lookahead(context, index),
+            OperatorTokenType::OpeningParenthesis,
+        ) {
+            index += 1;
+        }
+        self.cursor.lookahead(context, index).is_some_and(|token| {
+            token.kind == TokenType::Identifier
+                || token.kind == TokenType::Operator(OperatorTokenType::Asterisk)
+        })
     }
 
     fn declarator_identifier(&self, declarator: Declarator) -> Option<Identifier> {
@@ -1736,6 +1742,7 @@ impl SynchronizationKind {
                 TokenType::Operator(
                     OperatorTokenType::Comma
                         | OperatorTokenType::Semicolon
+                        | OperatorTokenType::ClosingParenthesis
                         | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
@@ -1759,10 +1766,7 @@ impl SynchronizationKind {
         braces: usize,
     ) -> bool {
         match self {
-            | Self::Declaration
-            | Self::Initializer
-            | Self::StructMember
-            | Self::EnumeratorValue =>
+            | Self::Declaration | Self::Initializer | Self::EnumeratorValue =>
                 braces == 0
                     && matches!(
                         token,
@@ -1770,6 +1774,16 @@ impl SynchronizationKind {
                             OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
                         )
                     ),
+            | Self::StructMember =>
+                braces == 0
+                    && matches!(
+                        token,
+                        TokenType::Operator(
+                            OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                        )
+                    )
+                    || parentheses == 0
+                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
             | Self::ArrayBound =>
                 braces == 0 && token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || brackets == 0
@@ -3637,6 +3651,15 @@ impl StructOrUnionSpecifierFrame {
                     self.finish_member(parser, context);
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Reprocess
+                } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList,
+                        token,
+                    );
+                    self.finish_member(parser, context);
+                    self.phase = StructOrUnionPhase::FinishBody;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -4857,9 +4880,11 @@ mod tests {
 
     #[test]
     fn conflicting_typedef_names_remain_specifiers_and_preserve_following_declarations() {
-        let parsed = parse("typedef int T; unsigned T x; unsigned T (*pointer); T y;\n");
+        let parsed = parse(
+            "typedef int T; unsigned T x; unsigned T (*pointer); unsigned T ((*nested)); T y;\n",
+        );
 
-        assert_eq!(parsed.items.len(), 4);
+        assert_eq!(parsed.items.len(), 5);
         assert!(parser_errors(&parsed).any(|error| matches!(
             error,
             ParserErrorType::ConflictingTypeSpecifiers(
@@ -4875,10 +4900,10 @@ mod tests {
                 .iter()
                 .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
                 .collect::<Vec<_>>(),
-            ["T", "x", "pointer", "y"]
+            ["T", "x", "pointer", "nested", "y"]
         );
         assert!(
-            declaration(&parsed, 3)
+            declaration(&parsed, 4)
                 .declaration_specifiers
                 .type_specifiers
                 .is_typedef_name()
@@ -5468,6 +5493,25 @@ mod tests {
     #[test]
     fn array_recovery_preserves_an_enclosing_closing_parenthesis() {
         let parsed = parse("int f(int a[1) int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
+    fn struct_recovery_preserves_an_enclosing_closing_parenthesis() {
+        let parsed = parse("int f(struct S { int x + ) int after;\n");
 
         assert_eq!(parsed.items.len(), 2);
         assert!(matches!(
