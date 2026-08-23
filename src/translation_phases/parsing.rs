@@ -2057,21 +2057,31 @@ impl Parser {
                     state.brackets,
                     state.braces,
                 );
-            let at_next_declaration = matches!(
+            let stops_at_initial_declaration = matches!(
+                (state.set.kind, state.set.target),
+                |(SynchronizationKind::Declaration | SynchronizationKind::Parameter, _)| (
+                    SynchronizationKind::ArrayBound,
+                    ParseFrameKind::Declarator
+                ) | (
+                    SynchronizationKind::StructMember,
+                    ParseFrameKind::StructOrUnionSpecifier
+                ) | (
+                    SynchronizationKind::EnumeratorValue,
+                    ParseFrameKind::EnumSpecifier
+                )
+            );
+            let stops_at_declaration_after_malformed_prefix = matches!(
                 state.set.kind,
-                SynchronizationKind::Declaration
-                    | SynchronizationKind::Initializer
+                SynchronizationKind::Initializer
                     | SynchronizationKind::ArrayBound
-                    | SynchronizationKind::Parameter
+                    | SynchronizationKind::VariadicParameterList
                     | SynchronizationKind::StructMember
                     | SynchronizationKind::EnumeratorValue
-            ) && at_top_level
+            );
+            let at_next_declaration = (stops_at_initial_declaration
+                || consumed_tokens > 0 && stops_at_declaration_after_malformed_prefix)
+                && at_top_level
                 && self.declaration_starter(token);
-            let at_next_variadic_declaration =
-                matches!(state.set.kind, SynchronizationKind::VariadicParameterList)
-                    && consumed_tokens > 0
-                    && at_top_level
-                    && self.declaration_starter(token);
             let at_next_k_and_r_identifier =
                 matches!(state.set.kind, SynchronizationKind::KAndRParameter)
                     && at_top_level
@@ -2083,7 +2093,6 @@ impl Parser {
                 && token.kind == TokenType::Identifier;
             if at_unambiguous_owning_delimiter
                 || at_next_declaration
-                || at_next_variadic_declaration
                 || at_next_k_and_r_identifier
                 || at_next_enumerator
                 || at_top_level && state.set.kind.stops_before(token.kind)
@@ -6633,6 +6642,20 @@ mod tests {
             ["first", "second"]
         );
 
+        let parsed = parse("struct S { int first : int; int second; };\n");
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .struct_declarators
+                .iter()
+                .filter_map(|declarator| declarator
+                    .declarator
+                    .and_then(|declarator| identifier_name(&parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+
         let parsed = parse("enum E { A + B, C };\n");
         assert_eq!(
             parsed
@@ -6678,6 +6701,40 @@ mod tests {
                 .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
                 .collect::<Vec<_>>(),
             ["A", "B"]
+        );
+
+        let parsed = parse("enum E { A = int, B };\n");
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .enumerators
+                .iter()
+                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+
+        let parsed = parse("int array[int];\nint after;\n");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+
+        let parsed = parse("int initialized = int;\nint after;\n");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
         );
 
         let parsed = parse("int f(int a, ... + int after;\n");
