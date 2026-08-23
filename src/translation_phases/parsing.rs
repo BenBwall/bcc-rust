@@ -851,10 +851,11 @@ pub(crate) struct TypeName {
 }
 
 struct TokenCursor {
-    preprocessor: Preprocessor,
-    current:      Option<Token>,
-    following:    Option<Token>,
-    reached_eof:  bool,
+    preprocessor:    Preprocessor,
+    current:         Option<Token>,
+    following:       Option<Token>,
+    after_following: Option<Token>,
+    reached_eof:     bool,
 }
 
 impl TokenCursor {
@@ -863,6 +864,7 @@ impl TokenCursor {
             preprocessor,
             current: None,
             following: None,
+            after_following: None,
             reached_eof: false,
         }
     }
@@ -884,9 +886,19 @@ impl TokenCursor {
         self.following
     }
 
+    fn after_following(&mut self, context: &mut Context) -> Option<Token> {
+        let _ = self.following(context)?;
+        if self.after_following.is_none() && !self.reached_eof {
+            self.after_following = self.preprocessor.next_item(context);
+            self.reached_eof = self.after_following.is_none();
+        }
+        self.after_following
+    }
+
     fn consume(&mut self) {
         debug_assert!(self.current.is_some(), "cannot consume parser EOF");
         self.current = self.following.take();
+        self.following = self.after_following.take();
     }
 }
 
@@ -1606,6 +1618,11 @@ impl Parser {
         };
         following.kind == TokenType::Identifier
             || is_operator(Some(following), OperatorTokenType::Asterisk)
+            || is_operator(Some(following), OperatorTokenType::OpeningParenthesis)
+                && is_operator(
+                    self.cursor.after_following(context),
+                    OperatorTokenType::Asterisk,
+                )
             || self.declaration_starter(following)
     }
 
@@ -1757,6 +1774,8 @@ impl SynchronizationKind {
                 braces == 0 && token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || brackets == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    || parentheses == 0
+                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                     || braces == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
             | Self::Parameter | Self::VariadicParameterList =>
@@ -2599,11 +2618,13 @@ impl DeclaratorFrame {
                     "this frame phase cannot receive a child value"
                 );
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    let token = token.expect("closing-parenthesis token exists");
                     self.direct_declarators.push(DirectDeclarator::Function {
                         parameter_list: VectorSlice::empty(),
                         is_variadic:    false,
                     });
                     self.has_direct_declarator = true;
+                    parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
@@ -2844,6 +2865,7 @@ impl DeclaratorFrame {
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Comma)
                     || is_operator(token, OperatorTokenType::Semicolon)
+                    || is_operator(token, OperatorTokenType::ClosingParenthesis)
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     if !self.array_is_pointer {
@@ -4835,9 +4857,9 @@ mod tests {
 
     #[test]
     fn conflicting_typedef_names_remain_specifiers_and_preserve_following_declarations() {
-        let parsed = parse("typedef int T; unsigned T x; T y;\n");
+        let parsed = parse("typedef int T; unsigned T x; unsigned T (*pointer); T y;\n");
 
-        assert_eq!(parsed.items.len(), 3);
+        assert_eq!(parsed.items.len(), 4);
         assert!(parser_errors(&parsed).any(|error| matches!(
             error,
             ParserErrorType::ConflictingTypeSpecifiers(
@@ -4853,10 +4875,10 @@ mod tests {
                 .iter()
                 .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
                 .collect::<Vec<_>>(),
-            ["T", "x", "y"]
+            ["T", "x", "pointer", "y"]
         );
         assert!(
-            declaration(&parsed, 2)
+            declaration(&parsed, 3)
                 .declaration_specifiers
                 .type_specifiers
                 .is_typedef_name()
@@ -5444,6 +5466,25 @@ mod tests {
     }
 
     #[test]
+    fn array_recovery_preserves_an_enclosing_closing_parenthesis() {
+        let parsed = parse("int f(int a[1) int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
     fn array_recovery_unwinds_at_semicolons_despite_unbalanced_children() {
         let parsed = parse("int a[(1; int after;\n");
 
@@ -5899,6 +5940,16 @@ mod tests {
             .map(|declarator| sourced_text(&parsed, declarator.source_vectors))
             .collect::<Vec<_>>();
         assert_eq!(member_declarator_text, ["first", "*second", "bits:3"]);
+    }
+
+    #[test]
+    fn empty_abstract_function_declarator_owns_both_parentheses() {
+        let parsed = parse("int f(int ());\n");
+        let declarator = parsed.parser.syntax.parameter_declarations[0]
+            .declarator
+            .expect("abstract function declarator");
+
+        assert_eq!(sourced_text(&parsed, declarator.source_vectors), "()");
     }
 
     #[test]
