@@ -623,18 +623,13 @@ impl TypeSpecifiers {
 
     fn map_typedef_name(
         self,
-        parser: &mut Parser,
         context: &mut Context,
         name: Identifier,
+        source_vectors: SourceVectors,
     ) -> Self {
         match self {
             | TypeSpecifiers::Empty => TypeSpecifiers::TypedefName(name),
             | type_specifiers => {
-                let source_vectors = context.create_source_vectors(
-                    parser.position(context),
-                    parser.source_file_index(),
-                    0,
-                );
                 context.parser_error(ParserError {
                     error_type: ParserErrorType::ConflictingTypeSpecifiers(
                         type_specifiers,
@@ -647,8 +642,13 @@ impl TypeSpecifiers {
         }
     }
 
-    fn make_typedef_name(&mut self, parser: &mut Parser, context: &mut Context, name: Identifier) {
-        *self = self.map_typedef_name(parser, context, name);
+    fn make_typedef_name(
+        &mut self,
+        context: &mut Context,
+        name: Identifier,
+        source_vectors: SourceVectors,
+    ) {
+        *self = self.map_typedef_name(context, name, source_vectors);
     }
 }
 
@@ -2366,9 +2366,9 @@ impl DeclarationSpecifiersFrame {
                 || parser.typedef_name_continues_specifiers(context))
         {
             self.specifiers.type_specifiers.make_typedef_name(
-                parser,
                 context,
                 Identifier::new(token.contents),
+                token.source_vectors,
             );
             parser.merge_source(context, &mut self.source_vectors, token);
             self.consumed = true;
@@ -4892,6 +4892,23 @@ mod tests {
                 TokenType::Identifier
             )
         )));
+        let conflict = parsed
+            .errors
+            .iter()
+            .find_map(|error| match error {
+                | TranslationError::Parsing(error)
+                    if matches!(
+                        error.error_type,
+                        ParserErrorType::ConflictingTypeSpecifiers(
+                            TypeSpecifiers::Unsigned,
+                            TokenType::Identifier
+                        )
+                    ) =>
+                    Some(error),
+                | _ => None,
+            })
+            .expect("typedef conflict diagnostic");
+        assert_eq!(sourced_text(&parsed, conflict.source_vectors), "T");
         assert_eq!(
             parsed
                 .parser
