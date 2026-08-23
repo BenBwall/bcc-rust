@@ -123,8 +123,19 @@ The typed result passed from a completed child frame to its parent. The current 
 The tokens at which a particular frame can safely resume or unwind after malformed input, paired with a legal recovery target.
 _Avoid_: Global recovery point
 
-**Error node** *(implemented at the external-declaration boundary)*:
-A syntax placeholder representing malformed input after a diagnostic. Migrated declaration frames finish recovery and provenance collection, then yield `ExternalDeclaration::Error` so parsing can continue without presenting malformed syntax as a successful declaration.
+**Recovered declaration** *(implemented at the external-declaration boundary)*:
+A declaration AST retained after one or more hard syntax diagnostics and local
+repair. Migrated frames finish synchronization and provenance collection, then
+yield `ExternalDeclaration::RecoveredDeclaration` with the declaration's arena
+handle. Later analysis may inspect the repaired tree to find additional
+problems, while the distinct variant prevents it from being mistaken for fully
+valid syntax.
+
+**Error node** *(reserved)*:
+A provenance-only syntax placeholder for malformed input from which no
+meaningful AST can be recovered. Current declaration recovery always constructs
+a recovered declaration, so `ExternalDeclaration::Error` is reserved for a
+future unrecoverable grammar path.
 
 ## Compiler boundaries
 
