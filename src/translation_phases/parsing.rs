@@ -853,6 +853,7 @@ pub(crate) struct TypeName {
 struct TokenCursor {
     preprocessor: Preprocessor,
     current:      Option<Token>,
+    following:    Option<Token>,
     reached_eof:  bool,
 }
 
@@ -861,6 +862,7 @@ impl TokenCursor {
         Self {
             preprocessor,
             current: None,
+            following: None,
             reached_eof: false,
         }
     }
@@ -873,9 +875,18 @@ impl TokenCursor {
         self.current
     }
 
+    fn following(&mut self, context: &mut Context) -> Option<Token> {
+        let _ = self.current(context)?;
+        if self.following.is_none() && !self.reached_eof {
+            self.following = self.preprocessor.next_item(context);
+            self.reached_eof = self.following.is_none();
+        }
+        self.following
+    }
+
     fn consume(&mut self) {
         debug_assert!(self.current.is_some(), "cannot consume parser EOF");
-        self.current = None;
+        self.current = self.following.take();
     }
 }
 
@@ -1571,6 +1582,15 @@ impl Parser {
         }
     }
 
+    fn typedef_name_continues_specifiers(&mut self, context: &mut Context) -> bool {
+        let Some(following) = self.cursor.following(context) else {
+            return false;
+        };
+        following.kind == TokenType::Identifier
+            || is_operator(Some(following), OperatorTokenType::Asterisk)
+            || self.declaration_starter(following)
+    }
+
     fn declarator_identifier(&self, declarator: Declarator) -> Option<Identifier> {
         let mut declarator = declarator;
         loop {
@@ -1593,24 +1613,29 @@ impl Parser {
     }
 
     fn declarator_function_binding(&self, declarator: Declarator) -> Option<bool> {
-        let start = declarator.kind.start_index as usize;
-        let end = start + declarator.kind.length as usize;
-        let direct = &self.syntax.direct_declarators[start..end];
+        let mut declarator = declarator;
+        let mut binding = None;
 
-        if let Some(DirectDeclarator::Parenthesized(nested)) = direct.first()
-            && let Some(binding) = self.declarator_function_binding(*nested)
-        {
-            return Some(binding);
+        loop {
+            let start = declarator.kind.start_index as usize;
+            let end = start + declarator.kind.length as usize;
+            let direct = &self.syntax.direct_declarators[start..end];
+
+            let local_binding = direct.get(1).map(|suffix| {
+                matches!(
+                    suffix,
+                    DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
+                )
+            });
+            binding = local_binding
+                .or_else(|| (declarator.pointer.type_qualifiers_list.length > 0).then_some(false))
+                .or(binding);
+
+            let Some(DirectDeclarator::Parenthesized(nested)) = direct.first() else {
+                return binding;
+            };
+            declarator = *nested;
         }
-
-        if let Some(suffix) = direct.get(1) {
-            return Some(matches!(
-                suffix,
-                DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
-            ));
-        }
-
-        (declarator.pointer.type_qualifiers_list.length > 0).then_some(false)
     }
 }
 
@@ -2285,8 +2310,9 @@ impl DeclarationSpecifiersFrame {
         }
 
         if token.kind == TokenType::Identifier
-            && self.specifiers.type_specifiers == TypeSpecifiers::Empty
             && parser.scopes.is_typedef(token.contents)
+            && (self.specifiers.type_specifiers == TypeSpecifiers::Empty
+                || parser.typedef_name_continues_specifiers(context))
         {
             self.specifiers.type_specifiers.make_typedef_name(
                 parser,
@@ -4786,6 +4812,36 @@ mod tests {
             )
             .as_deref(),
             Some("x")
+        );
+    }
+
+    #[test]
+    fn conflicting_typedef_names_remain_specifiers_and_preserve_following_declarations() {
+        let parsed = parse("typedef int T; unsigned T x; T y;\n");
+
+        assert_eq!(parsed.items.len(), 3);
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ConflictingTypeSpecifiers(
+                TypeSpecifiers::Unsigned,
+                TokenType::Identifier
+            )
+        )));
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .init_declarators
+                .iter()
+                .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
+                .collect::<Vec<_>>(),
+            ["T", "x", "y"]
+        );
+        assert!(
+            declaration(&parsed, 2)
+                .declaration_specifiers
+                .type_specifiers
+                .is_typedef_name()
         );
     }
 
