@@ -2060,9 +2060,6 @@ impl Parser {
             let stops_at_initial_declaration = matches!(
                 (state.set.kind, state.set.target),
                 |(SynchronizationKind::Declaration | SynchronizationKind::Parameter, _)| (
-                    SynchronizationKind::ArrayBound,
-                    ParseFrameKind::Declarator
-                ) | (
                     SynchronizationKind::StructMember,
                     ParseFrameKind::StructOrUnionSpecifier
                 ) | (
@@ -4105,8 +4102,19 @@ impl ParameterListFrame {
                     }
                     self.phase = ParameterListPhase::ExpectCloseAfterEllipsis;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::ClosingParenthesis)
-                    || is_operator(token, OperatorTokenType::Semicolon)
+                } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    let token = token.expect("closing-parenthesis token exists");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(
+                            Some(token.kind),
+                        ),
+                        Some(token),
+                    );
+                    parser.merge_source(context, &mut self.source_vectors, token);
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Consume
+                } else if is_operator(token, OperatorTokenType::Semicolon)
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                     || token.is_none()
                 {
@@ -4334,6 +4342,13 @@ impl StructOrUnionSpecifierFrame {
                 // specifier-qualifier-list child for the next member.
                 if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
                     let token = token.expect("closing-curly-brace token exists");
+                    if self.declarations.is_empty() {
+                        parser.report(
+                            context,
+                            ParserErrorType::ExpectedStructDeclarationBeforeClosingCurlyBrace,
+                            Some(token),
+                        );
+                    }
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = StructOrUnionPhase::FinishBody;
                     ParseAction::Consume
@@ -4702,6 +4717,13 @@ impl EnumSpecifierFrame {
                 // accepts the standard's optional trailing-comma form.
                 if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
                     let token = token.expect("closing-curly-brace token exists");
+                    if self.enumerators.is_empty() {
+                        parser.report(
+                            context,
+                            ParserErrorType::ExpectedEnumeratorBeforeClosingCurlyBrace,
+                            Some(token),
+                        );
+                    }
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Consume
@@ -5366,6 +5388,10 @@ pub(crate) enum ParserErrorType {
     /// Struct member list was not closed by `}`.
     /// C99: §6.7.2.1, p. 101; PDF p. 113.
     ExpectedClosingCurlyBraceInStructDeclarationList(Option<TokenType>),
+    /// A struct or union definition had no member declaration.
+    /// C99: struct-declaration-list is nonempty in §6.7.2.1, p. 101;
+    /// PDF p. 113.
+    ExpectedStructDeclarationBeforeClosingCurlyBrace,
     /// Struct member declaration reached `}` without its semicolon.
     /// C99: struct-declaration is §6.7.2.1, p. 101; PDF p. 113.
     ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList,
@@ -5382,6 +5408,9 @@ pub(crate) enum ParserErrorType {
     /// Enumerator list expected a name or its closing brace.
     /// C99: §6.7.2.2, p. 105; PDF p. 117.
     ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(Option<TokenType>),
+    /// An enum definition had no enumerator.
+    /// C99: enumerator-list is nonempty in §6.7.2.2, p. 105; PDF p. 117.
+    ExpectedEnumeratorBeforeClosingCurlyBrace,
     /// Enumerator was not followed by `,` or `}`.
     /// C99: §6.7.2.2, p. 105; PDF p. 117.
     ExpectedCommaOrClosingCurlyInEnumeratorList(Option<TokenType>),
@@ -5505,11 +5534,13 @@ impl GetSeverity for ParserErrorType {
             | Self::ExpectedStructOrUnionKeyword(..)
             | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
             | Self::ExpectedClosingCurlyBraceInStructDeclarationList(..)
+            | Self::ExpectedStructDeclarationBeforeClosingCurlyBrace
             | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList
             | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(..)
             | Self::ExpectedEnumKeyword(..)
             | Self::EnumSpecifierWithoutNameAndBody(..)
             | Self::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(..)
+            | Self::ExpectedEnumeratorBeforeClosingCurlyBrace
             | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(..)
             | Self::EmptyDeclarationSpecifiers(..)
             | Self::NoTypeSpecifiersInDeclarationSpecifiers(..)
@@ -5661,6 +5692,10 @@ impl Display for ParserErrorType {
                 write_expected(f, "struct-or-union specifier", "a tag name or `{`", *found),
             | Self::ExpectedClosingCurlyBraceInStructDeclarationList(found) =>
                 write_expected(f, "struct declaration list", "`}`", *found),
+            | Self::ExpectedStructDeclarationBeforeClosingCurlyBrace => write!(
+                f,
+                "Expected a struct declaration before `}}` in a struct or union body."
+            ),
             | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList =>
                 write!(f, "Expected `;` before `}}` in a struct declarator list."),
             | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(found) =>
@@ -5676,6 +5711,8 @@ impl Display for ParserErrorType {
                     "an enumeration constant or `}`",
                     *found,
                 ),
+            | Self::ExpectedEnumeratorBeforeClosingCurlyBrace =>
+                write!(f, "Expected an enumerator before `}}` in an enum body."),
             | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(found) => write_expected(
                 f,
                 "enumerator list",
@@ -6726,6 +6763,17 @@ mod tests {
             Some("after")
         );
 
+        let parsed = parse("int array[* int];\nint after;\n");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+
         let parsed = parse("int initialized = int;\nint after;\n");
         assert_eq!(parsed.items.len(), 2);
         assert_eq!(
@@ -6758,6 +6806,24 @@ mod tests {
             .as_deref(),
             Some("f")
         );
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+
+        let parsed = parse("int f(int a,);\nint after;\n");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(parser_errors(&parsed).count(), 1);
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(Some(
+                TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+            ))
+        )));
         assert_eq!(
             identifier_name(
                 &parsed,
@@ -7777,6 +7843,18 @@ mod tests {
                     ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList(..)
                 )
             }),
+            ("struct S {};\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedStructDeclarationBeforeClosingCurlyBrace
+                )
+            }),
+            ("union U {};\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedStructDeclarationBeforeClosingCurlyBrace
+                )
+            }),
             ("enum E { A\n", |error| {
                 matches!(
                     error,
@@ -7797,6 +7875,12 @@ mod tests {
                     ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
                         None
                     )
+                )
+            }),
+            ("enum E {};\n", |error| {
+                matches!(
+                    error,
+                    ParserErrorType::ExpectedEnumeratorBeforeClosingCurlyBrace
                 )
             }),
             ("typedef ;\n", |error| {
@@ -7824,6 +7908,14 @@ mod tests {
                 "missing expected parser diagnostic for {source:?}: {errors:#?}"
             );
             assert!(errors.iter().all(|error| error.source_vectors.length > 0));
+        }
+
+        for source in ["struct S {};\n", "union U {};\n", "enum E {};\n"] {
+            let parsed = parse(source);
+            assert!(matches!(
+                parsed.items.first(),
+                Some(ExternalDeclaration::RecoveredDeclaration(_))
+            ));
         }
     }
 
