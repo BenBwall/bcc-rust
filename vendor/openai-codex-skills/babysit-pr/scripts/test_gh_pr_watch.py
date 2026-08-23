@@ -155,7 +155,6 @@ def test_pending_review_feedback_surfaces_only_after_publication(monkeypatch):
         raise AssertionError(f"unexpected endpoint: {endpoint}")
 
     monkeypatch.setattr(gh_pr_watch, "gh_api_list_paginated", fake_list)
-    monkeypatch.setattr(gh_pr_watch, "fetch_resolved_review_comment_ids", lambda *args: set())
 
     assert (
         gh_pr_watch.fetch_new_review_items(
@@ -185,45 +184,6 @@ def test_pending_review_feedback_surfaces_only_after_publication(monkeypatch):
     }
     assert state["seen_review_comment_ids"] == ["20"]
     assert state["seen_review_ids"] == ["10"]
-
-
-def test_resolved_review_threads_do_not_surface_on_fresh_state(monkeypatch):
-    state = {}
-    review_comment = {
-        "id": 20,
-        "pull_request_review_id": 10,
-        "user": {"login": "octocat"},
-        "author_association": "MEMBER",
-        "body": "Already addressed.",
-        "created_at": "2026-06-08T10:00:00Z",
-        "path": "src/example.rs",
-        "line": 7,
-        "html_url": "https://github.com/openai/codex/pull/123#discussion_r20",
-    }
-
-    def fake_list(endpoint, **kwargs):
-        if endpoint.endswith("/pulls/123/comments"):
-            return [review_comment]
-        if endpoint.endswith("/issues/123/comments") or endpoint.endswith("/pulls/123/reviews"):
-            return []
-        raise AssertionError(f"unexpected endpoint: {endpoint}")
-
-    monkeypatch.setattr(gh_pr_watch, "gh_api_list_paginated", fake_list)
-    monkeypatch.setattr(
-        gh_pr_watch,
-        "fetch_resolved_review_comment_ids",
-        lambda repo, number: {"20"},
-    )
-
-    assert (
-        gh_pr_watch.fetch_new_review_items(
-            sample_pr(),
-            state,
-            fresh_state=True,
-            authenticated_login="octocat",
-        )
-        == []
-    )
 
 
 def test_run_watch_keeps_polling_open_ready_to_merge_pr(monkeypatch):
