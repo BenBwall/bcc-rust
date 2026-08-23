@@ -1582,6 +1582,19 @@ impl Parser {
             declarator = nested?;
         }
     }
+
+    fn declarator_has_function_suffix(&self, declarator: Declarator) -> bool {
+        let start = declarator.kind.start_index as usize;
+        let end = start + declarator.kind.length as usize;
+        self.syntax.direct_declarators[start..end]
+            .iter()
+            .any(|direct| {
+                matches!(
+                    direct,
+                    DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
+                )
+            })
+    }
 }
 
 impl ParseAction {
@@ -1619,7 +1632,9 @@ impl SynchronizationKind {
             | Self::ArrayBound => matches!(
                 token,
                 TokenType::Operator(
-                    OperatorTokenType::ClosingSquareBracket | OperatorTokenType::Semicolon
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::ClosingSquareBracket
+                        | OperatorTokenType::Semicolon
                 )
             ),
             | Self::Parameter => matches!(
@@ -1677,8 +1692,9 @@ impl SynchronizationKind {
                     || brackets == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
             | Self::Parameter | Self::VariadicParameterList =>
-                parentheses == 0
-                    && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                braces == 0 && token == TokenType::Operator(OperatorTokenType::Semicolon)
+                    || parentheses == 0
+                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                     || braces == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
             | Self::FunctionBody => false,
@@ -1931,6 +1947,10 @@ impl DeclarationFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                let has_function_suffix = self
+                    .last_init_index
+                    .and_then(|index| parser.syntax.init_declarators.get(index as usize))
+                    .is_some_and(|init| parser.declarator_has_function_suffix(init.declarator));
                 if is_operator(token, OperatorTokenType::Comma) {
                     if let Some(token) = token {
                         parser.merge_source(context, &mut self.source_vectors, token);
@@ -1950,7 +1970,9 @@ impl DeclarationFrame {
                     }
                     self.phase = DeclarationPhase::PushInitializer;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
+                } else if is_operator(token, OperatorTokenType::OpeningCurlyBrace)
+                    && has_function_suffix
+                {
                     self.phase = DeclarationPhase::AwaitFunctionBody;
                     ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
                         FutureChildKind::FunctionBody,
@@ -2741,7 +2763,9 @@ impl DeclaratorFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                } else if is_operator(token, OperatorTokenType::Comma)
+                    || is_operator(token, OperatorTokenType::Semicolon)
+                {
                     if !self.array_is_pointer {
                         parser.report(
                             context,
@@ -4934,6 +4958,31 @@ mod tests {
     }
 
     #[test]
+    fn only_function_declarators_can_own_a_braced_body() {
+        let parsed = parse("int object { int swallowed; } int after;\n");
+
+        assert!(
+            !parser_errors(&parsed)
+                .any(|error| matches!(error, ParserErrorType::FunctionBodyNotImplemented))
+        );
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
+                TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+            ))
+        )));
+        let after_item = parsed.items.len() - 1;
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, after_item))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
     fn malformed_external_declarations_reduce_to_error_nodes_and_continue() {
         let parsed = parse("}\nint after;\n");
 
@@ -5113,6 +5162,28 @@ mod tests {
     }
 
     #[test]
+    fn array_recovery_unwinds_at_a_top_level_declarator_comma() {
+        let parsed = parse("int a[1, b;\n");
+
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .init_declarators
+                .iter()
+                .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(Some(
+                TokenType::Operator(OperatorTokenType::Comma)
+            ))
+        )));
+    }
+
+    #[test]
     fn array_recovery_unwinds_at_semicolons_despite_unbalanced_children() {
         let parsed = parse("int a[(1; int after;\n");
 
@@ -5146,6 +5217,25 @@ mod tests {
                 Some(TokenType::Operator(OperatorTokenType::Semicolon))
             )
         )));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
+    fn parameter_recovery_unwinds_at_semicolons_despite_unbalanced_children() {
+        let parsed = parse("int f(int x + (1; int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
         assert_eq!(
             identifier_name(
                 &parsed,
