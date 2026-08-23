@@ -1466,7 +1466,12 @@ impl Parser {
                 brackets,
                 braces,
             );
-            if at_unambiguous_owning_delimiter || at_top_level && set.kind.stops_before(token.kind)
+            let at_next_declaration = matches!(set.kind, SynchronizationKind::Declaration)
+                && at_top_level
+                && self.declaration_starter(token);
+            if at_unambiguous_owning_delimiter
+                || at_next_declaration
+                || at_top_level && set.kind.stops_before(token.kind)
             {
                 break;
             }
@@ -1694,11 +1699,10 @@ impl SynchronizationKind {
         braces: usize,
     ) -> bool {
         match self {
-            | Self::Declaration =>
-                token == TokenType::Operator(OperatorTokenType::Semicolon)
-                    || braces == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
-            | Self::Initializer | Self::StructMember | Self::EnumeratorValue =>
+            | Self::Declaration
+            | Self::Initializer
+            | Self::StructMember
+            | Self::EnumeratorValue =>
                 braces == 0
                     && matches!(
                         token,
@@ -2011,6 +2015,16 @@ impl DeclarationFrame {
                     }
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Consume
+                } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = DeclarationPhase::Finish;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -5222,6 +5236,25 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             ["width", "after"]
+        );
+    }
+
+    #[test]
+    fn declaration_recovery_keeps_semicolons_inside_nested_braces() {
+        let parsed = parse("int x + sizeof(struct Inner { int member; }); int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
         );
     }
 
