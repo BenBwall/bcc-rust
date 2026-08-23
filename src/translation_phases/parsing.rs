@@ -2130,20 +2130,10 @@ impl FunctionDefinitionFrame {
                             let end = start + parameter_list.length as usize;
                             let mut names = Vec::new();
                             for parameter in &parser.syntax.parameter_declarations[start..end] {
-                                if let TypeSpecifiers::Enum(index) =
-                                    parameter.declaration_specifiers.type_specifiers
-                                    && let Some(enumeration_list) = parser.syntax.enum_specifiers
-                                        [index.0 as usize]
-                                        .enumeration_list
-                                {
-                                    let start = enumeration_list.start_index as usize;
-                                    let end = start + enumeration_list.length as usize;
-                                    names.extend(
-                                        parser.syntax.enumerators[start..end]
-                                            .iter()
-                                            .map(|enumerator| enumerator.name.name),
-                                    );
-                                }
+                                parser.collect_type_specifier_bindings(
+                                    parameter.declaration_specifiers.type_specifiers,
+                                    &mut names,
+                                );
                                 if let Some(name) = parameter
                                     .declarator
                                     .and_then(|declarator| parser.declarator_identifier(declarator))
@@ -4100,6 +4090,46 @@ impl Parser {
                 return suffix;
             };
             declarator = *nested;
+        }
+    }
+
+    fn collect_type_specifier_bindings(
+        &self,
+        type_specifiers: TypeSpecifiers,
+        names: &mut Vec<StringCacheId>,
+    ) {
+        let mut pending = vec![type_specifiers];
+        while let Some(type_specifiers) = pending.pop() {
+            match type_specifiers {
+                | TypeSpecifiers::Enum(index) => {
+                    if let Some(enumeration_list) =
+                        self.syntax.enum_specifiers[index.0 as usize].enumeration_list
+                    {
+                        let start = enumeration_list.start_index as usize;
+                        let end = start + enumeration_list.length as usize;
+                        names.extend(
+                            self.syntax.enumerators[start..end]
+                                .iter()
+                                .map(|enumerator| enumerator.name.name),
+                        );
+                    }
+                },
+                | TypeSpecifiers::StructOrUnion(index) => {
+                    if let Some(declarations) = self.syntax.struct_or_union_specifiers
+                        [index.0 as usize]
+                        .struct_declaration_list
+                    {
+                        let start = declarations.start_index as usize;
+                        let end = start + declarations.length as usize;
+                        pending.extend(
+                            self.syntax.struct_declarations[start..end]
+                                .iter()
+                                .map(|declaration| declaration.type_specifiers),
+                        );
+                    }
+                },
+                | _ => {},
+            }
         }
     }
 
@@ -10762,6 +10792,22 @@ mod tests {
     #[test]
     fn definition_parameter_enumerators_are_visible_in_the_function_body() {
         let parsed = parse("typedef int A; int f(enum { A } x) { A; return 0; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 1).body);
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Expression(ExpressionSlot::FutureChild(_))
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::FutureChild(_)))
+        )));
+    }
+
+    #[test]
+    fn nested_definition_parameter_enumerators_are_visible_in_the_function_body() {
+        let parsed = parse("typedef int A; int f(struct { enum { A } e; } x) { A; return 0; }\n");
         let items = block_items(&parsed, function_definition(&parsed, 1).body);
 
         assert_eq!(items.len(), 2);
