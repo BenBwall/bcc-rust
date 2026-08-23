@@ -1260,6 +1260,8 @@ enum SynchronizationKind {
     KAndRParameter,
     /// Stop before the `)` that must follow `...` or an enclosing boundary.
     VariadicParameterList,
+    /// Consume a comma-introduced parameter that illegally follows `...`.
+    VariadicTrailingParameter,
     /// Stop before a member separator or enclosing struct boundary.
     StructMember,
     /// Stop before an enumerator separator or enclosing enum boundary.
@@ -2059,6 +2061,7 @@ impl Parser {
                     | SynchronizationKind::Parameter
                     | SynchronizationKind::StructMember
                     | SynchronizationKind::EnumeratorValue
+                    | SynchronizationKind::VariadicParameterList
             ) && at_top_level
                 && self.declaration_starter(token);
             let at_next_k_and_r_identifier =
@@ -2068,6 +2071,7 @@ impl Parser {
                     && !self.scopes.is_typedef(token.contents);
             let at_next_enumerator = matches!(state.set.kind, SynchronizationKind::EnumeratorValue)
                 && at_top_level
+                && state.set.target == ParseFrameKind::EnumSpecifier
                 && token.kind == TokenType::Identifier;
             if at_unambiguous_owning_delimiter
                 || at_next_declaration
@@ -2324,7 +2328,7 @@ impl SynchronizationKind {
                         | OperatorTokenType::Semicolon
                 )
             ),
-            | Self::VariadicParameterList => matches!(
+            | Self::VariadicParameterList | Self::VariadicTrailingParameter => matches!(
                 token,
                 TokenType::Operator(
                     OperatorTokenType::ClosingParenthesis
@@ -2400,7 +2404,10 @@ impl SynchronizationKind {
                         && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                     || braces == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
-            | Self::Parameter | Self::KAndRParameter | Self::VariadicParameterList =>
+            | Self::Parameter
+            | Self::KAndRParameter
+            | Self::VariadicParameterList
+            | Self::VariadicTrailingParameter =>
                 braces == 0 && token == TokenType::Operator(OperatorTokenType::Semicolon)
                     || parentheses == 0
                         && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
@@ -4123,6 +4130,18 @@ impl ParameterListFrame {
                     );
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Reprocess
+                } else if let Some(token) = token
+                    && parser.declaration_starter(token)
+                {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
+                            token.kind,
+                        ),
+                        Some(token),
+                    );
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
                         context,
@@ -4140,7 +4159,11 @@ impl ParameterListFrame {
                         Some(token),
                     );
                     ParseAction::Recover(SynchronizationSet {
-                        kind:   SynchronizationKind::VariadicParameterList,
+                        kind:   if is_operator(Some(token), OperatorTokenType::Comma) {
+                            SynchronizationKind::VariadicTrailingParameter
+                        } else {
+                            SynchronizationKind::VariadicParameterList
+                        },
                         target: ParseFrameKind::ParameterList,
                     })
                 } else {
@@ -6622,6 +6645,29 @@ mod tests {
         );
 
         let parsed = parse("enum E { A = + int after;\n");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+
+        let parsed = parse("enum E { A = VALUE + OTHER, B };\n");
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .enumerators
+                .iter()
+                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+
+        let parsed = parse("int f(int a, ... + int after;\n");
         assert_eq!(parsed.items.len(), 2);
         assert_eq!(
             identifier_name(
