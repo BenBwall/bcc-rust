@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR"
+  short_description: "Coordinate the repository's specialist PR review suite"
+  default_prompt: "Use $review-pr to review the open PR associated with the current checkout."

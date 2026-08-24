@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Lexical Processing"
+  short_description: "Review C99 translation phases 1-3 and token formation"
+  default_prompt: "Use $review-pr-lexical-processing to review the current PR's early translation phases."
