@@ -36,6 +36,7 @@ use super::{
     SourceVectors,
     StrExt,
     TokenString,
+    TranslationError,
     TranslationPhase,
     preprocessor_tokenizer::{
         PreprocessorToken,
@@ -294,7 +295,7 @@ pub(crate) enum HashHash {
     Empty,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug)]
 pub(crate) struct Preprocessor {
     pub(crate) tokenizer:       PreprocessorTokenizer,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame>,
@@ -310,6 +311,7 @@ pub(crate) struct Preprocessor {
     system_include_directories: SharedVec<PathBuf>,
     expression_parser:          PreprocessorExpressionParser,
     pending_parser_token:       Option<Token>,
+    pending_parser_errors:      Vec<TranslationError>,
 }
 
 impl GetPosition for Preprocessor {
@@ -2172,6 +2174,7 @@ impl Preprocessor {
             system_include_directories,
             expression_parser: PreprocessorExpressionParser::new(),
             pending_parser_token: None,
+            pending_parser_errors: Vec::new(),
         }
     }
 
@@ -2206,6 +2209,10 @@ impl Preprocessor {
         self.pending_parser_token.is_some()
     }
 
+    pub(crate) fn pop_pending_parser_error(&mut self) -> Option<TranslationError> {
+        self.pending_parser_errors.pop()
+    }
+
     fn concatenate_adjacent_strings(&mut self, context: &mut Context, first: Token) -> Token {
         let TokenType::String(first_kind) = first.kind else {
             return first;
@@ -2217,11 +2224,22 @@ impl Preprocessor {
         let mut contents = context.string_cache.at(first_contents).to_string();
         let mut source_vectors = first.source_vectors;
 
-        while let Some(next) = self.next_parser_token(context) {
-            let TokenType::String(next_kind) = next.kind else {
-                self.pending_parser_token = Some(next);
+        loop {
+            let existing_errors = context.take_pending_errors();
+            let next = self.next_parser_token(context);
+            let generated_errors = context.take_pending_errors();
+            context.append_pending_errors(existing_errors);
+
+            let Some(next) = next else {
+                self.pending_parser_errors.extend(generated_errors);
                 break;
             };
+            let TokenType::String(next_kind) = next.kind else {
+                self.pending_parser_token = Some(next);
+                self.pending_parser_errors.extend(generated_errors);
+                break;
+            };
+            context.append_pending_errors(generated_errors);
             let next_contents = match next_kind {
                 | StringTokenType::String(contents) => contents,
                 | StringTokenType::WideString(contents) => {

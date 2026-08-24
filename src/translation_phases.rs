@@ -573,6 +573,14 @@ impl Context {
         self.pending_errors.pop()
     }
 
+    pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError> {
+        std::mem::take(&mut self.pending_errors)
+    }
+
+    pub(crate) fn append_pending_errors(&mut self, mut errors: Vec<TranslationError>) {
+        self.pending_errors.append(&mut errors);
+    }
+
     pub(crate) fn get_source_vectors(&self, source_vectors: SourceVectors) -> &[SourceVector] {
         let start_index = source_vectors.start_index as usize;
         let end_index = start_index + source_vectors.length as usize;

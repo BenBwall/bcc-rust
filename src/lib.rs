@@ -102,6 +102,9 @@ impl Iterator for PreprocessorIterator {
         if let Some(error) = self.context.pop_pending_error() {
             return Some(Err(error));
         }
+        if let Some(error) = self.preprocessor.pop_pending_parser_error() {
+            return Some(Err(error));
+        }
         if let Some(token) = self.pending_token.take() {
             return Some(Ok(token));
         }
@@ -158,12 +161,18 @@ impl Iterator for ParserIterator {
         if let Some(error) = self.context.pop_pending_error() {
             return Some(Err(error));
         }
+        if let Some(error) = self.parser.pop_pending_preprocessor_error() {
+            return Some(Err(error));
+        }
         if let Some(item) = self.pending_item.take() {
             return Some(Ok(item));
         }
 
         let item = self.parser.next_item(&mut self.context);
         if let Some(error) = self.context.pop_pending_error() {
+            self.pending_item = item;
+            Some(Err(error))
+        } else if let Some(error) = self.parser.pop_pending_preprocessor_error() {
             self.pending_item = item;
             Some(Err(error))
         } else {
@@ -248,6 +257,30 @@ mod pipeline_iterator_tests {
                 .get_source_vectors(identifier.source_vectors)
                 .is_empty()
         );
+        assert!(iterator.next().is_none());
+    }
+
+    #[test]
+    fn adjacent_string_lookahead_defers_buffered_token_diagnostics() {
+        let mut iterator = PreprocessorIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "\"a\" 0xg\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::String(_)
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
+                ..
+            })
+        ));
+        assert!(iterator.next().is_some());
         assert!(iterator.next().is_none());
     }
 
