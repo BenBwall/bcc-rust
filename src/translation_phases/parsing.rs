@@ -1429,10 +1429,6 @@ impl RecoveryState {
                 state.parentheses -= 1;
                 let closed_type_name = state.parenthesized_type_names.pop().unwrap_or(false);
                 state.last_closed_parenthesis_was_type_name = closed_type_name;
-                if closed_type_name && let Some(parent) = state.parenthesized_type_names.last_mut()
-                {
-                    *parent = true;
-                }
                 Self::discard_closed_questions(state);
             },
             | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
@@ -9193,6 +9189,24 @@ mod tests {
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn compound_literal_type_names_do_not_mark_outer_grouping_parentheses() {
+        let parsed =
+            parse("struct S { int x; };\nint f(void) { ((struct S){0}) { return; } break; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 1).body);
+
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Statement(_)));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Compound { .. }
+        )));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Break
         )));
     }
 
