@@ -259,6 +259,36 @@ pub(crate) trait GetSourceVectors {
 
 pub(crate) trait SetPosition: GetPosition {
     fn set_position(&mut self, context: &mut Context, position: SourcePosition);
+    #[expect(
+        dead_code,
+        reason = "Position setters are retained for translation-phase implementations."
+    )]
+    #[inline(always)]
+    fn set_index(&mut self, context: &mut Context, index: usize) {
+        self.set_position(
+            context,
+            SourcePosition {
+                index,
+                line: self.line(context),
+                column: self.column(context),
+            },
+        );
+    }
+    #[expect(
+        dead_code,
+        reason = "Position setters are retained for translation-phase implementations."
+    )]
+    #[inline(always)]
+    fn set_column(&mut self, context: &mut Context, column: u32) {
+        self.set_position(
+            context,
+            SourcePosition {
+                index: self.index(context),
+                line: self.line(context),
+                column,
+            },
+        );
+    }
     #[inline(always)]
     fn set_line(&mut self, context: &mut Context, line: u32) {
         self.set_position(

@@ -143,6 +143,14 @@ where
         }
     }
 
+    #[expect(
+        dead_code,
+        reason = "Reference-count inspection is retained for debugging callers."
+    )]
+    pub(crate) fn strong_reference_count(&self) -> usize {
+        self.ref_cnt().get()
+    }
+
     /// The caller of this function must maintain the invariant that the ref
     /// count accurately reflects how many references there are to the contents.
     /// This function is not marked unsafe because it's private to this module.
@@ -156,12 +164,28 @@ where
 }
 
 impl SharedString {
+    #[expect(
+        dead_code,
+        reason = "The explicit string view is retained for API ergonomics."
+    )]
+    pub(crate) fn as_str(&self) -> &str {
+        self
+    }
+
     pub(crate) fn from_string(s: String) -> Self {
         Self::from_boxed(s.into_boxed_str())
     }
 }
 
 impl<T> SharedVec<T> {
+    #[expect(
+        dead_code,
+        reason = "The explicit slice view is retained for API ergonomics."
+    )]
+    pub(crate) fn as_slice(&self) -> &[T] {
+        self
+    }
+
     pub(crate) fn from_vec(v: Vec<T>) -> Self {
         Self::from_boxed(v.into_boxed_slice())
     }
