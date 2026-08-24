@@ -309,6 +309,7 @@ pub(crate) struct Preprocessor {
     quote_include_directories:  SharedVec<PathBuf>,
     system_include_directories: SharedVec<PathBuf>,
     expression_parser:          PreprocessorExpressionParser,
+    pending_parser_token:       Option<Token>,
 }
 
 impl GetPosition for Preprocessor {
@@ -2157,6 +2158,73 @@ impl Preprocessor {
             quote_include_directories,
             system_include_directories,
             expression_parser: PreprocessorExpressionParser::new(),
+            pending_parser_token: None,
+        }
+    }
+
+    fn next_parser_token(&mut self, context: &mut Context) -> Option<Token> {
+        if let Some(token) = self.pending_parser_token.take() {
+            return Some(token);
+        }
+        loop {
+            let Some(token) = self.next_preprocessor_token::<true>(context) else {
+                if self.if_directive_balance != 0 {
+                    self.if_directive_balance = 0;
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_index(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
+                        source_vectors,
+                    });
+                }
+                return None;
+            };
+
+            if let Some(result) = self.map_preprocessor_token(context, token) {
+                return Some(result);
+            }
+        }
+    }
+
+    fn concatenate_adjacent_strings(&mut self, context: &mut Context, first: Token) -> Token {
+        let TokenType::String(first_kind) = first.kind else {
+            return first;
+        };
+        let mut wide = matches!(first_kind, StringTokenType::WideString(_));
+        let first_contents = match first_kind {
+            | StringTokenType::String(contents) | StringTokenType::WideString(contents) => contents,
+        };
+        let mut contents = context.string_cache.at(first_contents).to_string();
+        let mut source_vectors = first.source_vectors;
+
+        while let Some(next) = self.next_parser_token(context) {
+            let TokenType::String(next_kind) = next.kind else {
+                self.pending_parser_token = Some(next);
+                break;
+            };
+            let next_contents = match next_kind {
+                | StringTokenType::String(contents) => contents,
+                | StringTokenType::WideString(contents) => {
+                    wide = true;
+                    contents
+                },
+            };
+            contents.push_str(context.string_cache.at(next_contents));
+            source_vectors = context.merge_vectors(source_vectors, next.source_vectors);
+        }
+
+        let contents = context.string_cache.intern(&contents);
+        Token {
+            kind: if wide {
+                TokenType::String(StringTokenType::WideString(contents))
+            } else {
+                TokenType::String(StringTokenType::String(contents))
+            },
+            contents,
+            source_vectors,
         }
     }
 
@@ -6475,26 +6543,7 @@ impl TranslationPhase for Preprocessor {
     type Item = Token;
 
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
-        loop {
-            let Some(token) = self.next_preprocessor_token::<true>(context) else {
-                if self.if_directive_balance != 0 {
-                    self.if_directive_balance = 0;
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    );
-                    context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
-                        source_vectors,
-                    });
-                }
-                return None;
-            };
-
-            if let Some(result) = self.map_preprocessor_token(context, token) {
-                return Some(result);
-            }
-        }
+        let token = self.next_parser_token(context)?;
+        Some(self.concatenate_adjacent_strings(context, token))
     }
 }

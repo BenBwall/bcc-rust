@@ -2106,8 +2106,9 @@ enum ExpressionBoundary {
 
 #[derive(Debug, Clone, Copy)]
 struct ExpressionOperand {
-    index:            ExpressionIndex,
-    unary_expression: bool,
+    index:              ExpressionIndex,
+    unary_expression:   bool,
+    postfix_expression: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2152,15 +2153,16 @@ impl LanguageExpressionOperator {
 
 #[derive(Debug)]
 struct ExpressionFrame {
-    mode:                 ExpressionMode,
-    boundary:             ExpressionBoundary,
-    phase:                ExpressionPhase,
-    operators:            Vec<LanguageExpressionOperator>,
-    operands:             Vec<ExpressionOperand>,
-    state:                ExpressionParserState,
-    starting_error_count: usize,
-    call_arguments:       Vec<ExpressionIndex>,
-    call_source_vectors:  Option<SourceVectors>,
+    mode:                  ExpressionMode,
+    boundary:              ExpressionBoundary,
+    phase:                 ExpressionPhase,
+    operators:             Vec<LanguageExpressionOperator>,
+    operands:              Vec<ExpressionOperand>,
+    state:                 ExpressionParserState,
+    starting_error_count:  usize,
+    call_arguments:        Vec<ExpressionIndex>,
+    call_source_vectors:   Option<SourceVectors>,
+    pending_sizeof_prefix: Option<SourceVectors>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2199,7 +2201,8 @@ enum ExpressionPhase {
 #[derive(Debug, Clone, Copy)]
 enum TypeNameUse {
     Cast,
-    Sizeof,
+    Sizeof(SourceVectors),
+    UnaryCompoundLiteral,
 }
 
 impl ExpressionFrame {
@@ -2218,6 +2221,7 @@ impl ExpressionFrame {
             starting_error_count,
             call_arguments: Vec::new(),
             call_source_vectors: None,
+            pending_sizeof_prefix: None,
         }
     }
 }
@@ -2231,6 +2235,7 @@ struct InitializerFrame {
     source_vectors: Option<SourceVectors>,
     designation_source_vectors: Option<SourceVectors>,
     current_designator_source: Option<SourceVectors>,
+    current_designation_recovered: bool,
     starting_error_count: usize,
 }
 
@@ -2244,7 +2249,7 @@ enum InitializerPhase {
     FieldDesignator,
     PushArrayDesignator,
     AwaitArrayDesignator,
-    CloseArrayDesignator(ConstantExpressionIndex),
+    CloseArrayDesignator(ConstantExpressionIndex, bool),
     DesignationEquals,
     PushElement,
     AwaitElement,
@@ -2262,6 +2267,7 @@ impl InitializerFrame {
             source_vectors: None,
             designation_source_vectors: None,
             current_designator_source: None,
+            current_designation_recovered: false,
             starting_error_count,
         }
     }
@@ -4258,6 +4264,41 @@ impl Parser {
         }
     }
 
+    fn parenthesized_type_name_starts_compound_literal(&mut self, context: &mut Context) -> bool {
+        let Some(first) = self.cursor.following(context) else {
+            return false;
+        };
+        if !self.type_name_starter(first) {
+            return false;
+        }
+
+        let mut parenthesis_depth = 1_usize;
+        let mut lookahead = 0_usize;
+        loop {
+            let Some(token) = self.cursor.lookahead(context, lookahead) else {
+                return false;
+            };
+            match token.kind {
+                | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
+                    parenthesis_depth += 1;
+                },
+                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) => {
+                    parenthesis_depth -= 1;
+                    if parenthesis_depth == 0 {
+                        return self.cursor.lookahead(context, lookahead + 1).is_some_and(
+                            |following| {
+                                following.kind
+                                    == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                            },
+                        );
+                    }
+                },
+                | _ => {},
+            }
+            lookahead += 1;
+        }
+    }
+
     /// Resolves the declaration-specifier/declarator ambiguity after a visible
     /// typedef name using buffered lookahead.
     ///
@@ -4419,6 +4460,7 @@ impl Parser {
         self.syntax.expressions.push(Expression {
             kind,
             source_vectors,
+            recovered: false,
         });
         index
     }
@@ -7592,7 +7634,7 @@ impl ExpressionFrame {
                 };
                 let index = parser
                     .store_expression(ExpressionType::Parenthesized { expression: child }, source);
-                self.push_operand(index, true);
+                self.push_operand(index, true, true);
                 self.phase = ExpressionPhase::Parse;
                 return if consume {
                     ParseAction::Consume
@@ -7647,7 +7689,7 @@ impl ExpressionFrame {
                     },
                     source,
                 );
-                self.push_operand(index, true);
+                self.push_operand(index, true, true);
                 self.phase = ExpressionPhase::Parse;
                 return if consume {
                     ParseAction::Consume
@@ -7736,7 +7778,7 @@ impl ExpressionFrame {
                         ),
                         token,
                     );
-                    self.push_operand(base, true);
+                    self.push_operand(base, true, true);
                     self.phase = ExpressionPhase::Parse;
                     return ParseAction::Reprocess;
                 };
@@ -7757,7 +7799,7 @@ impl ExpressionFrame {
                     }
                 };
                 let index = parser.store_expression(kind, source);
-                self.push_operand(index, true);
+                self.push_operand(index, true, true);
                 self.phase = ExpressionPhase::Parse;
                 return ParseAction::Consume;
             },
@@ -7783,7 +7825,7 @@ impl ExpressionFrame {
                     },
                     source,
                 );
-                self.push_operand(index, true);
+                self.push_operand(index, true, false);
                 self.phase = ExpressionPhase::Parse;
                 return ParseAction::Reprocess;
             },
@@ -7796,8 +7838,10 @@ impl ExpressionFrame {
                         .following(context)
                         .is_some_and(|following| parser.type_name_starter(following))
                 {
-                    let source = context.merge_vectors(sizeof_source, opening.source_vectors);
-                    self.phase = ExpressionPhase::PushTypeName(source, TypeNameUse::Sizeof);
+                    self.phase = ExpressionPhase::PushTypeName(
+                        opening.source_vectors,
+                        TypeNameUse::Sizeof(sizeof_source),
+                    );
                     return ParseAction::Consume;
                 }
                 self.phase = ExpressionPhase::PushSizeofExpression(sizeof_source);
@@ -7819,7 +7863,7 @@ impl ExpressionFrame {
                     parser.syntax.expressions[operand.0 as usize].source_vectors,
                 );
                 let index = parser.store_expression(ExpressionType::SizeofExpr(operand), source);
-                self.push_operand(index, true);
+                self.push_operand(index, true, false);
                 self.phase = ExpressionPhase::Parse;
                 return ParseAction::Reprocess;
             },
@@ -7872,14 +7916,27 @@ impl ExpressionFrame {
                     self.phase = ExpressionPhase::PushCompoundLiteral(type_name, source, use_kind);
                 } else {
                     match use_kind {
-                        | TypeNameUse::Sizeof => {
+                        | TypeNameUse::Sizeof(sizeof_source) => {
+                            let source = context.merge_vectors(sizeof_source, source);
                             let index = parser
                                 .store_expression(ExpressionType::SizeofType(type_name), source);
-                            self.push_operand(index, true);
+                            self.push_operand(index, true, false);
                             self.phase = ExpressionPhase::Parse;
                         },
                         | TypeNameUse::Cast => {
                             self.phase = ExpressionPhase::PushCastOperand(type_name, source);
+                        },
+                        | TypeNameUse::UnaryCompoundLiteral => {
+                            parser.report(
+                                context,
+                                ParserErrorType::ExpectedStatementExpression(
+                                    "compound literal initializer",
+                                    token.map(|token| token.kind),
+                                ),
+                                token,
+                            );
+                            self.push_error(parser, context);
+                            self.phase = ExpressionPhase::Parse;
                         },
                     }
                 }
@@ -7917,12 +7974,10 @@ impl ExpressionFrame {
                     },
                     source,
                 );
-                let expression = if matches!(use_kind, TypeNameUse::Sizeof) {
-                    parser.store_expression(ExpressionType::SizeofExpr(compound), source)
-                } else {
-                    compound
-                };
-                self.push_operand(expression, true);
+                if let TypeNameUse::Sizeof(sizeof_source) = use_kind {
+                    self.pending_sizeof_prefix = Some(sizeof_source);
+                }
+                self.push_operand(compound, true, true);
                 self.phase = ExpressionPhase::Parse;
                 return ParseAction::Reprocess;
             },
@@ -7948,7 +8003,7 @@ impl ExpressionFrame {
                     },
                     source,
                 );
-                self.push_operand(index, false);
+                self.push_operand(index, false, false);
                 self.phase = ExpressionPhase::Parse;
                 return ParseAction::Reprocess;
             },
@@ -8049,13 +8104,31 @@ impl ExpressionFrame {
                     },
                     source,
                 );
-                self.push_operand(index, false);
+                self.push_operand(index, false, false);
                 self.phase = ExpressionPhase::Parse;
                 return ParseAction::Reprocess;
             },
             | ExpressionPhase::Parse => {
                 debug_assert!(returned.is_none());
             },
+        }
+
+        if self.state == ExpressionParserState::Operator
+            && self.pending_sizeof_prefix.is_some()
+            && !token.is_some_and(|token| is_postfix_starter(token.kind))
+        {
+            let operand = self.pop_operand().index;
+            let sizeof_source = self
+                .pending_sizeof_prefix
+                .take()
+                .expect("pending sizeof operand has an operator source");
+            let source = context.merge_vectors(
+                sizeof_source,
+                parser.syntax.expressions[operand.0 as usize].source_vectors,
+            );
+            let index = parser.store_expression(ExpressionType::SizeofExpr(operand), source);
+            self.push_operand(index, true, false);
+            return ParseAction::Reprocess;
         }
 
         if self.state == ExpressionParserState::Operator
@@ -8098,14 +8171,19 @@ impl ExpressionFrame {
                 return ParseAction::Consume;
             }
             if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
-                if self.mode != ExpressionMode::UnaryExpression
-                    && parser
+                let type_name_use = if self.mode == ExpressionMode::UnaryExpression {
+                    parser
+                        .parenthesized_type_name_starts_compound_literal(context)
+                        .then_some(TypeNameUse::UnaryCompoundLiteral)
+                } else {
+                    parser
                         .cursor
                         .following(context)
                         .is_some_and(|following| parser.type_name_starter(following))
-                {
-                    self.phase =
-                        ExpressionPhase::PushTypeName(token.source_vectors, TypeNameUse::Cast);
+                        .then_some(TypeNameUse::Cast)
+                };
+                if let Some(type_name_use) = type_name_use {
+                    self.phase = ExpressionPhase::PushTypeName(token.source_vectors, type_name_use);
                     return ParseAction::Consume;
                 }
                 self.phase = ExpressionPhase::PushGrouped(token.source_vectors);
@@ -8117,9 +8195,7 @@ impl ExpressionFrame {
                 | TokenType::Integer(value) => ExpressionType::Constant(Constant::Integer(value)),
                 | TokenType::Float(value) => ExpressionType::Constant(Constant::Float(value)),
                 | TokenType::Character(value) => ExpressionType::Constant(Constant::Char(value)),
-                | TokenType::String(
-                    StringTokenType::String(value) | StringTokenType::WideString(value),
-                ) => ExpressionType::StringLiteral(value),
+                | TokenType::String(value) => ExpressionType::StringLiteral(value),
                 | _ => {
                     parser.report(
                         context,
@@ -8134,12 +8210,28 @@ impl ExpressionFrame {
                 },
             };
             let index = parser.store_expression(kind, token.source_vectors);
-            self.push_operand(index, true);
+            self.push_operand(index, true, true);
             ParseAction::Consume
         } else {
             let Some(token) = token else {
                 return self.finish(parser, context);
             };
+            if is_postfix_starter(token.kind)
+                && !self
+                    .operands
+                    .last()
+                    .is_some_and(|operand| operand.postfix_expression)
+            {
+                parser.report(
+                    context,
+                    ParserErrorType::ExpectedStatementExpression(
+                        "operator after a non-postfix expression",
+                        Some(token.kind),
+                    ),
+                    Some(token),
+                );
+                return self.finish(parser, context);
+            }
             match token.kind {
                 | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
                     let base = self.pop_operand().index;
@@ -8183,7 +8275,7 @@ impl ExpressionFrame {
                         },
                         source,
                     );
-                    self.push_operand(index, true);
+                    self.push_operand(index, true, true);
                     return ParseAction::Consume;
                 },
                 | _ => {},
@@ -8256,10 +8348,16 @@ impl ExpressionFrame {
         }
     }
 
-    fn push_operand(&mut self, index: ExpressionIndex, unary_expression: bool) {
+    fn push_operand(
+        &mut self,
+        index: ExpressionIndex,
+        unary_expression: bool,
+        postfix_expression: bool,
+    ) {
         self.operands.push(ExpressionOperand {
             index,
             unary_expression,
+            postfix_expression,
         });
         self.state = ExpressionParserState::Operator;
     }
@@ -8293,7 +8391,7 @@ impl ExpressionFrame {
                 .take()
                 .unwrap_or_else(|| parser.syntax.expressions[base.0 as usize].source_vectors),
         );
-        self.push_operand(index, true);
+        self.push_operand(index, true, true);
     }
 
     fn reduce_one(&mut self, parser: &mut Parser, context: &mut Context) {
@@ -8324,7 +8422,7 @@ impl ExpressionFrame {
                     },
                     source,
                 );
-                self.push_operand(index, false);
+                self.push_operand(index, false, false);
             },
             | LanguageExpressionOperator::Question { .. }
             | LanguageExpressionOperator::Conditional { .. } =>
@@ -8510,6 +8608,7 @@ impl ExpressionFrame {
         self.operands.push(ExpressionOperand {
             index,
             unary_expression: false,
+            postfix_expression: false,
         });
         self.state = ExpressionParserState::Operator;
     }
@@ -8525,6 +8624,7 @@ impl ExpressionFrame {
                 .expect("error expression supplies one operand")
         });
         let recovered = parser.hard_error_count > self.starting_error_count;
+        parser.syntax.expressions[operand.index.0 as usize].recovered |= recovered;
         if self.mode == ExpressionMode::ConstantExpression {
             ParseAction::Reduce(ParseValue::ConstantExpression(ConstantExpressionResult {
                 index: ConstantExpressionIndex(operand.index.0),
@@ -8607,10 +8707,22 @@ impl InitializerFrame {
                     self.phase = InitializerPhase::FinishList;
                     return ParseAction::Consume;
                 }
+                if Self::at_caller_boundary(token) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = InitializerPhase::FinishList;
+                    return ParseAction::Reprocess;
+                }
                 self.current_designators.clear();
                 self.current_designation = None;
                 self.designation_source_vectors = None;
                 self.current_designator_source = None;
+                self.current_designation_recovered = false;
                 self.phase = InitializerPhase::Designation;
                 ParseAction::Reprocess
             },
@@ -8657,6 +8769,7 @@ impl InitializerFrame {
                         source_vectors: self.current_designator_source.take().unwrap_or_default(),
                         recovered:      true,
                     });
+                    self.current_designation_recovered = true;
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
                 };
@@ -8684,21 +8797,25 @@ impl InitializerFrame {
             },
             | InitializerPhase::AwaitArrayDesignator => {
                 let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
-                    index, ..
+                    index,
+                    recovered,
                 })) = returned
                 else {
                     panic!("array designator returned an unexpected value: {returned:?}");
                 };
-                self.phase = InitializerPhase::CloseArrayDesignator(index);
+                self.phase = InitializerPhase::CloseArrayDesignator(index, recovered);
                 ParseAction::Reprocess
             },
-            | InitializerPhase::CloseArrayDesignator(expression) => {
+            | InitializerPhase::CloseArrayDesignator(expression, expression_recovered) => {
                 debug_assert!(returned.is_none());
+                let expression_source = parser.syntax.expressions
+                    [ExpressionIndex::from(expression).0 as usize]
+                    .source_vectors;
                 let mut source_vectors = context.merge_vectors(
                     self.current_designator_source.take().unwrap_or_default(),
-                    parser.syntax.expressions[ExpressionIndex::from(expression).0 as usize]
-                        .source_vectors,
+                    expression_source,
                 );
+                self.merge_designation_source(context, expression_source);
                 if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
                 {
@@ -8707,8 +8824,9 @@ impl InitializerFrame {
                     self.current_designators.push(Designator {
                         kind: DesignatorType::Array(expression),
                         source_vectors,
-                        recovered: false,
+                        recovered: expression_recovered,
                     });
+                    self.current_designation_recovered |= expression_recovered;
                     self.phase = InitializerPhase::Designation;
                     ParseAction::Consume
                 } else {
@@ -8724,6 +8842,7 @@ impl InitializerFrame {
                         source_vectors,
                         recovered: true,
                     });
+                    self.current_designation_recovered = true;
                     self.phase = InitializerPhase::Designation;
                     ParseAction::Reprocess
                 }
@@ -8738,12 +8857,12 @@ impl InitializerFrame {
                 } else {
                     parser.report(
                         context,
-                        ParserErrorType::ExpectedStatementExpression(
-                            "`=` after initializer designators",
+                        ParserErrorType::ExpectedEqualsAfterInitializerDesignation(
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
+                    self.current_designation_recovered = true;
                     false
                 };
                 self.finish_designation(parser);
@@ -8804,6 +8923,17 @@ impl InitializerFrame {
                     self.phase = InitializerPhase::FinishList;
                     return ParseAction::Consume;
                 }
+                if Self::at_caller_boundary(token) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = InitializerPhase::FinishList;
+                    return ParseAction::Reprocess;
+                }
                 parser.report(
                     context,
                     ParserErrorType::ExpectedStatementExpression(
@@ -8846,6 +8976,11 @@ impl InitializerFrame {
     }
 
     fn finish_designation(&mut self, parser: &mut Parser) {
+        let recovered = self.current_designation_recovered
+            || self
+                .current_designators
+                .iter()
+                .any(|designator| designator.recovered);
         let start = parser.syntax.designators.len().to_u32();
         parser
             .syntax
@@ -8863,9 +8998,22 @@ impl InitializerFrame {
         parser.syntax.designations.push(Designation {
             designators,
             source_vectors: self.designation_source_vectors.take().unwrap_or_default(),
-            recovered: false,
+            recovered,
         });
         self.current_designation = Some(index);
+    }
+
+    fn at_caller_boundary(token: Option<Token>) -> bool {
+        token.is_none_or(|token| {
+            matches!(
+                token.kind,
+                TokenType::Operator(
+                    OperatorTokenType::Semicolon
+                        | OperatorTokenType::ClosingParenthesis
+                        | OperatorTokenType::ClosingSquareBracket
+                )
+            )
+        })
     }
 
     fn store_initializer(
@@ -9112,6 +9260,8 @@ pub(crate) struct Expression {
     pub(crate) kind:           ExpressionType,
     /// Original-source segments contributing to the expression.
     pub(crate) source_vectors: SourceVectors,
+    /// Whether this expression or one of its grammar children required repair.
+    pub(crate) recovered:      bool,
 }
 
 /// C expression grammar forms represented through arena handles.
@@ -9155,7 +9305,7 @@ pub(crate) enum ExpressionType {
     },
     Identifier(Identifier),
     Constant(Constant),
-    StringLiteral(StringCacheId),
+    StringLiteral(StringTokenType),
     SizeofType(TypeNameIndex),
     SizeofExpr(ExpressionIndex),
     Cast {
@@ -9334,6 +9484,10 @@ pub(crate) enum ParserErrorType {
     ExpectedGotoLabel(Option<TokenType>),
     /// A required statement expression was absent.
     ExpectedStatementExpression(&'static str, Option<TokenType>),
+    /// A brace-enclosed initializer list omitted its closing `}`.
+    ExpectedClosingCurlyBraceInInitializerList(Option<TokenType>),
+    /// A designator list omitted its required `=`.
+    ExpectedEqualsAfterInitializerDesignation(Option<TokenType>),
     /// A statement header omitted its opening parenthesis.
     ExpectedOpeningParenthesisInStatement(&'static str, Option<TokenType>),
     /// A statement header omitted its closing parenthesis.
@@ -9533,6 +9687,8 @@ impl GetSeverity for ParserErrorType {
             | Self::ExpectedStatement(..)
             | Self::ExpectedGotoLabel(..)
             | Self::ExpectedStatementExpression(..)
+            | Self::ExpectedClosingCurlyBraceInInitializerList(..)
+            | Self::ExpectedEqualsAfterInitializerDesignation(..)
             | Self::ExpectedOpeningParenthesisInStatement(..)
             | Self::ExpectedClosingParenthesisInStatement(..)
             | Self::ExpectedSemicolonInStatement(..)
@@ -9623,6 +9779,10 @@ impl Display for ParserErrorType {
                 write_expected(f, "goto statement", "an identifier", *found),
             | Self::ExpectedStatementExpression(position, found) =>
                 write_expected(f, position, "an expression", *found),
+            | Self::ExpectedClosingCurlyBraceInInitializerList(found) =>
+                write_expected(f, "initializer list", "`}`", *found),
+            | Self::ExpectedEqualsAfterInitializerDesignation(found) =>
+                write_expected(f, "initializer designation", "`=`", *found),
             | Self::ExpectedOpeningParenthesisInStatement(position, found) =>
                 write_expected(f, position, "`(`", *found),
             | Self::ExpectedClosingParenthesisInStatement(position, found) =>
@@ -13828,12 +13988,52 @@ mod tests {
         assert_eq!(outer.len(), 2);
         assert!(outer.iter().all(|element| element.designation.is_some()));
 
+        let field_designation = outer[0].designation.expect("field designation");
+        let field_designation = parsed.parser.syntax.designations[field_designation.0 as usize];
+        let field_designators =
+            &parsed.parser.syntax.designators[field_designation.designators.start_index as usize
+                ..(field_designation.designators.start_index + field_designation.designators.length)
+                    as usize];
+        assert!(matches!(
+            field_designators,
+            [Designator {
+                kind: DesignatorType::Field(identifier),
+                ..
+            }] if parsed.context.string_cache.at(identifier.name) == "field"
+        ));
+
         let InitializerType::InitializerList(nested_elements) =
             parsed.parser.syntax.initializers[outer[0].initializer.0 as usize].kind
         else {
             panic!("expected nested initializer list");
         };
         assert_eq!(nested_elements.length, 2);
+        let nested = &parsed.parser.syntax.initializer_elements[nested_elements.start_index as usize
+            ..(nested_elements.start_index + nested_elements.length) as usize];
+        let array_designation = nested[0].designation.expect("array designation");
+        let array_designation = parsed.parser.syntax.designations[array_designation.0 as usize];
+        let array_designator =
+            parsed.parser.syntax.designators[array_designation.designators.start_index as usize];
+        assert!(matches!(
+            array_designator.kind,
+            DesignatorType::Array(expression) if constant_expression_text(&parsed, expression) == "2"
+        ));
+        let scalar_text = |element: InitializerElement| {
+            let InitializerType::AssignmentExpression(expression) =
+                parsed.parser.syntax.initializers[element.initializer.0 as usize].kind
+            else {
+                panic!("expected scalar initializer")
+            };
+            expression_text(&parsed, expression)
+        };
+        assert_eq!(scalar_text(nested[0]), "3");
+        assert_eq!(scalar_text(nested[1]), "4");
+        assert_eq!(scalar_text(outer[1]), "5");
+        assert_eq!(
+            sourced_text(&parsed, array_designation.source_vectors),
+            "[2]="
+        );
+        assert!(sourced_text(&parsed, outer[0].source_vectors).contains(".field"));
         assert!(
             parser_errors(&parsed).next().is_none(),
             "{:#?}",
@@ -14051,5 +14251,274 @@ mod tests {
             "{:#?}",
             parsed.errors
         );
+    }
+
+    #[test]
+    fn unterminated_initializer_lists_stop_at_caller_boundaries_and_eof() {
+        let parsed = parse("int x = {1; int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items[0],
+            ExternalDeclaration::RecoveredDeclaration(_)
+        ));
+        assert!(matches!(
+            parsed.items[1],
+            ExternalDeclaration::Declaration(_)
+        ));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(Some(TokenType::Operator(
+                OperatorTokenType::Semicolon
+            )))
+        )));
+
+        let eof = parse("int x = {1");
+        assert_eq!(eof.items.len(), 1);
+        assert!(parser_errors(&eof).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(None)
+        )));
+    }
+
+    #[test]
+    fn adjacent_strings_merge_across_macro_expansion_and_preserve_width() {
+        let parsed = parse(
+            "#define PREFIX \"a\"\nchar *ordinary = PREFIX \"b\"; char *wide = \"x\" L\"y\";\n",
+        );
+
+        assert_eq!(parsed.items.len(), 2);
+        let literal = |item: usize| {
+            let initializer = init_declarators(&parsed, declaration(&parsed, item))[0]
+                .initializer
+                .expect("string initializer");
+            let InitializerType::AssignmentExpression(expression) =
+                parsed.parser.syntax.initializers[initializer.0 as usize].kind
+            else {
+                panic!("expected scalar string initializer")
+            };
+            let ExpressionType::StringLiteral(literal) =
+                parsed.parser.syntax.expressions[expression.0 as usize].kind
+            else {
+                panic!("expected string literal expression")
+            };
+            literal
+        };
+        let StringTokenType::String(ordinary) = literal(0) else {
+            panic!("ordinary concatenation must remain ordinary")
+        };
+        let StringTokenType::WideString(wide) = literal(1) else {
+            panic!("a mixed concatenation must become wide")
+        };
+        assert_eq!(parsed.context.string_cache.at(ordinary), "ab");
+        assert_eq!(parsed.context.string_cache.at(wide), "xy");
+        assert!(parser_errors(&parsed).next().is_none());
+    }
+
+    #[test]
+    fn prefix_increment_accepts_a_compound_literal_postfix_operand() {
+        let parsed = parse("typedef struct { int x; } T; int f(void) { ++(T){1}.x; return 0; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 1).body);
+        let BlockItem::Statement(statement) = items[0] else {
+            panic!("expected expression statement")
+        };
+        let StatementType::Expression(ExpressionSlot::Parsed(root)) =
+            parsed.parser.syntax.statements[statement.0 as usize].kind
+        else {
+            panic!("expected parsed prefix expression")
+        };
+        let ExpressionType::Unary {
+            operator: UnaryOperator::PreIncrement,
+            operand_expression,
+        } = parsed.parser.syntax.expressions[root.0 as usize].kind
+        else {
+            panic!("expected prefix increment")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions[operand_expression.0 as usize].kind,
+            ExpressionType::DirectMember { base_expression, .. }
+                if matches!(
+                    parsed.parser.syntax.expressions[base_expression.0 as usize].kind,
+                    ExpressionType::CompoundLiteral { .. }
+                )
+        ));
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
+    fn sizeof_owns_the_complete_compound_literal_postfix_operand() {
+        let parsed =
+            parse("typedef struct { int x; } T; int f(void) { return sizeof (T){1}.x; }\n");
+        let [BlockItem::Statement(statement)] =
+            block_items(&parsed, function_definition(&parsed, 1).body)
+        else {
+            panic!("expected one return statement")
+        };
+        let StatementType::Return(Some(ExpressionSlot::Parsed(root))) =
+            parsed.parser.syntax.statements[statement.0 as usize].kind
+        else {
+            panic!("expected parsed return expression")
+        };
+        let ExpressionType::SizeofExpr(operand) =
+            parsed.parser.syntax.expressions[root.0 as usize].kind
+        else {
+            panic!("expected sizeof expression")
+        };
+        let ExpressionType::DirectMember {
+            base_expression, ..
+        } = parsed.parser.syntax.expressions[operand.0 as usize].kind
+        else {
+            panic!("sizeof must own the member suffix")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions[base_expression.0 as usize].kind,
+            ExpressionType::CompoundLiteral { .. }
+        ));
+        assert_eq!(expression_text(&parsed, base_expression), "(T){1}");
+        assert_eq!(expression_text(&parsed, root), "sizeof(T){1}.x");
+        assert!(parser_errors(&parsed).next().is_none());
+
+        let invalid = parse("int f(void) { return sizeof(int)(); }\n");
+        assert!(parser_errors(&invalid).next().is_some());
+        assert!(
+            !invalid
+                .parser
+                .syntax
+                .expressions
+                .iter()
+                .any(|expression| matches!(expression.kind, ExpressionType::Call { .. }))
+        );
+    }
+
+    #[test]
+    fn repaired_expressions_and_designations_retain_recovery_metadata() {
+        let parsed = parse("int x[] = { [(1] = 1, [2] 3 }; int after;\n");
+
+        assert_eq!(parsed.items.len(), 2);
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .expressions
+                .iter()
+                .any(|expression| expression.recovered
+                    && matches!(expression.kind, ExpressionType::Parenthesized { .. }))
+        );
+        let [first, second] = parsed.parser.syntax.designations.as_slice() else {
+            panic!("expected two designations")
+        };
+        assert!(first.recovered);
+        assert!(second.recovered);
+        let first_designator =
+            parsed.parser.syntax.designators[first.designators.start_index as usize];
+        assert!(first_designator.recovered);
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedEqualsAfterInitializerDesignation(_)
+        )));
+    }
+
+    #[test]
+    fn adjacent_precedence_levels_and_parentheses_have_explicit_tree_tests() {
+        let cases = [
+            (
+                "a*b+c",
+                BinaryOperator::Addition,
+                BinaryOperator::Multiplication,
+            ),
+            (
+                "a+b<<c",
+                BinaryOperator::LeftShift,
+                BinaryOperator::Addition,
+            ),
+            (
+                "a<<b<c",
+                BinaryOperator::LessThan,
+                BinaryOperator::LeftShift,
+            ),
+            ("a<b==c", BinaryOperator::Equal, BinaryOperator::LessThan),
+            ("a==b&c", BinaryOperator::BitwiseAnd, BinaryOperator::Equal),
+            (
+                "a&b^c",
+                BinaryOperator::BitwiseXor,
+                BinaryOperator::BitwiseAnd,
+            ),
+            (
+                "a^b|c",
+                BinaryOperator::BitwiseOr,
+                BinaryOperator::BitwiseXor,
+            ),
+            (
+                "a|b&&c",
+                BinaryOperator::LogicalAnd,
+                BinaryOperator::BitwiseOr,
+            ),
+            (
+                "a&&b||c",
+                BinaryOperator::LogicalOr,
+                BinaryOperator::LogicalAnd,
+            ),
+        ];
+        for (source, outer, inner) in cases {
+            let parsed = parse(&format!("int f(void) {{ {source}; }}\n"));
+            let [BlockItem::Statement(statement)] =
+                block_items(&parsed, function_definition(&parsed, 0).body)
+            else {
+                panic!("expected one expression statement")
+            };
+            let StatementType::Expression(ExpressionSlot::Parsed(root)) =
+                parsed.parser.syntax.statements[statement.0 as usize].kind
+            else {
+                panic!("expected parsed expression")
+            };
+            let ExpressionType::Binary {
+                operator,
+                left_expression,
+                ..
+            } = parsed.parser.syntax.expressions[root.0 as usize].kind
+            else {
+                panic!("expected binary root for {source}")
+            };
+            assert_eq!(operator, outer, "wrong outer operator for {source}");
+            assert!(matches!(
+                parsed.parser.syntax.expressions[left_expression.0 as usize].kind,
+                ExpressionType::Binary { operator, .. } if operator == inner
+            ));
+            assert!(parser_errors(&parsed).next().is_none());
+        }
+
+        let parsed = parse("int f(void) { (a+b)*c; }\n");
+        let [BlockItem::Statement(statement)] =
+            block_items(&parsed, function_definition(&parsed, 0).body)
+        else {
+            panic!("expected one expression statement")
+        };
+        let StatementType::Expression(ExpressionSlot::Parsed(root)) =
+            parsed.parser.syntax.statements[statement.0 as usize].kind
+        else {
+            panic!("expected parsed expression")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions[root.0 as usize].kind,
+            ExpressionType::Binary {
+                operator: BinaryOperator::Multiplication,
+                left_expression,
+                ..
+            } if matches!(
+                parsed.parser.syntax.expressions[left_expression.0 as usize].kind,
+                ExpressionType::Parenthesized { expression }
+                    if matches!(
+                        parsed.parser.syntax.expressions[expression.0 as usize].kind,
+                        ExpressionType::Binary {
+                            operator: BinaryOperator::Addition,
+                            ..
+                        }
+                    )
+            )
+        ));
     }
 }
