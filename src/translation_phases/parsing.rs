@@ -146,6 +146,8 @@ pub(crate) struct Declaration {
     /// init-declarator-list
     pub(crate) init_declarators:       VectorSlice<InitDeclarator>,
     pub(crate) source_vectors:         SourceVectors,
+    /// Whether local syntax recovery repaired this declaration.
+    pub(crate) recovered:              bool,
     /// This declaration-shaped prefix transferred to a function definition
     /// before a declaration semicolon was consumed.
     is_function_definition_head:       bool,
@@ -1670,6 +1672,8 @@ struct DeclarationFrame {
     init_declarator_start: u32,
     /// Provenance accumulated across specifiers, declarators, and separators.
     source_vectors: Option<SourceVectors>,
+    /// Hard-error count on entry, used to scope recovery to this declaration.
+    starting_error_count: usize,
     /// Most recently stored init-declarator, used to attach an initializer.
     last_init_index: Option<u32>,
     /// Provenance of `=` retained while the initializer child runs.
@@ -1715,12 +1719,17 @@ enum DeclarationPhase {
 }
 
 impl DeclarationFrame {
-    fn new(init_declarator_start: u32, context: DeclarationContext) -> Self {
+    fn new(
+        init_declarator_start: u32,
+        context: DeclarationContext,
+        starting_error_count: usize,
+    ) -> Self {
         Self {
             phase: DeclarationPhase::Start,
             declaration_specifiers: None,
             init_declarator_start,
             source_vectors: None,
+            starting_error_count,
             last_init_index: None,
             initializer_source: None,
             context,
@@ -2204,6 +2213,7 @@ impl FunctionDefinitionFrame {
                     ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
                         parser.syntax.init_declarators.len().to_u32(),
                         DeclarationContext::OldStyleParameter,
+                        parser.hard_error_count,
                     )))
                 } else {
                     parser.report(
@@ -2366,6 +2376,7 @@ impl CompoundStatementFrame {
                         ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
                             parser.syntax.init_declarators.len().to_u32(),
                             DeclarationContext::Block,
+                            parser.hard_error_count,
                         )))
                     } else {
                         self.phase = CompoundStatementPhase::AwaitStatement;
@@ -3120,6 +3131,7 @@ impl StatementFrame {
                     ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
                         parser.syntax.init_declarators.len().to_u32(),
                         DeclarationContext::ForInitializer,
+                        parser.hard_error_count,
                     )))
                 } else {
                     self.phase = StatementPhase::AwaitForInitializerExpression;
@@ -4695,6 +4707,7 @@ impl ExternalDeclarationFrame {
                 ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
                     parser.syntax.init_declarators.len().to_u32(),
                     DeclarationContext::External,
+                    parser.hard_error_count,
                 )))
             },
             | ExternalDeclarationPhase::AwaitDeclaration => {
@@ -5098,6 +5111,7 @@ impl DeclarationFrame {
                         parser.syntax.init_declarators.len().to_u32(),
                     ),
                     source_vectors,
+                    recovered: parser.hard_error_count > self.starting_error_count,
                     is_function_definition_head: self.is_function_definition_head,
                 });
                 ParseAction::Reduce(ParseValue::Declaration(DeclarationIndex(index)))
@@ -8472,6 +8486,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(names, ["left", "right"]);
+        assert!(
+            parsed.parser.syntax.declaration_indices
+                [start..start + definition.old_style_declarations.length as usize]
+                .iter()
+                .all(|index| !parsed.parser.syntax.declarations[index.0 as usize].recovered)
+        );
         assert_eq!(
             sourced_text(&parsed, definition.source_vectors),
             "intold_style(left,right)intleft;intright;{return;}"
@@ -8561,6 +8581,9 @@ mod tests {
             let parsed = parse(source);
             let definition = function_definition(&parsed, 0);
             assert_eq!(definition.old_style_declarations.length, 1);
+            let declaration = parsed.parser.syntax.declaration_indices
+                [definition.old_style_declarations.start_index as usize];
+            assert!(parsed.parser.syntax.declarations[declaration.0 as usize].recovered);
             let [BlockItem::Statement(statement)] = block_items(&parsed, definition.body) else {
                 panic!("expected the recovered function body to retain its return statement")
             };
@@ -9167,7 +9190,10 @@ mod tests {
         let items = block_items(&parsed, function_definition(&parsed, 0).body);
 
         assert_eq!(items.len(), 3);
-        assert!(matches!(items[0], BlockItem::Declaration(_)));
+        let BlockItem::Declaration(declaration) = items[0] else {
+            panic!("expected a recovered block declaration")
+        };
+        assert!(parsed.parser.syntax.declarations[declaration.0 as usize].recovered);
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Return(None)
@@ -9474,6 +9500,7 @@ mod tests {
                 .length,
             1
         );
+        assert!(parsed.parser.syntax.declarations[declaration.0 as usize].recovered);
         assert!(matches!(
             parsed.parser.syntax.statements[body_statement.0 as usize].kind,
             StatementType::Null
