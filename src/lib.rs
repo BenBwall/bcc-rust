@@ -241,12 +241,7 @@ mod pipeline_iterator_tests {
     }
 
     #[test]
-    fn parser_iterator_yields_a_diagnostic_before_its_recovered_item() {
-        use crate::translation_phases::parsing::{
-            ParserError,
-            ParserErrorType,
-        };
-
+    fn parser_iterator_yields_a_parsed_initialized_declaration() {
         let mut iterator = ParserIterator::new(
             PathBuf::from("<test>").into_boxed_path(),
             "int value = 1;\n".to_owned().into(),
@@ -255,15 +250,8 @@ mod pipeline_iterator_tests {
         );
 
         assert!(matches!(
-            iterator.next().unwrap().unwrap_err(),
-            TranslationError::Parsing(ParserError {
-                error_type: ParserErrorType::InitializerNotImplemented,
-                ..
-            })
-        ));
-        assert!(matches!(
             iterator.next().unwrap().unwrap(),
-            ExternalDeclaration::RecoveredDeclaration(_)
+            ExternalDeclaration::Declaration(_)
         ));
         assert!(iterator.next().is_none());
     }

@@ -22,7 +22,7 @@ git diff --check
 ## Context pointers
 
 - **Parser or domain-model work:** read [`../CONTEXT.md`](../CONTEXT.md) before changing terminology, AST boundaries, typedef handling, or the proposed machine protocol. Update that glossary only when a durable domain meaning changes.
-- **Parser phase planning or implementation:** read [`../parser-roadmap.md`](../parser-roadmap.md) for authoritative phase boundaries. For Phase 03, also follow [`../phase-03-statements-and-function-definitions-plan.md`](../phase-03-statements-and-function-definitions-plan.md).
+- **Parser phase planning or implementation:** read [`../parser-roadmap.md`](../parser-roadmap.md) for authoritative phase boundaries. For Phase 03, also follow [`../phase-03-statements-and-function-definitions-plan.md`](../phase-03-statements-and-function-definitions-plan.md); for Phase 04 expressions, type names, initializers, or expression-dependent declarations, follow [`../phase-04-expressions-and-type-names-plan.md`](../phase-04-expressions-and-type-names-plan.md).
 - **Non-recursive parsing or Double-E work:** read [`../double-e-integration-report.html`](../double-e-integration-report.html), then revalidate its dated findings against [`../src/translation_phases/parsing.rs`](../src/translation_phases/parsing.rs) and [`../src/translation_phases/preprocessing.rs`](../src/translation_phases/preprocessing.rs).
 - **Repository orientation or public behavior:** read [`../README.md`](../README.md). Keep human setup/status there instead of copying it into this guide.
 - **Commits:** follow the authoritative message and hook policy in [`../CONTRIBUTING.md`](../CONTRIBUTING.md) whenever creating commits.
@@ -33,7 +33,7 @@ git diff --check
 - `src/translation_phases.rs` owns shared phase, provenance, context, and diagnostic concepts. Its phase modules proceed from `initial_processing.rs` through `preprocessor_tokenizer.rs`, `preprocessing.rs`, and the incomplete `parsing.rs`.
 - `src/lib.rs` drives the parser inspection CLI by default and retains the preprocessing-token dump behind `--tokens`. There is no semantic-analysis pipeline or backend/code-generation path.
 - `parsing.rs` implements Phase 03 declarations, function definitions, compound blocks, and statements through `Parser::next_item`. Re-run the canonical checks before quoting test counts or gate status.
-- External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, function-definition, compound-statement, statement, and typed future-child frames are implemented. Phases 04 and 05 own expressions/type names and initializers/expression-dependent declarations respectively.
+- External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, function-definition, compound-statement, statement, and typed future-child frames are implemented. Phase 04 owns the complete expression/type-name/initializer cluster and every expression-dependent declaration site; Phase 05 owns recovery and parser closure.
 - `ScopeStack` implements file, function, prototype, block, and implicit selection/iteration lifetimes for typedef-sensitive parsing. Function-local label and switch state use distinct parser stacks; broader redeclaration and control-flow constraints remain semantic work.
 - Preserve source provenance and structured diagnostics across phase changes. Malformed user input should reduce to diagnostics plus explicitly recovered syntax (or an error node when no meaningful syntax survives) and synchronization, not compiler panics.
 
