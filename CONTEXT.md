@@ -115,18 +115,17 @@ One policy layer over shared precedence reduction. The preprocessing dialect eva
 
 ## Parser stack-machine vocabulary
 
-The Phase 02 declaration subset implements this vocabulary in `parsing.rs`.
-The authoritative sequence for the remaining frame families is
-`parser-roadmap.md`: Phase 03 adds structural statements and function
-definitions, Phase 04 adds expressions and type names, and Phase 05 adds
-initializers and expression-dependent declaration branches.
+The Phase 03 parser implements this vocabulary through declarations, function
+definitions, compound statements, and statements. `parser-roadmap.md` keeps the
+authoritative boundaries for the remaining expression, type-name, initializer,
+and closure work.
 
 **ParserMachine** *(partially implemented as `Parser`)*:
 The single driver that owns the buffered token cursor, control stack, typed child return, syntax arenas, file-scope name classification, and diagnostic/recovery state for language parsing.
 _Avoid_: Recursive-descent parser
 
 **ParseFrame** *(partially implemented)*:
-A resumable state machine for one grammar family. External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, and typed future-child frames are implemented. Later frame families cover function definitions, compound statements, statements, expressions, type names, and full initializers.
+A resumable state machine for one grammar family. Current families cover external declarations, declarations, declarators, parameters, tags, function definitions, compound statements, statements, and typed deferred children; expressions, type names, and full initializers remain later families.
 _Avoid_: Grammar call
 
 **ExpressionFrame** *(future)*:
@@ -136,9 +135,13 @@ The parse frame that owns the Double-E operator and operand stacks for a languag
 A small owned instruction returned by a frame to the driver: consume input, push a child frame, reduce a value, reprocess lookahead, or recover at a synchronization set.
 
 **ParseValue** *(partially implemented)*:
-The typed result passed from a completed child frame to its parent. The current variants cover migrated declaration grammar and typed markers for deferred expression, initializer, and function-body children.
+The typed result passed from a completed child frame to its parent. Current variants cover declarations, function definitions, compound statements, statements, and typed deferred expression or initializer children.
 
-**Synchronization set** *(implemented for migrated frames)*:
+**Deferred child**:
+A present grammar child whose parser belongs to a later phase, retained as a typed source-backed slot rather than confused with syntactic absence. Its parent continues to own and consume the terminating delimiter.
+_Avoid_: Skipped syntax
+
+**Synchronization set** *(implemented)*:
 The tokens at which a particular frame can safely resume or unwind after malformed input, paired with a legal recovery target.
 _Avoid_: Global recovery point
 
@@ -149,6 +152,9 @@ yield `ExternalDeclaration::RecoveredDeclaration` with the declaration's arena
 handle. Later analysis may inspect the repaired tree to find additional
 problems, while the distinct variant prevents it from being mistaken for fully
 valid syntax.
+
+**Recovered function definition**:
+A function-definition AST retained after a hard error in its head, old-style declaration list, or body. The distinct external-declaration variant preserves inspectable syntax without presenting it as valid.
 
 **Error node** *(reserved)*:
 A provenance-only syntax placeholder for malformed input from which no
