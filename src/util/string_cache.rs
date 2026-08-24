@@ -144,15 +144,24 @@ impl StringCache {
         inner(self, s.as_ref())
     }
 
-    #[cfg(test)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Lookup by string is retained for parser test and diagnostic helpers."
+        )
+    )]
     pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
-        let string = s.as_ref();
-        let hash = FxBuildHasher.hash_one(string);
-        self.dedup
-            .find(hash, |symbol| {
-                string == StringCache::at_impl(&self.data, &self.ends, *symbol)
-            })
-            .copied()
+        fn inner(interner: &StringCache, s: &str) -> Option<StringCacheId> {
+            let hash = FxBuildHasher.hash_one(s);
+            interner
+                .dedup
+                .find(hash, |symbol| {
+                    s == StringCache::at_impl(&interner.data, &interner.ends, *symbol)
+                })
+                .copied()
+        }
+        inner(self, s.as_ref())
     }
 
     pub(crate) fn push(&mut self, c: impl Into<char>) {
@@ -167,6 +176,32 @@ impl StringCache {
             interner.data.push_str(s);
         }
         inner(self, s.as_ref());
+    }
+
+    #[expect(
+        dead_code,
+        clippy::cast_possible_truncation,
+        reason = "Incremental cache edits retain the cache-size invariant for future callers."
+    )]
+    pub(crate) fn pop(&mut self) {
+        assert!(
+            self.ends.last().copied() != Some(self.data.len() as u32),
+            "StringCache: cannot pop across string boundaries."
+        );
+        _ = self.data.pop();
+    }
+
+    #[expect(
+        dead_code,
+        clippy::cast_possible_truncation,
+        reason = "Incremental cache edits retain the cache-size invariant for future callers."
+    )]
+    pub(crate) fn pop_str(&mut self, len: u32) {
+        assert!(
+            self.ends.last().copied() < Some(self.data.len() as u32 + len - 1),
+            "StringCache: cannot pop across string boundaries."
+        );
+        self.data.truncate(self.data.len() - len as usize);
     }
 
     #[expect(
@@ -224,5 +259,15 @@ impl StringCache {
 
     pub(crate) fn at(&self, id: impl Into<StringCacheId>) -> &str {
         Self::at_impl(&self.data, &self.ends, id.into())
+    }
+
+    #[expect(
+        dead_code,
+        reason = "Resetting a cache is retained for future callers."
+    )]
+    pub(crate) fn clear(&mut self) {
+        self.ends.truncate(1);
+        self.data.clear();
+        self.dedup.clear();
     }
 }

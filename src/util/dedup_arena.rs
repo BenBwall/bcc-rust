@@ -34,6 +34,29 @@ impl<T, H> DedupArena<T, H> {
         Self::with_hasher(H::default())
     }
 
+    #[expect(
+        dead_code,
+        reason = "Preallocation support is retained for future arena callers."
+    )]
+    pub(crate) fn with_capacity_and_hasher(capacity: usize, hasher: H) -> Self {
+        Self {
+            indices: HashTable::with_capacity(capacity),
+            data: Vec::with_capacity(capacity),
+            hasher,
+        }
+    }
+
+    #[expect(
+        dead_code,
+        reason = "Preallocation support is retained for future arena callers."
+    )]
+    pub(crate) fn with_capacity(capacity: usize) -> Self
+    where
+        H: Default,
+    {
+        Self::with_capacity_and_hasher(capacity, H::default())
+    }
+
     /// Intern a value into the arena, returning the index of the value. If the
     /// value is already in the arena, the index of the existing value is
     /// returned. The value is not cloned. Value is dropped if it already
@@ -59,6 +82,16 @@ impl<T, H> DedupArena<T, H> {
                 Ok(index)
             },
         }
+    }
+
+    /// SAFETY: The caller must ensure that the values in the arena remain
+    /// unique.
+    #[expect(
+        dead_code,
+        reason = "Mutable access is retained for future arena callers."
+    )]
+    pub(crate) unsafe fn as_mut_slice(&mut self) -> &mut [T] {
+        self.data.as_mut_slice()
     }
 
     /// Intern a value into the arena, returning the index of the value. Returns

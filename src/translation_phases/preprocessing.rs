@@ -2754,6 +2754,52 @@ impl Preprocessor {
         false
     }
 
+    #[expect(
+        dead_code,
+        clippy::type_complexity,
+        reason = "Macro-frame inspection is retained for pending expansion paths."
+    )]
+    fn current_function_like_macro(
+        &self,
+        _context: &Context,
+    ) -> Option<(
+        u32,
+        PreprocessorTokenizer,
+        Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
+        bool,
+    )> {
+        match self.tokenizer_stack.last() {
+            | Some(TokenizerFrame {
+                frame_type:
+                    TokenizerFrameType::FunctionLikeMacroInvocation {
+                        arguments,
+                        is_variadic,
+                    },
+                tokenizer,
+            }) => Some((
+                tokenizer.source_file_index(),
+                tokenizer.clone(),
+                arguments.clone(),
+                *is_variadic,
+            )),
+            | _ => None,
+        }
+    }
+
+    #[expect(
+        dead_code,
+        reason = "Macro-frame inspection is retained for pending expansion paths."
+    )]
+    fn current_is_function_like_macro(&self, _context: &Context) -> bool {
+        matches!(
+            self.tokenizer_stack.last(),
+            Some(TokenizerFrame {
+                frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
+                ..
+            })
+        )
+    }
+
     fn handle_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         context: &mut Context,

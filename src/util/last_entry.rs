@@ -67,6 +67,17 @@ impl<T> LastEntry<'_, T> {
     }
 }
 
+impl<'vector, T> LastEntry<'vector, T> {
+    #[expect(
+        dead_code,
+        reason = "The consuming mutable entry accessor is retained for callers."
+    )]
+    pub(crate) fn into_mut(self) -> &'vector mut T {
+        let Self { vector: _, last } = self;
+        last
+    }
+}
+
 impl<T> Borrow<T> for LastEntry<'_, T> {
     fn borrow(&self) -> &T {
         self.get()
