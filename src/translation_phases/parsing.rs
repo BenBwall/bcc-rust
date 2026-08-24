@@ -2797,7 +2797,9 @@ impl StatementFrame {
                     self.phase = StatementPhase::Finish(StatementType::Return(None));
                     ParseAction::Consume
                 } else if Self::at_expression_boundary(token, ExpressionTerminator::Semicolon)
-                    || token.is_some_and(|token| parser.declaration_starter(token))
+                    || token.is_some_and(|token| {
+                        parser.declaration_recovery_starts_here(context, token)
+                    })
                     || token.is_some_and(|token| token.kind == TokenType::Identifier)
                         && is_operator(parser.cursor.following(context), OperatorTokenType::Colon)
                 {
@@ -4295,39 +4297,10 @@ impl Parser {
         }
     }
 
-    fn parenthesized_type_name_starts_compound_literal(&mut self, context: &mut Context) -> bool {
-        let Some(first) = self.cursor.following(context) else {
-            return false;
-        };
-        if !self.type_name_starter(first) {
-            return false;
-        }
-
-        let mut parenthesis_depth = 1_usize;
-        let mut lookahead = 0_usize;
-        loop {
-            let Some(token) = self.cursor.lookahead(context, lookahead) else {
-                return false;
-            };
-            match token.kind {
-                | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
-                    parenthesis_depth += 1;
-                },
-                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) => {
-                    parenthesis_depth -= 1;
-                    if parenthesis_depth == 0 {
-                        return self.cursor.lookahead(context, lookahead + 1).is_some_and(
-                            |following| {
-                                following.kind
-                                    == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-                            },
-                        );
-                    }
-                },
-                | _ => {},
-            }
-            lookahead += 1;
-        }
+    fn declaration_recovery_starts_here(&mut self, context: &mut Context, token: Token) -> bool {
+        self.declaration_starter(token)
+            && (token.kind != TokenType::Identifier
+                || self.typedef_name_continues_specifiers(context))
     }
 
     /// Resolves the declaration-specifier/declarator ambiguity after a visible
@@ -8339,7 +8312,9 @@ impl ExpressionFrame {
             if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
                 let type_name_use = if self.mode == ExpressionMode::UnaryExpression {
                     parser
-                        .parenthesized_type_name_starts_compound_literal(context)
+                        .cursor
+                        .following(context)
+                        .is_some_and(|following| parser.type_name_starter(following))
                         .then_some(TypeNameUse::UnaryCompoundLiteral)
                 } else {
                     parser
@@ -8772,10 +8747,11 @@ impl ExpressionFrame {
         token: Token,
         boundary: ExpressionBoundary,
     ) -> bool {
+        let declaration_starts_here = parser.declaration_recovery_starts_here(context, token);
         match boundary {
             | ExpressionBoundary::Initializer =>
                 is_statement_keyword(token.kind)
-                    || parser.declaration_starter(token)
+                    || declaration_starts_here
                         && !matches!(
                             parser
                                 .cursor
@@ -8824,7 +8800,7 @@ impl ExpressionFrame {
                         ))
                     ),
             | ExpressionBoundary::Statement(_) | ExpressionBoundary::ClosingParenthesis =>
-                parser.declaration_starter(token)
+                declaration_starts_here
                     || is_statement_keyword(token.kind)
                     || matches!(
                         boundary,
@@ -11182,6 +11158,52 @@ mod tests {
             panic!("expected a parsed return expression")
         };
         assert_eq!(expression_text(&parsed, expression), "p->T");
+    }
+
+    #[test]
+    fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
+        let parsed = parse("typedef int T; int value = T + 1; int f(void) { return T + 1; }\n");
+
+        let initializer = init_declarators(&parsed, declaration(&parsed, 1))[0]
+            .initializer
+            .expect("value must have an initializer");
+        let InitializerType::AssignmentExpression(initializer_expression) =
+            parsed.parser.syntax.initializers[initializer.0 as usize].kind
+        else {
+            panic!("expected a scalar initializer")
+        };
+        assert_eq!(expression_text(&parsed, initializer_expression), "T+1");
+
+        let [BlockItem::Statement(statement)] =
+            block_items(&parsed, function_definition(&parsed, 2).body)
+        else {
+            panic!("expected one return statement")
+        };
+        let StatementType::Return(Some(ExpressionSlot::Parsed(return_expression))) =
+            parsed.parser.syntax.statements[statement.0 as usize].kind
+        else {
+            panic!("expected a parsed return expression")
+        };
+        assert_eq!(expression_text(&parsed, return_expression), "T+1");
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
+    fn unary_compound_literal_classification_recovers_without_scanning_ahead() {
+        let parsed = parse("typedef int T; int f(void) { ++(T; int after; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 1).body);
+
+        assert_eq!(items.len(), 2, "{items:#?}");
+        assert!(matches!(items[0], BlockItem::Statement(_)));
+        assert!(matches!(items[1], BlockItem::Declaration(_)));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingParenthesisInStatement("type name", _)
+        )));
     }
 
     #[test]
