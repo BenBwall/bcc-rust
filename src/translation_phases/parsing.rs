@@ -3830,7 +3830,14 @@ impl Parser {
             let at_next_declaration = (stops_at_initial_declaration
                 || consumed_tokens > 0 && stops_at_declaration_after_malformed_prefix)
                 && at_top_level
-                && self.declaration_starter(token);
+                && self.declaration_starter(token)
+                && !(token.kind == TokenType::Identifier
+                    && matches!(
+                        state.last_token,
+                        Some(TokenType::Operator(
+                            OperatorTokenType::Period | OperatorTokenType::Arrow
+                        ))
+                    ));
             let at_next_k_and_r_identifier =
                 matches!(recovery_set.kind, SynchronizationKind::KAndRParameter)
                     && at_top_level
@@ -8872,6 +8879,24 @@ mod tests {
             error,
             ParserErrorType::ExpectedSemicolonInStatement("return statement", Some(_))
         )));
+    }
+
+    #[test]
+    fn typedef_named_members_remain_inside_deferred_expressions() {
+        let parsed =
+            parse("typedef int T; struct S { int T; }; int f(struct S *p) { return p->T; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 2).body);
+
+        assert_eq!(items.len(), 1);
+        let BlockItem::Statement(statement) = items[0] else {
+            panic!("expected a return statement")
+        };
+        let StatementType::Return(Some(ExpressionSlot::FutureChild(expression))) =
+            parsed.parser.syntax.statements[statement.0 as usize].kind
+        else {
+            panic!("expected a deferred return expression")
+        };
+        assert_eq!(sourced_text(&parsed, expression), "p->T");
     }
 
     #[test]
