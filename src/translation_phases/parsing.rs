@@ -4145,47 +4145,6 @@ impl Parser {
         }
     }
 
-    /// Reports whether the identifier binding produced by `declarator` is a
-    /// function rather than an object or pointer.
-    ///
-    /// C99: derived declarator interpretation is §6.7.5 paragraph 4,
-    /// p. 114; PDF p. 126; function declarators are §6.7.5.3,
-    /// pp. 118-121; PDF pp. 130-133.
-    fn declarator_declares_function(&self, declarator: Declarator) -> bool {
-        self.declarator_function_binding(declarator) == Some(true)
-    }
-
-    /// Walks parenthesized declarators to find the function suffix bound to the
-    /// declared identifier rather than a function type returned by it.
-    ///
-    /// C99: parenthesized declarator binding follows §6.7.5 paragraph 4,
-    /// p. 114; PDF p. 126.
-    fn declarator_function_binding(&self, declarator: Declarator) -> Option<bool> {
-        let mut declarator = declarator;
-        let mut binding = None;
-
-        loop {
-            let start = declarator.kind.start_index as usize;
-            let end = start + declarator.kind.length as usize;
-            let direct = &self.syntax.direct_declarators[start..end];
-
-            let local_binding = direct.get(1).map(|suffix| {
-                matches!(
-                    suffix,
-                    DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
-                )
-            });
-            binding = local_binding
-                .or_else(|| (declarator.pointer.type_qualifiers_list.length > 0).then_some(false))
-                .or(binding);
-
-            let Some(DirectDeclarator::Parenthesized(nested)) = direct.first() else {
-                return binding;
-            };
-            declarator = *nested;
-        }
-    }
-
     fn declaration_head_declarator(&self, declaration: DeclarationIndex) -> Option<Declarator> {
         let declaration = self.syntax.declarations.get(declaration.0 as usize)?;
         if declaration.init_declarators.length != 1 {
