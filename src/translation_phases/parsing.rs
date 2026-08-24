@@ -2572,7 +2572,7 @@ impl StatementFrame {
                         self.phase = StatementPhase::Finish(StatementType::Null);
                         return ParseAction::Consume;
                     }
-                    return self.finish(parser, StatementType::Null);
+                    return self.finish(parser, context, StatementType::Null);
                 }
                 self.phase = StatementPhase::AwaitExpression;
                 ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::statement(
@@ -2707,7 +2707,8 @@ impl StatementFrame {
                         ),
                         token,
                     );
-                    self.phase = StatementPhase::CaseColon(Self::missing_slot(parser, context));
+                    self.phase =
+                        StatementPhase::CaseColon(Self::missing_constant_slot(parser, context));
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::AwaitCaseExpression;
@@ -2718,9 +2719,8 @@ impl StatementFrame {
                 }
             },
             | StatementPhase::AwaitCaseExpression => {
-                let slot =
-                    Self::future_slot(returned, FutureChildKind::StatementConstantExpression);
-                self.merge_slot(parser, context, slot);
+                let slot = Self::future_constant_slot(returned);
+                self.merge_constant_slot(parser, context, slot);
                 self.phase = StatementPhase::CaseColon(slot);
                 ParseAction::Reprocess
             },
@@ -2776,6 +2776,7 @@ impl StatementFrame {
                 self.merge_statement(parser, context, statement);
                 self.finish(
                     parser,
+                    context,
                     match prefix {
                         | LabelPrefix::Identifier(identifier) =>
                             StatementType::Label(identifier, statement),
@@ -2893,6 +2894,7 @@ impl StatementFrame {
                     },
                     | HeaderKind::Switch => self.finish(
                         parser,
+                        context,
                         StatementType::Switch {
                             condition_expression: expression,
                             body_statement:       body,
@@ -2900,6 +2902,7 @@ impl StatementFrame {
                     ),
                     | HeaderKind::While => self.finish(
                         parser,
+                        context,
                         StatementType::While {
                             condition_expression: expression,
                             body_statement:       body,
@@ -2918,6 +2921,7 @@ impl StatementFrame {
                 } else {
                     self.finish(
                         parser,
+                        context,
                         StatementType::If {
                             condition_expression: expression,
                             then_statement,
@@ -2942,6 +2946,7 @@ impl StatementFrame {
                 self.merge_statement(parser, context, else_statement);
                 self.finish(
                     parser,
+                    context,
                     StatementType::If {
                         condition_expression: expression,
                         then_statement,
@@ -3280,6 +3285,7 @@ impl StatementFrame {
                 self.merge_statement(parser, context, body);
                 self.finish(
                     parser,
+                    context,
                     StatementType::For {
                         initializer,
                         condition_expression: condition,
@@ -3295,12 +3301,12 @@ impl StatementFrame {
                     self.phase = StatementPhase::Finish(StatementType::Null);
                     ParseAction::Consume
                 } else {
-                    self.finish(parser, StatementType::Null)
+                    self.finish(parser, context, StatementType::Null)
                 }
             },
             | StatementPhase::Finish(kind) => {
                 debug_assert!(returned.is_none());
-                self.finish(parser, kind)
+                self.finish(parser, context, kind)
             },
         }
     }
@@ -3319,6 +3325,16 @@ impl StatementFrame {
         let position = parser.position(context);
         let source_file_index = parser.source_file_index();
         ExpressionSlot::Missing(context.create_source_vectors(position, source_file_index, 0))
+    }
+
+    fn missing_constant_slot(parser: &Parser, context: &mut Context) -> ConstantExpressionSlot {
+        let position = parser.position(context);
+        let source_file_index = parser.source_file_index();
+        ConstantExpressionSlot::Missing(context.create_source_vectors(
+            position,
+            source_file_index,
+            0,
+        ))
     }
 
     fn merge_token(&mut self, parser: &Parser, context: &mut Context, token: Token) {
@@ -3350,11 +3366,42 @@ impl StatementFrame {
         ExpressionSlot::FutureChild(source_vectors)
     }
 
+    fn future_constant_slot(returned: Option<ParseValue>) -> ConstantExpressionSlot {
+        let Some(ParseValue::FutureChild(FutureChildResult {
+            kind: FutureChildKind::StatementConstantExpression,
+            source_vectors,
+        })) = returned
+        else {
+            panic!("case expression returned an unexpected value: {returned:?}");
+        };
+        ConstantExpressionSlot::FutureChild(source_vectors)
+    }
+
     fn merge_slot(&mut self, parser: &Parser, context: &mut Context, slot: ExpressionSlot) {
         let source = match slot {
             | ExpressionSlot::Parsed(index) =>
                 parser.syntax.expressions[index.0 as usize].source_vectors,
             | ExpressionSlot::FutureChild(source) | ExpressionSlot::Missing(source) => source,
+        };
+        if source.length > 0 {
+            self.source_vectors = Some(
+                self.source_vectors
+                    .map_or(source, |existing| context.merge_vectors(existing, source)),
+            );
+        }
+    }
+
+    fn merge_constant_slot(
+        &mut self,
+        parser: &Parser,
+        context: &mut Context,
+        slot: ConstantExpressionSlot,
+    ) {
+        let source = match slot {
+            | ConstantExpressionSlot::Parsed(index) =>
+                parser.syntax.expressions[index.0 as usize].source_vectors,
+            | ConstantExpressionSlot::FutureChild(source)
+            | ConstantExpressionSlot::Missing(source) => source,
         };
         if source.length > 0 {
             self.source_vectors = Some(
@@ -3408,11 +3455,19 @@ impl StatementFrame {
         ParseAction::Reduce(ParseValue::Statement(statement))
     }
 
-    fn finish(&mut self, parser: &mut Parser, kind: StatementType) -> ParseAction {
+    fn finish(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        kind: StatementType,
+    ) -> ParseAction {
         let index = parser.syntax.statements.len().to_u32();
+        let source_vectors = self.source_vectors.unwrap_or_else(|| {
+            context.create_source_vectors(parser.position(context), parser.source_file_index(), 0)
+        });
         parser.syntax.statements.push(Statement {
             kind,
-            source_vectors: self.source_vectors.unwrap_or_default(),
+            source_vectors,
             recovered: parser.hard_error_count > self.starting_error_count,
         });
         self.restore_scopes(parser);
@@ -3527,7 +3582,7 @@ enum HeaderKind {
 #[derive(Debug, Clone, Copy)]
 enum LabelPrefix {
     Identifier(Identifier),
-    Case(ExpressionSlot),
+    Case(ConstantExpressionSlot),
     Default,
 }
 
@@ -3552,7 +3607,7 @@ enum StatementPhase {
     IdentifierLabelColon(Identifier),
     CaseExpression,
     AwaitCaseExpression,
-    CaseColon(ExpressionSlot),
+    CaseColon(ConstantExpressionSlot),
     DefaultColon,
     PushLabeled(LabelPrefix),
     AwaitLabeled(LabelPrefix),
@@ -4143,11 +4198,9 @@ impl Parser {
         init.initializer.is_none().then_some(init.declarator)
     }
 
-    fn declaration_is_function_head(&self, declaration: DeclarationIndex) -> bool {
+    fn declaration_is_definition_head(&self, declaration: DeclarationIndex) -> bool {
         self.syntax.declarations[declaration.0 as usize].is_function_definition_head
-            && self
-                .declaration_head_declarator(declaration)
-                .is_some_and(|declarator| self.declarator_declares_function(declarator))
+            && self.declaration_head_declarator(declaration).is_some()
     }
 
     fn declaration_is_old_style_function_head(&self, declaration: DeclarationIndex) -> bool {
@@ -4689,7 +4742,7 @@ impl ExternalDeclarationFrame {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("declaration frame returned an unexpected value: {returned:?}");
                 };
-                let is_definition = parser.declaration_is_function_head(declaration)
+                let is_definition = parser.declaration_is_definition_head(declaration)
                     && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                         || parser.declaration_is_old_style_function_head(declaration)
                             && token.is_some_and(|token| parser.declaration_starter(token)));
@@ -4878,15 +4931,12 @@ impl DeclarationFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                let has_sole_uninitialized_function_declarator =
+                let has_sole_uninitialized_declarator =
                     parser.syntax.init_declarators.len().to_u32() == self.init_declarator_start + 1
                         && self
                             .last_init_index
                             .and_then(|index| parser.syntax.init_declarators.get(index as usize))
-                            .is_some_and(|init| {
-                                init.initializer.is_none()
-                                    && parser.declarator_declares_function(init.declarator)
-                            });
+                            .is_some_and(|init| init.initializer.is_none());
                 let is_old_style_function_declarator = self
                     .last_init_index
                     .and_then(|index| parser.syntax.init_declarators.get(index as usize))
@@ -4898,13 +4948,15 @@ impl DeclarationFrame {
                             })
                     });
                 let starts_function_definition = self.context == DeclarationContext::External
-                    && has_sole_uninitialized_function_declarator
+                    && has_sole_uninitialized_declarator
                     && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                         || is_old_style_function_declarator
                             && token.is_some_and(|token| parser.declaration_starter(token)));
                 // The same prefix can continue as another init-declarator, an
                 // initializer, a completed declaration, or a function body.
-                // Declarator binding decides whether `{` is legal here.
+                // A sole declarator followed by `{` matches the function-
+                // definition production. Whether it declares a function is a
+                // separate C constraint left to semantic analysis.
                 if is_operator(token, OperatorTokenType::Comma) {
                     if let Some(token) = token {
                         parser.merge_source(context, &mut self.source_vectors, token);
@@ -7274,6 +7326,19 @@ pub(crate) enum ExpressionSlot {
     Missing(SourceVectors),
 }
 
+/// A statement constant-expression preserves its narrower grammar type while
+/// parsed, explicitly deferred, or synthesized during recovery.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ConstantExpressionSlot {
+    #[expect(
+        dead_code,
+        reason = "Phase 04 will construct parsed constant-expression slots."
+    )]
+    Parsed(ConstantExpressionIndex),
+    FutureChild(SourceVectors),
+    Missing(SourceVectors),
+}
+
 /// Statement syntax node constructed by the statement frame.
 ///
 /// C99: §6.8-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
@@ -7323,7 +7388,7 @@ pub(crate) enum StatementType {
     Continue,
     Goto(Identifier),
     Label(Identifier, StatementIndex),
-    Case(ExpressionSlot, StatementIndex),
+    Case(ConstantExpressionSlot, StatementIndex),
     Default(StatementIndex),
     Null,
 }
@@ -8683,7 +8748,7 @@ mod tests {
         let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
             panic!("expected one case label")
         };
-        let StatementType::Case(ExpressionSlot::FutureChild(expression), _) =
+        let StatementType::Case(ConstantExpressionSlot::FutureChild(expression), _) =
             parsed.parser.syntax.statements[case.0 as usize].kind
         else {
             panic!("expected a deferred case expression")
@@ -8712,7 +8777,7 @@ mod tests {
         let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
             panic!("expected one case label")
         };
-        let StatementType::Case(ExpressionSlot::FutureChild(expression), _) =
+        let StatementType::Case(ConstantExpressionSlot::FutureChild(expression), _) =
             parsed.parser.syntax.statements[case.0 as usize].kind
         else {
             panic!("expected a deferred case expression")
@@ -8741,7 +8806,7 @@ mod tests {
         let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
             panic!("expected one case label")
         };
-        let StatementType::Case(ExpressionSlot::FutureChild(expression), _) =
+        let StatementType::Case(ConstantExpressionSlot::FutureChild(expression), _) =
             parsed.parser.syntax.statements[case.0 as usize].kind
         else {
             panic!("expected a deferred case expression")
@@ -8877,7 +8942,7 @@ mod tests {
         else {
             panic!("expected an if statement with a missing expression")
         };
-        let StatementType::Case(ExpressionSlot::Missing(case_expression), _) =
+        let StatementType::Case(ConstantExpressionSlot::Missing(case_expression), _) =
             parsed.parser.syntax.statements[case_statement.0 as usize].kind
         else {
             panic!("expected a case statement with a missing expression")
@@ -9583,16 +9648,43 @@ mod tests {
 
     #[test]
     fn premature_eof_unwinds_every_phase_03_frame_family() {
-        for source in [
-            "int f(void) {",
-            "int f(void) { if (",
-            "int f(void) { if (condition",
-            "int f(void) { case value",
-            "int f(void) { label:",
-            "int f(void) { goto",
-            "int f(void) { do ;",
-            "int f(void) { for (",
-            "int f(parameter) int parameter;",
+        for (source, expected_error) in [
+            (
+                "int f(void) {",
+                ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None),
+            ),
+            (
+                "int f(void) { if (",
+                ParserErrorType::ExpectedStatementExpression("if statement", None),
+            ),
+            (
+                "int f(void) { if (condition",
+                ParserErrorType::ExpectedClosingParenthesisInStatement("if statement", None),
+            ),
+            (
+                "int f(void) { case value",
+                ParserErrorType::ExpectedColonInLabel("case label", None),
+            ),
+            (
+                "int f(void) { label:",
+                ParserErrorType::ExpectedStatement(None),
+            ),
+            (
+                "int f(void) { goto",
+                ParserErrorType::ExpectedGotoLabel(None),
+            ),
+            (
+                "int f(void) { do ;",
+                ParserErrorType::ExpectedWhileAfterDoBody(None),
+            ),
+            (
+                "int f(void) { for (",
+                ParserErrorType::ExpectedSemicolonInStatement("for initializer", None),
+            ),
+            (
+                "int f(parameter) int parameter;",
+                ParserErrorType::ExpectedFunctionBody(None),
+            ),
         ] {
             let parsed = parse(source);
             assert!(
@@ -9604,12 +9696,62 @@ mod tests {
                 parsed.items
             );
             assert!(
-                parser_errors(&parsed).next().is_some(),
-                "expected a diagnostic for {source:?}"
+                parser_errors(&parsed).any(|error| error == &expected_error),
+                "missing {expected_error:?} for {source:?}: {:#?}",
+                parsed.errors
+            );
+            assert!(parsed.errors.iter().all(|error| match error {
+                | TranslationError::Parsing(error) => {
+                    error.source_vectors.length > 0
+                        && !matches!(
+                            error.error_type,
+                            ParserErrorType::ParserFrameConsumedAtEndOfInput(_)
+                        )
+                },
+                | _ => true,
+            }));
+            let definition = function_definition(&parsed, 0);
+            assert!(
+                !parsed
+                    .context
+                    .get_source_vectors(definition.source_vectors)
+                    .is_empty()
+            );
+            assert!(
+                !parsed
+                    .context
+                    .get_source_vectors(
+                        parsed.parser.syntax.statements[definition.body.0 as usize].source_vectors
+                    )
+                    .is_empty()
             );
             assert!(parsed.parser.scopes.nested_scopes.is_empty(), "{source:?}");
             assert!(parsed.parser.label_scopes.is_empty(), "{source:?}");
             assert!(parsed.parser.switch_scopes.is_empty(), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn synthesized_missing_statements_are_anchored_at_the_recovery_point() {
+        for source in ["int f(void) { if (x) }", "int f(void) { if (x)"] {
+            let parsed = parse(source);
+            let definition = function_definition(&parsed, 0);
+            let [BlockItem::Statement(if_statement)] = block_items(&parsed, definition.body) else {
+                panic!("expected one if statement for {source:?}")
+            };
+            let StatementType::If { then_statement, .. } =
+                parsed.parser.syntax.statements[if_statement.0 as usize].kind
+            else {
+                panic!("expected an if statement for {source:?}")
+            };
+            let [missing_source] = parsed.context.get_source_vectors(
+                parsed.parser.syntax.statements[then_statement.0 as usize].source_vectors,
+            ) else {
+                panic!("expected one missing-statement anchor for {source:?}")
+            };
+
+            assert_eq!(missing_source.index, source.len());
+            assert_eq!(missing_source.length, 0);
         }
     }
 
@@ -10164,24 +10306,31 @@ mod tests {
     }
 
     #[test]
-    fn only_function_declarators_can_own_a_braced_body() {
-        let parsed = parse("int object { int swallowed; } int after;\n");
+    fn braced_declarators_retain_function_definition_syntax_before_constraint_checking() {
+        let parsed = parse("int object { int retained; } int after;\n");
 
-        assert!(
-            !parser_errors(&parsed)
-                .any(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
-        );
-        assert!(parser_errors(&parsed).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
-                TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-            ))
-        )));
-        let after_item = parsed.items.len() - 1;
+        assert!(!function_definition(&parsed, 0).recovered);
+        let [BlockItem::Declaration(retained)] =
+            block_items(&parsed, function_definition(&parsed, 0).body)
+        else {
+            panic!("expected the braced declarator to retain its compound body")
+        };
         assert_eq!(
             identifier_name(
                 &parsed,
-                init_declarators(&parsed, declaration(&parsed, after_item))[0].declarator
+                init_declarators(
+                    &parsed,
+                    &parsed.parser.syntax.declarations[retained.0 as usize]
+                )[0]
+                .declarator
+            )
+            .as_deref(),
+            Some("retained")
+        );
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -10224,21 +10373,15 @@ mod tests {
         )));
 
         let pointer = parse("int (*fp)(void) { int swallowed; } int after;\n");
-        assert!(
-            !parser_errors(&pointer)
-                .any(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
+        assert!(!function_definition(&pointer, 0).recovered);
+        assert_eq!(
+            block_items(&pointer, function_definition(&pointer, 0).body).len(),
+            1
         );
-        assert!(parser_errors(&pointer).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
-                TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-            ))
-        )));
-        let after_item = pointer.items.len() - 1;
         assert_eq!(
             identifier_name(
                 &pointer,
-                init_declarators(&pointer, declaration(&pointer, after_item))[0].declarator
+                init_declarators(&pointer, declaration(&pointer, 1))[0].declarator
             )
             .as_deref(),
             Some("after")
