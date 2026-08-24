@@ -127,6 +127,19 @@ mod tests {
         preprocess_with_configuration(source, CompilerConfiguration::default())
     }
 
+    #[test]
+    fn adjacent_string_lookahead_restores_diagnostics_to_the_phase_context() {
+        let (_, errors) = preprocess("\"a\" 0xg\n");
+
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
+                ..
+            })
+        )));
+    }
+
     fn strict_c99() -> CompilerConfiguration {
         CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny)
     }
@@ -2179,6 +2192,7 @@ impl Preprocessor {
     }
 
     fn next_parser_token(&mut self, context: &mut Context) -> Option<Token> {
+        context.append_pending_errors(take(&mut self.pending_parser_errors));
         if let Some(token) = self.pending_parser_token.take() {
             return Some(token);
         }
@@ -2207,10 +2221,6 @@ impl Preprocessor {
 
     pub(crate) fn has_pending_parser_token(&self) -> bool {
         self.pending_parser_token.is_some()
-    }
-
-    pub(crate) fn pop_pending_parser_error(&mut self) -> Option<TranslationError> {
-        self.pending_parser_errors.pop()
     }
 
     fn concatenate_adjacent_strings(&mut self, context: &mut Context, first: Token) -> Token {

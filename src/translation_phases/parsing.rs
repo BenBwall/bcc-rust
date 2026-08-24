@@ -44,7 +44,6 @@ use super::{
     SetSourceFileIndex,
     SourcePosition,
     SourceVectors,
-    TranslationError,
     TranslationPhase,
     preprocessing::{
         CharacterTokenType,
@@ -2248,6 +2247,32 @@ impl ExpressionFrame {
             pending_sizeof_prefix: None,
         }
     }
+
+    fn closing_parenthesis_is_boundary(&self) -> bool {
+        [self.boundary, self.recovery_boundary]
+            .into_iter()
+            .any(|boundary| {
+                matches!(
+                    boundary,
+                    ExpressionBoundary::ClosingParenthesis
+                        | ExpressionBoundary::Argument
+                        | ExpressionBoundary::Statement(ExpressionTerminator::ClosingParenthesis)
+                )
+            })
+    }
+
+    fn closing_square_bracket_is_boundary(&self) -> bool {
+        [self.boundary, self.recovery_boundary]
+            .into_iter()
+            .any(|boundary| {
+                matches!(
+                    boundary,
+                    ExpressionBoundary::ClosingSquareBracket
+                        | ExpressionBoundary::ArrayBound
+                        | ExpressionBoundary::Designator
+                )
+            })
+    }
 }
 
 #[derive(Debug)]
@@ -2262,6 +2287,10 @@ struct InitializerFrame {
     current_designation_recovered: bool,
     synchronized_designator: Option<(ConstantExpressionIndex, SourceVectors, usize)>,
     starting_error_count: usize,
+    /// Whether `)` belongs to an enclosing expression or `for` header.
+    closing_parenthesis_is_caller_boundary: bool,
+    /// Whether `]` belongs to an enclosing expression.
+    closing_square_bracket_is_caller_boundary: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2284,7 +2313,11 @@ enum InitializerPhase {
 }
 
 impl InitializerFrame {
-    fn new(starting_error_count: usize) -> Self {
+    fn new(
+        starting_error_count: usize,
+        closing_parenthesis_is_caller_boundary: bool,
+        closing_square_bracket_is_caller_boundary: bool,
+    ) -> Self {
         Self {
             phase: InitializerPhase::Start,
             elements: Vec::new(),
@@ -2296,6 +2329,8 @@ impl InitializerFrame {
             current_designation_recovered: false,
             synchronized_designator: None,
             starting_error_count,
+            closing_parenthesis_is_caller_boundary,
+            closing_square_bracket_is_caller_boundary,
         }
     }
 }
@@ -3933,10 +3968,6 @@ impl Parser {
         &self.syntax
     }
 
-    pub(crate) fn pop_pending_preprocessor_error(&mut self) -> Option<TranslationError> {
-        self.cursor.preprocessor.pop_pending_parser_error()
-    }
-
     /// Runs owned frame actions until one external declaration reduces or EOF
     /// is observed between declarations.
     ///
@@ -5420,6 +5451,8 @@ impl DeclarationFrame {
                 self.phase = DeclarationPhase::AwaitInitializer;
                 ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
                     parser.hard_error_count,
+                    self.context == DeclarationContext::ForInitializer,
+                    false,
                 )))
             },
             | DeclarationPhase::AwaitInitializer => {
@@ -5667,7 +5700,8 @@ impl DeclarationSpecifiersFrame {
 
         if token.kind == TokenType::Identifier
             && parser.scopes.is_typedef(token.contents)
-            && (self.specifiers.type_specifiers == TypeSpecifiers::Empty
+            && (self.mode == SpecifierMode::SpecifierQualifier
+                || self.specifiers.type_specifiers == TypeSpecifiers::Empty
                 || parser.typedef_name_continues_specifiers(context))
         {
             // A visible typedef spelling is still allowed to become the
@@ -8059,6 +8093,8 @@ impl ExpressionFrame {
                     ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind);
                 return ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
                     parser.hard_error_count,
+                    self.closing_parenthesis_is_boundary(),
+                    self.closing_square_bracket_is_boundary(),
                 )));
             },
             | ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind) => {
@@ -8921,7 +8957,23 @@ impl InitializerFrame {
                     self.phase = InitializerPhase::FinishList;
                     return ParseAction::Consume;
                 }
-                if Self::at_recovery_boundary(parser, context, token) {
+                if self.is_unowned_closing_delimiter(token) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStatementExpression(
+                            "initializer element",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    parser.merge_source(
+                        context,
+                        &mut self.source_vectors,
+                        token.expect("an unowned closing delimiter exists"),
+                    );
+                    return ParseAction::Consume;
+                }
+                if self.at_recovery_boundary(parser, context, token) {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
@@ -9075,7 +9127,7 @@ impl InitializerFrame {
                     }
                     return ParseAction::Consume;
                 }
-                if depth == 0 && Self::at_array_designator_sync_boundary(parser, context, token) {
+                if depth == 0 && self.at_array_designator_sync_boundary(parser, context, token) {
                     self.push_array_designator(expression, source_vectors, true);
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
@@ -9128,6 +9180,8 @@ impl InitializerFrame {
                 self.phase = InitializerPhase::AwaitElement;
                 ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
                     parser.hard_error_count,
+                    self.closing_parenthesis_is_caller_boundary,
+                    self.closing_square_bracket_is_caller_boundary,
                 )))
             },
             | InitializerPhase::AwaitElement => {
@@ -9173,7 +9227,24 @@ impl InitializerFrame {
                     self.phase = InitializerPhase::FinishList;
                     return ParseAction::Consume;
                 }
-                if Self::at_recovery_boundary(parser, context, token) {
+                if self.is_unowned_closing_delimiter(token) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStatementExpression(
+                            "`,` or `}` after initializer element",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    parser.merge_source(
+                        context,
+                        &mut self.source_vectors,
+                        token.expect("an unowned closing delimiter exists"),
+                    );
+                    self.phase = InitializerPhase::ElementOrClose;
+                    return ParseAction::Consume;
+                }
+                if self.at_recovery_boundary(parser, context, token) {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
@@ -9240,6 +9311,7 @@ impl InitializerFrame {
     }
 
     fn at_array_designator_sync_boundary(
+        &self,
         parser: &mut Parser,
         context: &mut Context,
         token: Option<Token>,
@@ -9253,10 +9325,11 @@ impl InitializerFrame {
                 OperatorTokenType::Equals
                     | OperatorTokenType::Comma
                     | OperatorTokenType::Semicolon
-                    | OperatorTokenType::ClosingParenthesis
                     | OperatorTokenType::ClosingCurlyBrace
             )
-        ) || is_statement_keyword(token.kind)
+        ) || self.closing_parenthesis_is_caller_boundary
+            && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+            || is_statement_keyword(token.kind)
             || ExpressionFrame::is_strong_grammar_boundary_for(
                 parser,
                 context,
@@ -9293,25 +9366,32 @@ impl InitializerFrame {
         self.current_designation = Some(index);
     }
 
-    fn at_caller_boundary(token: Option<Token>) -> bool {
+    fn at_caller_boundary(&self, token: Option<Token>) -> bool {
         token.is_none_or(|token| {
-            matches!(
-                token.kind,
-                TokenType::Operator(
-                    OperatorTokenType::Semicolon
-                        | OperatorTokenType::ClosingParenthesis
-                        | OperatorTokenType::ClosingSquareBracket
-                )
-            )
+            token.kind == TokenType::Operator(OperatorTokenType::Semicolon)
+                || self.closing_parenthesis_is_caller_boundary
+                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                || self.closing_square_bracket_is_caller_boundary
+                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+        })
+    }
+
+    fn is_unowned_closing_delimiter(&self, token: Option<Token>) -> bool {
+        token.is_some_and(|token| {
+            !self.closing_parenthesis_is_caller_boundary
+                && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                || !self.closing_square_bracket_is_caller_boundary
+                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
         })
     }
 
     fn at_recovery_boundary(
+        &self,
         parser: &mut Parser,
         context: &mut Context,
         token: Option<Token>,
     ) -> bool {
-        if Self::at_caller_boundary(token) {
+        if self.at_caller_boundary(token) {
             return true;
         }
         let Some(token) = token else {
@@ -10443,6 +10523,15 @@ mod tests {
             panic!("expected a function-definition item")
         };
         &parsed.parser.syntax.function_definitions[index.0 as usize]
+    }
+
+    fn return_expression(parsed: &Parsed, statement: StatementIndex) -> ExpressionIndex {
+        let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
+            parsed.parser.syntax.statements[statement.0 as usize].kind
+        else {
+            panic!("expected a parsed return expression")
+        };
+        expression
     }
 
     fn block_items(parsed: &Parsed, statement: StatementIndex) -> &[BlockItem] {
@@ -14306,6 +14395,88 @@ mod tests {
     }
 
     #[test]
+    fn type_names_retain_typedef_specifiers_after_primitive_specifiers() {
+        let parsed =
+            parse("typedef int T; int f(void) { return sizeof(int T) + sizeof(T int); }\n");
+
+        assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
+        let definition = function_definition(&parsed, 1);
+        let items = block_items(&parsed, definition.body);
+        assert_eq!(items.len(), 1, "{items:#?}");
+        assert_eq!(parsed.parser.syntax.type_names.len(), 2);
+        assert_eq!(
+            sourced_text(&parsed, parsed.parser.syntax.type_names[0].source_vectors),
+            "intT"
+        );
+        assert_eq!(
+            sourced_text(&parsed, parsed.parser.syntax.type_names[1].source_vectors),
+            "Tint"
+        );
+        assert_eq!(parser_errors(&parsed).count(), 2, "{:#?}", parsed.errors);
+    }
+
+    #[test]
+    fn cast_and_sizeof_classification_tracks_typedef_shadowing() {
+        let parsed = parse(
+            "typedef int T;\nint unshadowed(void) { return (T)1; }\nint parameter(int T) { return \
+             sizeof(T); }\nint block(void) { int T; return (T); }\nint iteration(void) { for (int \
+             T; ; ) return (T); }\n",
+        );
+
+        let unshadowed = block_items(&parsed, function_definition(&parsed, 1).body);
+        let BlockItem::Statement(unshadowed_return) = unshadowed[0] else {
+            panic!("expected unshadowed return statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions
+                [return_expression(&parsed, unshadowed_return).0 as usize]
+                .kind,
+            ExpressionType::Cast { .. }
+        ));
+
+        let parameter = block_items(&parsed, function_definition(&parsed, 2).body);
+        let BlockItem::Statement(parameter_return) = parameter[0] else {
+            panic!("expected parameter-shadowed return statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions
+                [return_expression(&parsed, parameter_return).0 as usize]
+                .kind,
+            ExpressionType::SizeofExpr(_)
+        ));
+
+        let block = block_items(&parsed, function_definition(&parsed, 3).body);
+        let BlockItem::Statement(block_return) = block[1] else {
+            panic!("expected block-shadowed return statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions[return_expression(&parsed, block_return).0 as usize]
+                .kind,
+            ExpressionType::Parenthesized { .. }
+        ));
+
+        let iteration = block_items(&parsed, function_definition(&parsed, 4).body);
+        let BlockItem::Statement(for_statement) = iteration[0] else {
+            panic!("expected for statement")
+        };
+        let StatementType::For { body_statement, .. } =
+            parsed.parser.syntax.statements[for_statement.0 as usize].kind
+        else {
+            panic!("expected for statement syntax")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions[return_expression(&parsed, body_statement).0 as usize]
+                .kind,
+            ExpressionType::Parenthesized { .. }
+        ));
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
     fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
         let parsed =
             parse("int f(void) { a = b = c; a ? (b, c) : d ? e : f; call(a, b); call((a, b)); }\n");
@@ -14416,6 +14587,126 @@ mod tests {
                 _
             )
         )));
+    }
+
+    #[test]
+    fn every_equal_precedence_operator_pair_has_explicit_tree_coverage() {
+        let left_associative_groups: &[&[(&str, BinaryOperator)]] = &[
+            &[
+                ("*", BinaryOperator::Multiplication),
+                ("/", BinaryOperator::Division),
+                ("%", BinaryOperator::Modulo),
+            ],
+            &[
+                ("+", BinaryOperator::Addition),
+                ("-", BinaryOperator::Subtraction),
+            ],
+            &[
+                ("<<", BinaryOperator::LeftShift),
+                (">>", BinaryOperator::RightShift),
+            ],
+            &[
+                ("<", BinaryOperator::LessThan),
+                (">", BinaryOperator::GreaterThan),
+                ("<=", BinaryOperator::LessThanOrEqual),
+                (">=", BinaryOperator::GreaterThanOrEqual),
+            ],
+            &[
+                ("==", BinaryOperator::Equal),
+                ("!=", BinaryOperator::NotEqual),
+            ],
+            &[("&", BinaryOperator::BitwiseAnd)],
+            &[("^", BinaryOperator::BitwiseXor)],
+            &[("|", BinaryOperator::BitwiseOr)],
+            &[("&&", BinaryOperator::LogicalAnd)],
+            &[("||", BinaryOperator::LogicalOr)],
+            &[(",", BinaryOperator::Comma)],
+        ];
+        for group in left_associative_groups {
+            for &(first_spelling, first_operator) in *group {
+                for &(second_spelling, second_operator) in *group {
+                    let source =
+                        format!("int f(void) {{ a{first_spelling}b{second_spelling}c; }}\n");
+                    let parsed = parse(&source);
+                    let [BlockItem::Statement(statement)] =
+                        block_items(&parsed, function_definition(&parsed, 0).body)
+                    else {
+                        panic!("expected one expression statement for {source:?}")
+                    };
+                    let StatementType::Expression(ExpressionSlot::Parsed(root)) =
+                        parsed.parser.syntax.statements[statement.0 as usize].kind
+                    else {
+                        panic!("expected a parsed expression for {source:?}")
+                    };
+                    let ExpressionType::Binary {
+                        operator,
+                        left_expression,
+                        ..
+                    } = parsed.parser.syntax.expressions[root.0 as usize].kind
+                    else {
+                        panic!("expected a binary root for {source:?}")
+                    };
+                    assert_eq!(operator, second_operator, "wrong root for {source:?}");
+                    assert!(matches!(
+                        parsed.parser.syntax.expressions[left_expression.0 as usize].kind,
+                        ExpressionType::Binary { operator, .. } if operator == first_operator
+                    ));
+                    assert!(
+                        parser_errors(&parsed).next().is_none(),
+                        "{:#?}",
+                        parsed.errors
+                    );
+                }
+            }
+        }
+
+        let assignment_operators = [
+            ("=", BinaryOperator::Assignment),
+            ("*=", BinaryOperator::MultiplicationAssignment),
+            ("/=", BinaryOperator::DivisionAssignment),
+            ("%=", BinaryOperator::ModuloAssignment),
+            ("+=", BinaryOperator::AdditionAssignment),
+            ("-=", BinaryOperator::SubtractionAssignment),
+            ("<<=", BinaryOperator::LeftShiftAssignment),
+            (">>=", BinaryOperator::RightShiftAssignment),
+            ("&=", BinaryOperator::BitwiseAndAssignment),
+            ("^=", BinaryOperator::BitwiseXorAssignment),
+            ("|=", BinaryOperator::BitwiseOrAssignment),
+        ];
+        for (first_spelling, first_operator) in assignment_operators {
+            for (second_spelling, second_operator) in assignment_operators {
+                let source = format!("int f(void) {{ a{first_spelling}b{second_spelling}c; }}\n");
+                let parsed = parse(&source);
+                let [BlockItem::Statement(statement)] =
+                    block_items(&parsed, function_definition(&parsed, 0).body)
+                else {
+                    panic!("expected one assignment statement for {source:?}")
+                };
+                let StatementType::Expression(ExpressionSlot::Parsed(root)) =
+                    parsed.parser.syntax.statements[statement.0 as usize].kind
+                else {
+                    panic!("expected a parsed assignment for {source:?}")
+                };
+                let ExpressionType::Binary {
+                    operator,
+                    right_expression,
+                    ..
+                } = parsed.parser.syntax.expressions[root.0 as usize].kind
+                else {
+                    panic!("expected an assignment root for {source:?}")
+                };
+                assert_eq!(operator, first_operator, "wrong root for {source:?}");
+                assert!(matches!(
+                    parsed.parser.syntax.expressions[right_expression.0 as usize].kind,
+                    ExpressionType::Binary { operator, .. } if operator == second_operator
+                ));
+                assert!(
+                    parser_errors(&parsed).next().is_none(),
+                    "{:#?}",
+                    parsed.errors
+                );
+            }
+        }
     }
 
     #[test]
@@ -15071,6 +15362,77 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(names, ["x", "after", "later"]);
+    }
+
+    #[test]
+    fn array_designator_recovery_consumes_parentheses_not_owned_by_the_caller() {
+        let parsed = parse("int f(){ int a[] = {[1 + )] = 2}; int after; return 0; }\n");
+
+        assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 3, "{items:#?}");
+        assert!(matches!(items[0], BlockItem::Declaration(_)));
+        assert!(matches!(items[1], BlockItem::Declaration(_)));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+        )));
+    }
+
+    #[test]
+    fn array_designator_recovery_preserves_a_for_header_parenthesis() {
+        let parsed = parse("int f(void) { for (int a[] = {[1 + ) ; return; }\n");
+
+        assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 2, "{items:#?}");
+        let BlockItem::Statement(for_statement) = items[0] else {
+            panic!("expected recovered for statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.statements[for_statement.0 as usize].kind,
+            StatementType::For { .. }
+        ));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn initializer_recovery_consumes_unowned_closing_delimiters() {
+        for closer in [")", "]"] {
+            let parsed = parse(&format!(
+                "int f(void) {{ int a[] = {{1 + {closer} }}; int after; return; }}\n"
+            ));
+
+            assert_eq!(parsed.items.len(), 1, "{closer}: {:#?}", parsed.items);
+            let items = block_items(&parsed, function_definition(&parsed, 0).body);
+            assert_eq!(items.len(), 3, "{closer}: {items:#?}");
+            assert!(matches!(items[0], BlockItem::Declaration(_)));
+            assert!(matches!(items[1], BlockItem::Declaration(_)));
+            assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+                parsed.parser.syntax.statements[index.0 as usize].kind,
+                StatementType::Return(None)
+            )));
+        }
+    }
+
+    #[test]
+    fn initializer_recovery_preserves_an_enclosing_subscript_bracket() {
+        let parsed = parse("int f(void) { return values[(int[]){1 + ]; return 0; }\n");
+
+        assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        assert_eq!(items.len(), 2, "{items:#?}");
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+        )));
     }
 
     #[test]
