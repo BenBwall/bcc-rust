@@ -43,6 +43,8 @@ where
                     clippy::multiple_unsafe_ops_per_block,
                     reason = "The safety comment explains why both operations are okay."
                 )]
+                // SAFETY: Both raw pointers originate from valid Box allocations and are only
+                // reconstructed once their shared reference count reaches zero.
                 unsafe {
                     drop(Box::from_raw(this.ref_count.as_ptr()));
                     drop(Box::from_raw(this.contents.as_ptr()));
@@ -65,7 +67,7 @@ where
             abort();
         }
 
-        _ = self.ref_cnt().update(|count| count + 1);
+        () = self.ref_cnt().update(|count| count + 1);
 
         Self {
             ref_count: self.ref_count,
@@ -141,10 +143,6 @@ where
         }
     }
 
-    pub(crate) fn strong_reference_count(&self) -> usize {
-        self.ref_cnt().get()
-    }
-
     /// The caller of this function must maintain the invariant that the ref
     /// count accurately reflects how many references there are to the contents.
     /// This function is not marked unsafe because it's private to this module.
@@ -158,20 +156,12 @@ where
 }
 
 impl SharedString {
-    pub(crate) fn as_str(&self) -> &str {
-        self
-    }
-
     pub(crate) fn from_string(s: String) -> Self {
         Self::from_boxed(s.into_boxed_str())
     }
 }
 
 impl<T> SharedVec<T> {
-    pub(crate) fn as_slice(&self) -> &[T] {
-        self
-    }
-
     pub(crate) fn from_vec(v: Vec<T>) -> Self {
         Self::from_boxed(v.into_boxed_slice())
     }

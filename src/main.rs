@@ -6,11 +6,6 @@
     unused_crate_dependencies,
     reason = "We have a bunch of dependencies that are not used in our main module."
 )]
-#![expect(
-    clippy::cargo_common_metadata,
-    reason = "We don't have any metadata in our main module, because it's not getting published."
-)]
-
 use std::process::ExitCode;
 
 #[cfg(not(feature = "benchmarking-internals"))]

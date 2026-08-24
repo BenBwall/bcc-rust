@@ -12,11 +12,6 @@ use hashbrown::{
     hash_table::Entry,
 };
 
-#[expect(
-    dead_code,
-    reason = "We're not currently this, but it's still here because I don't want to have to \
-              reimplement it."
-)]
 pub(crate) struct DedupArena<T, H> {
     indices: HashTable<u32>,
     data:    Vec<T>,
@@ -37,21 +32,6 @@ impl<T, H> DedupArena<T, H> {
         H: Default,
     {
         Self::with_hasher(H::default())
-    }
-
-    pub(crate) fn with_capacity_and_hasher(capacity: usize, hasher: H) -> Self {
-        Self {
-            indices: HashTable::with_capacity(capacity),
-            data: Vec::with_capacity(capacity),
-            hasher,
-        }
-    }
-
-    pub(crate) fn with_capacity(capacity: usize) -> Self
-    where
-        H: Default,
-    {
-        Self::with_capacity_and_hasher(capacity, H::default())
     }
 
     /// Intern a value into the arena, returning the index of the value. If the
@@ -79,12 +59,6 @@ impl<T, H> DedupArena<T, H> {
                 Ok(index)
             },
         }
-    }
-
-    /// SAFETY: The caller must ensure that the values in the arena remain
-    /// unique.
-    pub(crate) unsafe fn as_mut_slice(&mut self) -> &mut [T] {
-        self.data.as_mut_slice()
     }
 
     /// Intern a value into the arena, returning the index of the value. Returns

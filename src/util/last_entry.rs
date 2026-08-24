@@ -28,7 +28,7 @@ pub(crate) struct LastEntry<'vector, T> {
     last:   &'vector mut T,
 }
 
-impl<'vector, T> LastEntry<'vector, T> {
+impl<T> LastEntry<'_, T> {
     pub(crate) fn get(&self) -> &T {
         self.last
     }
@@ -64,11 +64,6 @@ impl<'vector, T> LastEntry<'vector, T> {
             vector.set_len(new_length);
         }
         value
-    }
-
-    pub(crate) fn into_mut(self) -> &'vector mut T {
-        let Self { vector: _, last } = self;
-        last
     }
 }
 
@@ -135,15 +130,6 @@ mod tests {
         let mut values = vec![10, 20, 30];
 
         *last_entry(&mut values).unwrap().get_mut() = 31;
-
-        assert_eq!(values, [10, 20, 31]);
-    }
-
-    #[test]
-    fn into_mut_mutates_only_the_final_element() {
-        let mut values = vec![10, 20, 30];
-
-        *last_entry(&mut values).unwrap().into_mut() = 31;
 
         assert_eq!(values, [10, 20, 31]);
     }

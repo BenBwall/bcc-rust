@@ -15,16 +15,6 @@ use hashbrown::{
     hash_table::Entry,
 };
 use rustc_hash::FxBuildHasher;
-#[expect(
-    clippy::assertions_on_constants,
-    reason = "Clippy is giving a false positive here, the value of usize::BITS will vary \
-              depending on which architecture we're targeting."
-)]
-const _: () = assert!(
-    usize::BITS >= 32,
-    "StringCache: usize must be at least 32 bits."
-);
-
 #[derive(Debug, Clone)]
 pub(crate) struct StringCache {
     ends:  Vec<u32>,
@@ -154,17 +144,15 @@ impl StringCache {
         inner(self, s.as_ref())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
-        fn inner(interner: &StringCache, s: &str) -> Option<StringCacheId> {
-            let hash = FxBuildHasher.hash_one(s);
-            interner
-                .dedup
-                .find(hash, |symbol| {
-                    s == StringCache::at_impl(&interner.data, &interner.ends, *symbol)
-                })
-                .copied()
-        }
-        inner(self, s.as_ref())
+        let string = s.as_ref();
+        let hash = FxBuildHasher.hash_one(string);
+        self.dedup
+            .find(hash, |symbol| {
+                string == StringCache::at_impl(&self.data, &self.ends, *symbol)
+            })
+            .copied()
     }
 
     pub(crate) fn push(&mut self, c: impl Into<char>) {
@@ -179,32 +167,6 @@ impl StringCache {
             interner.data.push_str(s);
         }
         inner(self, s.as_ref());
-    }
-
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "One of our invariants is that self.data.len() will never be greater than \
-                  u32::MAX."
-    )]
-    pub(crate) fn pop(&mut self) {
-        assert!(
-            self.ends.last().copied() != Some(self.data.len() as u32),
-            "StringCache: cannot pop across string boundaries."
-        );
-        _ = self.data.pop();
-    }
-
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "One of our invariants is that self.data.len() will never be greater than \
-                  u32::MAX."
-    )]
-    pub(crate) fn pop_str(&mut self, len: u32) {
-        assert!(
-            self.ends.last().copied() < Some(self.data.len() as u32 + len - 1),
-            "StringCache: cannot pop across string boundaries."
-        );
-        self.data.truncate(self.data.len() - len as usize);
     }
 
     #[expect(
@@ -262,11 +224,5 @@ impl StringCache {
 
     pub(crate) fn at(&self, id: impl Into<StringCacheId>) -> &str {
         Self::at_impl(&self.data, &self.ends, id.into())
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.ends.truncate(1);
-        self.data.clear();
-        self.dedup.clear();
     }
 }

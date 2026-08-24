@@ -2126,6 +2126,19 @@ pub(crate) struct FunctionLikeMacroArgument {
     tokenizer: PreprocessorTokenizer,
 }
 
+#[expect(
+    clippy::needless_continue,
+    reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "Preprocessor-expression conversion reports out-of-range values before conversion."
+)]
+#[expect(
+    clippy::while_let_loop,
+    reason = "The macro-parameter loop has multiple semantic exit conditions."
+)]
 impl Preprocessor {
     pub(crate) fn new(
         context: &mut Context,
@@ -2634,7 +2647,7 @@ impl Preprocessor {
                         | TokenizerFrame {
                             frame_type:
                                 TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                                | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                                | TokenizerFrameType::ObjectLikeMacroInvocation,
                             ..
                         } =>
                             if token.kind == PreprocessorTokenType::Newline {
@@ -2741,43 +2754,6 @@ impl Preprocessor {
         false
     }
 
-    fn current_function_like_macro(
-        &self,
-        _context: &Context,
-    ) -> Option<(
-        u32,
-        PreprocessorTokenizer,
-        Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
-        bool,
-    )> {
-        match self.tokenizer_stack.last() {
-            | Some(TokenizerFrame {
-                frame_type:
-                    TokenizerFrameType::FunctionLikeMacroInvocation {
-                        arguments,
-                        is_variadic,
-                    },
-                tokenizer,
-            }) => Some((
-                tokenizer.source_file_index(),
-                tokenizer.clone(),
-                arguments.clone(),
-                *is_variadic,
-            )),
-            | _ => None,
-        }
-    }
-
-    fn current_is_function_like_macro(&self, _context: &Context) -> bool {
-        match self.tokenizer_stack.last() {
-            | Some(TokenizerFrame {
-                frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
-                ..
-            }) => true,
-            | _ => false,
-        }
-    }
-
     fn handle_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         context: &mut Context,
@@ -2811,7 +2787,7 @@ impl Preprocessor {
             let hash_hash = if let Some(TokenizerFrame {
                 frame_type:
                     TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                    | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                    | TokenizerFrameType::ObjectLikeMacroInvocation,
                 ..
             }) = self.tokenizer_stack.last()
             {
@@ -3120,7 +3096,7 @@ impl Preprocessor {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context
                                     .string_cache
-                                    .intern(&source_file.to_string_lossy()),
+                                    .intern(source_file.to_string_lossy()),
                                 source_vectors: context.create_source_vectors(
                                     SourcePosition {
                                         index:  0,
@@ -3269,7 +3245,7 @@ impl Preprocessor {
             }
         };
         self.generate_placeholders = false;
-        self.current_is_newline = ret.map_or(true, |t| t.kind == PreprocessorTokenType::Newline);
+        self.current_is_newline = ret.is_none_or(|t| t.kind == PreprocessorTokenType::Newline);
         ret
     }
 
@@ -3598,14 +3574,14 @@ impl Preprocessor {
         let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
         let is_octal = contents.starts_with('0') && !is_hex && !is_binary;
         if is_hex {
-            if contents.contains(|c| c == '.' || c == 'p' || c == 'P') {
+            if contents.contains(['.', 'p', 'P']) {
                 self.parse_hexadecimal_float(context, token)
             } else {
                 self.parse_hexadecimal_integer(context, token)
             }
         } else if is_binary {
             self.parse_binary_integer(context, token)
-        } else if contents.contains(|c| c == '.' || c == 'e' || c == 'E') {
+        } else if contents.contains(['.', 'e', 'E']) {
             self.parse_decimal_float(context, token)
         } else if is_octal {
             self.parse_octal_integer(context, token)
@@ -3833,7 +3809,7 @@ impl Preprocessor {
                     Some(TokenizerFrame {
                         frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. }
                             | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                            | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                            | TokenizerFrameType::ObjectLikeMacroInvocation,
                         ..
                     })
                 ) {
@@ -5068,7 +5044,7 @@ impl Preprocessor {
                         while let Some(mut entry) =
                             last_entry(&mut self.expression_parser.operator_stack)
                         {
-                            match *entry.get() {
+                            match *entry {
                                 | PreprocessorExpressionOperator::QuestionMark => {
                                     _ = entry.insert(PreprocessorExpressionOperator::Conditional);
                                     matched_question_mark = true;
@@ -5081,13 +5057,13 @@ impl Preprocessor {
                                 },
                             }
                         }
-                        if !matched_question_mark {
+                        if matched_question_mark {
+                            self.expression_parser.state = UNARY;
+                        } else {
                             context.preprocessor_error(PreprocessorError {
                                 error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
                                 source_vectors: token.source_vectors,
                             });
-                        } else {
-                            self.expression_parser.state = UNARY;
                         }
                     },
                     (
@@ -5184,7 +5160,7 @@ impl Preprocessor {
                                 | IntegerTokenType::UnsignedLongLong(ull) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ull)),
                             },
                             _ => unreachable!("Compiler bug: parse_number should return a number token."),
-                        };
+                        }
                         self.expression_parser.state = BINARY;
                     },
                     (PreprocessorTokenType::Number, BINARY) => context.preprocessor_error(PreprocessorError {
@@ -5429,11 +5405,10 @@ impl Preprocessor {
                 })
             },
             "parsing ifdef directive",
-        ) {
-            if !self.macro_definitions.contains_key(&name.contents) {
-                self.skip_over_dead_code(context);
-                return;
-            }
+        ) && !self.macro_definitions.contains_key(&name.contents)
+        {
+            self.skip_over_dead_code(context);
+            return;
         }
         if self
             .expect_token_from_previous_phase::<true>(
@@ -5467,11 +5442,10 @@ impl Preprocessor {
                 })
             },
             "parsing ifndef directive",
-        ) {
-            if !self.macro_definitions.contains_key(&name.contents) {
-                self.skip_over_dead_code(context);
-                return;
-            }
+        ) && !self.macro_definitions.contains_key(&name.contents)
+        {
+            self.skip_over_dead_code(context);
+            return;
         }
         if self
             .expect_token_from_previous_phase::<true>(
