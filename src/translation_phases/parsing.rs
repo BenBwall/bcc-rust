@@ -2594,6 +2594,8 @@ impl StatementFrame {
                     ParseAction::Consume
                 } else if Self::at_expression_boundary(token, ExpressionTerminator::Semicolon)
                     || token.is_some_and(|token| parser.declaration_starter(token))
+                    || token.is_some_and(|token| token.kind == TokenType::Identifier)
+                        && is_operator(parser.cursor.following(context), OperatorTokenType::Colon)
                 {
                     self.phase = StatementPhase::ReturnSemicolon(None);
                     ParseAction::Reprocess
@@ -8907,6 +8909,22 @@ mod tests {
         assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Break
+        )));
+    }
+
+    #[test]
+    fn bare_return_recovery_preserves_following_identifier_labels() {
+        let parsed = parse("int f(void) { return label: ; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(None)
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Label(_, _)
         )));
     }
 
