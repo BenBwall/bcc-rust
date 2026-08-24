@@ -2212,12 +2212,17 @@ impl FunctionDefinitionFrame {
                         token,
                     );
                     if token.is_none() {
+                        let body_source = context.create_source_vectors(
+                            parser.position(context),
+                            parser.source_file_index(),
+                            0,
+                        );
                         let body = parser.syntax.statements.len().to_u32();
                         parser.syntax.statements.push(Statement {
                             kind:           StatementType::Compound {
                                 items: VectorSlice::empty(),
                             },
-                            source_vectors: SourceVectors::default(),
+                            source_vectors: body_source,
                             recovered:      true,
                         });
                         self.body = Some(StatementIndex(body));
@@ -9606,6 +9611,21 @@ mod tests {
             assert!(parsed.parser.label_scopes.is_empty(), "{source:?}");
             assert!(parsed.parser.switch_scopes.is_empty(), "{source:?}");
         }
+    }
+
+    #[test]
+    fn missing_function_body_at_eof_retains_a_zero_width_source_location() {
+        let source = "int f(parameter) int parameter;";
+        let parsed = parse(source);
+        let definition = function_definition(&parsed, 0);
+        let body = &parsed.parser.syntax.statements[definition.body.0 as usize];
+        let [body_source] = parsed.context.get_source_vectors(body.source_vectors) else {
+            panic!("expected one source vector for the recovered function body")
+        };
+
+        assert!(body.recovered);
+        assert_eq!(body_source.index, source.len());
+        assert_eq!(body_source.length, 0);
     }
 
     #[test]
