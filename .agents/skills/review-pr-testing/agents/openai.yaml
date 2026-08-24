@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Testing"
+  short_description: "Review test quality and concrete regression coverage"
+  default_prompt: "Use $review-pr-testing to review the current PR's regression protection."

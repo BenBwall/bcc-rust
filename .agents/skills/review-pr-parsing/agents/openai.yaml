@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Parsing"
+  short_description: "Review C99 grammar, AST, scope, and parser control flow"
+  default_prompt: "Use $review-pr-parsing to review the current PR's C parser changes."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Behavior"
+  short_description: "Review observable correctness and integration behavior"
+  default_prompt: "Use $review-pr-behavior to review the current PR for behavioral defects."

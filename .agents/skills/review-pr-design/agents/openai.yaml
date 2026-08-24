@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Design"
+  short_description: "Review architecture, maintainability, and repo conventions"
+  default_prompt: "Use $review-pr-design to review the current PR's design and maintainability."
