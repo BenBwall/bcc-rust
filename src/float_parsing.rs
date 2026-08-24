@@ -23,6 +23,7 @@ mod ffi {
         non_camel_case_types,
         non_snake_case,
         dead_code,
+        unused_results,
         clippy::all,
         clippy::allow_attributes,
         clippy::allow_attributes_without_reason,
@@ -31,7 +32,7 @@ mod ffi {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-/// Calls libc::errno() and returns the value.
+/// Calls `libc::errno()` and returns the value.
 fn errno() -> i32 {
     // `std::io::Error::last_os_error().raw_os_error()` is guaranteed to
     // return Some(i32).
@@ -56,8 +57,6 @@ const LONG_DOUBLE_BYTES: usize = ffi::LONG_DOUBLE_BYTES as _;
 
 impl Display for LongDouble {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        type T = std::fmt::Error;
-
         let s = long_double_to_string(*self).expect("Converting long_double to string failed.");
         write!(f, "{s}")
     }
@@ -108,7 +107,7 @@ pub(crate) fn long_double_to_operand(
     };
     // SAFETY: long_double_to_operand is safe to call because we're  passing a
     // pointer to a valid error variable.
-    let operand = unsafe { ffi::long_double_to_operand(ld, &mut error) };
+    let operand = unsafe { ffi::long_double_to_operand(ld, &raw mut error) };
     if let Some(error) = NonZeroI32::new(error) {
         return Err(error);
     }
@@ -149,7 +148,7 @@ pub(crate) fn string_to_long_double(s: &str) -> Result<LongDouble, ParseFloatErr
     // null-terminated, and we're also a pointer to a null pointer, which is
     // what you're supposed to do.
     let long_double =
-        unsafe { ffi::string_to_long_double(s.as_ptr().cast::<c_char>(), &mut endptr) };
+        unsafe { ffi::string_to_long_double(s.as_ptr().cast::<c_char>(), &raw mut endptr) };
     let error = errno();
     // SAFETY: Pointer arithmetic is safe because we know that the string contains
     // at least one byte (the null terminator), so adding a len - 1 is guaranteed to
@@ -182,7 +181,7 @@ pub(crate) fn string_to_double(s: &str) -> Result<f64, ParseFloatError> {
     let mut endptr = std::ptr::null_mut();
     // SAFETY: strtod is safe to call because our string is null-terminated, and
     // we're also a pointer to a null pointer, which is what you're supposed to do.
-    let double = unsafe { strtod(s.as_ptr().cast::<c_char>(), &mut endptr) };
+    let double = unsafe { strtod(s.as_ptr().cast::<c_char>(), &raw mut endptr) };
     let error = errno();
     // SAFETY: Pointer arithmetic is safe because we know that the string contains
     // at least one byte (the null terminator), so adding a len - 1 is guaranteed to
@@ -207,7 +206,7 @@ pub(crate) fn string_to_float(s: &str) -> Result<f32, ParseFloatError> {
     let mut endptr = std::ptr::null_mut();
     // SAFETY: strtof is safe to call because our string is null-terminated, and
     // we're also a pointer to a null pointer, which is what you're supposed to do.
-    let float = unsafe { strtof(s.as_ptr().cast::<c_char>(), &mut endptr) };
+    let float = unsafe { strtof(s.as_ptr().cast::<c_char>(), &raw mut endptr) };
     let error = errno();
     // SAFETY: Pointer arithmetic is safe because we know that the string contains
     // at least one byte (the null terminator), so adding a len - 1 is guaranteed to
