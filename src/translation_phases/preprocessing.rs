@@ -2189,6 +2189,10 @@ impl Preprocessor {
         }
     }
 
+    pub(crate) fn has_pending_parser_token(&self) -> bool {
+        self.pending_parser_token.is_some()
+    }
+
     fn concatenate_adjacent_strings(&mut self, context: &mut Context, first: Token) -> Token {
         let TokenType::String(first_kind) = first.kind else {
             return first;

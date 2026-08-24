@@ -106,7 +106,12 @@ impl Iterator for PreprocessorIterator {
             return Some(Ok(token));
         }
 
-        self.context.source_vectors.0.clear();
+        // Adjacent-string concatenation may already have mapped and buffered
+        // the next non-string token. Its source-vector handle remains valid
+        // until that buffered token is yielded.
+        if !self.preprocessor.has_pending_parser_token() {
+            self.context.source_vectors.0.clear();
+        }
         let token = self.preprocessor.next_item(&mut self.context);
         if let Some(error) = self.context.pop_pending_error() {
             self.pending_token = token;
@@ -216,6 +221,32 @@ mod pipeline_iterator_tests {
         assert_eq!(
             iterator.context.string_cache.at(token.contents),
             "COMMA_RESULT_2"
+        );
+        assert!(iterator.next().is_none());
+    }
+
+    #[test]
+    fn adjacent_string_lookahead_keeps_the_buffered_token_provenance() {
+        let mut iterator = PreprocessorIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "\"a\" identifier\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        let string = iterator.next().unwrap().unwrap();
+        assert!(matches!(string.kind, TokenType::String(_)));
+        let identifier = iterator.next().unwrap().unwrap();
+        assert_eq!(identifier.kind, TokenType::Identifier);
+        assert_eq!(
+            iterator.context.string_cache.at(identifier.contents),
+            "identifier"
+        );
+        assert!(
+            !iterator
+                .context
+                .get_source_vectors(identifier.source_vectors)
+                .is_empty()
         );
         assert!(iterator.next().is_none());
     }

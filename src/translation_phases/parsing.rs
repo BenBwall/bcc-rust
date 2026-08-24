@@ -8543,8 +8543,7 @@ impl ExpressionFrame {
     ) -> bool {
         match self.boundary {
             | ExpressionBoundary::Initializer =>
-                token.kind != TokenType::Identifier
-                    && parser.declaration_starter(token)
+                parser.declaration_starter(token)
                     && !matches!(
                         parser
                             .cursor
@@ -8593,8 +8592,15 @@ impl ExpressionFrame {
                         ))
                     ),
             | ExpressionBoundary::Statement(_) | ExpressionBoundary::ClosingParenthesis =>
-                token.kind != TokenType::Identifier && parser.declaration_starter(token)
-                    || is_statement_keyword(token.kind),
+                parser.declaration_starter(token)
+                    || is_statement_keyword(token.kind)
+                    || matches!(
+                        self.boundary,
+                        ExpressionBoundary::Statement(ExpressionTerminator::Semicolon)
+                    ) && token.kind == TokenType::Identifier
+                        && parser.cursor.following(context).is_some_and(|following| {
+                            following.kind == TokenType::Operator(OperatorTokenType::Colon)
+                        }),
             | ExpressionBoundary::ClosingSquareBracket
             | ExpressionBoundary::Argument
             | ExpressionBoundary::Designator => false,
@@ -10920,6 +10926,20 @@ mod tests {
     }
 
     #[test]
+    fn initializer_recovery_preserves_following_typedef_led_declarations() {
+        let parsed = parse("typedef int T; int f(void) { int x = 1 + T y; return y; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 1).body);
+
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], BlockItem::Declaration(_)));
+        assert!(matches!(items[1], BlockItem::Declaration(_)));
+        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+        )));
+    }
+
+    #[test]
     fn expression_recovery_preserves_following_identifier_labels() {
         let parsed = parse("int f(void) { value label: ; return; }\n");
         let items = block_items(&parsed, function_definition(&parsed, 0).body);
@@ -10935,6 +10955,22 @@ mod tests {
         assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Return(None)
+        )));
+    }
+
+    #[test]
+    fn malformed_expression_recovery_preserves_following_identifier_labels() {
+        let parsed = parse("int f(void) { x = 1 + label: return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Expression(ExpressionSlot::Parsed(_))
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Label(_, _)
         )));
     }
 
