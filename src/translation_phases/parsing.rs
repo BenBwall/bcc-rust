@@ -2155,6 +2155,7 @@ impl LanguageExpressionOperator {
 struct ExpressionFrame {
     mode:                  ExpressionMode,
     boundary:              ExpressionBoundary,
+    recovery_boundary:     ExpressionBoundary,
     phase:                 ExpressionPhase,
     operators:             Vec<LanguageExpressionOperator>,
     operands:              Vec<ExpressionOperand>,
@@ -2213,9 +2214,28 @@ impl ExpressionFrame {
         boundary: ExpressionBoundary,
         starting_error_count: usize,
     ) -> Self {
+        Self::with_recovery_boundary(mode, boundary, boundary, starting_error_count)
+    }
+
+    fn nested(
+        &self,
+        mode: ExpressionMode,
+        boundary: ExpressionBoundary,
+        starting_error_count: usize,
+    ) -> Self {
+        Self::with_recovery_boundary(mode, boundary, self.recovery_boundary, starting_error_count)
+    }
+
+    fn with_recovery_boundary(
+        mode: ExpressionMode,
+        boundary: ExpressionBoundary,
+        recovery_boundary: ExpressionBoundary,
+        starting_error_count: usize,
+    ) -> Self {
         Self {
             mode,
             boundary,
+            recovery_boundary,
             phase: ExpressionPhase::Parse,
             operators: Vec::new(),
             operands: Vec::new(),
@@ -7678,7 +7698,7 @@ impl ExpressionFrame {
             | ExpressionPhase::PushGrouped(opening) => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitGrouped(opening);
-                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
                     ExpressionMode::Expression,
                     ExpressionBoundary::ClosingParenthesis,
                     parser.hard_error_count,
@@ -7730,7 +7750,7 @@ impl ExpressionFrame {
             | ExpressionPhase::PushSubscript(base, opening) => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitSubscript(base, opening);
-                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
                     ExpressionMode::Expression,
                     ExpressionBoundary::ClosingSquareBracket,
                     parser.hard_error_count,
@@ -7808,7 +7828,7 @@ impl ExpressionFrame {
             | ExpressionPhase::PushCallArgument(base) => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitCallArgument(base);
-                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
                     ExpressionMode::AssignmentExpression,
                     ExpressionBoundary::Argument,
                     parser.hard_error_count,
@@ -7904,7 +7924,7 @@ impl ExpressionFrame {
             | ExpressionPhase::PushPrefix(operator, operator_source, child_mode) => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitPrefix(operator, operator_source);
-                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
                     child_mode,
                     self.boundary,
                     parser.hard_error_count,
@@ -7950,7 +7970,7 @@ impl ExpressionFrame {
             | ExpressionPhase::PushSizeofExpression(sizeof_source) => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitSizeofExpression(sizeof_source);
-                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
                     ExpressionMode::UnaryExpression,
                     self.boundary,
                     parser.hard_error_count,
@@ -8095,7 +8115,7 @@ impl ExpressionFrame {
             | ExpressionPhase::PushCastOperand(type_name, type_source) => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitCastOperand(type_name, type_source);
-                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
                     ExpressionMode::CastExpression,
                     self.boundary,
                     parser.hard_error_count,
@@ -8178,7 +8198,7 @@ impl ExpressionFrame {
             | ExpressionPhase::PushConditionalElse => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitConditionalElse;
-                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
                     ExpressionMode::ConstantExpression,
                     self.boundary,
                     parser.hard_error_count,
@@ -8717,7 +8737,23 @@ impl ExpressionFrame {
         context: &mut Context,
         token: Token,
     ) -> bool {
-        match self.boundary {
+        Self::is_strong_grammar_boundary_for(parser, context, token, self.boundary)
+            || self.recovery_boundary != self.boundary
+                && Self::is_strong_grammar_boundary_for(
+                    parser,
+                    context,
+                    token,
+                    self.recovery_boundary,
+                )
+    }
+
+    fn is_strong_grammar_boundary_for(
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Token,
+        boundary: ExpressionBoundary,
+    ) -> bool {
+        match boundary {
             | ExpressionBoundary::Initializer =>
                 parser.declaration_starter(token)
                     && !matches!(
@@ -8771,7 +8807,7 @@ impl ExpressionFrame {
                 parser.declaration_starter(token)
                     || is_statement_keyword(token.kind)
                     || matches!(
-                        self.boundary,
+                        boundary,
                         ExpressionBoundary::Statement(ExpressionTerminator::Semicolon)
                     ) && token.kind == TokenType::Identifier
                         && parser.cursor.following(context).is_some_and(|following| {
@@ -11248,6 +11284,22 @@ mod tests {
         assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Expression(ExpressionSlot::Parsed(_))
+        )));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Label(_, _)
+        )));
+    }
+
+    #[test]
+    fn grouped_expression_recovery_preserves_following_identifier_labels() {
+        let parsed = parse("int f(void) { return (1 + label: ; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
         )));
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
