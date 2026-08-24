@@ -11,11 +11,11 @@
 //! with its arena handle so later semantic analysis can continue. The distinct
 //! status prevents repaired syntax from being mistaken for fully valid input.
 //!
-//! Phase 03 implements declarations, function definitions, compound blocks,
-//! every C99 statement family, and the scope transitions needed for
-//! typedef-sensitive block-item decisions. Expressions and initializers remain
-//! typed deferred children that diagnose and synchronize at their owning
-//! grammar boundaries for Phases 04 and 05.
+//! Phase 04 implements declarations, function definitions, compound blocks,
+//! every C99 statement family, expressions, type names, initializers, and the
+//! scope transitions needed for typedef-sensitive grammar decisions. All
+//! productions use heap-backed frames and retain recovered syntax at their
+//! owning grammar boundaries.
 //!
 //! Standard references in this module cite WG14/N1256, ISO/IEC 9899:TC3
 //! (C99 with Technical Corrigenda 1, 2, and 3). Each reference gives the
@@ -51,6 +51,7 @@ use super::{
         IntegerTokenType,
         KeywordTokenType,
         Preprocessor,
+        StringTokenType,
         Token,
         TokenType,
     },
@@ -161,7 +162,7 @@ pub(crate) struct Declaration {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct InitDeclarator {
     pub(crate) declarator:     Declarator,
-    pub(crate) initializer:    Option<Initializer>,
+    pub(crate) initializer:    Option<InitializerIndex>,
     pub(crate) source_vectors: SourceVectors,
 }
 
@@ -172,22 +173,44 @@ pub(crate) struct InitDeclarator {
 ///
 /// C99: §6.7.8, p. 125; PDF p. 137.
 #[derive(Debug, PartialEq, Clone)]
-#[expect(
-    clippy::enum_variant_names,
-    reason = "InitializerList is the C grammar production represented by this variant."
-)]
-pub(crate) enum Initializer {
-    #[expect(
-        dead_code,
-        reason = "The expression frame will construct this variant."
-    )]
+pub(crate) struct Initializer {
+    pub(crate) kind:           InitializerType,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum InitializerType {
     AssignmentExpression(ExpressionIndex),
-    #[expect(
-        dead_code,
-        reason = "The initializer frame will construct this variant."
-    )]
-    InitializerList(VectorSlice<Initializer>),
-    FutureChild(SourceVectors),
+    InitializerList(VectorSlice<InitializerElement>),
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct InitializerElement {
+    pub(crate) designation:    Option<DesignationIndex>,
+    pub(crate) initializer:    InitializerIndex,
+    pub(crate) source_vectors: SourceVectors,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct Designation {
+    pub(crate) designators:    VectorSlice<Designator>,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct Designator {
+    pub(crate) kind:           DesignatorType,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum DesignatorType {
+    Array(ConstantExpressionIndex),
+    Field(Identifier),
+    Error,
 }
 
 bitflags::bitflags! {
@@ -919,7 +942,7 @@ pub(crate) struct ParameterDeclaration {
 
 // The Phase 03 parser machine is implemented below the retained syntax model.
 
-/// A type-name syntax node retained for the future type-name frame.
+/// A parsed type-name syntax node.
 ///
 /// C99: §6.7.6, p. 122; PDF p. 134.
 #[derive(Debug, PartialEq, Clone)]
@@ -928,6 +951,8 @@ pub(crate) struct TypeName {
     pub(crate) declaration_specifiers: DeclarationSpecifiers,
     /// Optional abstract declarator deriving pointer, array, or function shape.
     pub(crate) declarator:             Option<Declarator>,
+    pub(crate) source_vectors:         SourceVectors,
+    pub(crate) recovered:              bool,
 }
 
 /// Buffered adapter from the preprocessor's iterator interface to parser
@@ -1006,12 +1031,14 @@ impl TokenCursor {
 /// implementation strategy, not a normative C concept.
 #[derive(Debug, Default)]
 struct SyntaxStore {
-    #[expect(dead_code, reason = "Owned by the future type-name frame.")]
     type_names:                 Vec<TypeName>,
     declarations:               Vec<Declaration>,
     init_declarators:           Vec<InitDeclarator>,
+    initializers:               Vec<Initializer>,
+    initializer_elements:       Vec<InitializerElement>,
+    designations:               Vec<Designation>,
+    designators:                Vec<Designator>,
     expressions:                Vec<Expression>,
-    #[expect(dead_code, reason = "Owned by the future expression frame.")]
     expression_indices:         Vec<ExpressionIndex>,
     statements:                 Vec<Statement>,
     block_items:                Vec<BlockItem>,
@@ -1162,6 +1189,12 @@ pub(crate) enum ParseFrameKind {
     StructOrUnionSpecifier,
     /// Enum tag specifier and optional enumerator body.
     EnumSpecifier,
+    /// Specifier-qualifier list and optional abstract declarator.
+    TypeName,
+    /// C99 expression with a caller-selected grammar entry and boundary.
+    Expression,
+    /// Scalar or brace-enclosed initializer.
+    Initializer,
     /// Function definition continuation after a completed declaration head.
     FunctionDefinition,
     /// Brace-delimited ordered block-item sequence.
@@ -1169,8 +1202,6 @@ pub(crate) enum ParseFrameKind {
     /// One labeled, compound, expression, selection, iteration, or jump
     /// statement.
     Statement,
-    /// Typed placeholder for a grammar child implemented in a later phase.
-    FutureChild(FutureChildKind),
 }
 
 impl ParseFrameKind {
@@ -1184,10 +1215,12 @@ impl ParseFrameKind {
             | Self::ParameterList => "parameter-list",
             | Self::StructOrUnionSpecifier => "struct-or-union-specifier",
             | Self::EnumSpecifier => "enum-specifier",
+            | Self::TypeName => "type-name",
+            | Self::Expression => "expression",
+            | Self::Initializer => "initializer",
             | Self::FunctionDefinition => "function-definition",
             | Self::CompoundStatement => "compound-statement",
             | Self::Statement => "statement",
-            | Self::FutureChild(kind) => kind.label(),
         }
     }
 }
@@ -1228,6 +1261,11 @@ enum ParseValue {
     StructOrUnionSpecifier(StructOrUnionSpecifierIndex),
     /// Completed enum specifier and its recovery handoff.
     EnumSpecifier(EnumSpecifierResult),
+    /// Arena handle for a completed type name.
+    TypeName(TypeNameIndex),
+    Expression(ExpressionResult),
+    ConstantExpression(ConstantExpressionResult),
+    Initializer(InitializerResult),
     /// Arena handle for a completed declaration.
     Declaration(DeclarationIndex),
     FunctionDefinition(FunctionDefinitionIndex),
@@ -1235,8 +1273,6 @@ enum ParseValue {
     Statement(StatementIndex),
     /// External item ready to be yielded by the translation-phase seam.
     ExternalDeclaration(ExternalDeclaration),
-    /// Recovered placeholder for a child implemented in a later phase.
-    FutureChild(FutureChildResult),
 }
 
 /// Parameter-list child result before it is appended to a declarator frame.
@@ -1261,16 +1297,22 @@ struct EnumSpecifierResult {
     stopped_before_declaration: bool,
 }
 
-/// Result of diagnosing and synchronizing a deferred grammar child.
-///
-/// C99: a syntax violation requires a diagnostic under §5.1.1.3, p. 11; PDF
-/// p. 23. Synchronization and placeholders are implementation mechanisms.
 #[derive(Debug, Clone, Copy)]
-struct FutureChildResult {
-    /// Deferred grammar family that was encountered.
-    kind:           FutureChildKind,
-    /// Source consumed while synchronizing that child.
-    source_vectors: SourceVectors,
+struct ExpressionResult {
+    index:     ExpressionIndex,
+    recovered: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConstantExpressionResult {
+    index:     ConstantExpressionIndex,
+    recovered: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InitializerResult {
+    index:     InitializerIndex,
+    recovered: bool,
 }
 
 /// Sum type for every grammar frame currently implemented by the parser.
@@ -1286,10 +1328,12 @@ enum ParseFrame {
     ParameterList(ParameterListFrame),
     StructOrUnionSpecifier(StructOrUnionSpecifierFrame),
     EnumSpecifier(EnumSpecifierFrame),
+    TypeName(TypeNameFrame),
+    Expression(ExpressionFrame),
+    Initializer(InitializerFrame),
     FunctionDefinition(FunctionDefinitionFrame),
     CompoundStatement(CompoundStatementFrame),
     Statement(StatementFrame),
-    FutureChild(FutureChildFrame),
 }
 
 /// One driver response paired with the identity of the frame that produced it.
@@ -1335,10 +1379,6 @@ enum SynchronizationKind {
     /// Stop before a `for` header's closing parenthesis as well as declaration
     /// separators.
     ForInitializer,
-    /// Stop before an initializer separator or declaration boundary.
-    Initializer,
-    /// Balance a block initializer while retaining following block-item starts.
-    BlockInitializer,
     /// Stop before the owning `]` or an enclosing declaration boundary.
     ArrayBound,
     /// Stop before a prototype parameter separator or enclosing boundary.
@@ -1505,123 +1545,6 @@ impl RecoveryState {
     }
 }
 
-/// Grammar child whose implementation is intentionally deferred beyond Phase
-/// 02 while its parent production and recovery seam remain explicit.
-///
-/// C99: array bounds are §6.7.5.2, pp. 116-117; PDF pp. 128-129; bit-field
-/// widths are §6.7.2.1, p. 101; PDF p. 113; enumerator values are §6.7.2.2,
-/// p. 105; PDF p. 117; initializers are §6.7.8, pp. 125-130; PDF pp. 137-142;
-/// function bodies are §6.9.1, pp. 141-142; PDF pp. 153-154.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FutureChildKind {
-    /// Assignment expression between `[` and `]` in an array declarator.
-    ArrayBoundExpression,
-    /// Constant expression following `:` in a bit-field declaration.
-    BitFieldWidthExpression,
-    /// Constant expression following `=` in an enumerator.
-    EnumeratorValueExpression,
-    /// Object initializer following `=` in an init-declarator.
-    Initializer,
-    /// General expression in a statement position.
-    StatementExpression,
-    /// Constant expression in a `case` label.
-    StatementConstantExpression,
-}
-
-impl FutureChildKind {
-    /// Returns the grammar-position label used for this deferred child.
-    fn label(self) -> &'static str {
-        match self {
-            | Self::ArrayBoundExpression => "array-bound-expression",
-            | Self::BitFieldWidthExpression => "bit-field-width-expression",
-            | Self::EnumeratorValueExpression => "enumerator-value-expression",
-            | Self::Initializer => "initializer",
-            | Self::StatementExpression => "statement-expression",
-            | Self::StatementConstantExpression => "statement-constant-expression",
-        }
-    }
-
-    fn not_implemented_error(self) -> ParserErrorType {
-        match self {
-            | Self::ArrayBoundExpression => ParserErrorType::ArrayBoundExpressionNotImplemented,
-            | Self::BitFieldWidthExpression =>
-                ParserErrorType::BitFieldWidthExpressionNotImplemented,
-            | Self::EnumeratorValueExpression =>
-                ParserErrorType::EnumeratorValueExpressionNotImplemented,
-            | Self::Initializer => ParserErrorType::InitializerNotImplemented,
-            | Self::StatementExpression | Self::StatementConstantExpression =>
-                ParserErrorType::StatementExpressionNotImplemented,
-        }
-    }
-}
-
-/// Placeholder frame that emits one stable unsupported-child diagnostic and
-/// synchronizes at the boundary chosen by [`FutureChildKind`].
-///
-/// C99: the deferred productions are cited by [`FutureChildKind`]. Reporting
-/// them rather than silently accepting them follows §5.1.1.3, p. 11; PDF p. 23.
-#[derive(Debug, Clone, Copy)]
-struct FutureChildFrame {
-    /// Deferred grammar family represented by this frame.
-    kind:                     FutureChildKind,
-    /// Whether the diagnostic/recovery step has run.
-    phase:                    FutureChildPhase,
-    /// Provenance consumed by recovery for the parent placeholder node.
-    recovered_source_vectors: Option<SourceVectors>,
-    /// Caller-selected stop token for statement expressions.
-    expression_terminator:    Option<ExpressionTerminator>,
-    /// Optional caller-selected synchronization policy for deferred children.
-    recovery_kind:            Option<SynchronizationKind>,
-}
-
-/// Lifecycle of a deferred child frame.
-///
-/// C99: implementation state for the deferred productions cited by
-/// [`FutureChildKind`]; the standard does not prescribe parser states.
-#[derive(Debug, Clone, Copy)]
-enum FutureChildPhase {
-    /// Emit the unsupported-child diagnostic and request recovery.
-    Start,
-    /// Return the recovered source to the parent.
-    Recovered,
-}
-
-impl FutureChildFrame {
-    fn new(kind: FutureChildKind) -> Self {
-        Self {
-            kind,
-            phase: FutureChildPhase::Start,
-            recovered_source_vectors: None,
-            expression_terminator: None,
-            recovery_kind: None,
-        }
-    }
-
-    fn with_recovery(kind: FutureChildKind, recovery_kind: SynchronizationKind) -> Self {
-        Self {
-            recovery_kind: Some(recovery_kind),
-            ..Self::new(kind)
-        }
-    }
-
-    fn statement(kind: FutureChildKind, terminator: ExpressionTerminator) -> Self {
-        debug_assert!(
-            matches!(
-                kind,
-                FutureChildKind::StatementExpression | FutureChildKind::StatementConstantExpression
-            ),
-            "statement recovery requires an expression-shaped deferred child"
-        );
-        Self {
-            kind,
-            phase: FutureChildPhase::Start,
-            recovered_source_vectors: None,
-            expression_terminator: Some(terminator),
-            recovery_kind: None,
-        }
-    }
-}
-
 /// Root frame that converts one declaration child into a valid or explicitly
 /// recovered external-declaration item.
 ///
@@ -1658,7 +1581,7 @@ impl ExternalDeclarationFrame {
 }
 
 /// Parses a declaration shell around declaration specifiers, comma-separated
-/// declarators, optional deferred initializers, and the terminating semicolon.
+/// declarators, optional initializers, and the terminating semicolon.
 ///
 /// C99: declaration, init-declarator-list, and init-declarator are §6.7,
 /// p. 97; PDF p. 109.
@@ -1708,7 +1631,7 @@ enum DeclarationPhase {
     AfterMissingDeclarator,
     /// Classify the token following a completed declarator.
     AfterDeclarator,
-    /// Push the deferred initializer child after consuming `=`.
+    /// Push the initializer child after consuming `=`.
     PushInitializer,
     /// Attach a recovered initializer placeholder.
     AwaitInitializer,
@@ -1845,6 +1768,8 @@ struct DeclaratorFrame {
     array_is_static: bool,
     /// Whether the active array suffix uses the `[*]` form.
     array_is_pointer: bool,
+    /// Parsed assignment-expression bound for the active array suffix.
+    array_assignment_expression: Option<ExpressionIndex>,
     /// Provenance accumulated across every declarator component.
     source_vectors: Option<SourceVectors>,
 }
@@ -1871,11 +1796,11 @@ enum DeclaratorPhase {
     ExpectNestedClose(Declarator),
     /// Consume zero or more array/function suffixes.
     Suffix,
-    /// Parse array qualifiers, `static`, `*`, or a deferred bound.
+    /// Parse array qualifiers, `static`, `*`, or an optional bound.
     Array,
     /// Require the closing bracket of an expression-free array suffix.
     ArrayExpectClose,
-    /// Receive and close a deferred array-bound expression.
+    /// Receive and close an array-bound expression.
     AwaitArrayBound,
     /// Decide whether a function suffix is empty, K&R, or prototype-style.
     FunctionStart,
@@ -1899,6 +1824,7 @@ impl DeclaratorFrame {
             array_qualifiers_before_static: false,
             array_is_static: false,
             array_is_pointer: false,
+            array_assignment_expression: None,
             source_vectors: None,
         }
     }
@@ -2032,7 +1958,7 @@ enum StructOrUnionPhase {
     AwaitMemberDeclarator,
     /// Decide whether a bit-field width follows the member declarator.
     AfterMemberDeclarator,
-    /// Push the deferred constant-expression bit-field width.
+    /// Push the constant-expression bit-field width.
     PushBitFieldWidth,
     /// Receive the recovered bit-field width placeholder.
     AwaitBitFieldWidth,
@@ -2061,7 +1987,7 @@ impl StructOrUnionSpecifierFrame {
 }
 
 /// Parses an enum specifier, including its optional tag, enumerators, trailing
-/// comma, and deferred explicit values.
+/// comma, and optional explicit values.
 ///
 /// C99: enumeration specifiers and enumerators are §6.7.2.2,
 /// pp. 105-107; PDF pp. 117-119.
@@ -2100,7 +2026,7 @@ enum EnumPhase {
     EnumeratorOrClose,
     /// Decide whether `=` introduces an explicit value.
     AfterEnumeratorName,
-    /// Push the deferred constant-expression value.
+    /// Push the constant-expression value.
     PushEnumeratorValue,
     /// Receive the recovered enumerator-value placeholder.
     AwaitEnumeratorValue,
@@ -2121,6 +2047,222 @@ impl EnumSpecifierFrame {
             stopped_before_declaration: false,
             source_vectors: None,
             current_enumerator_source: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TypeNameFrame {
+    phase:                  TypeNamePhase,
+    declaration_specifiers: Option<DeclarationSpecifiers>,
+    starting_error_count:   usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TypeNamePhase {
+    Start,
+    AwaitSpecifiers,
+    AwaitDeclarator,
+    Finish(Option<Declarator>),
+}
+
+impl TypeNameFrame {
+    fn new(starting_error_count: usize) -> Self {
+        Self {
+            phase: TypeNamePhase::Start,
+            declaration_specifiers: None,
+            starting_error_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpressionMode {
+    Expression,
+    AssignmentExpression,
+    ConstantExpression,
+    CastExpression,
+    UnaryExpression,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpressionParserState {
+    Operand,
+    Operator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpressionBoundary {
+    Statement(ExpressionTerminator),
+    ClosingParenthesis,
+    ClosingSquareBracket,
+    Argument,
+    Initializer,
+    ArrayBound,
+    StructMember,
+    Enumerator,
+    Designator,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExpressionOperand {
+    index:            ExpressionIndex,
+    unary_expression: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LanguageExpressionOperator {
+    Binary {
+        operator:       BinaryOperator,
+        source_vectors: SourceVectors,
+    },
+    Question {
+        source_vectors: SourceVectors,
+    },
+    Conditional {
+        middle:          ExpressionIndex,
+        question_source: SourceVectors,
+        colon_source:    Option<SourceVectors>,
+    },
+}
+
+impl LanguageExpressionOperator {
+    fn precedence(self) -> u32 {
+        match self {
+            | Self::Binary { operator, .. } => binary_operator_precedence(operator),
+            | Self::Question { .. } | Self::Conditional { .. } => 13,
+        }
+    }
+
+    fn is_right_associative(self) -> bool {
+        matches!(
+            self,
+            Self::Binary { operator, .. } if is_assignment_operator(operator)
+        ) || matches!(self, Self::Question { .. } | Self::Conditional { .. })
+    }
+
+    fn has_precedence_over(self, incoming: Self) -> bool {
+        if incoming.is_right_associative() {
+            self.precedence() < incoming.precedence()
+        } else {
+            self.precedence() <= incoming.precedence()
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ExpressionFrame {
+    mode:                 ExpressionMode,
+    boundary:             ExpressionBoundary,
+    phase:                ExpressionPhase,
+    operators:            Vec<LanguageExpressionOperator>,
+    operands:             Vec<ExpressionOperand>,
+    state:                ExpressionParserState,
+    starting_error_count: usize,
+    call_arguments:       Vec<ExpressionIndex>,
+    call_source_vectors:  Option<SourceVectors>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ExpressionPhase {
+    Parse,
+    PushGrouped(SourceVectors),
+    AwaitGrouped(SourceVectors),
+    CloseGrouped(SourceVectors, ExpressionIndex),
+    PushSubscript(ExpressionIndex, SourceVectors),
+    AwaitSubscript(ExpressionIndex, SourceVectors),
+    CloseSubscript(ExpressionIndex, SourceVectors, ExpressionIndex),
+    CallStart(ExpressionIndex, SourceVectors),
+    PushCallArgument(ExpressionIndex),
+    AwaitCallArgument(ExpressionIndex),
+    CallSeparator(ExpressionIndex),
+    ExpectMember(ExpressionIndex, bool, SourceVectors),
+    PushPrefix(UnaryOperator, SourceVectors, ExpressionMode),
+    AwaitPrefix(UnaryOperator, SourceVectors),
+    SizeofStart(SourceVectors),
+    PushSizeofExpression(SourceVectors),
+    AwaitSizeofExpression(SourceVectors),
+    PushTypeName(SourceVectors, TypeNameUse),
+    AwaitTypeName(SourceVectors, TypeNameUse),
+    CloseTypeName(SourceVectors, TypeNameUse, TypeNameIndex),
+    PushCompoundLiteral(TypeNameIndex, SourceVectors, TypeNameUse),
+    AwaitCompoundLiteral(TypeNameIndex, SourceVectors, TypeNameUse),
+    PushCastOperand(TypeNameIndex, SourceVectors),
+    AwaitCastOperand(TypeNameIndex, SourceVectors),
+    PushConditionalMiddle,
+    AwaitConditionalMiddle,
+    ExpectConditionalColon(ExpressionIndex),
+    PushConditionalElse,
+    AwaitConditionalElse,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TypeNameUse {
+    Cast,
+    Sizeof,
+}
+
+impl ExpressionFrame {
+    fn new(
+        mode: ExpressionMode,
+        boundary: ExpressionBoundary,
+        starting_error_count: usize,
+    ) -> Self {
+        Self {
+            mode,
+            boundary,
+            phase: ExpressionPhase::Parse,
+            operators: Vec::new(),
+            operands: Vec::new(),
+            state: ExpressionParserState::Operand,
+            starting_error_count,
+            call_arguments: Vec::new(),
+            call_source_vectors: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct InitializerFrame {
+    phase: InitializerPhase,
+    elements: Vec<InitializerElement>,
+    current_designators: Vec<Designator>,
+    current_designation: Option<DesignationIndex>,
+    source_vectors: Option<SourceVectors>,
+    designation_source_vectors: Option<SourceVectors>,
+    current_designator_source: Option<SourceVectors>,
+    starting_error_count: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InitializerPhase {
+    Start,
+    PushScalar,
+    AwaitScalar,
+    ElementOrClose,
+    Designation,
+    FieldDesignator,
+    PushArrayDesignator,
+    AwaitArrayDesignator,
+    CloseArrayDesignator(ConstantExpressionIndex),
+    DesignationEquals,
+    PushElement,
+    AwaitElement,
+    Separator,
+    FinishList,
+}
+
+impl InitializerFrame {
+    fn new(starting_error_count: usize) -> Self {
+        Self {
+            phase: InitializerPhase::Start,
+            elements: Vec::new(),
+            current_designators: Vec::new(),
+            current_designation: None,
+            source_vectors: None,
+            designation_source_vectors: None,
+            current_designator_source: None,
+            starting_error_count,
         }
     }
 }
@@ -2586,9 +2728,10 @@ impl StatementFrame {
                     return self.finish(parser, context, StatementType::Null);
                 }
                 self.phase = StatementPhase::AwaitExpression;
-                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::statement(
-                    FutureChildKind::StatementExpression,
-                    ExpressionTerminator::Semicolon,
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::Expression,
+                    ExpressionBoundary::Statement(ExpressionTerminator::Semicolon),
+                    parser.hard_error_count,
                 )))
             },
             | StatementPhase::AwaitCompound => {
@@ -2599,7 +2742,7 @@ impl StatementFrame {
                 self.finish_existing(parser, statement)
             },
             | StatementPhase::AwaitExpression => {
-                let slot = Self::future_slot(returned, FutureChildKind::StatementExpression);
+                let slot = Self::parsed_slot(returned);
                 self.merge_slot(parser, context, slot);
                 self.phase = StatementPhase::ExpressionSemicolon(slot);
                 ParseAction::Reprocess
@@ -2629,14 +2772,15 @@ impl StatementFrame {
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::AwaitReturnExpression;
-                    ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::statement(
-                        FutureChildKind::StatementExpression,
-                        ExpressionTerminator::Semicolon,
+                    ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        ExpressionMode::Expression,
+                        ExpressionBoundary::Statement(ExpressionTerminator::Semicolon),
+                        parser.hard_error_count,
                     )))
                 }
             },
             | StatementPhase::AwaitReturnExpression => {
-                let slot = Self::future_slot(returned, FutureChildKind::StatementExpression);
+                let slot = Self::parsed_slot(returned);
                 self.merge_slot(parser, context, slot);
                 self.phase = StatementPhase::ReturnSemicolon(Some(slot));
                 ParseAction::Reprocess
@@ -2723,14 +2867,15 @@ impl StatementFrame {
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::AwaitCaseExpression;
-                    ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::statement(
-                        FutureChildKind::StatementConstantExpression,
-                        ExpressionTerminator::Colon,
+                    ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        ExpressionMode::ConstantExpression,
+                        ExpressionBoundary::Statement(ExpressionTerminator::Colon),
+                        parser.hard_error_count,
                     )))
                 }
             },
             | StatementPhase::AwaitCaseExpression => {
-                let slot = Self::future_constant_slot(returned);
+                let slot = Self::parsed_constant_slot(returned);
                 self.merge_constant_slot(parser, context, slot);
                 self.phase = StatementPhase::CaseColon(slot);
                 ParseAction::Reprocess
@@ -2832,14 +2977,15 @@ impl StatementFrame {
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::AwaitHeaderExpression(kind);
-                    ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::statement(
-                        FutureChildKind::StatementExpression,
-                        ExpressionTerminator::ClosingParenthesis,
+                    ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        ExpressionMode::Expression,
+                        ExpressionBoundary::ClosingParenthesis,
+                        parser.hard_error_count,
                     )))
                 }
             },
             | StatementPhase::AwaitHeaderExpression(kind) => {
-                let slot = Self::future_slot(returned, FutureChildKind::StatementExpression);
+                let slot = Self::parsed_slot(returned);
                 self.merge_slot(parser, context, slot);
                 self.phase = StatementPhase::HeaderClosing(kind, slot);
                 ParseAction::Reprocess
@@ -3035,14 +3181,15 @@ impl StatementFrame {
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::DoAwaitExpression(body);
-                    ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::statement(
-                        FutureChildKind::StatementExpression,
-                        ExpressionTerminator::ClosingParenthesis,
+                    ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        ExpressionMode::Expression,
+                        ExpressionBoundary::ClosingParenthesis,
+                        parser.hard_error_count,
                     )))
                 }
             },
             | StatementPhase::DoAwaitExpression(body) => {
-                let expression = Self::future_slot(returned, FutureChildKind::StatementExpression);
+                let expression = Self::parsed_slot(returned);
                 self.merge_slot(parser, context, expression);
                 self.phase = StatementPhase::DoClosing(body, expression);
                 ParseAction::Reprocess
@@ -3135,14 +3282,15 @@ impl StatementFrame {
                     )))
                 } else {
                     self.phase = StatementPhase::AwaitForInitializerExpression;
-                    ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::statement(
-                        FutureChildKind::StatementExpression,
-                        ExpressionTerminator::ForSemicolon,
+                    ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        ExpressionMode::Expression,
+                        ExpressionBoundary::Statement(ExpressionTerminator::ForSemicolon),
+                        parser.hard_error_count,
                     )))
                 }
             },
             | StatementPhase::AwaitForInitializerExpression => {
-                let expression = Self::future_slot(returned, FutureChildKind::StatementExpression);
+                let expression = Self::parsed_slot(returned);
                 self.merge_slot(parser, context, expression);
                 self.phase = StatementPhase::ForInitializerSemicolon(expression);
                 ParseAction::Reprocess
@@ -3185,14 +3333,15 @@ impl StatementFrame {
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::AwaitForCondition(initializer);
-                    ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::statement(
-                        FutureChildKind::StatementExpression,
-                        ExpressionTerminator::ForSemicolon,
+                    ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        ExpressionMode::Expression,
+                        ExpressionBoundary::Statement(ExpressionTerminator::ForSemicolon),
+                        parser.hard_error_count,
                     )))
                 }
             },
             | StatementPhase::AwaitForCondition(initializer) => {
-                let expression = Self::future_slot(returned, FutureChildKind::StatementExpression);
+                let expression = Self::parsed_slot(returned);
                 self.merge_slot(parser, context, expression);
                 self.phase = StatementPhase::ForConditionSemicolon(initializer, expression);
                 ParseAction::Reprocess
@@ -3234,14 +3383,15 @@ impl StatementFrame {
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::AwaitForIteration(initializer, condition);
-                    ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::statement(
-                        FutureChildKind::StatementExpression,
-                        ExpressionTerminator::ClosingParenthesis,
+                    ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        ExpressionMode::Expression,
+                        ExpressionBoundary::ClosingParenthesis,
+                        parser.hard_error_count,
                     )))
                 }
             },
             | StatementPhase::AwaitForIteration(initializer, condition) => {
-                let expression = Self::future_slot(returned, FutureChildKind::StatementExpression);
+                let expression = Self::parsed_slot(returned);
                 self.merge_slot(parser, context, expression);
                 self.phase = StatementPhase::ForClosing(initializer, condition, Some(expression));
                 ParseAction::Reprocess
@@ -3366,34 +3516,29 @@ impl StatementFrame {
         );
     }
 
-    fn future_slot(returned: Option<ParseValue>, kind: FutureChildKind) -> ExpressionSlot {
-        let Some(ParseValue::FutureChild(FutureChildResult {
-            kind: returned_kind,
-            source_vectors,
-        })) = returned
-        else {
-            panic!("statement expression returned an unexpected value: {returned:?}");
+    fn parsed_slot(returned: Option<ParseValue>) -> ExpressionSlot {
+        let Some(ParseValue::Expression(ExpressionResult { index, recovered })) = returned else {
+            panic!("expression frame returned an unexpected value: {returned:?}");
         };
-        assert_eq!(returned_kind, kind);
-        ExpressionSlot::FutureChild(source_vectors)
+        let _ = recovered;
+        ExpressionSlot::Parsed(index)
     }
 
-    fn future_constant_slot(returned: Option<ParseValue>) -> ConstantExpressionSlot {
-        let Some(ParseValue::FutureChild(FutureChildResult {
-            kind: FutureChildKind::StatementConstantExpression,
-            source_vectors,
-        })) = returned
+    fn parsed_constant_slot(returned: Option<ParseValue>) -> ConstantExpressionSlot {
+        let Some(ParseValue::ConstantExpression(ConstantExpressionResult { index, recovered })) =
+            returned
         else {
-            panic!("case expression returned an unexpected value: {returned:?}");
+            panic!("constant-expression frame returned an unexpected value: {returned:?}");
         };
-        ConstantExpressionSlot::FutureChild(source_vectors)
+        let _ = recovered;
+        ConstantExpressionSlot::Parsed(index)
     }
 
     fn merge_slot(&mut self, parser: &Parser, context: &mut Context, slot: ExpressionSlot) {
         let source = match slot {
             | ExpressionSlot::Parsed(index) =>
                 parser.syntax.expressions[index.0 as usize].source_vectors,
-            | ExpressionSlot::FutureChild(source) | ExpressionSlot::Missing(source) => source,
+            | ExpressionSlot::Missing(source) => source,
         };
         if source.length > 0 {
             self.source_vectors = Some(
@@ -3412,7 +3557,6 @@ impl StatementFrame {
         let source = match slot {
             | ConstantExpressionSlot::Parsed(index) =>
                 parser.syntax.expressions[index.0 as usize].source_vectors,
-            | ConstantExpressionSlot::FutureChild(source)
             | ConstantExpressionSlot::Missing(source) => source,
         };
         if source.length > 0 {
@@ -3903,9 +4047,7 @@ impl Parser {
             );
             let stops_at_declaration_after_malformed_prefix = matches!(
                 recovery_set.kind,
-                SynchronizationKind::Initializer
-                    | SynchronizationKind::BlockInitializer
-                    | SynchronizationKind::ArrayBound
+                SynchronizationKind::ArrayBound
                     | SynchronizationKind::VariadicParameterList
                     | SynchronizationKind::StructMember
                     | SynchronizationKind::EnumeratorValue
@@ -3932,56 +4074,46 @@ impl Parser {
                     && at_top_level
                     && recovery_set.target == ParseFrameKind::EnumSpecifier
                     && token.kind == TokenType::Identifier;
-            let has_pending_conditional_at_depth = state
-                .questions
-                .iter()
-                .any(|question| *question == delimiter_depth);
+            let has_pending_conditional_at_depth = state.questions.contains(&delimiter_depth);
             let at_next_identifier_label =
                 (matches!(
                     recovery_set.kind,
                     SynchronizationKind::StatementExpression(ExpressionTerminator::Semicolon)
-                ) || matches!(
-                    recovery_set.kind,
-                    SynchronizationKind::BlockDeclaration | SynchronizationKind::BlockInitializer
-                ) || matches!(recovery_set.kind, SynchronizationKind::Statement)
-                    && consumed_tokens > 0)
+                ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration)
+                    || matches!(recovery_set.kind, SynchronizationKind::Statement)
+                        && consumed_tokens > 0)
                     && at_top_level
                     && !has_pending_conditional_at_depth
                     && token.kind == TokenType::Identifier
                     && is_operator(self.cursor.following(context), OperatorTokenType::Colon);
-            let at_statement_body_brace = (matches!(
-                recovery_set.kind,
-                SynchronizationKind::StatementExpression(
-                    ExpressionTerminator::ClosingParenthesis | ExpressionTerminator::Semicolon
-                )
-            ) || matches!(
-                recovery_set.kind,
-                SynchronizationKind::BlockDeclaration | SynchronizationKind::BlockInitializer
-            )) && at_top_level
-                && (!matches!(recovery_set.kind, SynchronizationKind::BlockInitializer)
-                    || consumed_tokens > 0)
-                && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-                && (state.last_token
-                    != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
-                    || !state.last_closed_parenthesis_was_type_name
-                    || state.last_closed_parenthesis_was_sizeof_type_name
-                        && self.cursor.following(context).is_some_and(|following| {
-                            is_statement_keyword(following.kind)
-                                || following.kind != TokenType::Identifier
-                                    && self.declaration_starter(following)
-                                || matches!(
-                                    following.kind,
-                                    TokenType::Operator(
-                                        OperatorTokenType::Semicolon
-                                            | OperatorTokenType::ClosingCurlyBrace
+            let at_statement_body_brace =
+                (matches!(
+                    recovery_set.kind,
+                    SynchronizationKind::StatementExpression(
+                        ExpressionTerminator::ClosingParenthesis | ExpressionTerminator::Semicolon
+                    )
+                ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration))
+                    && at_top_level
+                    && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    && (state.last_token
+                        != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
+                        || !state.last_closed_parenthesis_was_type_name
+                        || state.last_closed_parenthesis_was_sizeof_type_name
+                            && self.cursor.following(context).is_some_and(|following| {
+                                is_statement_keyword(following.kind)
+                                    || following.kind != TokenType::Identifier
+                                        && self.declaration_starter(following)
+                                    || matches!(
+                                        following.kind,
+                                        TokenType::Operator(
+                                            OperatorTokenType::Semicolon
+                                                | OperatorTokenType::ClosingCurlyBrace
+                                        )
                                     )
-                                )
-                        }));
+                            }));
             let at_next_statement_keyword = matches!(
                 recovery_set.kind,
-                SynchronizationKind::Statement
-                    | SynchronizationKind::BlockInitializer
-                    | SynchronizationKind::ForInitializer
+                SynchronizationKind::Statement | SynchronizationKind::ForInitializer
             ) && consumed_tokens > 0
                 && at_top_level
                 && is_statement_keyword(token.kind);
@@ -4088,6 +4220,33 @@ impl Parser {
                 | KeywordTokenType::Static
                 | KeywordTokenType::Struct
                 | KeywordTokenType::Typedef
+                | KeywordTokenType::Union
+                | KeywordTokenType::Unsigned
+                | KeywordTokenType::Void
+                | KeywordTokenType::Volatile
+                | KeywordTokenType::Bool,
+            ) => true,
+            | TokenType::Identifier => self.scopes.is_typedef(token.contents),
+            | _ => false,
+        }
+    }
+
+    fn type_name_starter(&self, token: Token) -> bool {
+        match token.kind {
+            | TokenType::Keyword(
+                KeywordTokenType::Char
+                | KeywordTokenType::Complex
+                | KeywordTokenType::Const
+                | KeywordTokenType::Double
+                | KeywordTokenType::Enum
+                | KeywordTokenType::Float
+                | KeywordTokenType::Imaginary
+                | KeywordTokenType::Int
+                | KeywordTokenType::Long
+                | KeywordTokenType::Restrict
+                | KeywordTokenType::Short
+                | KeywordTokenType::Signed
+                | KeywordTokenType::Struct
                 | KeywordTokenType::Union
                 | KeywordTokenType::Unsigned
                 | KeywordTokenType::Void
@@ -4244,6 +4403,25 @@ impl Parser {
     fn statement_source(&self, index: StatementIndex) -> SourceVectors {
         self.syntax.statements[index.0 as usize].source_vectors
     }
+
+    fn store_expression(
+        &mut self,
+        kind: ExpressionType,
+        source_vectors: SourceVectors,
+    ) -> ExpressionIndex {
+        let index = ExpressionIndex(
+            self.syntax
+                .expressions
+                .len()
+                .try_into()
+                .expect("expression arena length must fit in u32"),
+        );
+        self.syntax.expressions.push(Expression {
+            kind,
+            source_vectors,
+        });
+        index
+    }
 }
 
 impl ParseAction {
@@ -4296,14 +4474,6 @@ impl SynchronizationKind {
                     OperatorTokenType::Comma
                         | OperatorTokenType::Semicolon
                         | OperatorTokenType::ClosingParenthesis
-                        | OperatorTokenType::ClosingCurlyBrace
-                )
-            ),
-            | Self::Initializer | Self::BlockInitializer => matches!(
-                token,
-                TokenType::Operator(
-                    OperatorTokenType::Comma
-                        | OperatorTokenType::Semicolon
                         | OperatorTokenType::ClosingCurlyBrace
                 )
             ),
@@ -4403,7 +4573,7 @@ impl SynchronizationKind {
         braces: usize,
     ) -> bool {
         match self {
-            | Self::Declaration | Self::Initializer | Self::BlockInitializer =>
+            | Self::Declaration =>
                 braces == 0
                     && matches!(
                         token,
@@ -4540,8 +4710,139 @@ fn is_operator(token: Option<Token>, operator: OperatorTokenType) -> bool {
     token.is_some_and(|token| token.kind == TokenType::Operator(operator))
 }
 
+fn binary_operator_precedence(operator: BinaryOperator) -> u32 {
+    match operator {
+        | BinaryOperator::Multiplication | BinaryOperator::Division | BinaryOperator::Modulo => 3,
+        | BinaryOperator::Addition | BinaryOperator::Subtraction => 4,
+        | BinaryOperator::LeftShift | BinaryOperator::RightShift => 5,
+        | BinaryOperator::LessThan
+        | BinaryOperator::GreaterThan
+        | BinaryOperator::LessThanOrEqual
+        | BinaryOperator::GreaterThanOrEqual => 6,
+        | BinaryOperator::Equal | BinaryOperator::NotEqual => 7,
+        | BinaryOperator::BitwiseAnd => 8,
+        | BinaryOperator::BitwiseXor => 9,
+        | BinaryOperator::BitwiseOr => 10,
+        | BinaryOperator::LogicalAnd => 11,
+        | BinaryOperator::LogicalOr => 12,
+        | BinaryOperator::Assignment
+        | BinaryOperator::MultiplicationAssignment
+        | BinaryOperator::DivisionAssignment
+        | BinaryOperator::ModuloAssignment
+        | BinaryOperator::AdditionAssignment
+        | BinaryOperator::SubtractionAssignment
+        | BinaryOperator::LeftShiftAssignment
+        | BinaryOperator::RightShiftAssignment
+        | BinaryOperator::BitwiseAndAssignment
+        | BinaryOperator::BitwiseXorAssignment
+        | BinaryOperator::BitwiseOrAssignment => 14,
+        | BinaryOperator::Comma => 15,
+        | BinaryOperator::Subscript => 1,
+    }
+}
+
+fn binary_operator(token: TokenType) -> Option<BinaryOperator> {
+    let operator = match token {
+        | TokenType::Operator(OperatorTokenType::Asterisk) => BinaryOperator::Multiplication,
+        | TokenType::Operator(OperatorTokenType::ForwardSlash) => BinaryOperator::Division,
+        | TokenType::Operator(OperatorTokenType::Percent) => BinaryOperator::Modulo,
+        | TokenType::Operator(OperatorTokenType::Plus) => BinaryOperator::Addition,
+        | TokenType::Operator(OperatorTokenType::Minus) => BinaryOperator::Subtraction,
+        | TokenType::Operator(OperatorTokenType::LessThanLessThan) => BinaryOperator::LeftShift,
+        | TokenType::Operator(OperatorTokenType::GreaterThanGreaterThan) =>
+            BinaryOperator::RightShift,
+        | TokenType::Operator(OperatorTokenType::LessThan) => BinaryOperator::LessThan,
+        | TokenType::Operator(OperatorTokenType::GreaterThan) => BinaryOperator::GreaterThan,
+        | TokenType::Operator(OperatorTokenType::LessThanEquals) => BinaryOperator::LessThanOrEqual,
+        | TokenType::Operator(OperatorTokenType::GreaterThanEquals) =>
+            BinaryOperator::GreaterThanOrEqual,
+        | TokenType::Operator(OperatorTokenType::EqualsEquals) => BinaryOperator::Equal,
+        | TokenType::Operator(OperatorTokenType::ExclamationMarkEquals) => BinaryOperator::NotEqual,
+        | TokenType::Operator(OperatorTokenType::Ampersand) => BinaryOperator::BitwiseAnd,
+        | TokenType::Operator(OperatorTokenType::Caret) => BinaryOperator::BitwiseXor,
+        | TokenType::Operator(OperatorTokenType::Pipe) => BinaryOperator::BitwiseOr,
+        | TokenType::Operator(OperatorTokenType::AmpersandAmpersand) => BinaryOperator::LogicalAnd,
+        | TokenType::Operator(OperatorTokenType::PipePipe) => BinaryOperator::LogicalOr,
+        | TokenType::Operator(OperatorTokenType::Comma) => BinaryOperator::Comma,
+        | TokenType::Operator(OperatorTokenType::Equals) => BinaryOperator::Assignment,
+        | TokenType::Operator(OperatorTokenType::AsteriskEquals) =>
+            BinaryOperator::MultiplicationAssignment,
+        | TokenType::Operator(OperatorTokenType::ForwardSlashEquals) =>
+            BinaryOperator::DivisionAssignment,
+        | TokenType::Operator(OperatorTokenType::PercentEquals) => BinaryOperator::ModuloAssignment,
+        | TokenType::Operator(OperatorTokenType::PlusEquals) => BinaryOperator::AdditionAssignment,
+        | TokenType::Operator(OperatorTokenType::MinusEquals) =>
+            BinaryOperator::SubtractionAssignment,
+        | TokenType::Operator(OperatorTokenType::LessThanLessThanEquals) =>
+            BinaryOperator::LeftShiftAssignment,
+        | TokenType::Operator(OperatorTokenType::GreaterThanGreaterThanEquals) =>
+            BinaryOperator::RightShiftAssignment,
+        | TokenType::Operator(OperatorTokenType::AmpersandEquals) =>
+            BinaryOperator::BitwiseAndAssignment,
+        | TokenType::Operator(OperatorTokenType::CaretEquals) =>
+            BinaryOperator::BitwiseXorAssignment,
+        | TokenType::Operator(OperatorTokenType::PipeEquals) => BinaryOperator::BitwiseOrAssignment,
+        | _ => return None,
+    };
+    Some(operator)
+}
+
+fn prefix_operator(token: TokenType) -> Option<(UnaryOperator, ExpressionMode)> {
+    let (operator, mode) = match token {
+        | TokenType::Operator(OperatorTokenType::PlusPlus) =>
+            (UnaryOperator::PreIncrement, ExpressionMode::UnaryExpression),
+        | TokenType::Operator(OperatorTokenType::MinusMinus) =>
+            (UnaryOperator::PreDecrement, ExpressionMode::UnaryExpression),
+        | TokenType::Operator(OperatorTokenType::Ampersand) =>
+            (UnaryOperator::AddressOf, ExpressionMode::CastExpression),
+        | TokenType::Operator(OperatorTokenType::Asterisk) =>
+            (UnaryOperator::Indirection, ExpressionMode::CastExpression),
+        | TokenType::Operator(OperatorTokenType::Plus) =>
+            (UnaryOperator::Plus, ExpressionMode::CastExpression),
+        | TokenType::Operator(OperatorTokenType::Minus) =>
+            (UnaryOperator::Minus, ExpressionMode::CastExpression),
+        | TokenType::Operator(OperatorTokenType::Tilde) =>
+            (UnaryOperator::BitwiseNot, ExpressionMode::CastExpression),
+        | TokenType::Operator(OperatorTokenType::ExclamationMark) =>
+            (UnaryOperator::LogicalNot, ExpressionMode::CastExpression),
+        | _ => return None,
+    };
+    Some((operator, mode))
+}
+
+fn is_postfix_starter(token: TokenType) -> bool {
+    matches!(
+        token,
+        TokenType::Operator(
+            OperatorTokenType::OpeningSquareBracket
+                | OperatorTokenType::OpeningParenthesis
+                | OperatorTokenType::Period
+                | OperatorTokenType::Arrow
+                | OperatorTokenType::PlusPlus
+                | OperatorTokenType::MinusMinus
+        )
+    )
+}
+
+fn is_assignment_operator(operator: BinaryOperator) -> bool {
+    matches!(
+        operator,
+        BinaryOperator::Assignment
+            | BinaryOperator::MultiplicationAssignment
+            | BinaryOperator::DivisionAssignment
+            | BinaryOperator::ModuloAssignment
+            | BinaryOperator::AdditionAssignment
+            | BinaryOperator::SubtractionAssignment
+            | BinaryOperator::LeftShiftAssignment
+            | BinaryOperator::RightShiftAssignment
+            | BinaryOperator::BitwiseAndAssignment
+            | BinaryOperator::BitwiseXorAssignment
+            | BinaryOperator::BitwiseOrAssignment
+    )
+}
+
 /// Returns whether a token begins a statement production rather than an
-/// expression that the deferred expression frame could consume.
+/// expression that the expression frame can consume.
 fn is_statement_keyword(token: TokenType) -> bool {
     matches!(
         token,
@@ -4570,16 +4871,19 @@ impl ParseFrame {
             return;
         };
         let destination = match self {
-            | Self::ExternalDeclaration(_) | Self::DeclarationSpecifiers(_) => return,
+            | Self::ExternalDeclaration(_)
+            | Self::DeclarationSpecifiers(_)
+            | Self::TypeName(_)
+            | Self::Expression(_) => return,
             | Self::Declaration(frame) => &mut frame.source_vectors,
             | Self::Declarator(frame) => &mut frame.source_vectors,
             | Self::ParameterList(frame) => &mut frame.source_vectors,
             | Self::StructOrUnionSpecifier(frame) => &mut frame.source_vectors,
             | Self::EnumSpecifier(frame) => &mut frame.source_vectors,
+            | Self::Initializer(frame) => &mut frame.source_vectors,
             | Self::FunctionDefinition(frame) => &mut frame.source_vectors,
             | Self::CompoundStatement(frame) => &mut frame.source_vectors,
             | Self::Statement(frame) => &mut frame.source_vectors,
-            | Self::FutureChild(frame) => &mut frame.recovered_source_vectors,
         };
         *destination = Some(destination.map_or(recovered, |existing| {
             context.merge_vectors(existing, recovered)
@@ -4624,6 +4928,18 @@ impl ParseFrame {
                 frame_kind: ParseFrameKind::EnumSpecifier,
                 action:     frame.step(parser, context, token, returned),
             },
+            | Self::TypeName(frame) => FrameStep {
+                frame_kind: ParseFrameKind::TypeName,
+                action:     frame.step(parser, context, token, returned),
+            },
+            | Self::Expression(frame) => FrameStep {
+                frame_kind: ParseFrameKind::Expression,
+                action:     frame.step(parser, context, token, returned),
+            },
+            | Self::Initializer(frame) => FrameStep {
+                frame_kind: ParseFrameKind::Initializer,
+                action:     frame.step(parser, context, token, returned),
+            },
             | Self::FunctionDefinition(frame) => FrameStep {
                 frame_kind: ParseFrameKind::FunctionDefinition,
                 action:     frame.step(parser, context, token, returned),
@@ -4636,55 +4952,6 @@ impl ParseFrame {
                 frame_kind: ParseFrameKind::Statement,
                 action:     frame.step(parser, context, token, returned),
             },
-            | Self::FutureChild(frame) => FrameStep {
-                frame_kind: ParseFrameKind::FutureChild(frame.kind),
-                action:     frame.step(parser, context, token, returned),
-            },
-        }
-    }
-}
-
-impl FutureChildFrame {
-    fn step(
-        &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
-        token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
-        debug_assert!(
-            returned.is_none(),
-            "future-child frames cannot receive child values"
-        );
-        match self.phase {
-            | FutureChildPhase::Start => {
-                parser.report(context, self.kind.not_implemented_error(), token);
-                self.phase = FutureChildPhase::Recovered;
-                let kind = match self.kind {
-                    | FutureChildKind::ArrayBoundExpression => SynchronizationKind::ArrayBound,
-                    | FutureChildKind::BitFieldWidthExpression => SynchronizationKind::StructMember,
-                    | FutureChildKind::EnumeratorValueExpression =>
-                        SynchronizationKind::EnumeratorValue,
-                    | FutureChildKind::Initializer => self
-                        .recovery_kind
-                        .unwrap_or(SynchronizationKind::Initializer),
-                    | FutureChildKind::StatementExpression
-                    | FutureChildKind::StatementConstantExpression =>
-                        SynchronizationKind::StatementExpression(
-                            self.expression_terminator
-                                .expect("statement expressions have a caller stop token"),
-                        ),
-                };
-                ParseAction::Recover(SynchronizationSet {
-                    kind,
-                    target: ParseFrameKind::FutureChild(self.kind),
-                })
-            },
-            | FutureChildPhase::Recovered =>
-                ParseAction::Reduce(ParseValue::FutureChild(FutureChildResult {
-                    kind:           self.kind,
-                    source_vectors: self.recovered_source_vectors.take().unwrap_or_default(),
-                })),
         }
     }
 }
@@ -4754,15 +5021,6 @@ impl DeclarationFrame {
             | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
             | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
             | DeclarationContext::External => SynchronizationKind::Declaration,
-            | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
-        }
-    }
-
-    fn initializer_recovery_kind(&self) -> SynchronizationKind {
-        match self.context {
-            | DeclarationContext::Block => SynchronizationKind::BlockInitializer,
-            | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
-            | DeclarationContext::External => SynchronizationKind::Initializer,
             | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
         }
     }
@@ -5048,22 +5306,21 @@ impl DeclarationFrame {
                     "this frame phase cannot receive a child value"
                 );
                 self.phase = DeclarationPhase::AwaitInitializer;
-                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::with_recovery(
-                    FutureChildKind::Initializer,
-                    self.initializer_recovery_kind(),
+                ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
+                    parser.hard_error_count,
                 )))
             },
             | DeclarationPhase::AwaitInitializer => {
-                let Some(ParseValue::FutureChild(FutureChildResult {
-                    kind: FutureChildKind::Initializer,
-                    source_vectors,
+                let Some(ParseValue::Initializer(InitializerResult {
+                    index: initializer_index,
+                    recovered,
                 })) = returned
                 else {
-                    panic!("initializer seam returned an unexpected value: {returned:?}");
+                    panic!("initializer frame returned an unexpected value: {returned:?}");
                 };
-                // Even while initializer parsing is deferred, attach its
-                // recovered provenance to both the child placeholder and the
-                // containing init-declarator/declaration.
+                let _ = recovered;
+                let source_vectors =
+                    parser.syntax.initializers[initializer_index.0 as usize].source_vectors;
                 let initializer_source = self
                     .initializer_source
                     .map_or(source_vectors, |equals_source| {
@@ -5075,8 +5332,7 @@ impl DeclarationFrame {
                     }));
                 if let Some(index) = self.last_init_index {
                     let init_declarator = &mut parser.syntax.init_declarators[index as usize];
-                    init_declarator.initializer =
-                        Some(Initializer::FutureChild(initializer_source));
+                    init_declarator.initializer = Some(initializer_index);
                     init_declarator.source_vectors =
                         context.merge_vectors(init_declarator.source_vectors, initializer_source);
                 }
@@ -5680,6 +5936,7 @@ impl DeclaratorFrame {
                     self.array_qualifiers_before_static = false;
                     self.array_is_static = false;
                     self.array_is_pointer = false;
+                    self.array_assignment_expression = None;
                     self.phase = DeclaratorPhase::Array;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::OpeningParenthesis) {
@@ -5786,8 +6043,10 @@ impl DeclaratorFrame {
                     return ParseAction::Reprocess;
                 }
                 self.phase = DeclaratorPhase::AwaitArrayBound;
-                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
-                    FutureChildKind::ArrayBoundExpression,
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::AssignmentExpression,
+                    ExpressionBoundary::ArrayBound,
+                    parser.hard_error_count,
                 )))
             },
             | DeclaratorPhase::ArrayExpectClose => {
@@ -5836,17 +6095,15 @@ impl DeclaratorFrame {
                 }
             },
             | DeclaratorPhase::AwaitArrayBound => {
-                // This phase is entered both after a future expression child
+                // This phase is entered both after an expression child
                 // and after direct recovery from malformed `[* ...]` input.
                 // Merge a child only when one actually returned.
                 if let Some(returned) = returned {
-                    let ParseValue::FutureChild(FutureChildResult {
-                        kind: FutureChildKind::ArrayBoundExpression,
-                        source_vectors,
-                    }) = returned
-                    else {
-                        panic!("array-bound seam returned an unexpected value: {returned:?}");
+                    let ParseValue::Expression(ExpressionResult { index, .. }) = returned else {
+                        panic!("array-bound frame returned an unexpected value: {returned:?}");
                     };
+                    let source_vectors = parser.syntax.expressions[index.0 as usize].source_vectors;
+                    self.array_assignment_expression = Some(index);
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
                             context.merge_vectors(existing, source_vectors)
@@ -6019,7 +6276,7 @@ impl DeclaratorFrame {
             type_qualifiers:       self.array_qualifiers,
             is_static:             self.array_is_static,
             is_pointer:            self.array_is_pointer,
-            assignment_expression: None,
+            assignment_expression: self.array_assignment_expression.take(),
         });
         self.has_direct_declarator = true;
         self.array_qualifiers = TypeQualifiers::empty();
@@ -6708,18 +6965,22 @@ impl StructOrUnionSpecifierFrame {
                     "this frame phase cannot receive a child value"
                 );
                 self.phase = StructOrUnionPhase::AwaitBitFieldWidth;
-                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
-                    FutureChildKind::BitFieldWidthExpression,
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::ConstantExpression,
+                    ExpressionBoundary::StructMember,
+                    parser.hard_error_count,
                 )))
             },
             | StructOrUnionPhase::AwaitBitFieldWidth => {
-                let Some(ParseValue::FutureChild(FutureChildResult {
-                    kind: FutureChildKind::BitFieldWidthExpression,
-                    source_vectors,
+                let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
+                    index, ..
                 })) = returned
                 else {
-                    panic!("bit-field seam returned an unexpected value: {returned:?}");
+                    panic!("bit-field frame returned an unexpected value: {returned:?}");
                 };
+                let source_vectors = parser.syntax.expressions
+                    [ExpressionIndex::from(index).0 as usize]
+                    .source_vectors;
                 self.member_source = Some(self.member_source.map_or(source_vectors, |existing| {
                     context.merge_vectors(existing, source_vectors)
                 }));
@@ -6735,7 +6996,7 @@ impl StructOrUnionSpecifierFrame {
                     .unwrap_or_default();
                 self.member_declarators.push(StructDeclarator {
                     declarator: self.member_declarator.take(),
-                    bitfield_width: None,
+                    bitfield_width: Some(index),
                     source_vectors,
                 });
                 self.phase = StructOrUnionPhase::AfterStructDeclarator;
@@ -7037,7 +7298,7 @@ impl EnumSpecifierFrame {
                     self.phase = EnumPhase::PushEnumeratorValue;
                     ParseAction::Consume
                 } else {
-                    self.finish_enumerator(parser);
+                    self.finish_enumerator(parser, None);
                     self.phase = EnumPhase::AfterEnumerator;
                     ParseAction::Reprocess
                 }
@@ -7048,18 +7309,22 @@ impl EnumSpecifierFrame {
                     "this frame phase cannot receive a child value"
                 );
                 self.phase = EnumPhase::AwaitEnumeratorValue;
-                ParseAction::Push(ParseFrame::FutureChild(FutureChildFrame::new(
-                    FutureChildKind::EnumeratorValueExpression,
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::ConstantExpression,
+                    ExpressionBoundary::Enumerator,
+                    parser.hard_error_count,
                 )))
             },
             | EnumPhase::AwaitEnumeratorValue => {
-                let Some(ParseValue::FutureChild(FutureChildResult {
-                    kind: FutureChildKind::EnumeratorValueExpression,
-                    source_vectors,
+                let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
+                    index, ..
                 })) = returned
                 else {
-                    panic!("enumerator-value seam returned an unexpected value: {returned:?}");
+                    panic!("enumerator-value frame returned an unexpected value: {returned:?}");
                 };
+                let source_vectors = parser.syntax.expressions
+                    [ExpressionIndex::from(index).0 as usize]
+                    .source_vectors;
                 self.source_vectors =
                     Some(self.source_vectors.map_or(source_vectors, |existing| {
                         context.merge_vectors(existing, source_vectors)
@@ -7070,7 +7335,7 @@ impl EnumSpecifierFrame {
                             context.merge_vectors(existing, source_vectors)
                         }),
                 );
-                self.finish_enumerator(parser);
+                self.finish_enumerator(parser, Some(index));
                 self.phase = EnumPhase::AfterEnumerator;
                 ParseAction::Reprocess
             },
@@ -7164,11 +7429,15 @@ impl EnumSpecifierFrame {
         }
     }
 
-    fn finish_enumerator(&mut self, parser: &mut Parser) {
+    fn finish_enumerator(
+        &mut self,
+        parser: &mut Parser,
+        expression: Option<ConstantExpressionIndex>,
+    ) {
         if let Some(name) = self.current_enumerator.take() {
             self.enumerators.push(Enumerator {
                 name,
-                expression: None,
+                expression,
                 source_vectors: self.current_enumerator_source.take().unwrap_or_default(),
             });
             // Enumeration constants join the ordinary identifier namespace as
@@ -7194,6 +7463,1459 @@ impl EnumSpecifierFrame {
             stopped_before_declaration: self.stopped_before_declaration,
         }))
     }
+}
+
+impl TypeNameFrame {
+    #[expect(
+        clippy::missing_assert_message,
+        reason = "Frame-state debug assertions are local transition invariants."
+    )]
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | TypeNamePhase::Start => {
+                debug_assert!(returned.is_none());
+                self.phase = TypeNamePhase::AwaitSpecifiers;
+                ParseAction::Push(ParseFrame::DeclarationSpecifiers(
+                    DeclarationSpecifiersFrame::new(SpecifierMode::SpecifierQualifier),
+                ))
+            },
+            | TypeNamePhase::AwaitSpecifiers => {
+                let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
+                    panic!("type-name specifiers returned an unexpected value: {returned:?}");
+                };
+                self.declaration_specifiers = Some(specifiers);
+                if token.is_some_and(|token| is_abstract_declarator_starter(token.kind)) {
+                    self.phase = TypeNamePhase::AwaitDeclarator;
+                    ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        DeclaratorMode::Abstract,
+                    )))
+                } else {
+                    self.phase = TypeNamePhase::Finish(None);
+                    ParseAction::Reprocess
+                }
+            },
+            | TypeNamePhase::AwaitDeclarator => {
+                let Some(ParseValue::Declarator(declarator)) = returned else {
+                    panic!("type-name declarator returned an unexpected value: {returned:?}");
+                };
+                self.phase = TypeNamePhase::Finish(declarator);
+                ParseAction::Reprocess
+            },
+            | TypeNamePhase::Finish(declarator) => {
+                debug_assert!(returned.is_none());
+                let declaration_specifiers = self
+                    .declaration_specifiers
+                    .expect("type name cannot finish without specifiers");
+                let source_vectors =
+                    declarator.map_or(declaration_specifiers.source_vectors, |declarator| {
+                        context.merge_vectors(
+                            declaration_specifiers.source_vectors,
+                            declarator.source_vectors,
+                        )
+                    });
+                let index = TypeNameIndex(
+                    parser
+                        .syntax
+                        .type_names
+                        .len()
+                        .try_into()
+                        .expect("type-name arena length must fit in u32"),
+                );
+                parser.syntax.type_names.push(TypeName {
+                    declaration_specifiers,
+                    declarator,
+                    source_vectors,
+                    recovered: parser.hard_error_count > self.starting_error_count,
+                });
+                ParseAction::Reduce(ParseValue::TypeName(index))
+            },
+        }
+    }
+}
+
+impl ExpressionFrame {
+    #[expect(
+        clippy::missing_assert_message,
+        clippy::too_many_lines,
+        reason = "The explicit expression frame keeps the C precedence grammar and transition \
+                  invariants in one non-recursive state machine."
+    )]
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | ExpressionPhase::PushGrouped(opening) => {
+                debug_assert!(returned.is_none());
+                self.phase = ExpressionPhase::AwaitGrouped(opening);
+                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::Expression,
+                    ExpressionBoundary::ClosingParenthesis,
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitGrouped(opening) => {
+                let child = expression_value(returned);
+                self.phase = ExpressionPhase::CloseGrouped(opening, child);
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::CloseGrouped(opening, child) => {
+                debug_assert!(returned.is_none());
+                let mut source = context.merge_vectors(
+                    opening,
+                    parser.syntax.expressions[child.0 as usize].source_vectors,
+                );
+                let consume = if let Some(close) = token
+                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                {
+                    source = context.merge_vectors(source, close.source_vectors);
+                    true
+                } else {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingParenthesisInStatement(
+                            "grouped expression",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    false
+                };
+                let index = parser
+                    .store_expression(ExpressionType::Parenthesized { expression: child }, source);
+                self.push_operand(index, true);
+                self.phase = ExpressionPhase::Parse;
+                return if consume {
+                    ParseAction::Consume
+                } else {
+                    ParseAction::Reprocess
+                };
+            },
+            | ExpressionPhase::PushSubscript(base, opening) => {
+                debug_assert!(returned.is_none());
+                self.phase = ExpressionPhase::AwaitSubscript(base, opening);
+                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::Expression,
+                    ExpressionBoundary::ClosingSquareBracket,
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitSubscript(base, opening) => {
+                let child = expression_value(returned);
+                self.phase = ExpressionPhase::CloseSubscript(base, opening, child);
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::CloseSubscript(base, opening, child) => {
+                debug_assert!(returned.is_none());
+                let mut source = context.merge_vectors(
+                    parser.syntax.expressions[base.0 as usize].source_vectors,
+                    opening,
+                );
+                source = context.merge_vectors(
+                    source,
+                    parser.syntax.expressions[child.0 as usize].source_vectors,
+                );
+                let consume = if let Some(close) = token
+                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                {
+                    source = context.merge_vectors(source, close.source_vectors);
+                    true
+                } else {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    false
+                };
+                let index = parser.store_expression(
+                    ExpressionType::Binary {
+                        operator:         BinaryOperator::Subscript,
+                        left_expression:  base,
+                        right_expression: child,
+                    },
+                    source,
+                );
+                self.push_operand(index, true);
+                self.phase = ExpressionPhase::Parse;
+                return if consume {
+                    ParseAction::Consume
+                } else {
+                    ParseAction::Reprocess
+                };
+            },
+            | ExpressionPhase::CallStart(base, opening) => {
+                debug_assert!(returned.is_none());
+                self.call_source_vectors = Some(context.merge_vectors(
+                    parser.syntax.expressions[base.0 as usize].source_vectors,
+                    opening,
+                ));
+                if let Some(close) = token
+                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                {
+                    self.merge_call_source(context, close.source_vectors);
+                    self.finish_call(parser, base);
+                    self.phase = ExpressionPhase::Parse;
+                    return ParseAction::Consume;
+                }
+                self.phase = ExpressionPhase::PushCallArgument(base);
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::PushCallArgument(base) => {
+                debug_assert!(returned.is_none());
+                self.phase = ExpressionPhase::AwaitCallArgument(base);
+                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::AssignmentExpression,
+                    ExpressionBoundary::Argument,
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitCallArgument(base) => {
+                let argument = expression_value(returned);
+                self.call_arguments.push(argument);
+                self.merge_call_source(
+                    context,
+                    parser.syntax.expressions[argument.0 as usize].source_vectors,
+                );
+                self.phase = ExpressionPhase::CallSeparator(base);
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::CallSeparator(base) => {
+                debug_assert!(returned.is_none());
+                if let Some(separator) = token
+                    && separator.kind == TokenType::Operator(OperatorTokenType::Comma)
+                {
+                    self.merge_call_source(context, separator.source_vectors);
+                    self.phase = ExpressionPhase::PushCallArgument(base);
+                    return ParseAction::Consume;
+                }
+                let consume = if let Some(close) = token
+                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                {
+                    self.merge_call_source(context, close.source_vectors);
+                    true
+                } else {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingParenthesisInStatement(
+                            "function call",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    false
+                };
+                self.finish_call(parser, base);
+                self.phase = ExpressionPhase::Parse;
+                return if consume {
+                    ParseAction::Consume
+                } else {
+                    ParseAction::Reprocess
+                };
+            },
+            | ExpressionPhase::ExpectMember(base, indirect, operator_source) => {
+                debug_assert!(returned.is_none());
+                let Some(member_token) = token.filter(|token| token.kind == TokenType::Identifier)
+                else {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStatementExpression(
+                            "member identifier",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.push_operand(base, true);
+                    self.phase = ExpressionPhase::Parse;
+                    return ParseAction::Reprocess;
+                };
+                let source = context.merge_vectors(
+                    parser.syntax.expressions[base.0 as usize].source_vectors,
+                    operator_source,
+                );
+                let source = context.merge_vectors(source, member_token.source_vectors);
+                let kind = if indirect {
+                    ExpressionType::IndirectMember {
+                        base_expression: base,
+                        member:          Identifier::new(member_token.contents),
+                    }
+                } else {
+                    ExpressionType::DirectMember {
+                        base_expression: base,
+                        member:          Identifier::new(member_token.contents),
+                    }
+                };
+                let index = parser.store_expression(kind, source);
+                self.push_operand(index, true);
+                self.phase = ExpressionPhase::Parse;
+                return ParseAction::Consume;
+            },
+            | ExpressionPhase::PushPrefix(operator, operator_source, child_mode) => {
+                debug_assert!(returned.is_none());
+                self.phase = ExpressionPhase::AwaitPrefix(operator, operator_source);
+                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    child_mode,
+                    self.boundary,
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitPrefix(operator, operator_source) => {
+                let operand = expression_value(returned);
+                let source = context.merge_vectors(
+                    operator_source,
+                    parser.syntax.expressions[operand.0 as usize].source_vectors,
+                );
+                let index = parser.store_expression(
+                    ExpressionType::Unary {
+                        operator,
+                        operand_expression: operand,
+                    },
+                    source,
+                );
+                self.push_operand(index, true);
+                self.phase = ExpressionPhase::Parse;
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::SizeofStart(sizeof_source) => {
+                debug_assert!(returned.is_none());
+                if let Some(opening) = token
+                    && opening.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                    && parser
+                        .cursor
+                        .following(context)
+                        .is_some_and(|following| parser.type_name_starter(following))
+                {
+                    let source = context.merge_vectors(sizeof_source, opening.source_vectors);
+                    self.phase = ExpressionPhase::PushTypeName(source, TypeNameUse::Sizeof);
+                    return ParseAction::Consume;
+                }
+                self.phase = ExpressionPhase::PushSizeofExpression(sizeof_source);
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::PushSizeofExpression(sizeof_source) => {
+                debug_assert!(returned.is_none());
+                self.phase = ExpressionPhase::AwaitSizeofExpression(sizeof_source);
+                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::UnaryExpression,
+                    self.boundary,
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitSizeofExpression(sizeof_source) => {
+                let operand = expression_value(returned);
+                let source = context.merge_vectors(
+                    sizeof_source,
+                    parser.syntax.expressions[operand.0 as usize].source_vectors,
+                );
+                let index = parser.store_expression(ExpressionType::SizeofExpr(operand), source);
+                self.push_operand(index, true);
+                self.phase = ExpressionPhase::Parse;
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::PushTypeName(opening_source, use_kind) => {
+                debug_assert!(returned.is_none());
+                self.phase = ExpressionPhase::AwaitTypeName(opening_source, use_kind);
+                return ParseAction::Push(ParseFrame::TypeName(TypeNameFrame::new(
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitTypeName(opening_source, use_kind) => {
+                let Some(ParseValue::TypeName(type_name)) = returned else {
+                    panic!("type-name frame returned an unexpected value: {returned:?}");
+                };
+                self.phase = ExpressionPhase::CloseTypeName(opening_source, use_kind, type_name);
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::CloseTypeName(opening_source, use_kind, type_name) => {
+                debug_assert!(returned.is_none());
+                let mut source = context.merge_vectors(
+                    opening_source,
+                    parser.syntax.type_names[type_name.0 as usize].source_vectors,
+                );
+                let consume = if let Some(close) = token
+                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                {
+                    source = context.merge_vectors(source, close.source_vectors);
+                    true
+                } else {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingParenthesisInStatement(
+                            "type name",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    false
+                };
+                let starts_compound_literal = consume
+                    && parser.cursor.following(context).is_some_and(|following| {
+                        following.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    })
+                    && !parser.cursor.lookahead(context, 1).is_some_and(|first| {
+                        first.kind != TokenType::Identifier
+                            && (parser.declaration_starter(first)
+                                || is_statement_keyword(first.kind))
+                    });
+                if starts_compound_literal {
+                    self.phase = ExpressionPhase::PushCompoundLiteral(type_name, source, use_kind);
+                } else {
+                    match use_kind {
+                        | TypeNameUse::Sizeof => {
+                            let index = parser
+                                .store_expression(ExpressionType::SizeofType(type_name), source);
+                            self.push_operand(index, true);
+                            self.phase = ExpressionPhase::Parse;
+                        },
+                        | TypeNameUse::Cast => {
+                            self.phase = ExpressionPhase::PushCastOperand(type_name, source);
+                        },
+                    }
+                }
+                return if consume {
+                    ParseAction::Consume
+                } else {
+                    ParseAction::Reprocess
+                };
+            },
+            | ExpressionPhase::PushCompoundLiteral(type_name, type_source, use_kind) => {
+                debug_assert!(returned.is_none());
+                self.phase =
+                    ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind);
+                return ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind) => {
+                let Some(ParseValue::Initializer(InitializerResult {
+                    index: initializer, ..
+                })) = returned
+                else {
+                    panic!(
+                        "compound-literal initializer returned an unexpected value: {returned:?}"
+                    );
+                };
+                let source = context.merge_vectors(
+                    type_source,
+                    parser.syntax.initializers[initializer.0 as usize].source_vectors,
+                );
+                let compound = parser.store_expression(
+                    ExpressionType::CompoundLiteral {
+                        type_name,
+                        initializer,
+                    },
+                    source,
+                );
+                let expression = if matches!(use_kind, TypeNameUse::Sizeof) {
+                    parser.store_expression(ExpressionType::SizeofExpr(compound), source)
+                } else {
+                    compound
+                };
+                self.push_operand(expression, true);
+                self.phase = ExpressionPhase::Parse;
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::PushCastOperand(type_name, type_source) => {
+                debug_assert!(returned.is_none());
+                self.phase = ExpressionPhase::AwaitCastOperand(type_name, type_source);
+                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::CastExpression,
+                    self.boundary,
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitCastOperand(type_name, type_source) => {
+                let operand = expression_value(returned);
+                let source = context.merge_vectors(
+                    type_source,
+                    parser.syntax.expressions[operand.0 as usize].source_vectors,
+                );
+                let index = parser.store_expression(
+                    ExpressionType::Cast {
+                        target_type:        type_name,
+                        operand_expression: operand,
+                    },
+                    source,
+                );
+                self.push_operand(index, false);
+                self.phase = ExpressionPhase::Parse;
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::PushConditionalMiddle => {
+                debug_assert!(returned.is_none());
+                self.phase = ExpressionPhase::AwaitConditionalMiddle;
+                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::Expression,
+                    ExpressionBoundary::Statement(ExpressionTerminator::Colon),
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitConditionalMiddle => {
+                let middle = expression_value(returned);
+                self.phase = ExpressionPhase::ExpectConditionalColon(middle);
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::ExpectConditionalColon(middle) => {
+                debug_assert!(returned.is_none());
+                if let Some(colon) = token
+                    && colon.kind == TokenType::Operator(OperatorTokenType::Colon)
+                {
+                    let Some(LanguageExpressionOperator::Question { source_vectors }) =
+                        self.operators.pop()
+                    else {
+                        panic!("conditional middle must retain its question marker");
+                    };
+                    self.operators
+                        .push(LanguageExpressionOperator::Conditional {
+                            middle,
+                            question_source: source_vectors,
+                            colon_source: Some(colon.source_vectors),
+                        });
+                    self.phase = ExpressionPhase::PushConditionalElse;
+                    return ParseAction::Consume;
+                }
+                parser.report(
+                    context,
+                    ParserErrorType::ExpectedColonInLabel(
+                        "conditional expression",
+                        token.map(|token| token.kind),
+                    ),
+                    token,
+                );
+                let Some(LanguageExpressionOperator::Question { source_vectors }) =
+                    self.operators.pop()
+                else {
+                    panic!("conditional middle must retain its question marker");
+                };
+                self.operators
+                    .push(LanguageExpressionOperator::Conditional {
+                        middle,
+                        question_source: source_vectors,
+                        colon_source: None,
+                    });
+                self.phase = ExpressionPhase::PushConditionalElse;
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::PushConditionalElse => {
+                debug_assert!(returned.is_none());
+                self.phase = ExpressionPhase::AwaitConditionalElse;
+                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::ConstantExpression,
+                    self.boundary,
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitConditionalElse => {
+                let final_expression = any_expression_value(returned);
+                let Some(LanguageExpressionOperator::Conditional {
+                    middle,
+                    question_source,
+                    colon_source,
+                }) = self.operators.pop()
+                else {
+                    panic!("conditional final operand must retain its completed marker");
+                };
+                let condition = self.pop_operand().index;
+                let source = context.merge_vectors(
+                    parser.syntax.expressions[condition.0 as usize].source_vectors,
+                    question_source,
+                );
+                let source = context.merge_vectors(
+                    source,
+                    parser.syntax.expressions[middle.0 as usize].source_vectors,
+                );
+                let source =
+                    colon_source.map_or(source, |colon| context.merge_vectors(source, colon));
+                let source = context.merge_vectors(
+                    source,
+                    parser.syntax.expressions[final_expression.0 as usize].source_vectors,
+                );
+                let index = parser.store_expression(
+                    ExpressionType::Conditional {
+                        condition_expression: condition,
+                        then_expression:      middle,
+                        else_expression:      final_expression,
+                    },
+                    source,
+                );
+                self.push_operand(index, false);
+                self.phase = ExpressionPhase::Parse;
+                return ParseAction::Reprocess;
+            },
+            | ExpressionPhase::Parse => {
+                debug_assert!(returned.is_none());
+            },
+        }
+
+        if self.state == ExpressionParserState::Operator
+            && self.is_boundary(token.map(|token| token.kind))
+        {
+            return self.finish(parser, context);
+        }
+
+        if self.state == ExpressionParserState::Operand {
+            let Some(token) = token else {
+                parser.report(
+                    context,
+                    ParserErrorType::ExpectedStatementExpression("expression", None),
+                    None,
+                );
+                self.push_error(parser, context);
+                return self.finish(parser, context);
+            };
+            if self.is_owning_boundary(token.kind)
+                || self.is_strong_grammar_boundary(parser, context, token)
+            {
+                parser.report(
+                    context,
+                    ParserErrorType::ExpectedStatementExpression(
+                        "expression operand",
+                        Some(token.kind),
+                    ),
+                    Some(token),
+                );
+                self.push_error(parser, context);
+                return self.finish(parser, context);
+            }
+            if token.kind == TokenType::Keyword(KeywordTokenType::Sizeof) {
+                self.phase = ExpressionPhase::SizeofStart(token.source_vectors);
+                return ParseAction::Consume;
+            }
+            if let Some((operator, child_mode)) = prefix_operator(token.kind) {
+                self.phase =
+                    ExpressionPhase::PushPrefix(operator, token.source_vectors, child_mode);
+                return ParseAction::Consume;
+            }
+            if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
+                if self.mode != ExpressionMode::UnaryExpression
+                    && parser
+                        .cursor
+                        .following(context)
+                        .is_some_and(|following| parser.type_name_starter(following))
+                {
+                    self.phase =
+                        ExpressionPhase::PushTypeName(token.source_vectors, TypeNameUse::Cast);
+                    return ParseAction::Consume;
+                }
+                self.phase = ExpressionPhase::PushGrouped(token.source_vectors);
+                return ParseAction::Consume;
+            }
+            let kind = match token.kind {
+                | TokenType::Identifier =>
+                    ExpressionType::Identifier(Identifier::new(token.contents)),
+                | TokenType::Integer(value) => ExpressionType::Constant(Constant::Integer(value)),
+                | TokenType::Float(value) => ExpressionType::Constant(Constant::Float(value)),
+                | TokenType::Character(value) => ExpressionType::Constant(Constant::Char(value)),
+                | TokenType::String(
+                    StringTokenType::String(value) | StringTokenType::WideString(value),
+                ) => ExpressionType::StringLiteral(value),
+                | _ => {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStatementExpression(
+                            "expression",
+                            Some(token.kind),
+                        ),
+                        Some(token),
+                    );
+                    self.push_error(parser, context);
+                    return ParseAction::Consume;
+                },
+            };
+            let index = parser.store_expression(kind, token.source_vectors);
+            self.push_operand(index, true);
+            ParseAction::Consume
+        } else {
+            let Some(token) = token else {
+                return self.finish(parser, context);
+            };
+            match token.kind {
+                | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
+                    let base = self.pop_operand().index;
+                    self.phase = ExpressionPhase::PushSubscript(base, token.source_vectors);
+                    return ParseAction::Consume;
+                },
+                | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
+                    let base = self.pop_operand().index;
+                    self.call_arguments.clear();
+                    self.call_source_vectors = None;
+                    self.phase = ExpressionPhase::CallStart(base, token.source_vectors);
+                    return ParseAction::Consume;
+                },
+                | TokenType::Operator(OperatorTokenType::Period | OperatorTokenType::Arrow) => {
+                    let base = self.pop_operand().index;
+                    self.phase = ExpressionPhase::ExpectMember(
+                        base,
+                        token.kind == TokenType::Operator(OperatorTokenType::Arrow),
+                        token.source_vectors,
+                    );
+                    return ParseAction::Consume;
+                },
+                | TokenType::Operator(
+                    OperatorTokenType::PlusPlus | OperatorTokenType::MinusMinus,
+                ) => {
+                    let base = self.pop_operand().index;
+                    let source = context.merge_vectors(
+                        parser.syntax.expressions[base.0 as usize].source_vectors,
+                        token.source_vectors,
+                    );
+                    let operator = if token.kind == TokenType::Operator(OperatorTokenType::PlusPlus)
+                    {
+                        UnaryOperator::PostIncrement
+                    } else {
+                        UnaryOperator::PostDecrement
+                    };
+                    let index = parser.store_expression(
+                        ExpressionType::Unary {
+                            operator,
+                            operand_expression: base,
+                        },
+                        source,
+                    );
+                    self.push_operand(index, true);
+                    return ParseAction::Consume;
+                },
+                | _ => {},
+            }
+            if token.kind == TokenType::Operator(OperatorTokenType::QuestionMark)
+                && !matches!(
+                    self.mode,
+                    ExpressionMode::CastExpression | ExpressionMode::UnaryExpression
+                )
+            {
+                while self.operators.last().is_some_and(|operator| {
+                    !matches!(operator, LanguageExpressionOperator::Question { .. })
+                        && operator.precedence() < 13
+                }) {
+                    self.reduce_one(parser, context);
+                }
+                self.operators.push(LanguageExpressionOperator::Question {
+                    source_vectors: token.source_vectors,
+                });
+                self.phase = ExpressionPhase::PushConditionalMiddle;
+                return ParseAction::Consume;
+            }
+            if let Some(operator) = binary_operator(token.kind)
+                && !(operator == BinaryOperator::Comma && self.mode != ExpressionMode::Expression)
+                && !(is_assignment_operator(operator)
+                    && self.mode == ExpressionMode::ConstantExpression)
+                && !matches!(
+                    self.mode,
+                    ExpressionMode::CastExpression | ExpressionMode::UnaryExpression
+                )
+            {
+                let incoming = LanguageExpressionOperator::Binary {
+                    operator,
+                    source_vectors: token.source_vectors,
+                };
+                while self.operators.last().is_some_and(|stacked| {
+                    !matches!(stacked, LanguageExpressionOperator::Question { .. })
+                        && stacked.has_precedence_over(incoming)
+                }) {
+                    self.reduce_one(parser, context);
+                }
+                if is_assignment_operator(operator)
+                    && !self
+                        .operands
+                        .last()
+                        .is_some_and(|operand| operand.unary_expression)
+                {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStatementExpression(
+                            "unary-expression left operand of assignment",
+                            Some(token.kind),
+                        ),
+                        Some(token),
+                    );
+                }
+                self.operators.push(incoming);
+                self.state = ExpressionParserState::Operand;
+                return ParseAction::Consume;
+            }
+            parser.report(
+                context,
+                ParserErrorType::ExpectedStatementExpression(
+                    "operator in expression",
+                    Some(token.kind),
+                ),
+                Some(token),
+            );
+            self.finish(parser, context)
+        }
+    }
+
+    fn push_operand(&mut self, index: ExpressionIndex, unary_expression: bool) {
+        self.operands.push(ExpressionOperand {
+            index,
+            unary_expression,
+        });
+        self.state = ExpressionParserState::Operator;
+    }
+
+    fn pop_operand(&mut self) -> ExpressionOperand {
+        self.operands
+            .pop()
+            .expect("operator state has an expression operand")
+    }
+
+    fn merge_call_source(&mut self, context: &mut Context, source: SourceVectors) {
+        self.call_source_vectors = Some(
+            self.call_source_vectors
+                .map_or(source, |existing| context.merge_vectors(existing, source)),
+        );
+    }
+
+    fn finish_call(&mut self, parser: &mut Parser, base: ExpressionIndex) {
+        let start = parser.syntax.expression_indices.len().to_u32();
+        parser
+            .syntax
+            .expression_indices
+            .append(&mut self.call_arguments);
+        let arguments = VectorSlice::new(start, parser.syntax.expression_indices.len().to_u32());
+        let index = parser.store_expression(
+            ExpressionType::Call {
+                function_expression: base,
+                arguments,
+            },
+            self.call_source_vectors
+                .take()
+                .unwrap_or_else(|| parser.syntax.expressions[base.0 as usize].source_vectors),
+        );
+        self.push_operand(index, true);
+    }
+
+    fn reduce_one(&mut self, parser: &mut Parser, context: &mut Context) {
+        let operator = self
+            .operators
+            .pop()
+            .expect("a pending expression operator exists");
+        match operator {
+            | LanguageExpressionOperator::Binary {
+                operator,
+                source_vectors,
+            } => {
+                let right = self.pop_operand().index;
+                let left = self.pop_operand().index;
+                let source = context.merge_vectors(
+                    parser.syntax.expressions[left.0 as usize].source_vectors,
+                    source_vectors,
+                );
+                let source = context.merge_vectors(
+                    source,
+                    parser.syntax.expressions[right.0 as usize].source_vectors,
+                );
+                let index = parser.store_expression(
+                    ExpressionType::Binary {
+                        operator,
+                        left_expression: left,
+                        right_expression: right,
+                    },
+                    source,
+                );
+                self.push_operand(index, false);
+            },
+            | LanguageExpressionOperator::Question { .. }
+            | LanguageExpressionOperator::Conditional { .. } =>
+                panic!("conditional markers reduce only after their child frames return"),
+        }
+    }
+
+    fn is_boundary(&self, token: Option<TokenType>) -> bool {
+        let Some(token) = token else {
+            return true;
+        };
+        if matches!(
+            token,
+            TokenType::Operator(
+                OperatorTokenType::ClosingParenthesis
+                    | OperatorTokenType::ClosingSquareBracket
+                    | OperatorTokenType::ClosingCurlyBrace
+            )
+        ) {
+            return true;
+        }
+        if matches!(
+            self.mode,
+            ExpressionMode::CastExpression | ExpressionMode::UnaryExpression
+        ) && !is_postfix_starter(token)
+        {
+            return true;
+        }
+        if self.mode == ExpressionMode::AssignmentExpression
+            && token == TokenType::Operator(OperatorTokenType::Comma)
+        {
+            return true;
+        }
+        if self.mode == ExpressionMode::ConstantExpression
+            && matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Equals
+                        | OperatorTokenType::PlusEquals
+                        | OperatorTokenType::MinusEquals
+                        | OperatorTokenType::AsteriskEquals
+                        | OperatorTokenType::ForwardSlashEquals
+                        | OperatorTokenType::PercentEquals
+                        | OperatorTokenType::LessThanLessThanEquals
+                        | OperatorTokenType::GreaterThanGreaterThanEquals
+                        | OperatorTokenType::AmpersandEquals
+                        | OperatorTokenType::CaretEquals
+                        | OperatorTokenType::PipeEquals
+                )
+            )
+        {
+            return true;
+        }
+        self.is_owning_boundary(token)
+    }
+
+    fn is_owning_boundary(&self, token: TokenType) -> bool {
+        if matches!(
+            token,
+            TokenType::Operator(
+                OperatorTokenType::ClosingParenthesis
+                    | OperatorTokenType::ClosingSquareBracket
+                    | OperatorTokenType::ClosingCurlyBrace
+            )
+        ) {
+            return true;
+        }
+        match self.boundary {
+            | ExpressionBoundary::Statement(
+                ExpressionTerminator::Semicolon | ExpressionTerminator::ForSemicolon,
+            ) => token == TokenType::Operator(OperatorTokenType::Semicolon),
+            | ExpressionBoundary::Statement(ExpressionTerminator::ClosingParenthesis)
+            | ExpressionBoundary::ClosingParenthesis =>
+                token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+            | ExpressionBoundary::Statement(ExpressionTerminator::Colon) =>
+                token == TokenType::Operator(OperatorTokenType::Colon),
+            | ExpressionBoundary::ClosingSquareBracket
+            | ExpressionBoundary::ArrayBound
+            | ExpressionBoundary::Designator =>
+                token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
+            | ExpressionBoundary::Argument => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma | OperatorTokenType::ClosingParenthesis
+                )
+            ),
+            | ExpressionBoundary::Initializer => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::ClosingCurlyBrace
+                        | OperatorTokenType::Semicolon
+                )
+            ),
+            | ExpressionBoundary::StructMember => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma
+                        | OperatorTokenType::Semicolon
+                        | OperatorTokenType::ClosingCurlyBrace
+                )
+            ),
+            | ExpressionBoundary::Enumerator => matches!(
+                token,
+                TokenType::Operator(
+                    OperatorTokenType::Comma | OperatorTokenType::ClosingCurlyBrace
+                )
+            ),
+        }
+    }
+
+    fn is_strong_grammar_boundary(
+        &self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Token,
+    ) -> bool {
+        match self.boundary {
+            | ExpressionBoundary::Initializer =>
+                token.kind != TokenType::Identifier
+                    && parser.declaration_starter(token)
+                    && !matches!(
+                        parser
+                            .cursor
+                            .following(context)
+                            .map(|following| following.kind),
+                        Some(TokenType::Operator(
+                            OperatorTokenType::Comma
+                                | OperatorTokenType::Semicolon
+                                | OperatorTokenType::ClosingCurlyBrace
+                        ))
+                    ),
+            | ExpressionBoundary::ArrayBound =>
+                token.kind != TokenType::Identifier
+                    && parser.declaration_starter(token)
+                    && !matches!(
+                        parser
+                            .cursor
+                            .following(context)
+                            .map(|following| following.kind),
+                        Some(TokenType::Operator(OperatorTokenType::ClosingSquareBracket))
+                    ),
+            | ExpressionBoundary::StructMember =>
+                token.kind != TokenType::Identifier
+                    && parser.declaration_starter(token)
+                    && !matches!(
+                        parser
+                            .cursor
+                            .following(context)
+                            .map(|following| following.kind),
+                        Some(TokenType::Operator(
+                            OperatorTokenType::Comma
+                                | OperatorTokenType::Semicolon
+                                | OperatorTokenType::ClosingCurlyBrace
+                        ))
+                    ),
+            | ExpressionBoundary::Enumerator =>
+                token.kind != TokenType::Identifier
+                    && parser.declaration_starter(token)
+                    && !matches!(
+                        parser
+                            .cursor
+                            .following(context)
+                            .map(|following| following.kind),
+                        Some(TokenType::Operator(
+                            OperatorTokenType::Comma | OperatorTokenType::ClosingCurlyBrace
+                        ))
+                    ),
+            | ExpressionBoundary::Statement(_) | ExpressionBoundary::ClosingParenthesis =>
+                token.kind != TokenType::Identifier && parser.declaration_starter(token)
+                    || is_statement_keyword(token.kind),
+            | ExpressionBoundary::ClosingSquareBracket
+            | ExpressionBoundary::Argument
+            | ExpressionBoundary::Designator => false,
+        }
+    }
+
+    fn push_error(&mut self, parser: &mut Parser, context: &mut Context) {
+        let source_vectors =
+            context.create_source_vectors(parser.position(context), parser.source_file_index(), 0);
+        let index = parser.store_expression(ExpressionType::Error, source_vectors);
+        self.operands.push(ExpressionOperand {
+            index,
+            unary_expression: false,
+        });
+        self.state = ExpressionParserState::Operator;
+    }
+
+    fn finish(&mut self, parser: &mut Parser, context: &mut Context) -> ParseAction {
+        while !self.operators.is_empty() {
+            self.reduce_one(parser, context);
+        }
+        let operand = self.operands.pop().unwrap_or_else(|| {
+            self.push_error(parser, context);
+            self.operands
+                .pop()
+                .expect("error expression supplies one operand")
+        });
+        let recovered = parser.hard_error_count > self.starting_error_count;
+        if self.mode == ExpressionMode::ConstantExpression {
+            ParseAction::Reduce(ParseValue::ConstantExpression(ConstantExpressionResult {
+                index: ConstantExpressionIndex(operand.index.0),
+                recovered,
+            }))
+        } else {
+            ParseAction::Reduce(ParseValue::Expression(ExpressionResult {
+                index: operand.index,
+                recovered,
+            }))
+        }
+    }
+}
+
+impl InitializerFrame {
+    #[expect(
+        clippy::missing_assert_message,
+        reason = "Frame-state debug assertions are local transition invariants."
+    )]
+    fn step(
+        &mut self,
+        parser: &mut Parser,
+        context: &mut Context,
+        token: Option<Token>,
+        returned: Option<ParseValue>,
+    ) -> ParseAction {
+        match self.phase {
+            | InitializerPhase::Start => {
+                debug_assert!(returned.is_none());
+                if let Some(opening) = token
+                    && opening.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                {
+                    parser.merge_source(context, &mut self.source_vectors, opening);
+                    self.phase = InitializerPhase::ElementOrClose;
+                    ParseAction::Consume
+                } else {
+                    self.phase = InitializerPhase::PushScalar;
+                    ParseAction::Reprocess
+                }
+            },
+            | InitializerPhase::PushScalar => {
+                debug_assert!(returned.is_none());
+                self.phase = InitializerPhase::AwaitScalar;
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::AssignmentExpression,
+                    ExpressionBoundary::Initializer,
+                    parser.hard_error_count,
+                )))
+            },
+            | InitializerPhase::AwaitScalar => {
+                let expression = expression_value(returned);
+                let source_vectors =
+                    parser.syntax.expressions[expression.0 as usize].source_vectors;
+                let index = self.store_initializer(
+                    parser,
+                    InitializerType::AssignmentExpression(expression),
+                    source_vectors,
+                );
+                ParseAction::Reduce(ParseValue::Initializer(InitializerResult {
+                    index,
+                    recovered: parser.hard_error_count > self.starting_error_count,
+                }))
+            },
+            | InitializerPhase::ElementOrClose => {
+                debug_assert!(returned.is_none());
+                if let Some(close) = token
+                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                {
+                    if self.elements.is_empty() {
+                        parser.report(
+                            context,
+                            ParserErrorType::ExpectedStatementExpression(
+                                "nonempty initializer list",
+                                Some(close.kind),
+                            ),
+                            Some(close),
+                        );
+                    }
+                    parser.merge_source(context, &mut self.source_vectors, close);
+                    self.phase = InitializerPhase::FinishList;
+                    return ParseAction::Consume;
+                }
+                self.current_designators.clear();
+                self.current_designation = None;
+                self.designation_source_vectors = None;
+                self.current_designator_source = None;
+                self.phase = InitializerPhase::Designation;
+                ParseAction::Reprocess
+            },
+            | InitializerPhase::Designation => {
+                debug_assert!(returned.is_none());
+                if let Some(designator) = token
+                    && designator.kind == TokenType::Operator(OperatorTokenType::Period)
+                {
+                    self.merge_designation_source(context, designator.source_vectors);
+                    self.current_designator_source = Some(designator.source_vectors);
+                    self.phase = InitializerPhase::FieldDesignator;
+                    return ParseAction::Consume;
+                }
+                if let Some(designator) = token
+                    && designator.kind
+                        == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                {
+                    self.merge_designation_source(context, designator.source_vectors);
+                    self.current_designator_source = Some(designator.source_vectors);
+                    self.phase = InitializerPhase::PushArrayDesignator;
+                    return ParseAction::Consume;
+                }
+                self.phase = if self.current_designators.is_empty() {
+                    InitializerPhase::PushElement
+                } else {
+                    InitializerPhase::DesignationEquals
+                };
+                ParseAction::Reprocess
+            },
+            | InitializerPhase::FieldDesignator => {
+                debug_assert!(returned.is_none());
+                let Some(identifier) = token.filter(|token| token.kind == TokenType::Identifier)
+                else {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStatementExpression(
+                            "field designator identifier",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.current_designators.push(Designator {
+                        kind:           DesignatorType::Error,
+                        source_vectors: self.current_designator_source.take().unwrap_or_default(),
+                        recovered:      true,
+                    });
+                    self.phase = InitializerPhase::Designation;
+                    return ParseAction::Reprocess;
+                };
+                self.merge_designation_source(context, identifier.source_vectors);
+                let source_vectors = context.merge_vectors(
+                    self.current_designator_source.take().unwrap_or_default(),
+                    identifier.source_vectors,
+                );
+                self.current_designators.push(Designator {
+                    kind: DesignatorType::Field(Identifier::new(identifier.contents)),
+                    source_vectors,
+                    recovered: false,
+                });
+                self.phase = InitializerPhase::Designation;
+                ParseAction::Consume
+            },
+            | InitializerPhase::PushArrayDesignator => {
+                debug_assert!(returned.is_none());
+                self.phase = InitializerPhase::AwaitArrayDesignator;
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    ExpressionMode::ConstantExpression,
+                    ExpressionBoundary::Designator,
+                    parser.hard_error_count,
+                )))
+            },
+            | InitializerPhase::AwaitArrayDesignator => {
+                let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
+                    index, ..
+                })) = returned
+                else {
+                    panic!("array designator returned an unexpected value: {returned:?}");
+                };
+                self.phase = InitializerPhase::CloseArrayDesignator(index);
+                ParseAction::Reprocess
+            },
+            | InitializerPhase::CloseArrayDesignator(expression) => {
+                debug_assert!(returned.is_none());
+                let mut source_vectors = context.merge_vectors(
+                    self.current_designator_source.take().unwrap_or_default(),
+                    parser.syntax.expressions[ExpressionIndex::from(expression).0 as usize]
+                        .source_vectors,
+                );
+                if let Some(close) = token
+                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                {
+                    source_vectors = context.merge_vectors(source_vectors, close.source_vectors);
+                    self.merge_designation_source(context, close.source_vectors);
+                    self.current_designators.push(Designator {
+                        kind: DesignatorType::Array(expression),
+                        source_vectors,
+                        recovered: false,
+                    });
+                    self.phase = InitializerPhase::Designation;
+                    ParseAction::Consume
+                } else {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.current_designators.push(Designator {
+                        kind: DesignatorType::Array(expression),
+                        source_vectors,
+                        recovered: true,
+                    });
+                    self.phase = InitializerPhase::Designation;
+                    ParseAction::Reprocess
+                }
+            },
+            | InitializerPhase::DesignationEquals => {
+                debug_assert!(returned.is_none());
+                let consume = if let Some(equals) = token
+                    && equals.kind == TokenType::Operator(OperatorTokenType::Equals)
+                {
+                    self.merge_designation_source(context, equals.source_vectors);
+                    true
+                } else {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStatementExpression(
+                            "`=` after initializer designators",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    false
+                };
+                self.finish_designation(parser);
+                self.phase = InitializerPhase::PushElement;
+                if consume {
+                    ParseAction::Consume
+                } else {
+                    ParseAction::Reprocess
+                }
+            },
+            | InitializerPhase::PushElement => {
+                debug_assert!(returned.is_none());
+                self.phase = InitializerPhase::AwaitElement;
+                ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
+                    parser.hard_error_count,
+                )))
+            },
+            | InitializerPhase::AwaitElement => {
+                let Some(ParseValue::Initializer(InitializerResult { index, .. })) = returned
+                else {
+                    panic!("initializer element returned an unexpected value: {returned:?}");
+                };
+                let initializer_source =
+                    parser.syntax.initializers[index.0 as usize].source_vectors;
+                let source_vectors =
+                    self.current_designation
+                        .map_or(initializer_source, |designation| {
+                            context.merge_vectors(
+                                parser.syntax.designations[designation.0 as usize].source_vectors,
+                                initializer_source,
+                            )
+                        });
+                self.elements.push(InitializerElement {
+                    designation: self.current_designation.take(),
+                    initializer: index,
+                    source_vectors,
+                });
+                self.source_vectors =
+                    Some(self.source_vectors.map_or(source_vectors, |existing| {
+                        context.merge_vectors(existing, source_vectors)
+                    }));
+                self.phase = InitializerPhase::Separator;
+                ParseAction::Reprocess
+            },
+            | InitializerPhase::Separator => {
+                debug_assert!(returned.is_none());
+                if let Some(comma) = token
+                    && comma.kind == TokenType::Operator(OperatorTokenType::Comma)
+                {
+                    parser.merge_source(context, &mut self.source_vectors, comma);
+                    self.phase = InitializerPhase::ElementOrClose;
+                    return ParseAction::Consume;
+                }
+                if let Some(close) = token
+                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                {
+                    parser.merge_source(context, &mut self.source_vectors, close);
+                    self.phase = InitializerPhase::FinishList;
+                    return ParseAction::Consume;
+                }
+                parser.report(
+                    context,
+                    ParserErrorType::ExpectedStatementExpression(
+                        "`,` or `}` after initializer element",
+                        token.map(|token| token.kind),
+                    ),
+                    token,
+                );
+                self.phase = InitializerPhase::ElementOrClose;
+                ParseAction::Reprocess
+            },
+            | InitializerPhase::FinishList => {
+                debug_assert!(returned.is_none());
+                let start = parser.syntax.initializer_elements.len().to_u32();
+                parser
+                    .syntax
+                    .initializer_elements
+                    .append(&mut self.elements);
+                let elements =
+                    VectorSlice::new(start, parser.syntax.initializer_elements.len().to_u32());
+                let source_vectors = self.source_vectors.unwrap_or_default();
+                let index = self.store_initializer(
+                    parser,
+                    InitializerType::InitializerList(elements),
+                    source_vectors,
+                );
+                ParseAction::Reduce(ParseValue::Initializer(InitializerResult {
+                    index,
+                    recovered: parser.hard_error_count > self.starting_error_count,
+                }))
+            },
+        }
+    }
+
+    fn merge_designation_source(&mut self, context: &mut Context, source: SourceVectors) {
+        self.designation_source_vectors = Some(
+            self.designation_source_vectors
+                .map_or(source, |existing| context.merge_vectors(existing, source)),
+        );
+    }
+
+    fn finish_designation(&mut self, parser: &mut Parser) {
+        let start = parser.syntax.designators.len().to_u32();
+        parser
+            .syntax
+            .designators
+            .append(&mut self.current_designators);
+        let designators = VectorSlice::new(start, parser.syntax.designators.len().to_u32());
+        let index = DesignationIndex(
+            parser
+                .syntax
+                .designations
+                .len()
+                .try_into()
+                .expect("designation arena length must fit in u32"),
+        );
+        parser.syntax.designations.push(Designation {
+            designators,
+            source_vectors: self.designation_source_vectors.take().unwrap_or_default(),
+            recovered: false,
+        });
+        self.current_designation = Some(index);
+    }
+
+    fn store_initializer(
+        &self,
+        parser: &mut Parser,
+        kind: InitializerType,
+        source_vectors: SourceVectors,
+    ) -> InitializerIndex {
+        let index = InitializerIndex(
+            parser
+                .syntax
+                .initializers
+                .len()
+                .try_into()
+                .expect("initializer arena length must fit in u32"),
+        );
+        parser.syntax.initializers.push(Initializer {
+            kind,
+            source_vectors,
+            recovered: parser.hard_error_count > self.starting_error_count,
+        });
+        index
+    }
+}
+
+fn expression_value(returned: Option<ParseValue>) -> ExpressionIndex {
+    let Some(ParseValue::Expression(ExpressionResult { index, .. })) = returned else {
+        panic!("expression child returned an unexpected value: {returned:?}");
+    };
+    index
+}
+
+fn any_expression_value(returned: Option<ParseValue>) -> ExpressionIndex {
+    match returned {
+        | Some(ParseValue::Expression(ExpressionResult { index, .. })) => index,
+        | Some(ParseValue::ConstantExpression(ConstantExpressionResult { index, .. })) =>
+            index.into(),
+        | returned => panic!("expression child returned an unexpected value: {returned:?}"),
+    }
+}
+
+fn is_abstract_declarator_starter(token: TokenType) -> bool {
+    matches!(
+        token,
+        TokenType::Operator(
+            OperatorTokenType::Asterisk
+                | OperatorTokenType::OpeningParenthesis
+                | OperatorTokenType::OpeningSquareBracket
+        )
+    )
 }
 
 /// One top-level parser result.
@@ -7233,6 +8955,18 @@ pub(crate) struct DeclarationIndex(u32);
 /// Typed handle into the function-definition arena.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct FunctionDefinitionIndex(u32);
+
+/// Typed handle into the type-name arena.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct TypeNameIndex(u32);
+
+/// Typed handle into the initializer arena.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct InitializerIndex(u32);
+
+/// Typed handle into the designation arena.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct DesignationIndex(u32);
 
 /// Typed handle into the expression arena.
 ///
@@ -7289,26 +9023,19 @@ pub(crate) enum BlockItem {
     Statement(StatementIndex),
 }
 
-/// A statement expression is either parsed by Phase 04, explicitly deferred
-/// by Phase 03, or missing because recovery repaired a required position.
+/// A statement expression is parsed or missing because recovery repaired a
+/// required position.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum ExpressionSlot {
-    #[expect(dead_code, reason = "Phase 04 will construct parsed expression slots.")]
     Parsed(ExpressionIndex),
-    FutureChild(SourceVectors),
     Missing(SourceVectors),
 }
 
 /// A statement constant-expression preserves its narrower grammar type while
-/// parsed, explicitly deferred, or synthesized during recovery.
+/// parsed or synthesized during recovery.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum ConstantExpressionSlot {
-    #[expect(
-        dead_code,
-        reason = "Phase 04 will construct parsed constant-expression slots."
-    )]
     Parsed(ConstantExpressionIndex),
-    FutureChild(SourceVectors),
     Missing(SourceVectors),
 }
 
@@ -7392,11 +9119,10 @@ pub(crate) struct Expression {
 /// C99: primary through comma expressions are §6.5.1-§6.5.17,
 /// pp. 69-94; PDF pp. 81-106.
 #[derive(Debug, PartialEq, Clone)]
-#[expect(
-    dead_code,
-    reason = "The future expression frame will construct these syntax variants."
-)]
 pub(crate) enum ExpressionType {
+    Parenthesized {
+        expression: ExpressionIndex,
+    },
     Conditional {
         condition_expression: ExpressionIndex,
         then_expression:      ExpressionIndex,
@@ -7424,18 +9150,19 @@ pub(crate) enum ExpressionType {
         member:          Identifier,
     },
     CompoundLiteral {
-        struct_type:      TypeName,
-        initializer_list: VectorSlice<Initializer>,
+        type_name:   TypeNameIndex,
+        initializer: InitializerIndex,
     },
     Identifier(Identifier),
     Constant(Constant),
     StringLiteral(StringCacheId),
-    SizeofType(TypeName),
+    SizeofType(TypeNameIndex),
     SizeofExpr(ExpressionIndex),
     Cast {
-        target_type:        TypeName,
+        target_type:        TypeNameIndex,
         operand_expression: ExpressionIndex,
     },
+    Error,
 }
 
 /// Typed literal value accepted by a primary expression.
@@ -7443,10 +9170,6 @@ pub(crate) enum ExpressionType {
 /// C99: primary-expression is §6.5.1, p. 69; PDF p. 81; constants are §6.4.4,
 /// pp. 54-62; PDF pp. 66-74.
 #[derive(Debug, PartialEq, Clone)]
-#[expect(
-    dead_code,
-    reason = "The future expression frame will construct constants."
-)]
 pub(crate) enum Constant {
     Integer(IntegerTokenType),
     Float(FloatTokenType),
@@ -7458,10 +9181,6 @@ pub(crate) enum Constant {
 /// C99: postfix and binary expression productions are §6.5.2 and
 /// §6.5.5-§6.5.17, pp. 69-94; PDF pp. 81-106.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[expect(
-    dead_code,
-    reason = "The future expression frame will construct binary operators."
-)]
 pub(crate) enum BinaryOperator {
     Multiplication,
     Division,
@@ -7501,10 +9220,6 @@ pub(crate) enum BinaryOperator {
 /// C99: postfix, unary, and cast expressions are §6.5.2-§6.5.4,
 /// pp. 69-81; PDF pp. 81-93.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[expect(
-    dead_code,
-    reason = "The future expression frame will construct unary operators."
-)]
 pub(crate) enum UnaryOperator {
     AddressOf,
     Indirection,
@@ -7516,7 +9231,6 @@ pub(crate) enum UnaryOperator {
     PreDecrement,
     PostIncrement,
     PostDecrement,
-    Cast,
 }
 
 /// Interned identifier spelling used by syntax nodes and scope classification.
@@ -7608,21 +9322,6 @@ pub(crate) enum ParserErrorType {
     /// Internal invariant failure: a typed frame attempted to consume EOF.
     /// C99: implementation guard supporting §5.1.1.3, p. 11; PDF p. 23.
     ParserFrameConsumedAtEndOfInput(ParseFrameKind),
-    /// Array-bound expression reached the deferred expression seam.
-    /// C99: §6.7.5.2, pp. 116-117; PDF pp. 128-129.
-    ArrayBoundExpressionNotImplemented,
-    /// Bit-field width reached the deferred constant-expression seam.
-    /// C99: §6.7.2.1, p. 101; PDF p. 113.
-    BitFieldWidthExpressionNotImplemented,
-    /// Enumerator value reached the deferred constant-expression seam.
-    /// C99: §6.7.2.2, p. 105; PDF p. 117.
-    EnumeratorValueExpressionNotImplemented,
-    /// Initializer reached the deferred initializer seam.
-    /// C99: §6.7.8, pp. 125-130; PDF pp. 137-142.
-    InitializerNotImplemented,
-    /// A present statement expression reached the Phase 04 seam.
-    /// C99: §6.8-§6.8.6, pp. 131-139; PDF pp. 143-151.
-    StatementExpressionNotImplemented,
     /// A function-definition head was not followed by its compound body.
     ExpectedFunctionBody(Option<TokenType>),
     /// A compound statement did not begin with `{`.
@@ -7828,11 +9527,6 @@ impl GetSeverity for ParserErrorType {
         match self {
             | Self::EmptyTranslationUnit
             | Self::ParserFrameConsumedAtEndOfInput(..)
-            | Self::ArrayBoundExpressionNotImplemented
-            | Self::BitFieldWidthExpressionNotImplemented
-            | Self::EnumeratorValueExpressionNotImplemented
-            | Self::InitializerNotImplemented
-            | Self::StatementExpressionNotImplemented
             | Self::ExpectedFunctionBody(..)
             | Self::ExpectedOpeningCurlyBraceInCompoundStatement(..)
             | Self::ExpectedClosingCurlyBraceInCompoundStatement(..)
@@ -7912,26 +9606,6 @@ impl Display for ParserErrorType {
                 f,
                 "Parser frame `{}` attempted to consume a token at end of input.",
                 frame.label()
-            ),
-            | Self::ArrayBoundExpressionNotImplemented => write!(
-                f,
-                "The array-bound expression parser is not implemented yet; skipped the bound."
-            ),
-            | Self::BitFieldWidthExpressionNotImplemented => write!(
-                f,
-                "The bit-field-width expression parser is not implemented yet; skipped the width."
-            ),
-            | Self::EnumeratorValueExpressionNotImplemented => write!(
-                f,
-                "The enumerator-value expression parser is not implemented yet; skipped the value."
-            ),
-            | Self::InitializerNotImplemented => write!(
-                f,
-                "The initializer parser is not implemented yet; skipped the initializer."
-            ),
-            | Self::StatementExpressionNotImplemented => write!(
-                f,
-                "The expression parser is not implemented yet; deferred the statement expression."
             ),
             | Self::ExpectedFunctionBody(found) => write_expected(
                 f,
@@ -8318,6 +9992,17 @@ mod tests {
             .collect()
     }
 
+    fn expression_text(parsed: &Parsed, expression: ExpressionIndex) -> String {
+        sourced_text(
+            parsed,
+            parsed.parser.syntax.expressions[expression.0 as usize].source_vectors,
+        )
+    }
+
+    fn constant_expression_text(parsed: &Parsed, expression: ConstantExpressionIndex) -> String {
+        expression_text(parsed, expression.into())
+    }
+
     #[test]
     fn prototype_style_definition_produces_real_function_syntax() {
         let parsed = parse("int defined(int value) { return; }\n");
@@ -8444,8 +10129,9 @@ mod tests {
             2
         );
         assert!(
-            parser_errors(&parsed)
-                .all(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
         );
         assert!(parsed.parser.scopes.nested_scopes.is_empty());
         assert!(parsed.parser.label_scopes.is_empty());
@@ -8517,11 +10203,12 @@ mod tests {
         let parsed = parse(&nested_statements);
         assert!(matches!(
             parsed.items.first(),
-            Some(ExternalDeclaration::RecoveredFunctionDefinition(_))
+            Some(ExternalDeclaration::FunctionDefinition(_))
         ));
         assert!(
-            parser_errors(&parsed)
-                .all(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
         );
         assert!(parsed.parser.scopes.nested_scopes.is_empty());
         assert!(
@@ -8567,8 +10254,9 @@ mod tests {
             Some("value")
         );
         assert!(
-            parser_errors(&nested)
-                .all(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
+            parser_errors(&nested).next().is_none(),
+            "{:#?}",
+            nested.errors
         );
     }
 
@@ -8646,7 +10334,7 @@ mod tests {
         ));
         assert!(matches!(
             parsed.parser.syntax.statements[else_statement.0 as usize].kind,
-            StatementType::Expression(ExpressionSlot::FutureChild(_))
+            StatementType::Expression(ExpressionSlot::Parsed(_))
         ));
     }
 
@@ -8677,7 +10365,7 @@ mod tests {
         ));
         assert!(matches!(
             parsed.parser.syntax.statements[else_statement.0 as usize].kind,
-            StatementType::Expression(ExpressionSlot::FutureChild(_))
+            StatementType::Expression(ExpressionSlot::Parsed(_))
         ));
     }
 
@@ -8710,7 +10398,7 @@ mod tests {
         ));
         assert!(matches!(
             parsed.parser.syntax.statements[outer_else.0 as usize].kind,
-            StatementType::Expression(ExpressionSlot::FutureChild(_))
+            StatementType::Expression(ExpressionSlot::Parsed(_))
         ));
     }
 
@@ -8730,16 +10418,17 @@ mod tests {
         let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
             panic!("expected one case label")
         };
-        let StatementType::Case(ConstantExpressionSlot::FutureChild(expression), _) =
+        let StatementType::Case(ConstantExpressionSlot::Parsed(expression), _) =
             parsed.parser.syntax.statements[case.0 as usize].kind
         else {
-            panic!("expected a deferred case expression")
+            panic!("expected a parsed case expression")
         };
 
-        assert_eq!(sourced_text(&parsed, expression), "a?b:c");
+        assert_eq!(constant_expression_text(&parsed, expression), "a?b:c");
         assert!(
-            parser_errors(&parsed)
-                .all(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
         );
     }
 
@@ -8759,17 +10448,17 @@ mod tests {
         let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
             panic!("expected one case label")
         };
-        let StatementType::Case(ConstantExpressionSlot::FutureChild(expression), _) =
+        let StatementType::Case(ConstantExpressionSlot::Parsed(expression), _) =
             parsed.parser.syntax.statements[case.0 as usize].kind
         else {
-            panic!("expected a deferred case expression")
+            panic!("expected a parsed case expression")
         };
 
-        assert_eq!(sourced_text(&parsed, expression), "(a?b)");
-        assert!(
-            parser_errors(&parsed)
-                .all(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
-        );
+        assert_eq!(constant_expression_text(&parsed, expression), "(a?b)");
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedColonInLabel("conditional expression", _)
+        )));
     }
 
     #[test]
@@ -8788,13 +10477,13 @@ mod tests {
         let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
             panic!("expected one case label")
         };
-        let StatementType::Case(ConstantExpressionSlot::FutureChild(expression), _) =
+        let StatementType::Case(ConstantExpressionSlot::Parsed(expression), _) =
             parsed.parser.syntax.statements[case.0 as usize].kind
         else {
-            panic!("expected a deferred case expression")
+            panic!("expected a parsed case expression")
         };
 
-        assert_eq!(sourced_text(&parsed, expression), "a?(b?c):d");
+        assert_eq!(constant_expression_text(&parsed, expression), "a?(b?c):d");
     }
 
     #[test]
@@ -8849,7 +10538,7 @@ mod tests {
     }
 
     #[test]
-    fn for_slots_distinguish_absence_deferred_expressions_and_declarations() {
+    fn for_slots_distinguish_absent_expressions_and_declarations() {
         let parsed = parse(
             "int f(void) {\nfor (;;) ;\nfor (start; ; ) ;\nfor (; condition; ) ;\nfor (; ; step) \
              ;\nfor (int item; condition; step) ;}\n",
@@ -8891,7 +10580,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_expressions_remain_distinct_from_present_deferred_children() {
+    fn missing_expressions_remain_distinct_from_present_children() {
         let parsed = parse("int f(void) { for () ; if (;) ; case ; return }\n");
         let items = block_items(&parsed, function_definition(&parsed, 0).body);
         let [
@@ -8935,10 +10624,6 @@ mod tests {
             parsed.parser.syntax.statements[return_statement.0 as usize].kind,
             StatementType::Return(None)
         ));
-        assert!(
-            parser_errors(&parsed)
-                .all(|error| !matches!(error, ParserErrorType::StatementExpressionNotImplemented))
-        );
     }
 
     #[test]
@@ -8948,7 +10633,7 @@ mod tests {
         assert_eq!(items.len(), 3);
         assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
-            StatementType::Return(Some(ExpressionSlot::FutureChild(_)))
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
         )));
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
@@ -8965,7 +10650,7 @@ mod tests {
     }
 
     #[test]
-    fn typedef_named_members_remain_inside_deferred_expressions() {
+    fn typedef_named_members_remain_inside_expressions() {
         let parsed =
             parse("typedef int T; struct S { int T; }; int f(struct S *p) { return p->T; }\n");
         let items = block_items(&parsed, function_definition(&parsed, 2).body);
@@ -8974,12 +10659,12 @@ mod tests {
         let BlockItem::Statement(statement) = items[0] else {
             panic!("expected a return statement")
         };
-        let StatementType::Return(Some(ExpressionSlot::FutureChild(expression))) =
+        let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
             parsed.parser.syntax.statements[statement.0 as usize].kind
         else {
-            panic!("expected a deferred return expression")
+            panic!("expected a parsed return expression")
         };
-        assert_eq!(sourced_text(&parsed, expression), "p->T");
+        assert_eq!(expression_text(&parsed, expression), "p->T");
     }
 
     #[test]
@@ -9065,7 +10750,7 @@ mod tests {
         assert_eq!(items.len(), 3);
         assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
-            StatementType::Expression(ExpressionSlot::FutureChild(_))
+            StatementType::Expression(ExpressionSlot::Parsed(_))
         )));
         assert!(matches!(items[1], BlockItem::Declaration(_)));
         assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
@@ -9081,7 +10766,7 @@ mod tests {
         assert_eq!(items.len(), 3);
         assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
-            StatementType::Expression(ExpressionSlot::FutureChild(_))
+            StatementType::Expression(ExpressionSlot::Parsed(_))
         )));
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
@@ -9102,12 +10787,12 @@ mod tests {
         let BlockItem::Statement(expression) = items[0] else {
             panic!("expected an expression statement")
         };
-        let StatementType::Expression(ExpressionSlot::FutureChild(source)) =
+        let StatementType::Expression(ExpressionSlot::Parsed(source)) =
             parsed.parser.syntax.statements[expression.0 as usize].kind
         else {
-            panic!("expected a deferred expression")
+            panic!("expected a parsed expression")
         };
-        assert_eq!(sourced_text(&parsed, source), "c?x:y");
+        assert_eq!(expression_text(&parsed, source), "c?x:y");
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Return(None)
@@ -9167,17 +10852,19 @@ mod tests {
         let BlockItem::Declaration(declaration) = items[0] else {
             panic!("expected a block declaration")
         };
-        let initializer = init_declarators(
+        let initializer = *init_declarators(
             &parsed,
             &parsed.parser.syntax.declarations[declaration.0 as usize],
         )[0]
         .initializer
         .as_ref()
-        .expect("deferred initializer");
-        let Initializer::FutureChild(source) = initializer else {
-            panic!("expected a deferred initializer")
-        };
-        assert_eq!(sourced_text(&parsed, *source), "={1}");
+        .expect("parsed initializer");
+        let initializer = &parsed.parser.syntax.initializers[initializer.0 as usize];
+        assert!(matches!(
+            initializer.kind,
+            InitializerType::InitializerList(_)
+        ));
+        assert_eq!(sourced_text(&parsed, initializer.source_vectors), "{1}");
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Return(None)
@@ -9302,12 +10989,12 @@ mod tests {
         let BlockItem::Statement(statement) = items[0] else {
             panic!("expected a return statement")
         };
-        let StatementType::Return(Some(ExpressionSlot::FutureChild(expression))) =
+        let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
             parsed.parser.syntax.statements[statement.0 as usize].kind
         else {
-            panic!("expected a deferred return expression")
+            panic!("expected a parsed return expression")
         };
-        assert_eq!(sourced_text(&parsed, expression), "sizeof(int){1}");
+        assert_eq!(expression_text(&parsed, expression), "sizeof(int){1}");
     }
 
     #[test]
@@ -9352,7 +11039,7 @@ mod tests {
     }
 
     #[test]
-    fn compound_literals_survive_deferred_parenthesized_expression_recovery() {
+    fn compound_literals_survive_parenthesized_expression_recovery() {
         let parsed =
             parse("struct S { int x; };\nint f(void) { if ((struct S){0}.x) ; return; }\n");
         let items = block_items(&parsed, function_definition(&parsed, 1).body);
@@ -9361,14 +11048,14 @@ mod tests {
             panic!("expected an if statement")
         };
         let StatementType::If {
-            condition_expression: ExpressionSlot::FutureChild(expression),
+            condition_expression: ExpressionSlot::Parsed(expression),
             then_statement,
             else_statement: None,
         } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
         else {
-            panic!("expected a deferred if condition without an else branch")
+            panic!("expected a parsed if condition without an else branch")
         };
-        assert!(sourced_text(&parsed, expression).contains("{0}"));
+        assert!(expression_text(&parsed, expression).contains("{0}"));
         assert!(matches!(
             parsed.parser.syntax.statements[then_statement.0 as usize].kind,
             StatementType::Null
@@ -9467,10 +11154,14 @@ mod tests {
         else {
             panic!("expected a recovered declaration-form for statement")
         };
-        assert!(matches!(
-            parsed.parser.syntax.statements[body_statement.0 as usize].kind,
-            StatementType::Return(None)
-        ));
+        assert!(
+            matches!(
+                parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+                StatementType::Return(None)
+            ),
+            "{:#?}",
+            parsed.parser.syntax.statements[body_statement.0 as usize]
+        );
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Break
@@ -9500,7 +11191,15 @@ mod tests {
                 .length,
             1
         );
-        assert!(parsed.parser.syntax.declarations[declaration.0 as usize].recovered);
+        assert!(!parsed.parser.syntax.declarations[declaration.0 as usize].recovered);
+        assert!(
+            init_declarators(
+                &parsed,
+                &parsed.parser.syntax.declarations[declaration.0 as usize],
+            )[0]
+            .initializer
+            .is_some()
+        );
         assert!(matches!(
             parsed.parser.syntax.statements[body_statement.0 as usize].kind,
             StatementType::Null
@@ -10250,36 +11949,55 @@ mod tests {
     }
 
     #[test]
-    fn expression_dependent_positions_use_typed_future_children() {
+    fn expression_dependent_positions_store_typed_syntax_children() {
         let parsed = parse(
             "int bounded[4];\nstruct Bits { unsigned value:3; };\nenum Values { A=1, B };\nint \
              initialized=42;\nint function(void) { return 0; }\nint after;\n",
         );
 
         assert_eq!(parsed.items.len(), 6);
-        let future_children = parser_errors(&parsed)
-            .filter_map(|error| match error {
-                | ParserErrorType::ArrayBoundExpressionNotImplemented =>
-                    Some(FutureChildKind::ArrayBoundExpression),
-                | ParserErrorType::BitFieldWidthExpressionNotImplemented =>
-                    Some(FutureChildKind::BitFieldWidthExpression),
-                | ParserErrorType::EnumeratorValueExpressionNotImplemented =>
-                    Some(FutureChildKind::EnumeratorValueExpression),
-                | ParserErrorType::InitializerNotImplemented => Some(FutureChildKind::Initializer),
-                | ParserErrorType::StatementExpressionNotImplemented =>
-                    Some(FutureChildKind::StatementExpression),
-                | _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            future_children,
-            [
-                FutureChildKind::StatementExpression,
-                FutureChildKind::Initializer,
-                FutureChildKind::EnumeratorValueExpression,
-                FutureChildKind::BitFieldWidthExpression,
-                FutureChildKind::ArrayBoundExpression,
-            ]
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .direct_declarators
+                .iter()
+                .any(|direct| matches!(
+                    direct,
+                    DirectDeclarator::Array {
+                        assignment_expression: Some(_),
+                        ..
+                    }
+                ))
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .struct_declarators
+                .iter()
+                .any(|declarator| declarator.bitfield_width.is_some())
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .enumerators
+                .iter()
+                .any(|enumerator| enumerator.expression.is_some())
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .init_declarators
+                .iter()
+                .any(|declarator| declarator.initializer.is_some())
+        );
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
         );
         assert_eq!(
             identifier_name(
@@ -10323,10 +12041,6 @@ mod tests {
         );
 
         let parsed = parse("int object, f() { int swallowed; } int after;\n");
-        assert!(
-            !parser_errors(&parsed)
-                .any(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
-        );
         assert!(parser_errors(&parsed).any(|error| matches!(
             error,
             ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
@@ -10348,8 +12062,9 @@ mod tests {
     fn function_body_dispatch_follows_parenthesized_pointer_binding() {
         let function = parse("int (f()) { return 0; } int after;\n");
         assert!(
-            parser_errors(&function)
-                .any(|error| matches!(error, ParserErrorType::StatementExpressionNotImplemented))
+            parser_errors(&function).next().is_none(),
+            "{:#?}",
+            function.errors
         );
         assert!(!parser_errors(&function).any(|error| matches!(
             error,
@@ -10880,7 +12595,7 @@ mod tests {
     }
 
     #[test]
-    fn deferred_expression_recovery_keeps_semicolons_inside_nested_braces() {
+    fn expression_recovery_keeps_semicolons_inside_nested_braces() {
         for source in [
             "int array[sizeof(struct Inner { int member; })], after;\n",
             "int initialized = sizeof(struct Inner { int member; }), after;\n",
@@ -10931,7 +12646,7 @@ mod tests {
                         .and_then(|declarator| identifier_name(&parsed, declarator))
                 })
                 .collect::<Vec<_>>(),
-            ["width", "after"]
+            ["member", "width", "after"]
         );
     }
 
@@ -11378,11 +13093,11 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
-            StatementType::Expression(ExpressionSlot::FutureChild(_))
+            StatementType::Expression(ExpressionSlot::Parsed(_))
         )));
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
-            StatementType::Return(Some(ExpressionSlot::FutureChild(_)))
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
         )));
     }
 
@@ -11394,11 +13109,11 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
-            StatementType::Expression(ExpressionSlot::FutureChild(_))
+            StatementType::Expression(ExpressionSlot::Parsed(_))
         )));
         assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
             parsed.parser.syntax.statements[index.0 as usize].kind,
-            StatementType::Return(Some(ExpressionSlot::FutureChild(_)))
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
         )));
     }
 
@@ -11891,5 +13606,450 @@ mod tests {
                 "source provenance must grow linearly with grammar depth"
             );
         }
+    }
+
+    #[test]
+    fn primary_expressions_are_parsed_in_expression_and_return_statements() {
+        let parsed = parse("int f(void) { value; return 1; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        let BlockItem::Statement(expression_statement) = items[0] else {
+            panic!("expected expression statement");
+        };
+        let StatementType::Expression(ExpressionSlot::Parsed(identifier)) =
+            parsed.parser.syntax.statements[expression_statement.0 as usize].kind
+        else {
+            panic!("expected parsed identifier expression");
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions[identifier.0 as usize].kind,
+            ExpressionType::Identifier(_)
+        ));
+
+        let BlockItem::Statement(return_statement) = items[1] else {
+            panic!("expected return statement");
+        };
+        let StatementType::Return(Some(ExpressionSlot::Parsed(integer))) =
+            parsed.parser.syntax.statements[return_statement.0 as usize].kind
+        else {
+            panic!("expected parsed return expression");
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions[integer.0 as usize].kind,
+            ExpressionType::Constant(Constant::Integer(IntegerTokenType::Int(1)))
+        ));
+        assert!(parser_errors(&parsed).next().is_none());
+    }
+
+    #[test]
+    fn postfix_expression_suffixes_compose_left_to_right() {
+        let parsed = parse("int f(void) { factory()(x)[i].field->member++; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        let BlockItem::Statement(statement) = items[0] else {
+            panic!("expected expression statement");
+        };
+        let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
+            parsed.parser.syntax.statements[statement.0 as usize].kind
+        else {
+            panic!("expected parsed postfix expression");
+        };
+        let ExpressionType::Unary {
+            operator: UnaryOperator::PostIncrement,
+            operand_expression,
+        } = parsed.parser.syntax.expressions[expression.0 as usize].kind
+        else {
+            panic!("expected postfix increment at the root");
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions[operand_expression.0 as usize].kind,
+            ExpressionType::IndirectMember { .. }
+        ));
+        assert!(parser_errors(&parsed).next().is_none());
+    }
+
+    #[test]
+    fn unary_cast_and_sizeof_forms_use_parsed_type_names() {
+        let parsed =
+            parse("typedef int T; int f(void) { -(T)value; sizeof value; return sizeof(T); }\n");
+        let definition = function_definition(&parsed, 1);
+        let items = block_items(&parsed, definition.body);
+        let BlockItem::Statement(statement) = items[2] else {
+            panic!("expected return statement");
+        };
+        let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
+            parsed.parser.syntax.statements[statement.0 as usize].kind
+        else {
+            panic!(
+                "expected parsed return expression: {:#?}",
+                parsed.parser.syntax.statements
+            );
+        };
+        assert!(matches!(
+            parsed.parser.syntax.expressions[expression.0 as usize].kind,
+            ExpressionType::SizeofType(_)
+        ));
+        assert_eq!(parsed.parser.syntax.type_names.len(), 2);
+        assert!(parser_errors(&parsed).next().is_none());
+    }
+
+    #[test]
+    fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
+        let parsed =
+            parse("int f(void) { a = b = c; a ? (b, c) : d ? e : f; call(a, b); call((a, b)); }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        let roots = items
+            .iter()
+            .map(|item| {
+                let BlockItem::Statement(statement) = *item else {
+                    panic!("expected expression statement");
+                };
+                let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
+                    parsed.parser.syntax.statements[statement.0 as usize].kind
+                else {
+                    panic!("expected parsed expression");
+                };
+                expression
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            parsed.parser.syntax.expressions[roots[0].0 as usize].kind,
+            ExpressionType::Binary {
+                operator: BinaryOperator::Assignment,
+                right_expression,
+                ..
+            } if matches!(
+                parsed.parser.syntax.expressions[right_expression.0 as usize].kind,
+                ExpressionType::Binary {
+                    operator: BinaryOperator::Assignment,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            parsed.parser.syntax.expressions[roots[1].0 as usize].kind,
+            ExpressionType::Conditional { else_expression, .. }
+                if matches!(
+                    parsed.parser.syntax.expressions[else_expression.0 as usize].kind,
+                    ExpressionType::Conditional { .. }
+                )
+        ));
+        let argument_lengths = roots[2..]
+            .iter()
+            .map(
+                |root| match parsed.parser.syntax.expressions[root.0 as usize].kind {
+                    | ExpressionType::Call { arguments, .. } => arguments.length,
+                    | _ => panic!("expected call expression"),
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(argument_lengths, [2, 1]);
+        assert!(parser_errors(&parsed).next().is_none());
+    }
+
+    #[test]
+    fn equal_precedence_chains_nested_conditionals_and_casts_keep_their_associativity() {
+        let parsed = parse("int f(void) { a-b-c; a ? b ? c : d : e; (int)(long)a; a+b=c; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        let roots = items
+            .iter()
+            .map(|item| {
+                let BlockItem::Statement(statement) = *item else {
+                    panic!("expected expression statement");
+                };
+                let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
+                    parsed.parser.syntax.statements[statement.0 as usize].kind
+                else {
+                    panic!("expected parsed expression");
+                };
+                expression
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            parsed.parser.syntax.expressions[roots[0].0 as usize].kind,
+            ExpressionType::Binary {
+                operator: BinaryOperator::Subtraction,
+                left_expression,
+                ..
+            } if matches!(
+                parsed.parser.syntax.expressions[left_expression.0 as usize].kind,
+                ExpressionType::Binary {
+                    operator: BinaryOperator::Subtraction,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            parsed.parser.syntax.expressions[roots[1].0 as usize].kind,
+            ExpressionType::Conditional { then_expression, .. }
+                if matches!(
+                    parsed.parser.syntax.expressions[then_expression.0 as usize].kind,
+                    ExpressionType::Conditional { .. }
+                )
+        ));
+        assert!(matches!(
+            parsed.parser.syntax.expressions[roots[2].0 as usize].kind,
+            ExpressionType::Cast { operand_expression, .. }
+                if matches!(
+                    parsed.parser.syntax.expressions[operand_expression.0 as usize].kind,
+                    ExpressionType::Cast { .. }
+                )
+        ));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedStatementExpression(
+                "unary-expression left operand of assignment",
+                _
+            )
+        )));
+    }
+
+    #[test]
+    fn scalar_list_and_designated_initializers_have_stable_arena_children() {
+        let parsed = parse(
+            "struct S { int field; int tail; }; struct S value = { .field = { [2] = 3, 4, }, \
+             .tail = 5 };\n",
+        );
+        let declaration = declaration(&parsed, 1);
+        let [init_declarator] = init_declarators(&parsed, declaration) else {
+            panic!("expected one initialized declarator");
+        };
+        let initializer = init_declarator
+            .initializer
+            .expect("initializer must be attached to its declarator");
+        let InitializerType::InitializerList(elements) =
+            parsed.parser.syntax.initializers[initializer.0 as usize].kind
+        else {
+            panic!("expected outer initializer list");
+        };
+        let outer = &parsed.parser.syntax.initializer_elements
+            [elements.start_index as usize..(elements.start_index + elements.length) as usize];
+        assert_eq!(outer.len(), 2);
+        assert!(outer.iter().all(|element| element.designation.is_some()));
+
+        let InitializerType::InitializerList(nested_elements) =
+            parsed.parser.syntax.initializers[outer[0].initializer.0 as usize].kind
+        else {
+            panic!("expected nested initializer list");
+        };
+        assert_eq!(nested_elements.length, 2);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
+    fn every_c99_expression_operator_is_represented_by_the_syntax_model() {
+        let parsed = parse(
+            "struct S { int member; }; int f(int a, int b, int c, int *p, struct S s) { a*b; a/b; \
+             a%b; a+b; a-b; a<<b; a>>b; a<b; a>b; a<=b; a>=b; a==b; a!=b; a&b; a^b; a|b; a&&b; \
+             a||b; a=b; a*=b; a/=b; a%=b; a+=b; a-=b; a<<=b; a>>=b; a&=b; a^=b; a|=b; a,b; a?b:c; \
+             p[a]; f(a); s.member; p->member; &a; *p; +a; -a; ~a; !a; ++a; --a; a++; a--; (int)a; \
+             sizeof a; sizeof(int); return 0; }\n",
+        );
+        let binary = [
+            BinaryOperator::Multiplication,
+            BinaryOperator::Division,
+            BinaryOperator::Modulo,
+            BinaryOperator::Addition,
+            BinaryOperator::Subtraction,
+            BinaryOperator::LeftShift,
+            BinaryOperator::RightShift,
+            BinaryOperator::LessThan,
+            BinaryOperator::GreaterThan,
+            BinaryOperator::LessThanOrEqual,
+            BinaryOperator::GreaterThanOrEqual,
+            BinaryOperator::Equal,
+            BinaryOperator::NotEqual,
+            BinaryOperator::BitwiseAnd,
+            BinaryOperator::BitwiseXor,
+            BinaryOperator::BitwiseOr,
+            BinaryOperator::LogicalAnd,
+            BinaryOperator::LogicalOr,
+            BinaryOperator::Assignment,
+            BinaryOperator::MultiplicationAssignment,
+            BinaryOperator::DivisionAssignment,
+            BinaryOperator::ModuloAssignment,
+            BinaryOperator::AdditionAssignment,
+            BinaryOperator::SubtractionAssignment,
+            BinaryOperator::LeftShiftAssignment,
+            BinaryOperator::RightShiftAssignment,
+            BinaryOperator::BitwiseAndAssignment,
+            BinaryOperator::BitwiseXorAssignment,
+            BinaryOperator::BitwiseOrAssignment,
+            BinaryOperator::Comma,
+            BinaryOperator::Subscript,
+        ];
+        for expected in binary {
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .expressions
+                    .iter()
+                    .any(|expression| matches!(
+                        expression.kind,
+                        ExpressionType::Binary { operator, .. } if operator == expected
+                    )),
+                "missing binary operator {expected:?}"
+            );
+        }
+        let unary = [
+            UnaryOperator::AddressOf,
+            UnaryOperator::Indirection,
+            UnaryOperator::Plus,
+            UnaryOperator::Minus,
+            UnaryOperator::BitwiseNot,
+            UnaryOperator::LogicalNot,
+            UnaryOperator::PreIncrement,
+            UnaryOperator::PreDecrement,
+            UnaryOperator::PostIncrement,
+            UnaryOperator::PostDecrement,
+        ];
+        for expected in unary {
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .expressions
+                    .iter()
+                    .any(|expression| matches!(
+                        expression.kind,
+                        ExpressionType::Unary { operator, .. } if operator == expected
+                    )),
+                "missing unary operator {expected:?}"
+            );
+        }
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .expressions
+                .iter()
+                .any(|expression| matches!(expression.kind, ExpressionType::Conditional { .. }))
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .expressions
+                .iter()
+                .any(|expression| matches!(expression.kind, ExpressionType::Cast { .. }))
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .expressions
+                .iter()
+                .any(|expression| matches!(expression.kind, ExpressionType::SizeofExpr(_)))
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .expressions
+                .iter()
+                .any(|expression| matches!(expression.kind, ExpressionType::SizeofType(_)))
+        );
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
+    fn deeply_nested_expressions_use_heap_backed_parser_frames() {
+        let depth = 4_096;
+        let source = format!(
+            "int f(void) {{ return {}1{}; }}\n",
+            "(".repeat(depth),
+            ")".repeat(depth)
+        );
+        let parsed = parse(&source);
+
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        assert!(
+            parsed
+                .parser
+                .trace
+                .iter()
+                .map(|event| event.depth)
+                .max()
+                .is_some_and(|maximum| maximum > depth)
+        );
+    }
+
+    #[test]
+    fn call_argument_and_initializer_nesting_translation_floors_are_heap_backed() {
+        let arguments = (0..127).map(|_| "1").collect::<Vec<_>>().join(",");
+        let initializer_depth = 512;
+        let source = format!(
+            "int nested = {}1{}; int f(void) {{ return f({arguments}); }}\n",
+            "{".repeat(initializer_depth),
+            "}".repeat(initializer_depth),
+        );
+        let parsed = parse(&source);
+
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .expressions
+                .iter()
+                .any(|expression| matches!(
+                    expression.kind,
+                    ExpressionType::Call { arguments, .. } if arguments.length == 127
+                ))
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .initializers
+                .iter()
+                .filter(|initializer| matches!(
+                    initializer.kind,
+                    InitializerType::InitializerList(_)
+                ))
+                .count()
+                >= initializer_depth
+        );
+    }
+
+    #[test]
+    fn abstract_type_names_cover_pointer_array_function_and_parenthesized_forms() {
+        let parsed = parse(
+            "int f(int *p) { (int *)p; sizeof(int [4]); sizeof(int (*)(int)); return sizeof(int \
+             (*)[4]); }\n",
+        );
+
+        assert_eq!(parsed.parser.syntax.type_names.len(), 4);
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .type_names
+                .iter()
+                .all(|type_name| type_name.declarator.is_some())
+        );
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
     }
 }

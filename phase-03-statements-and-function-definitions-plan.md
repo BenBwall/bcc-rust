@@ -9,13 +9,12 @@ prototype, block, implicit selection/iteration, label, and switch lifetimes are
 covered by recovery and translation-floor tests; valid definitions no longer
 use a function-body future-child seam.
 
-Phase 04 still owns `StatementExpression` and
-`StatementConstantExpression` deferred slots and will replace their source
-provenance with expression indices. Phase 05 still owns initializer, array
-bound, bit-field width, and enumerator-value seams. The completion run has 99
-passing all-target tests and a clean nightly formatting check. Strict Clippy
-continues to report 84 existing error lines in generated bindings and
-non-parser modules; no diagnostic points at `parsing.rs`.
+Phase 04 owns `StatementExpression`, `StatementConstantExpression`,
+initializer, array-bound, bit-field-width, and enumerator-value deferred slots
+and will replace their source provenance with parsed handles. The completion
+run has 99 passing all-target tests and a clean nightly formatting check.
+Strict Clippy continues to report 84 existing error lines in generated
+bindings and non-parser modules; no diagnostic points at `parsing.rs`.
 
 ## Objective
 
@@ -33,9 +32,10 @@ owned frame actions, typed child returns, heap-backed grammar nesting, exact
 source provenance, and recovery that unwinds to a named owner.
 
 Expected size: roughly 12–20 focused days for one agent, delivered as small
-green commits. Expression and initializer parsing belong to Phases 04 and 05.
-This phase preserves their positions as explicit typed deferred children so it
-can finish independently without token skipping or duplicated grammar.
+green commits. Expression, type-name, and initializer parsing belong to the
+merged Phase 04. This phase preserves their positions as explicit typed
+deferred children so it can finish independently without token skipping or
+duplicated grammar.
 
 ## Scope
 
@@ -77,7 +77,7 @@ Before editing, read:
 - the current `src/translation_phases/parsing.rs`, `src/lib.rs`, and CLI entry
   point.
 - `parser-roadmap.md`, which is authoritative for the boundary between this
-  phase and Phases 04–06.
+  phase, merged grammar Phase 04, and closure Phase 05.
 
 At the Phase 03 planning baseline on 23 August 2026:
 
@@ -104,7 +104,7 @@ syntax-store layout before the first implementation commit.
 ## Phase boundary
 
 Statements contain expression and initializer grammar positions. Phase 03 owns
-their parent frames and delimiter contracts, while Phases 04 and 05 own the
+their parent frames and delimiter contracts, while Phase 04 owns the
 general-purpose expression and initializer implementations.
 
 Phase 03 must define typed deferred child contracts for:
@@ -121,8 +121,8 @@ with a private `ExpressionSlot::{Parsed, FutureChild}` model used by statement
 nodes. Do not overload `Option` to mean both “grammar position absent” and
 “expression present but deferred.” The future child emits a focused diagnostic,
 retains source provenance, and preserves the parent's delimiter. Phase 04
-replaces these slots with parsed expression indices; Phase 05 removes the
-initializer seams.
+replaces these slots with parsed expression indices and removes the initializer
+seams.
 
 Do not implement an ad hoc expression parser inside `StatementFrame` or
 `FunctionDefinitionFrame`.
@@ -515,7 +515,7 @@ delimiter ownership.
 
 ## Out of scope
 
-- implementing the Phase 04 expression parser or Phase 05 initializer parser;
+- implementing the merged Phase 04 expression, type-name, or initializer parser;
 - semantic type checking, control-flow validation, and return-type checking;
 - diagnosing all C99 constraints such as illegal `break`, duplicate labels, or
   incompatible old-style parameter declarations unless the existing parser
@@ -548,4 +548,4 @@ Phase 03 is complete only when all of the following are true:
 - strict Clippy is clean for all changed Phase 03 files;
 - the CLI syntax dump makes every representative node manually inspectable;
 - status and handoff documents identify every deferred expression and
-  initializer path assigned to Phases 04 and 05.
+  initializer path assigned to Phase 04.

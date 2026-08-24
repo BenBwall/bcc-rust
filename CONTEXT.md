@@ -1,6 +1,6 @@
 # bcc-rust Compiler Domain
 
-This glossary defines the canonical language for bcc-rust's C front end and its agreed parser direction. Terms under **Proposed parser vocabulary** describe intended architecture and do not imply that the architecture exists in the current parser.
+This glossary defines the canonical language for bcc-rust's C front end and its agreed parser direction.
 
 ## Translation pipeline
 
@@ -108,37 +108,37 @@ The integer expression accepted by conditional preprocessing directives. It has 
 The current two-state, operator-stack and operand-stack reducer that evaluates preprocessor expressions during conditional preprocessing.
 
 **Double-E reducer**:
-A non-recursive precedence reducer that alternates operand-expected and operator-expected states while reducing separate operator and operand stacks. The current preprocessor evaluator follows this style; a shared reducer for both preprocessing evaluation and language-AST construction is proposed.
+A non-recursive precedence reducer that alternates operand-expected and operator-expected states while reducing separate operator and operand stacks. The preprocessor evaluator and language parser each own their reducer implementation because their operands, legal operators, outputs, and diagnostics differ.
 
 **Expression dialect**:
-One policy layer over shared precedence reduction. The preprocessing dialect evaluates integer values, while the proposed language dialect constructs C expression AST nodes and accepts the full language operator set.
+The grammar and reduction policy of one expression parser. The preprocessing dialect evaluates integer values, while the independently implemented language dialect constructs C expression AST nodes and accepts the full language operator set.
 
 ## Parser stack-machine vocabulary
 
-The Phase 03 parser implements this vocabulary through declarations, function
-definitions, compound statements, and statements. `parser-roadmap.md` keeps the
-authoritative boundaries for the remaining expression, type-name, initializer,
-and closure work.
+The Phase 04 parser implements this vocabulary through declarations, function
+definitions, statements, expressions, type names, and initializers.
+`parser-roadmap.md` keeps the authoritative boundary for the remaining closure
+work.
 
-**ParserMachine** *(partially implemented as `Parser`)*:
+**ParserMachine** *(implemented as `Parser`)*:
 The single driver that owns the buffered token cursor, control stack, typed child return, syntax arenas, file-scope name classification, and diagnostic/recovery state for language parsing.
 _Avoid_: Recursive-descent parser
 
-**ParseFrame** *(partially implemented)*:
-A resumable state machine for one grammar family. Current families cover external declarations, declarations, declarators, parameters, tags, function definitions, compound statements, statements, and typed deferred children; expressions, type names, and full initializers remain later families.
+**ParseFrame** *(implemented)*:
+A resumable state machine for one grammar family. Current families cover external declarations, declarations, declarators, parameters, tags, function definitions, compound statements, statements, expressions, type names, and initializers.
 _Avoid_: Grammar call
 
-**ExpressionFrame** *(future)*:
+**ExpressionFrame** *(implemented)*:
 The parse frame that owns the Double-E operator and operand stacks for a language expression and returns an expression result to its parent frame.
 
 **ParseAction** *(implemented)*:
 A small owned instruction returned by a frame to the driver: consume input, push a child frame, reduce a value, reprocess lookahead, or recover at a synchronization set.
 
-**ParseValue** *(partially implemented)*:
-The typed result passed from a completed child frame to its parent. Current variants cover declarations, function definitions, compound statements, statements, and typed deferred expression or initializer children.
+**ParseValue** *(implemented)*:
+The typed result passed from a completed child frame to its parent. Variants cover declarations, function definitions, compound statements, statements, expressions, constant expressions, type names, and initializers.
 
-**Deferred child**:
-A present grammar child whose parser belongs to a later phase, retained as a typed source-backed slot rather than confused with syntactic absence. Its parent continues to own and consume the terminating delimiter.
+**Deferred child** *(historical phase seam)*:
+A present grammar child whose parser belonged to a later phase, retained as a typed source-backed slot rather than confused with syntactic absence. Phase 04 removed these seams from supported C99 grammar paths.
 _Avoid_: Skipped syntax
 
 **Synchronization set** *(implemented)*:
