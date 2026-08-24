@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Preprocessing"
+  short_description: "Review directives, macros, includes, and token conversion"
+  default_prompt: "Use $review-pr-preprocessing to review the current PR's C preprocessor behavior."

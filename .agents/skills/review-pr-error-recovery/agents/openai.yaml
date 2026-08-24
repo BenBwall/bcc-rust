@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Error Recovery"
+  short_description: "Review recovery, diagnostics, state, and provenance"
+  default_prompt: "Use $review-pr-error-recovery to audit the current compiler PR's failure paths."

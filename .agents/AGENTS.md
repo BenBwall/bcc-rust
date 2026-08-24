@@ -45,6 +45,10 @@ Double-E is the precedence reducer inside the expression frame and may inspire a
 
 The Phase 02 declaration subset implements this architecture. The remaining whole-language frames and shared expression reducer are intended design, not current behavior; keep current-status claims and proposed-design claims visibly separate.
 
+## First-party skills
+
+Repository-specific skills live as real directories under `.agents/skills/<name>` and are exposed to Claude through matching tracked symlinks under `.claude/skills/<name>`. Keep shared instructions in one authoritative reference and point sibling skills to it instead of copying the contract.
+
 ## Vendored skills
 
 `vendor/mattpocock-skills/` is a squashed Git subtree from `https://github.com/mattpocock/skills.git` `main` and the source of truth for those upstream skills. `vendor/openai-codex-skills/babysit-pr/` is a narrow snapshot of `.codex/skills/babysit-pr/` from `https://github.com/openai/codex.git`; its adjacent `.source.json` records the pinned revision. Every vendored directory containing `SKILL.md` is exposed through matching tracked symlinks under both `.agents/skills/<name>` and `.claude/skills/<name>`. The PR babysitter additionally has a thin overlay at `.codex/skills/babysit-pr`: its skill metadata and references link to the pristine snapshot, while the documented `scripts/gh_pr_watch.py` entrypoint links to the repository-local compatibility adapter.
