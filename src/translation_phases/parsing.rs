@@ -174,9 +174,11 @@ pub(crate) struct InitDeclarator {
 /// C99: §6.7.8, p. 125; PDF p. 137.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Initializer {
-    pub(crate) kind:           InitializerType,
+    pub(crate) kind: InitializerType,
     pub(crate) source_vectors: SourceVectors,
-    pub(crate) recovered:      bool,
+    pub(crate) opening_brace_source_vectors: Option<SourceVectors>,
+    pub(crate) closing_brace_source_vectors: Option<SourceVectors>,
+    pub(crate) recovered: bool,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -187,23 +189,27 @@ pub(crate) enum InitializerType {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct InitializerElement {
-    pub(crate) designation:    Option<DesignationIndex>,
-    pub(crate) initializer:    InitializerIndex,
-    pub(crate) source_vectors: SourceVectors,
+    pub(crate) designation:          Option<DesignationIndex>,
+    pub(crate) initializer:          InitializerIndex,
+    pub(crate) comma_source_vectors: Option<SourceVectors>,
+    pub(crate) source_vectors:       SourceVectors,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Designation {
-    pub(crate) designators:    VectorSlice<Designator>,
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) recovered:      bool,
+    pub(crate) designators:           VectorSlice<Designator>,
+    pub(crate) equals_source_vectors: Option<SourceVectors>,
+    pub(crate) source_vectors:        SourceVectors,
+    pub(crate) recovered:             bool,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Designator {
-    pub(crate) kind:           DesignatorType,
+    pub(crate) kind: DesignatorType,
+    pub(crate) operator_source_vectors: SourceVectors,
+    pub(crate) closing_bracket_source_vectors: Option<SourceVectors>,
     pub(crate) source_vectors: SourceVectors,
-    pub(crate) recovered:      bool,
+    pub(crate) recovered: bool,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -2287,7 +2293,10 @@ struct InitializerFrame {
     current_designators: Vec<Designator>,
     current_designation: Option<DesignationIndex>,
     source_vectors: Option<SourceVectors>,
+    opening_brace_source_vectors: Option<SourceVectors>,
+    closing_brace_source_vectors: Option<SourceVectors>,
     designation_source_vectors: Option<SourceVectors>,
+    designation_equals_source_vectors: Option<SourceVectors>,
     current_designator_source: Option<SourceVectors>,
     current_designation_recovered: bool,
     synchronized_designator: Option<(ConstantExpressionIndex, SourceVectors, usize)>,
@@ -2329,7 +2338,10 @@ impl InitializerFrame {
             current_designators: Vec::new(),
             current_designation: None,
             source_vectors: None,
+            opening_brace_source_vectors: None,
+            closing_brace_source_vectors: None,
             designation_source_vectors: None,
+            designation_equals_source_vectors: None,
             current_designator_source: None,
             current_designation_recovered: false,
             synchronized_designator: None,
@@ -9060,6 +9072,7 @@ impl InitializerFrame {
                 if let Some(opening) = token
                     && opening.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
                 {
+                    self.opening_brace_source_vectors = Some(opening.source_vectors);
                     parser.merge_source(context, &mut self.source_vectors, opening);
                     self.phase = InitializerPhase::ElementOrClose;
                     ParseAction::Consume
@@ -9106,6 +9119,7 @@ impl InitializerFrame {
                             Some(close),
                         );
                     }
+                    self.closing_brace_source_vectors = Some(close.source_vectors);
                     parser.merge_source(context, &mut self.source_vectors, close);
                     self.phase = InitializerPhase::FinishList;
                     return ParseAction::Consume;
@@ -9140,6 +9154,7 @@ impl InitializerFrame {
                 self.current_designators.clear();
                 self.current_designation = None;
                 self.designation_source_vectors = None;
+                self.designation_equals_source_vectors = None;
                 self.current_designator_source = None;
                 self.current_designation_recovered = false;
                 self.phase = InitializerPhase::Designation;
@@ -9183,22 +9198,28 @@ impl InitializerFrame {
                         ),
                         token,
                     );
+                    let operator_source_vectors =
+                        self.current_designator_source.take().unwrap_or_default();
                     self.current_designators.push(Designator {
-                        kind:           DesignatorType::Error,
-                        source_vectors: self.current_designator_source.take().unwrap_or_default(),
-                        recovered:      true,
+                        kind: DesignatorType::Error,
+                        operator_source_vectors,
+                        closing_bracket_source_vectors: None,
+                        source_vectors: operator_source_vectors,
+                        recovered: true,
                     });
                     self.current_designation_recovered = true;
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
                 };
                 self.merge_designation_source(context, identifier.source_vectors);
-                let source_vectors = context.merge_vectors(
-                    self.current_designator_source.take().unwrap_or_default(),
-                    identifier.source_vectors,
-                );
+                let operator_source_vectors =
+                    self.current_designator_source.take().unwrap_or_default();
+                let source_vectors =
+                    context.merge_vectors(operator_source_vectors, identifier.source_vectors);
                 self.current_designators.push(Designator {
                     kind: DesignatorType::Field(Identifier::new(identifier.contents)),
+                    operator_source_vectors,
+                    closing_bracket_source_vectors: None,
                     source_vectors,
                     recovered: false,
                 });
@@ -9233,17 +9254,21 @@ impl InitializerFrame {
                 let expression_source = parser.syntax.expressions
                     [ExpressionIndex::from(expression).0 as usize]
                     .source_vectors;
-                let mut source_vectors = context.merge_vectors(
-                    self.current_designator_source.take().unwrap_or_default(),
-                    expression_source,
-                );
+                let operator_source_vectors = self.current_designator_source.unwrap_or_default();
+                let mut source_vectors =
+                    context.merge_vectors(operator_source_vectors, expression_source);
                 self.merge_designation_source(context, expression_source);
                 if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
                 {
                     source_vectors = context.merge_vectors(source_vectors, close.source_vectors);
                     self.merge_designation_source(context, close.source_vectors);
-                    self.push_array_designator(expression, source_vectors, expression_recovered);
+                    self.push_array_designator(
+                        expression,
+                        source_vectors,
+                        Some(close.source_vectors),
+                        expression_recovered,
+                    );
                     self.phase = InitializerPhase::Designation;
                     ParseAction::Consume
                 } else {
@@ -9271,7 +9296,12 @@ impl InitializerFrame {
                     source_vectors = context.merge_vectors(source_vectors, token.source_vectors);
                     self.merge_designation_source(context, token.source_vectors);
                     if depth == 0 {
-                        self.push_array_designator(expression, source_vectors, true);
+                        self.push_array_designator(
+                            expression,
+                            source_vectors,
+                            Some(token.source_vectors),
+                            true,
+                        );
                         self.phase = InitializerPhase::Designation;
                     } else {
                         self.synchronized_designator =
@@ -9284,12 +9314,12 @@ impl InitializerFrame {
                 // initializer or declaration boundary. Depth only selects
                 // which later `]` can close this designator.
                 if self.at_array_designator_sync_boundary(parser, context, token) {
-                    self.push_array_designator(expression, source_vectors, true);
+                    self.push_array_designator(expression, source_vectors, None, true);
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
                 }
                 let Some(token) = token else {
-                    self.push_array_designator(expression, source_vectors, true);
+                    self.push_array_designator(expression, source_vectors, None, true);
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
                 };
@@ -9310,6 +9340,7 @@ impl InitializerFrame {
                 let consume = if let Some(equals) = token
                     && equals.kind == TokenType::Operator(OperatorTokenType::Equals)
                 {
+                    self.designation_equals_source_vectors = Some(equals.source_vectors);
                     self.merge_designation_source(context, equals.source_vectors);
                     true
                 } else {
@@ -9358,6 +9389,7 @@ impl InitializerFrame {
                 self.elements.push(InitializerElement {
                     designation: self.current_designation.take(),
                     initializer: index,
+                    comma_source_vectors: None,
                     source_vectors,
                 });
                 self.source_vectors =
@@ -9372,6 +9404,10 @@ impl InitializerFrame {
                 if let Some(comma) = token
                     && comma.kind == TokenType::Operator(OperatorTokenType::Comma)
                 {
+                    self.elements
+                        .last_mut()
+                        .expect("a separator follows one initializer element")
+                        .comma_source_vectors = Some(comma.source_vectors);
                     parser.merge_source(context, &mut self.source_vectors, comma);
                     self.phase = InitializerPhase::ElementOrClose;
                     return ParseAction::Consume;
@@ -9379,6 +9415,7 @@ impl InitializerFrame {
                 if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
                 {
+                    self.closing_brace_source_vectors = Some(close.source_vectors);
                     parser.merge_source(context, &mut self.source_vectors, close);
                     self.phase = InitializerPhase::FinishList;
                     return ParseAction::Consume;
@@ -9456,10 +9493,13 @@ impl InitializerFrame {
         &mut self,
         expression: ConstantExpressionIndex,
         source_vectors: SourceVectors,
+        closing_bracket_source_vectors: Option<SourceVectors>,
         recovered: bool,
     ) {
         self.current_designators.push(Designator {
             kind: DesignatorType::Array(expression),
+            operator_source_vectors: self.current_designator_source.take().unwrap_or_default(),
+            closing_bracket_source_vectors,
             source_vectors,
             recovered,
         });
@@ -9516,6 +9556,7 @@ impl InitializerFrame {
         );
         parser.syntax.designations.push(Designation {
             designators,
+            equals_source_vectors: self.designation_equals_source_vectors.take(),
             source_vectors: self.designation_source_vectors.take().unwrap_or_default(),
             recovered,
         });
@@ -9592,6 +9633,8 @@ impl InitializerFrame {
         parser.syntax.initializers.push(Initializer {
             kind,
             source_vectors,
+            opening_brace_source_vectors: self.opening_brace_source_vectors,
+            closing_brace_source_vectors: self.closing_brace_source_vectors,
             recovered: parser.hard_error_count > self.starting_error_count,
         });
         index
@@ -14872,6 +14915,37 @@ mod tests {
     }
 
     #[test]
+    fn declarator_binding_shadows_a_typedef_inside_its_own_initializer() {
+        let parsed = parse("typedef int T; int f(void) { int T = sizeof(T); }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 1).body);
+        let BlockItem::Declaration(declaration) = items[0] else {
+            panic!("expected a block declaration")
+        };
+        let [init_declarator] = init_declarators(
+            &parsed,
+            &parsed.parser.syntax.declarations[declaration.0 as usize],
+        ) else {
+            panic!("expected one initialized declarator")
+        };
+        let initializer = init_declarator.initializer.expect("parsed initializer");
+        let InitializerType::AssignmentExpression(expression) =
+            parsed.parser.syntax.initializers[initializer.0 as usize].kind
+        else {
+            panic!("expected a scalar initializer")
+        };
+
+        assert!(matches!(
+            parsed.parser.syntax.expressions[expression.0 as usize].kind,
+            ExpressionType::SizeofExpr(_)
+        ));
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
     fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
         let parsed =
             parse("int f(void) { a = b = c; a ? (b, c) : d ? e : f; call(a, b); call((a, b)); }\n");
@@ -14924,6 +14998,39 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(argument_lengths, [2, 1]);
         assert!(parser_errors(&parsed).next().is_none());
+    }
+
+    #[test]
+    fn conditional_middle_accepts_an_unparenthesized_comma_expression() {
+        let parsed = parse("int f(void) { return a ? b, c : d; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        let BlockItem::Statement(statement) = items[0] else {
+            panic!("expected a return statement")
+        };
+        let root = return_expression(&parsed, statement);
+        let ExpressionType::Conditional {
+            then_expression,
+            else_expression,
+            ..
+        } = parsed.parser.syntax.expressions[root.0 as usize].kind
+        else {
+            panic!("expected a conditional expression")
+        };
+
+        assert!(matches!(
+            parsed.parser.syntax.expressions[then_expression.0 as usize].kind,
+            ExpressionType::Binary {
+                operator: BinaryOperator::Comma,
+                ..
+            }
+        ));
+        assert_eq!(expression_text(&parsed, then_expression), "b,c");
+        assert_eq!(expression_text(&parsed, else_expression), "d");
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
     }
 
     #[test]
@@ -15153,11 +15260,28 @@ mod tests {
         let initializer = init_declarator
             .initializer
             .expect("initializer must be attached to its declarator");
-        let InitializerType::InitializerList(elements) =
-            parsed.parser.syntax.initializers[initializer.0 as usize].kind
-        else {
+        let outer_initializer = &parsed.parser.syntax.initializers[initializer.0 as usize];
+        let InitializerType::InitializerList(elements) = outer_initializer.kind else {
             panic!("expected outer initializer list");
         };
+        assert_eq!(
+            sourced_text(
+                &parsed,
+                outer_initializer
+                    .opening_brace_source_vectors
+                    .expect("opening initializer brace"),
+            ),
+            "{"
+        );
+        assert_eq!(
+            sourced_text(
+                &parsed,
+                outer_initializer
+                    .closing_brace_source_vectors
+                    .expect("closing initializer brace"),
+            ),
+            "}"
+        );
         let outer = &parsed.parser.syntax.initializer_elements
             [elements.start_index as usize..(elements.start_index + elements.length) as usize];
         assert_eq!(outer.len(), 2);
@@ -15176,10 +15300,23 @@ mod tests {
                 ..
             }] if parsed.context.string_cache.at(identifier.name) == "field"
         ));
+        assert_eq!(
+            sourced_text(&parsed, field_designators[0].operator_source_vectors),
+            "."
+        );
+        assert_eq!(
+            sourced_text(
+                &parsed,
+                field_designation
+                    .equals_source_vectors
+                    .expect("designation equals"),
+            ),
+            "="
+        );
 
-        let InitializerType::InitializerList(nested_elements) =
-            parsed.parser.syntax.initializers[outer[0].initializer.0 as usize].kind
-        else {
+        let nested_initializer =
+            &parsed.parser.syntax.initializers[outer[0].initializer.0 as usize];
+        let InitializerType::InitializerList(nested_elements) = nested_initializer.kind else {
             panic!("expected nested initializer list");
         };
         assert_eq!(nested_elements.length, 2);
@@ -15193,6 +15330,19 @@ mod tests {
             array_designator.kind,
             DesignatorType::Array(expression) if constant_expression_text(&parsed, expression) == "2"
         ));
+        assert_eq!(
+            sourced_text(&parsed, array_designator.operator_source_vectors),
+            "["
+        );
+        assert_eq!(
+            sourced_text(
+                &parsed,
+                array_designator
+                    .closing_bracket_source_vectors
+                    .expect("closing designator bracket"),
+            ),
+            "]"
+        );
         let scalar_text = |element: InitializerElement| {
             let InitializerType::AssignmentExpression(expression) =
                 parsed.parser.syntax.initializers[element.initializer.0 as usize].kind
@@ -15203,6 +15353,15 @@ mod tests {
         };
         assert_eq!(scalar_text(nested[0]), "3");
         assert_eq!(scalar_text(nested[1]), "4");
+        assert_eq!(
+            sourced_text(
+                &parsed,
+                nested[1]
+                    .comma_source_vectors
+                    .expect("trailing initializer comma"),
+            ),
+            ","
+        );
         assert_eq!(scalar_text(outer[1]), "5");
         assert_eq!(
             sourced_text(&parsed, array_designation.source_vectors),
@@ -15272,6 +15431,73 @@ mod tests {
             panic!("expected a scalar initializer")
         };
         assert_eq!(expression_text(&parsed, expression), "3");
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
+    fn array_designators_accept_conditional_and_parenthesized_comma_expressions() {
+        let parsed = parse("int values[] = { [x ? y : z] = 1, [(x, y)] = 2 };\n");
+        let declaration = declaration(&parsed, 0);
+        let [init_declarator] = init_declarators(&parsed, declaration) else {
+            panic!("expected one initialized declarator")
+        };
+        let initializer = init_declarator.initializer.expect("parsed initializer");
+        let InitializerType::InitializerList(elements) =
+            parsed.parser.syntax.initializers[initializer.0 as usize].kind
+        else {
+            panic!("expected an initializer list")
+        };
+        let elements = &parsed.parser.syntax.initializer_elements
+            [elements.start_index as usize..(elements.start_index + elements.length) as usize];
+        let expressions = elements
+            .iter()
+            .map(|element| {
+                let designation = element.designation.expect("array designation");
+                let designation = parsed.parser.syntax.designations[designation.0 as usize];
+                let designator =
+                    parsed.parser.syntax.designators[designation.designators.start_index as usize];
+                let DesignatorType::Array(expression) = designator.kind else {
+                    panic!("expected an array designator")
+                };
+                assert_eq!(
+                    sourced_text(&parsed, designator.operator_source_vectors),
+                    "["
+                );
+                assert_eq!(
+                    sourced_text(
+                        &parsed,
+                        designator
+                            .closing_bracket_source_vectors
+                            .expect("closing designator bracket"),
+                    ),
+                    "]"
+                );
+                ExpressionIndex::from(expression)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            parsed.parser.syntax.expressions[expressions[0].0 as usize].kind,
+            ExpressionType::Conditional { .. }
+        ));
+        assert!(matches!(
+            parsed.parser.syntax.expressions[expressions[1].0 as usize].kind,
+            ExpressionType::Parenthesized { expression }
+                if matches!(
+                    parsed.parser.syntax.expressions[expression.0 as usize].kind,
+                    ExpressionType::Binary {
+                        operator: BinaryOperator::Comma,
+                        ..
+                    }
+                )
+        ));
+        assert_eq!(expression_text(&parsed, expressions[0]), "x?y:z");
+        assert_eq!(expression_text(&parsed, expressions[1]), "(x,y)");
+        assert_eq!(elements.len(), 2);
         assert!(
             parser_errors(&parsed).next().is_none(),
             "{:#?}",
