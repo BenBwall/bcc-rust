@@ -8233,7 +8233,7 @@ impl ExpressionFrame {
             | ExpressionPhase::PushConditionalMiddle => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitConditionalMiddle;
-                return ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
                     ExpressionMode::Expression,
                     ExpressionBoundary::Statement(ExpressionTerminator::Colon),
                     parser.hard_error_count,
@@ -8873,8 +8873,17 @@ impl ExpressionFrame {
         context: &mut Context,
         token: Token,
     ) -> bool {
-        Self::is_strong_grammar_boundary_for(parser, context, token, self.boundary)
+        let identifier_precedes_conditional_colon = self.boundary
+            == ExpressionBoundary::Statement(ExpressionTerminator::Colon)
+            && token.kind == TokenType::Identifier
+            && parser.cursor.following(context).is_some_and(|following| {
+                following.kind == TokenType::Operator(OperatorTokenType::Colon)
+            });
+        token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+            && matches!(self.recovery_boundary, ExpressionBoundary::Statement(_))
+            || Self::is_strong_grammar_boundary_for(parser, context, token, self.boundary)
             || self.recovery_boundary != self.boundary
+                && !identifier_precedes_conditional_colon
                 && Self::is_strong_grammar_boundary_for(
                     parser,
                     context,
@@ -11718,6 +11727,7 @@ mod tests {
         for source in [
             "int f(void) { int x { return; } break; }\n",
             "int f(void) { value { return; } break; }\n",
+            "int f(void) { return + { return; } break; }\n",
         ] {
             let parsed = parse(source);
             let items = block_items(&parsed, function_definition(&parsed, 0).body);
@@ -14661,6 +14671,81 @@ mod tests {
     }
 
     #[test]
+    fn conditional_middle_recovery_honors_enclosing_boundaries() {
+        let parsed = parse("int f(void) { return 1 ? ; return 2; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2, "{items:#?}");
+        assert!(matches!(items[0], BlockItem::Statement(_)));
+        let BlockItem::Statement(following_return) = items[1] else {
+            panic!("expected the following return statement")
+        };
+        let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
+            parsed.parser.syntax.statements[following_return.0 as usize].kind
+        else {
+            panic!("expected an exact following return expression")
+        };
+        assert_eq!(expression_text(&parsed, expression), "2");
+        assert!(!parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedSemicolonInStatement("return statement", _)
+        )));
+
+        let parenthesis = parse("int f(void) { if (1 ? ) return 2; }\n");
+        let [BlockItem::Statement(if_statement)] =
+            block_items(&parenthesis, function_definition(&parenthesis, 0).body)
+        else {
+            panic!("expected one recovered if statement")
+        };
+        let StatementType::If { then_statement, .. } =
+            parenthesis.parser.syntax.statements[if_statement.0 as usize].kind
+        else {
+            panic!("expected recovered if syntax")
+        };
+        assert!(matches!(
+            parenthesis.parser.syntax.statements[then_statement.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+        ));
+        assert!(!parser_errors(&parenthesis).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingParenthesisInStatement("if statement", _)
+        )));
+
+        let bracket = parse("int f(void) { return array[1 ? ]; return 2; }\n");
+        let items = block_items(&bracket, function_definition(&bracket, 0).body);
+        assert_eq!(items.len(), 2, "{items:#?}");
+        assert!(
+            matches!(items[1], BlockItem::Statement(statement) if matches!(
+                bracket.parser.syntax.statements[statement.0 as usize].kind,
+                StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+            ))
+        );
+        assert!(!parser_errors(&bracket).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingSquareBracketInSubscript(_)
+        )));
+
+        let initializer = parse("int values[] = { 1 ? , 2 };\n");
+        let declaration = declaration(&initializer, 0);
+        let [init_declarator] = init_declarators(&initializer, declaration) else {
+            panic!("expected one initialized declarator")
+        };
+        let outer = init_declarator
+            .initializer
+            .expect("expected an initializer list");
+        let InitializerType::InitializerList(elements) =
+            initializer.parser.syntax.initializers[outer.0 as usize].kind
+        else {
+            panic!("expected an initializer list")
+        };
+        assert_eq!(elements.length, 2);
+        assert!(!parser_errors(&initializer).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(_)
+        )));
+    }
+
+    #[test]
     fn missing_square_brackets_name_the_owning_construct() {
         let subscript = parse("int f(void) { return array[1; }\n");
         assert!(parser_errors(&subscript).any(|error| matches!(
@@ -15132,6 +15217,69 @@ mod tests {
     }
 
     #[test]
+    fn chained_designators_retain_their_order_and_initializer() {
+        let parsed =
+            parse("struct S { int member[2][2]; }; struct S value = { .member[0][1] = 3 };\n");
+        let declaration = declaration(&parsed, 1);
+        let [init_declarator] = init_declarators(&parsed, declaration) else {
+            panic!("expected one initialized declarator")
+        };
+        let initializer = init_declarator
+            .initializer
+            .expect("initializer must be attached to its declarator");
+        let InitializerType::InitializerList(elements) =
+            parsed.parser.syntax.initializers[initializer.0 as usize].kind
+        else {
+            panic!("expected an initializer list")
+        };
+        let [element] = &parsed.parser.syntax.initializer_elements
+            [elements.start_index as usize..(elements.start_index + elements.length) as usize]
+        else {
+            panic!("expected one designated element")
+        };
+        let designation = element.designation.expect("expected a designation");
+        let designation = parsed.parser.syntax.designations[designation.0 as usize];
+        let designators = &parsed.parser.syntax.designators[designation.designators.start_index
+            as usize
+            ..(designation.designators.start_index + designation.designators.length) as usize];
+
+        assert!(matches!(
+            designators,
+            [
+                Designator {
+                    kind: DesignatorType::Field(identifier),
+                    ..
+                },
+                Designator {
+                    kind: DesignatorType::Array(first),
+                    ..
+                },
+                Designator {
+                    kind: DesignatorType::Array(second),
+                    ..
+                }
+            ] if parsed.context.string_cache.at(identifier.name) == "member"
+                && constant_expression_text(&parsed, *first) == "0"
+                && constant_expression_text(&parsed, *second) == "1"
+        ));
+        assert_eq!(
+            sourced_text(&parsed, designation.source_vectors),
+            ".member[0][1]="
+        );
+        let InitializerType::AssignmentExpression(expression) =
+            parsed.parser.syntax.initializers[element.initializer.0 as usize].kind
+        else {
+            panic!("expected a scalar initializer")
+        };
+        assert_eq!(expression_text(&parsed, expression), "3");
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
     fn every_c99_expression_operator_is_represented_by_the_syntax_model() {
         let parsed = parse(
             "struct S { int member; }; int f(int a, int b, int c, int *p, struct S s) { a*b; a/b; \
@@ -15250,6 +15398,56 @@ mod tests {
             "{:#?}",
             parsed.errors
         );
+    }
+
+    #[test]
+    fn each_unary_spelling_maps_to_its_ast_operator() {
+        let cases = [
+            ("&value", "&", UnaryOperator::AddressOf),
+            ("*value", "*", UnaryOperator::Indirection),
+            ("+value", "+", UnaryOperator::Plus),
+            ("-value", "-", UnaryOperator::Minus),
+            ("~value", "~", UnaryOperator::BitwiseNot),
+            ("!value", "!", UnaryOperator::LogicalNot),
+            ("++value", "++", UnaryOperator::PreIncrement),
+            ("--value", "--", UnaryOperator::PreDecrement),
+            ("value++", "++", UnaryOperator::PostIncrement),
+            ("value--", "--", UnaryOperator::PostDecrement),
+        ];
+
+        for (source_expression, operator_spelling, expected_operator) in cases {
+            let source = format!("int f(void) {{ {source_expression}; }}\n");
+            let parsed = parse(&source);
+            let [BlockItem::Statement(statement)] =
+                block_items(&parsed, function_definition(&parsed, 0).body)
+            else {
+                panic!("expected one expression statement for {source_expression}")
+            };
+            let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
+                parsed.parser.syntax.statements[statement.0 as usize].kind
+            else {
+                panic!("expected a parsed expression for {source_expression}")
+            };
+            let expression = &parsed.parser.syntax.expressions[expression.0 as usize];
+            assert!(matches!(
+                expression.kind,
+                ExpressionType::Unary { operator, .. } if operator == expected_operator
+            ));
+            assert_eq!(
+                sourced_text(
+                    &parsed,
+                    expression
+                        .operator_source_vectors
+                        .expect("unary expression must retain operator provenance"),
+                ),
+                operator_spelling
+            );
+            assert!(
+                parser_errors(&parsed).next().is_none(),
+                "unexpected diagnostics for {source_expression}: {:#?}",
+                parsed.errors
+            );
+        }
     }
 
     #[test]
