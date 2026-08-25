@@ -2832,18 +2832,20 @@ impl StatementFrame {
             },
             | StatementPhase::ReturnStart => {
                 debug_assert!(returned.is_none());
+                let identifier_continues_expression = token
+                    .is_some_and(|token| token.kind == TokenType::Identifier)
+                    && parser.cursor.following(context).is_some_and(|following| {
+                        following.kind == TokenType::Operator(OperatorTokenType::Asterisk)
+                            || is_postfix_starter(following.kind)
+                    });
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     self.merge_token(parser, context, token.expect("semicolon exists"));
                     self.phase = StatementPhase::Finish(StatementType::Return(None));
                     ParseAction::Consume
                 } else if Self::at_expression_boundary(token, ExpressionTerminator::Semicolon)
                     || token.is_some_and(|token| {
-                        parser.declaration_recovery_starts_here(context, token)
-                            && !(token.kind == TokenType::Identifier
-                                && is_operator(
-                                    parser.cursor.following(context),
-                                    OperatorTokenType::Asterisk,
-                                ))
+                        !identifier_continues_expression
+                            && parser.declaration_recovery_starts_here(context, token)
                     })
                     || token.is_some_and(|token| token.kind == TokenType::Identifier)
                         && is_operator(parser.cursor.following(context), OperatorTokenType::Colon)
@@ -4990,6 +4992,18 @@ fn is_postfix_starter(token: TokenType) -> bool {
     )
 }
 
+fn is_array_pointer_marker(
+    parser: &mut Parser,
+    context: &mut Context,
+    token: Option<Token>,
+) -> bool {
+    is_operator(token, OperatorTokenType::Asterisk)
+        && is_operator(
+            parser.cursor.following(context),
+            OperatorTokenType::ClosingSquareBracket,
+        )
+}
+
 fn is_assignment_operator(operator: BinaryOperator) -> bool {
     matches!(
         operator,
@@ -6173,7 +6187,7 @@ impl DeclaratorFrame {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     return ParseAction::Consume;
                 }
-                if is_operator(token, OperatorTokenType::Asterisk) {
+                if is_array_pointer_marker(parser, context, token) {
                     let token = token.expect("asterisk token exists");
                     if self.mode != DeclaratorMode::Named
                         && !self.has_direct_declarator
@@ -7840,7 +7854,7 @@ impl ExpressionFrame {
                 } else {
                     parser.report(
                         context,
-                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
+                        ParserErrorType::ExpectedClosingSquareBracketInSubscript(
                             token.map(|token| token.kind),
                         ),
                         token,
@@ -8398,6 +8412,8 @@ impl ExpressionFrame {
             let identifier_is_operand =
                 token.kind == TokenType::Identifier && !identifier_is_unambiguous_recovery_boundary;
             if self.is_owning_boundary(token.kind)
+                || self.recovery_boundary != self.boundary
+                    && Self::is_owning_boundary_for(self.recovery_boundary, token.kind)
                 || !identifier_is_operand && self.is_strong_grammar_boundary(parser, context, token)
             {
                 parser.report(
@@ -8756,17 +8772,24 @@ impl ExpressionFrame {
         {
             return true;
         }
-        if self.boundary == ExpressionBoundary::Argument && is_expression_operand_starter(token) {
+        if self.boundary == ExpressionBoundary::Argument
+            && is_expression_operand_starter(token)
+            && !is_postfix_starter(token)
+        {
             return true;
         }
         self.is_owning_boundary(token)
     }
 
     fn is_owning_boundary(&self, token: TokenType) -> bool {
+        Self::is_owning_boundary_for(self.boundary, token)
+    }
+
+    fn is_owning_boundary_for(boundary: ExpressionBoundary, token: TokenType) -> bool {
         if Self::is_closing_delimiter(token) {
             return true;
         }
-        match self.boundary {
+        match boundary {
             | ExpressionBoundary::Statement(
                 ExpressionTerminator::Semicolon | ExpressionTerminator::ForSemicolon,
             ) => token == TokenType::Operator(OperatorTokenType::Semicolon),
@@ -8866,6 +8889,11 @@ impl ExpressionFrame {
         token: Token,
         boundary: ExpressionBoundary,
     ) -> bool {
+        let identifier_continues_as_postfix = token.kind == TokenType::Identifier
+            && parser
+                .cursor
+                .following(context)
+                .is_some_and(|following| is_postfix_starter(following.kind));
         let declaration_starts_here = parser.declaration_recovery_starts_here(context, token);
         match boundary {
             | ExpressionBoundary::Initializer =>
@@ -8919,7 +8947,7 @@ impl ExpressionFrame {
                         ))
                     ),
             | ExpressionBoundary::Statement(_) | ExpressionBoundary::ClosingParenthesis =>
-                declaration_starts_here
+                declaration_starts_here && !identifier_continues_as_postfix
                     || is_statement_keyword(token.kind)
                     || matches!(
                         boundary,
@@ -9212,7 +9240,7 @@ impl InitializerFrame {
                 } else {
                     parser.report(
                         context,
-                        ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
+                        ParserErrorType::ExpectedClosingSquareBracketInArrayDesignator(
                             token.map(|token| token.kind),
                         ),
                         token,
@@ -10008,6 +10036,12 @@ pub(crate) enum ParserErrorType {
     ExpectedGotoLabel(Option<TokenType>),
     /// A required statement expression was absent.
     ExpectedStatementExpression(&'static str, Option<TokenType>),
+    /// A postfix subscript omitted its closing `]`.
+    /// C99: §6.5.2.1, p. 73; PDF p. 85.
+    ExpectedClosingSquareBracketInSubscript(Option<TokenType>),
+    /// An array designator omitted its closing `]`.
+    /// C99: §6.7.8, p. 125; PDF p. 137.
+    ExpectedClosingSquareBracketInArrayDesignator(Option<TokenType>),
     /// A brace-enclosed initializer list omitted its closing `}`.
     ExpectedClosingCurlyBraceInInitializerList(Option<TokenType>),
     /// A designator list omitted its required `=`.
@@ -10218,6 +10252,8 @@ impl GetSeverity for ParserErrorType {
             | Self::ExpectedStatement(..)
             | Self::ExpectedGotoLabel(..)
             | Self::ExpectedStatementExpression(..)
+            | Self::ExpectedClosingSquareBracketInSubscript(..)
+            | Self::ExpectedClosingSquareBracketInArrayDesignator(..)
             | Self::ExpectedClosingCurlyBraceInInitializerList(..)
             | Self::ExpectedEqualsAfterInitializerDesignation(..)
             | Self::ExpectedOpeningParenthesisInStatement(..)
@@ -10311,6 +10347,18 @@ impl Display for ParserErrorType {
                 write_expected(f, "goto statement", "an identifier", *found),
             | Self::ExpectedStatementExpression(position, found) =>
                 write_expected(f, position, "an expression", *found),
+            | Self::ExpectedClosingSquareBracketInSubscript(found) => write_expected(
+                f,
+                "postfix subscript",
+                "`]` after the subscript expression",
+                *found,
+            ),
+            | Self::ExpectedClosingSquareBracketInArrayDesignator(found) => write_expected(
+                f,
+                "array designator",
+                "`]` after the designator expression",
+                *found,
+            ),
             | Self::ExpectedClosingCurlyBraceInInitializerList(found) =>
                 write_expected(f, "initializer list", "`}`", *found),
             | Self::ExpectedEqualsAfterInitializerDesignation(found) =>
@@ -14056,49 +14104,44 @@ mod tests {
     }
 
     #[test]
-    fn pointer_array_declarator_reports_its_specific_closing_bracket_diagnostic() {
-        let parsed = parse("int array[* trailing];\n");
+    fn array_star_is_a_vla_marker_only_immediately_before_the_closing_bracket() {
+        let parsed = parse("void f(int *p, int marker[*]) { int bound[*p]; }\n");
 
-        assert!(parser_errors(&parsed).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
-                TokenType::Identifier
-            )
-        )));
-    }
+        let mut saw_marker = false;
+        let mut saw_bound = false;
+        for direct in &parsed.parser.syntax.direct_declarators {
+            let DirectDeclarator::Array {
+                is_pointer,
+                assignment_expression,
+                ..
+            } = *direct
+            else {
+                continue;
+            };
+            saw_marker |= is_pointer && assignment_expression.is_none();
+            if let Some(expression) = assignment_expression {
+                saw_bound |= matches!(
+                    parsed.parser.syntax.expressions[expression.0 as usize].kind,
+                    ExpressionType::Unary {
+                        operator: UnaryOperator::Indirection,
+                        ..
+                    }
+                );
+            }
+        }
 
-    #[test]
-    fn pointer_array_specific_diagnostics_do_not_fall_through_to_generic_recovery() {
-        let at_semicolon = parse("int array[*;\n");
-        assert!(matches!(
-            at_semicolon.items.first(),
-            Some(ExternalDeclaration::RecoveredDeclaration(_))
-        ));
-        assert!(parser_errors(&at_semicolon).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
-                TokenType::Operator(OperatorTokenType::Semicolon)
-            )
-        )));
-        assert!(!parser_errors(&at_semicolon).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(..)
-        )));
-
-        let at_eof = parse("int array[*");
-        assert!(parser_errors(&at_eof).any(|error| matches!(
-            error,
-            ParserErrorType::UnexpectedEndOfArrayDeclaratorAfterPointer
-        )));
-        assert!(!parser_errors(&at_eof).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(..)
-        )));
+        assert!(saw_marker);
+        assert!(saw_bound);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
     }
 
     #[test]
     fn hard_syntax_errors_retain_an_explicitly_recovered_declaration() {
-        let parsed = parse("int array[*;\n");
+        let parsed = parse("int array[+;\n");
         let Some(ExternalDeclaration::RecoveredDeclaration(index)) = parsed.items.first() else {
             panic!("hard syntax errors should retain a recovered declaration");
         };
@@ -14106,12 +14149,8 @@ mod tests {
         let declaration = &parsed.parser.syntax.declarations[index.0 as usize];
         assert_eq!(declaration.init_declarators.length, 1);
         assert!(parser_errors(&parsed).any(|error| {
-            matches!(
-                error,
-                ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
-                    TokenType::Operator(OperatorTokenType::Semicolon)
-                )
-            ) && error.severity() == ErrorSeverity::Error
+            matches!(error, ParserErrorType::ExpectedStatementExpression(..))
+                && error.severity() == ErrorSeverity::Error
         }));
         assert_eq!(
             identifier_name(
@@ -14198,11 +14237,15 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_pointer_array_marker_keeps_its_legacy_diagnostic() {
+    fn adjacent_array_stars_are_parsed_as_unary_indirection() {
         let parsed = parse("int array[**];\n");
 
         assert!(
             parser_errors(&parsed)
+                .any(|error| matches!(error, ParserErrorType::ExpectedStatementExpression(..)))
+        );
+        assert!(
+            !parser_errors(&parsed)
                 .any(|error| matches!(error, ParserErrorType::PointerSpecifiedTwice))
         );
     }
@@ -14330,12 +14373,7 @@ mod tests {
                 )
             }),
             ("int array[*;\n", |error| {
-                matches!(
-                    error,
-                    ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
-                        TokenType::Operator(OperatorTokenType::Semicolon)
-                    )
-                )
+                matches!(error, ParserErrorType::ExpectedStatementExpression(..))
             }),
             ("int function(int\n", |error| {
                 matches!(
@@ -14542,6 +14580,103 @@ mod tests {
             ExpressionType::IndirectMember { .. }
         ));
         assert!(parser_errors(&parsed).next().is_none());
+    }
+
+    #[test]
+    fn function_arguments_keep_postfix_calls_and_increments() {
+        let parsed = parse("int f(void) { return outer(inner(), value++); }\n");
+        let [BlockItem::Statement(statement)] =
+            block_items(&parsed, function_definition(&parsed, 0).body)
+        else {
+            panic!("expected one return statement")
+        };
+        let root = return_expression(&parsed, *statement);
+        let ExpressionType::Call { arguments, .. } =
+            parsed.parser.syntax.expressions[root.0 as usize].kind
+        else {
+            panic!("expected an outer call")
+        };
+        let start = arguments.start_index as usize;
+        let end = start + arguments.length as usize;
+        let arguments = &parsed.parser.syntax.expression_indices[start..end];
+
+        assert_eq!(arguments.len(), 2);
+        assert!(matches!(
+            parsed.parser.syntax.expressions[arguments[0].0 as usize].kind,
+            ExpressionType::Call { .. }
+        ));
+        assert!(matches!(
+            parsed.parser.syntax.expressions[arguments[1].0 as usize].kind,
+            ExpressionType::Unary {
+                operator: UnaryOperator::PostIncrement,
+                ..
+            }
+        ));
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
+    fn return_expression_keeps_a_typedef_spelled_call() {
+        let parsed = parse("typedef int T; int f(int *p) { return T(*p); }\n");
+        let [BlockItem::Statement(statement)] =
+            block_items(&parsed, function_definition(&parsed, 1).body)
+        else {
+            panic!("expected one return statement")
+        };
+        let root = return_expression(&parsed, *statement);
+
+        assert!(matches!(
+            parsed.parser.syntax.expressions[root.0 as usize].kind,
+            ExpressionType::Call { .. }
+        ));
+        assert_eq!(expression_text(&parsed, root), "T(*p)");
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
+    fn nested_expression_recovery_honors_the_enclosing_semicolon() {
+        let parsed = parse("int f(void) { ( ; return 1; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2, "{items:#?}");
+        assert!(matches!(items[0], BlockItem::Statement(_)));
+        assert!(
+            matches!(items[1], BlockItem::Statement(statement) if matches!(
+                parsed.parser.syntax.statements[statement.0 as usize].kind,
+                StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+            ))
+        );
+        assert!(!parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedSemicolonInStatement("expression statement", _)
+        )));
+    }
+
+    #[test]
+    fn missing_square_brackets_name_the_owning_construct() {
+        let subscript = parse("int f(void) { return array[1; }\n");
+        assert!(parser_errors(&subscript).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingSquareBracketInSubscript(Some(TokenType::Operator(
+                OperatorTokenType::Semicolon
+            )))
+        )));
+
+        let designator = parse("int array[] = { [1 = 2 };\n");
+        assert!(parser_errors(&designator).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingSquareBracketInArrayDesignator(Some(
+                TokenType::Operator(OperatorTokenType::Equals)
+            ))
+        )));
     }
 
     #[test]

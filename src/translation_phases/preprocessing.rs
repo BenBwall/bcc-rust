@@ -140,6 +140,25 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn adjacent_string_diagnostics_remain_in_source_order() {
+        let (_, errors) = preprocess("\"\\q\" \"\\u1\"\n");
+
+        assert!(matches!(
+            errors.as_slice(),
+            [
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::InvalidEscapeSequence,
+                    ..
+                }),
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
+                    ..
+                })
+            ]
+        ));
+    }
+
     fn strict_c99() -> CompilerConfiguration {
         CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny)
     }
@@ -2238,18 +2257,20 @@ impl Preprocessor {
             let existing_errors = context.take_pending_errors();
             let next = self.next_parser_token(context);
             let generated_errors = context.take_pending_errors();
-            context.append_pending_errors(existing_errors);
 
             let Some(next) = next else {
+                context.append_pending_errors(existing_errors);
                 self.pending_parser_errors.extend(generated_errors);
                 break;
             };
             let TokenType::String(next_kind) = next.kind else {
+                context.append_pending_errors(existing_errors);
                 self.pending_parser_token = Some(next);
                 self.pending_parser_errors.extend(generated_errors);
                 break;
             };
             context.append_pending_errors(generated_errors);
+            context.append_pending_errors(existing_errors);
             let next_contents = match next_kind {
                 | StringTokenType::String(contents) => contents,
                 | StringTokenType::WideString(contents) => {
