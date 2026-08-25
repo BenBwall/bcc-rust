@@ -106,10 +106,10 @@ impl Iterator for PreprocessorIterator {
             return Some(Ok(token));
         }
 
-        // Adjacent-string concatenation may already have mapped and buffered
-        // the next non-string token. Its source-vector handle remains valid
-        // until that buffered token is yielded.
-        if !self.preprocessor.has_pending_parser_token() {
+        // Adjacent-string concatenation may already have mapped buffered work
+        // for a later token or EOF. Keep its source-vector handles valid until
+        // every deferred token and diagnostic has been yielded.
+        if !self.preprocessor.has_pending_parser_work() {
             self.context.source_vectors.0.clear();
         }
         let token = self.preprocessor.next_item(&mut self.context);
@@ -307,6 +307,37 @@ mod pipeline_iterator_tests {
             iterator.next().unwrap().unwrap().kind,
             TokenType::Integer(_)
         ));
+        assert!(iterator.next().is_none());
+    }
+
+    #[test]
+    fn adjacent_string_lookahead_keeps_deferred_eof_diagnostic_provenance() {
+        let mut iterator = PreprocessorIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "\"a\"\n#error boom\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::String(_)
+        ));
+        let error = iterator.next().unwrap().unwrap_err();
+        assert!(matches!(
+            &error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::ErrorDirective(message),
+                ..
+            }) if message.trim() == "boom"
+        ));
+        let source_vectors = error.source_vectors(&mut iterator.context);
+        assert!(
+            !iterator
+                .context
+                .get_source_vectors(source_vectors)
+                .is_empty()
+        );
         assert!(iterator.next().is_none());
     }
 
