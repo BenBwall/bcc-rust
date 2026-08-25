@@ -106,13 +106,7 @@ impl Iterator for PreprocessorIterator {
             return Some(Ok(token));
         }
 
-        // Adjacent-string concatenation may already have mapped buffered work
-        // for a later token or EOF. Keep its source-vector handles valid until
-        // every deferred token and diagnostic has been yielded.
-        if !self.preprocessor.has_pending_parser_work() {
-            self.context.source_vectors.0.clear();
-        }
-        let token = self.preprocessor.next_item(&mut self.context);
+        let token = self.preprocessor.next_iterator_item(&mut self.context);
         if let Some(error) = self.context.pop_pending_error() {
             self.pending_token = token;
             Some(Err(error))
