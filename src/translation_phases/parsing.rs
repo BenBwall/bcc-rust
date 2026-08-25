@@ -2175,6 +2175,7 @@ struct ExpressionFrame {
 enum ExpressionPhase {
     Parse,
     Finish,
+    RecoverUnexpectedBrace(u32, SourceVectors),
     PushGrouped(SourceVectors),
     AwaitGrouped(SourceVectors),
     CloseGrouped(SourceVectors, ExpressionIndex),
@@ -2838,6 +2839,11 @@ impl StatementFrame {
                 } else if Self::at_expression_boundary(token, ExpressionTerminator::Semicolon)
                     || token.is_some_and(|token| {
                         parser.declaration_recovery_starts_here(context, token)
+                            && !(token.kind == TokenType::Identifier
+                                && is_operator(
+                                    parser.cursor.following(context),
+                                    OperatorTokenType::Asterisk,
+                                ))
                     })
                     || token.is_some_and(|token| token.kind == TokenType::Identifier)
                         && is_operator(parser.cursor.following(context), OperatorTokenType::Colon)
@@ -5688,14 +5694,10 @@ impl DeclarationSpecifiersFrame {
         }
 
         if let Some(qualifier) = type_qualifier(token.kind) {
-            if self.specifiers.type_qualifiers.contains(qualifier) {
-                let error_type = match qualifier {
-                    | TypeQualifiers::CONST => ParserErrorType::ConstSpecifiedTwice,
-                    | TypeQualifiers::VOLATILE => ParserErrorType::VolatileSpecifiedTwice,
-                    | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
-                    | _ => unreachable!("one type qualifier is handled at a time"),
-                };
-                parser.report(context, error_type, Some(token));
+            if self.mode != SpecifierMode::TypeName
+                && self.specifiers.type_qualifiers.contains(qualifier)
+            {
+                report_duplicate_type_qualifier(parser, context, token, qualifier);
             }
             self.specifiers.type_qualifiers.insert(qualifier);
             parser.merge_source(context, &mut self.source_vectors, token);
@@ -5855,6 +5857,21 @@ fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
     }
 }
 
+fn report_duplicate_type_qualifier(
+    parser: &mut Parser,
+    context: &mut Context,
+    token: Token,
+    qualifier: TypeQualifiers,
+) {
+    let error_type = match qualifier {
+        | TypeQualifiers::CONST => ParserErrorType::ConstSpecifiedTwice,
+        | TypeQualifiers::VOLATILE => ParserErrorType::VolatileSpecifiedTwice,
+        | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
+        | _ => unreachable!("one type qualifier is handled at a time"),
+    };
+    parser.report(context, error_type, Some(token));
+}
+
 /// Primitive keyword recognized while accumulating a C type-specifier set.
 ///
 /// C99: normative type-specifiers are §6.7.2, pp. 99-100; PDF pp. 111-112.
@@ -5932,14 +5949,10 @@ impl DeclaratorFrame {
                 if let Some(token) = token
                     && let Some(qualifier) = type_qualifier(token.kind)
                 {
-                    if self.current_qualifiers.contains(qualifier) {
-                        let error_type = match qualifier {
-                            | TypeQualifiers::CONST => ParserErrorType::ConstSpecifiedTwice,
-                            | TypeQualifiers::VOLATILE => ParserErrorType::VolatileSpecifiedTwice,
-                            | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
-                            | _ => unreachable!("one qualifier is handled at a time"),
-                        };
-                        parser.report(context, error_type, Some(token));
+                    if self.mode != DeclaratorMode::Abstract
+                        && self.current_qualifiers.contains(qualifier)
+                    {
+                        report_duplicate_type_qualifier(parser, context, token, qualifier);
                     }
                     self.current_qualifiers.insert(qualifier);
                     parser.merge_source(context, &mut self.source_vectors, token);
@@ -6130,14 +6143,10 @@ impl DeclaratorFrame {
                 if let Some(token) = token
                     && let Some(qualifier) = type_qualifier(token.kind)
                 {
-                    if self.array_qualifiers.contains(qualifier) {
-                        let error_type = match qualifier {
-                            | TypeQualifiers::CONST => ParserErrorType::ConstSpecifiedTwice,
-                            | TypeQualifiers::VOLATILE => ParserErrorType::VolatileSpecifiedTwice,
-                            | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
-                            | _ => unreachable!("one qualifier is handled at a time"),
-                        };
-                        parser.report(context, error_type, Some(token));
+                    if self.mode != DeclaratorMode::Abstract
+                        && self.array_qualifiers.contains(qualifier)
+                    {
+                        report_duplicate_type_qualifier(parser, context, token, qualifier);
                     }
                     if self.array_is_static && self.array_qualifiers_before_static {
                         parser.report(
@@ -7724,6 +7733,27 @@ impl ExpressionFrame {
         returned: Option<ParseValue>,
     ) -> ParseAction {
         match self.phase {
+            | ExpressionPhase::RecoverUnexpectedBrace(depth, source_vectors) => {
+                debug_assert!(returned.is_none());
+                let Some(token) = token else {
+                    self.push_error_with_source(parser, source_vectors, None);
+                    self.phase = ExpressionPhase::Parse;
+                    return self.finish(parser, context);
+                };
+                let source_vectors = context.merge_vectors(source_vectors, token.source_vectors);
+                let depth = match token.kind {
+                    | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => depth + 1,
+                    | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => depth - 1,
+                    | _ => depth,
+                };
+                if depth == 0 {
+                    self.push_error_with_source(parser, source_vectors, None);
+                    self.phase = ExpressionPhase::Parse;
+                } else {
+                    self.phase = ExpressionPhase::RecoverUnexpectedBrace(depth, source_vectors);
+                }
+                return ParseAction::Consume;
+            },
             | ExpressionPhase::PushGrouped(opening) => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitGrouped(opening);
@@ -7931,7 +7961,11 @@ impl ExpressionFrame {
                         ),
                         token,
                     );
-                    self.push_operand(base, true, true);
+                    let source = context.merge_vectors(
+                        parser.syntax.expressions[base.0 as usize].source_vectors,
+                        operator_source,
+                    );
+                    self.push_error_with_source(parser, source, Some(operator_source));
                     self.phase = ExpressionPhase::Parse;
                     return ParseAction::Reprocess;
                 };
@@ -8104,7 +8138,7 @@ impl ExpressionFrame {
                                 ),
                                 token,
                             );
-                            self.push_error(parser, context);
+                            self.push_error(parser, context, token);
                             self.phase = ExpressionPhase::Parse;
                         },
                     }
@@ -8347,24 +8381,24 @@ impl ExpressionFrame {
                     ParserErrorType::ExpectedStatementExpression("expression", None),
                     None,
                 );
-                self.push_error(parser, context);
+                self.push_error(parser, context, None);
                 return self.finish(parser, context);
             };
             // A visible typedef spelling is still a syntactically valid
             // primary expression. At the first initializer operand, do not
             // reinterpret declaration-shaped lookahead as recovery evidence.
-            let initial_initializer_typedef_operand = self.mode
-                == ExpressionMode::AssignmentExpression
-                && self.boundary == ExpressionBoundary::Initializer
-                && self.recovery_boundary == ExpressionBoundary::Initializer
-                && self.operands.is_empty()
-                && self.operators.is_empty()
-                && parser.hard_error_count == self.starting_error_count
-                && token.kind == TokenType::Identifier
-                && parser.scopes.is_typedef(token.contents);
+            let following_kind = parser
+                .cursor
+                .following(context)
+                .map(|following| following.kind);
+            let identifier_is_unambiguous_recovery_boundary = token.kind == TokenType::Identifier
+                && (following_kind == Some(TokenType::Operator(OperatorTokenType::Colon))
+                    || self.recovery_boundary == ExpressionBoundary::Initializer
+                        && following_kind == Some(TokenType::Identifier));
+            let identifier_is_operand =
+                token.kind == TokenType::Identifier && !identifier_is_unambiguous_recovery_boundary;
             if self.is_owning_boundary(token.kind)
-                || !initial_initializer_typedef_operand
-                    && self.is_strong_grammar_boundary(parser, context, token)
+                || !identifier_is_operand && self.is_strong_grammar_boundary(parser, context, token)
             {
                 parser.report(
                     context,
@@ -8374,7 +8408,7 @@ impl ExpressionFrame {
                     ),
                     Some(token),
                 );
-                self.push_error(parser, context);
+                self.push_error(parser, context, Some(token));
                 return self.finish(parser, context);
             }
             if token.kind == TokenType::Keyword(KeywordTokenType::Sizeof) {
@@ -8423,7 +8457,12 @@ impl ExpressionFrame {
                         ),
                         Some(token),
                     );
-                    self.push_error(parser, context);
+                    if token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) {
+                        self.phase =
+                            ExpressionPhase::RecoverUnexpectedBrace(1, token.source_vectors);
+                        return ParseAction::Consume;
+                    }
+                    self.push_error(parser, context, Some(token));
                     return ParseAction::Consume;
                 },
             };
@@ -8601,7 +8640,7 @@ impl ExpressionFrame {
         if let Some(operand) = self.operands.pop() {
             return operand;
         }
-        self.push_error(parser, context);
+        self.push_error(parser, context, None);
         self.operands
             .pop()
             .expect("error expression supplies one operand")
@@ -8895,10 +8934,43 @@ impl ExpressionFrame {
         }
     }
 
-    fn push_error(&mut self, parser: &mut Parser, context: &mut Context) {
-        let source_vectors =
-            context.create_source_vectors(parser.position(context), parser.source_file_index(), 0);
-        let index = parser.store_expression(ExpressionType::Error, source_vectors, None, true);
+    fn push_error(&mut self, parser: &mut Parser, context: &mut Context, anchor: Option<Token>) {
+        let anchor_vectors = anchor.map(|token| {
+            context
+                .get_source_vectors(token.source_vectors)
+                .iter()
+                .map(|source| (source.position(context), source.source_file_index))
+                .collect::<Vec<_>>()
+        });
+        let source_vectors = match anchor_vectors.filter(|vectors| !vectors.is_empty()) {
+            | Some(vectors) => vectors.into_iter().fold(
+                SourceVectors::default(),
+                |combined, (position, source_file_index)| {
+                    let anchor = context.create_source_vectors(position, source_file_index, 0);
+                    context.merge_vectors(combined, anchor)
+                },
+            ),
+            | None => context.create_source_vectors(
+                parser.position(context),
+                parser.source_file_index(),
+                0,
+            ),
+        };
+        self.push_error_with_source(parser, source_vectors, None);
+    }
+
+    fn push_error_with_source(
+        &mut self,
+        parser: &mut Parser,
+        source_vectors: SourceVectors,
+        operator_source_vectors: Option<SourceVectors>,
+    ) {
+        let index = parser.store_expression(
+            ExpressionType::Error,
+            source_vectors,
+            operator_source_vectors,
+            true,
+        );
         self.operands.push(ExpressionOperand {
             index,
             unary_expression: false,
@@ -8912,7 +8984,7 @@ impl ExpressionFrame {
             self.reduce_one(parser, context);
         }
         let operand = self.operands.pop().unwrap_or_else(|| {
-            self.push_error(parser, context);
+            self.push_error(parser, context, None);
             self.operands
                 .pop()
                 .expect("error expression supplies one operand")
@@ -11309,8 +11381,8 @@ mod tests {
     #[test]
     fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
         let parsed = parse(
-            "typedef int T; int value = T + 1; int product = T * ptr; int f(void) { return T + 1; \
-             }\n",
+            "typedef int T; int value = T + 1; int product = T * ptr; int sum = 1 + T * ptr; int \
+             f(void) { return T * ptr; }\n",
         );
 
         let initializer = init_declarators(&parsed, declaration(&parsed, 1))[0]
@@ -11333,17 +11405,26 @@ mod tests {
         };
         assert_eq!(expression_text(&parsed, initializer_expression), "T*ptr");
 
-        let [BlockItem::Statement(statement)] =
-            block_items(&parsed, function_definition(&parsed, 3).body)
+        let initializer = init_declarators(&parsed, declaration(&parsed, 3))[0]
+            .initializer
+            .expect("sum must have an initializer");
+        let InitializerType::AssignmentExpression(initializer_expression) =
+            parsed.parser.syntax.initializers[initializer.0 as usize].kind
         else {
-            panic!("expected one return statement")
+            panic!("expected a scalar initializer")
+        };
+        assert_eq!(expression_text(&parsed, initializer_expression), "1+T*ptr");
+
+        let items = block_items(&parsed, function_definition(&parsed, 4).body);
+        let [BlockItem::Statement(statement)] = items else {
+            panic!("expected one return statement: {items:#?}")
         };
         let StatementType::Return(Some(ExpressionSlot::Parsed(return_expression))) =
             parsed.parser.syntax.statements[statement.0 as usize].kind
         else {
             panic!("expected a parsed return expression")
         };
-        assert_eq!(expression_text(&parsed, return_expression), "T+1");
+        assert_eq!(expression_text(&parsed, return_expression), "T*ptr");
         assert!(
             parser_errors(&parsed).next().is_none(),
             "{:#?}",
@@ -15128,6 +15209,21 @@ mod tests {
     }
 
     #[test]
+    fn repeated_qualifiers_are_coalesced_in_type_names_and_abstract_declarators() {
+        let parsed = parse(
+            "int f(void) { sizeof(const const int); sizeof(int *volatile volatile); sizeof(int \
+             [restrict restrict 4]); return; }\n",
+        );
+
+        assert_eq!(parsed.parser.syntax.type_names.len(), 3);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
     fn unterminated_initializer_lists_stop_at_caller_boundaries_and_eof() {
         let parsed = parse("int x = {1; int after;\n");
 
@@ -15435,6 +15531,87 @@ mod tests {
                 )
         ));
         assert!(parser_errors(&parsed).next().is_some());
+    }
+
+    #[test]
+    fn missing_operand_error_is_anchored_at_the_current_boundary_token() {
+        let source = "int f(void) { return 1 + ; return; }\n";
+        let parsed = parse(source);
+        let error = parsed
+            .parser
+            .syntax
+            .expressions
+            .iter()
+            .find(|expression| matches!(expression.kind, ExpressionType::Error))
+            .expect("missing operand must produce an error expression");
+        let [anchor] = parsed.context.get_source_vectors(error.source_vectors) else {
+            panic!("error expression must have one source anchor")
+        };
+
+        assert_eq!(anchor.index, source.find(';').expect("boundary semicolon"));
+        assert_eq!(anchor.length, 0);
+    }
+
+    #[test]
+    fn unexpected_braces_in_an_expression_do_not_close_the_function_body() {
+        let parsed = parse("int f(void) { int x = 1 + {} int after; return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 3, "{items:#?}");
+        assert!(matches!(items[0], BlockItem::Declaration(_)));
+        assert!(matches!(items[1], BlockItem::Declaration(_)));
+        assert!(
+            matches!(items[2], BlockItem::Statement(statement) if matches!(
+                parsed.parser.syntax.statements[statement.0 as usize].kind,
+                StatementType::Return(None)
+            ))
+        );
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .expressions
+                .iter()
+                .enumerate()
+                .any(|(index, expression)| {
+                    matches!(expression.kind, ExpressionType::Error)
+                        && expression_text(&parsed, ExpressionIndex(index.to_u32())) == "{}"
+                })
+        );
+    }
+
+    #[test]
+    fn missing_member_names_retain_the_consumed_operator_provenance() {
+        let parsed = parse("int f(void) { return a.; return p->; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+        let roots = items
+            .iter()
+            .map(|item| {
+                let BlockItem::Statement(statement) = *item else {
+                    panic!("expected return statement")
+                };
+                return_expression(&parsed, statement)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(roots.len(), 2);
+        for (root, expression_source, operator_source) in
+            [(roots[0], "a.", "."), (roots[1], "p->", "->")]
+        {
+            let expression = &parsed.parser.syntax.expressions[root.0 as usize];
+            assert!(matches!(expression.kind, ExpressionType::Error));
+            assert!(expression.recovered);
+            assert_eq!(expression_text(&parsed, root), expression_source);
+            assert_eq!(
+                sourced_text(
+                    &parsed,
+                    expression
+                        .operator_source_vectors
+                        .expect("member operator provenance"),
+                ),
+                operator_source
+            );
+        }
     }
 
     #[test]
