@@ -2238,8 +2238,16 @@ impl Preprocessor {
         }
     }
 
-    pub(crate) fn has_pending_parser_work(&self) -> bool {
-        self.pending_parser_token.is_some() || !self.pending_parser_errors.is_empty()
+    /// Produces the next iterator item while keeping buffered provenance alive.
+    ///
+    /// Adjacent-string concatenation may already have mapped a later token or
+    /// EOF diagnostic. Source-vector compaction therefore belongs to the
+    /// producer that owns that buffered work, not to each iterator consumer.
+    pub(crate) fn next_iterator_item(&mut self, context: &mut Context) -> Option<Token> {
+        if self.pending_parser_token.is_none() && self.pending_parser_errors.is_empty() {
+            context.source_vectors.0.clear();
+        }
+        self.next_item(context)
     }
 
     fn concatenate_adjacent_strings(&mut self, context: &mut Context, first: Token) -> Token {

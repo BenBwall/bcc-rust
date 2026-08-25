@@ -7981,10 +7981,7 @@ impl ExpressionFrame {
                 else {
                     parser.report(
                         context,
-                        ParserErrorType::ExpectedStatementExpression(
-                            "member identifier",
-                            token.map(|token| token.kind),
-                        ),
+                        ParserErrorType::ExpectedMemberIdentifier(token.map(|token| token.kind)),
                         token,
                     );
                     let source = context.merge_vectors(
@@ -8787,6 +8784,7 @@ impl ExpressionFrame {
         if self.boundary == ExpressionBoundary::Argument
             && is_expression_operand_starter(token)
             && !is_postfix_starter(token)
+            && binary_operator(token).is_none()
         {
             return true;
         }
@@ -9602,7 +9600,12 @@ impl InitializerFrame {
         {
             return true;
         }
-        parser.declaration_starter(token)
+        let identifier_continues_initializer = token.kind == TokenType::Identifier
+            && parser.cursor.following(context).is_some_and(|following| {
+                binary_operator(following.kind).is_some() || is_postfix_starter(following.kind)
+            });
+        parser.declaration_recovery_starts_here(context, token)
+            && !identifier_continues_initializer
             && !matches!(
                 parser
                     .cursor
@@ -10088,6 +10091,9 @@ pub(crate) enum ParserErrorType {
     ExpectedGotoLabel(Option<TokenType>),
     /// A required statement expression was absent.
     ExpectedStatementExpression(&'static str, Option<TokenType>),
+    /// `.` or `->` was not followed by a member identifier.
+    /// C99: postfix member access is §6.5.2.3, pp. 73-74; PDF pp. 85-86.
+    ExpectedMemberIdentifier(Option<TokenType>),
     /// A postfix subscript omitted its closing `]`.
     /// C99: §6.5.2.1, p. 73; PDF p. 85.
     ExpectedClosingSquareBracketInSubscript(Option<TokenType>),
@@ -10304,6 +10310,7 @@ impl GetSeverity for ParserErrorType {
             | Self::ExpectedStatement(..)
             | Self::ExpectedGotoLabel(..)
             | Self::ExpectedStatementExpression(..)
+            | Self::ExpectedMemberIdentifier(..)
             | Self::ExpectedClosingSquareBracketInSubscript(..)
             | Self::ExpectedClosingSquareBracketInArrayDesignator(..)
             | Self::ExpectedClosingCurlyBraceInInitializerList(..)
@@ -10399,6 +10406,12 @@ impl Display for ParserErrorType {
                 write_expected(f, "goto statement", "an identifier", *found),
             | Self::ExpectedStatementExpression(position, found) =>
                 write_expected(f, position, "an expression", *found),
+            | Self::ExpectedMemberIdentifier(found) => write_expected(
+                f,
+                "postfix member access",
+                "an identifier after `.` or `->`",
+                *found,
+            ),
             | Self::ExpectedClosingSquareBracketInSubscript(found) => write_expected(
                 f,
                 "postfix subscript",
@@ -12988,6 +13001,36 @@ mod tests {
     }
 
     #[test]
+    fn assignments_are_rejected_in_constant_expression_owners() {
+        let parsed = parse("enum E { A = value = 1, B }; int after;\n");
+
+        assert!(matches!(
+            parsed.items.as_slice(),
+            [
+                ExternalDeclaration::RecoveredDeclaration(_),
+                ExternalDeclaration::Declaration(_)
+            ]
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+        let errors = parser_errors(&parsed).collect::<Vec<_>>();
+        assert!(matches!(
+            errors.as_slice(),
+            [
+                ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(
+                    TokenType::Operator(OperatorTokenType::Equals)
+                ))
+            ]
+        ));
+    }
+
+    #[test]
     fn braced_declarators_retain_function_definition_syntax_before_constraint_checking() {
         let parsed = parse("int object { int retained; } int after;\n");
 
@@ -14673,6 +14716,39 @@ mod tests {
     }
 
     #[test]
+    fn function_arguments_keep_binary_operators_inside_each_argument() {
+        let parsed = parse("int f(void) { return outer(1+2, 3-4, 5*6, 7&8); }\n");
+        let [BlockItem::Statement(statement)] =
+            block_items(&parsed, function_definition(&parsed, 0).body)
+        else {
+            panic!("expected one return statement")
+        };
+        let root = return_expression(&parsed, *statement);
+        let ExpressionType::Call { arguments, .. } =
+            parsed.parser.syntax.expressions[root.0 as usize].kind
+        else {
+            panic!("expected a function call")
+        };
+        let start = arguments.start_index as usize;
+        let end = start + arguments.length as usize;
+        let arguments = &parsed.parser.syntax.expression_indices[start..end];
+
+        assert_eq!(arguments.len(), 4);
+        assert_eq!(
+            arguments
+                .iter()
+                .map(|expression| expression_text(&parsed, *expression))
+                .collect::<Vec<_>>(),
+            ["1+2", "3-4", "5*6", "7&8"]
+        );
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+    }
+
+    #[test]
     fn return_expression_keeps_a_typedef_spelled_call() {
         let parsed = parse("typedef int T; int f(int *p) { return T(*p); }\n");
         let [BlockItem::Statement(statement)] =
@@ -15244,6 +15320,53 @@ mod tests {
                     parsed.errors
                 );
             }
+        }
+    }
+
+    #[test]
+    fn typedef_spelled_expressions_remain_inside_braced_initializers() {
+        for expression in ["T + 1", "T[0]", "T()", "T * value"] {
+            let parsed = parse(&format!(
+                "typedef int T; int values[] = {{ {expression} }}; int tail;\n"
+            ));
+
+            assert!(matches!(
+                parsed.items.as_slice(),
+                [
+                    ExternalDeclaration::Declaration(_),
+                    ExternalDeclaration::Declaration(_),
+                    ExternalDeclaration::Declaration(_)
+                ]
+            ));
+            let [init_declarator] = init_declarators(&parsed, declaration(&parsed, 1)) else {
+                panic!("expected one initialized declarator")
+            };
+            let initializer = init_declarator.initializer.expect("braced initializer");
+            let InitializerType::InitializerList(elements) =
+                parsed.parser.syntax.initializers[initializer.0 as usize].kind
+            else {
+                panic!("expected an initializer list")
+            };
+            let [element] = &parsed.parser.syntax.initializer_elements
+                [elements.start_index as usize..(elements.start_index + elements.length) as usize]
+            else {
+                panic!("expected one initializer element")
+            };
+            let InitializerType::AssignmentExpression(expression_index) =
+                parsed.parser.syntax.initializers[element.initializer.0 as usize].kind
+            else {
+                panic!("expected a scalar initializer element")
+            };
+
+            assert_eq!(
+                expression_text(&parsed, expression_index),
+                expression.replace(' ', "")
+            );
+            assert!(
+                parser_errors(&parsed).next().is_none(),
+                "{expression}: {:#?}",
+                parsed.errors
+            );
         }
     }
 
@@ -16171,6 +16294,19 @@ mod tests {
                 operator_source
             );
         }
+
+        let errors = parser_errors(&parsed).collect::<Vec<_>>();
+        assert!(errors.iter().all(|error| matches!(
+            error,
+            ParserErrorType::ExpectedMemberIdentifier(Some(TokenType::Operator(
+                OperatorTokenType::Semicolon
+            )))
+        )));
+        assert_eq!(
+            errors[0].to_string(),
+            "Expected an identifier after `.` or `->` in postfix member access; found \
+             Operator(Semicolon)."
+        );
     }
 
     #[test]
