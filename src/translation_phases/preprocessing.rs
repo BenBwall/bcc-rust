@@ -2219,8 +2219,8 @@ impl Preprocessor {
         }
     }
 
-    pub(crate) fn has_pending_parser_token(&self) -> bool {
-        self.pending_parser_token.is_some()
+    pub(crate) fn has_pending_parser_work(&self) -> bool {
+        self.pending_parser_token.is_some() || !self.pending_parser_errors.is_empty()
     }
 
     fn concatenate_adjacent_strings(&mut self, context: &mut Context, first: Token) -> Token {

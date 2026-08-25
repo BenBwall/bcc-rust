@@ -1669,8 +1669,12 @@ impl DeclarationFrame {
 enum SpecifierMode {
     /// Full declaration specifiers, including storage and function specifiers.
     Declaration,
-    /// Struct member/type-name specifiers: types and qualifiers only.
-    SpecifierQualifier,
+    /// Struct member specifiers: types and qualifiers followed by named
+    /// declarators or bit-fields.
+    StructMember,
+    /// Type-name specifiers: types and qualifiers followed only by an
+    /// optional abstract declarator.
+    TypeName,
 }
 
 /// Accumulates one declaration-specifier or specifier-qualifier sequence.
@@ -4953,6 +4957,19 @@ fn prefix_operator(token: TokenType) -> Option<(UnaryOperator, ExpressionMode)> 
     Some((operator, mode))
 }
 
+fn is_expression_operand_starter(token: TokenType) -> bool {
+    matches!(
+        token,
+        TokenType::Identifier
+            | TokenType::Integer(_)
+            | TokenType::Float(_)
+            | TokenType::Character(_)
+            | TokenType::String(_)
+            | TokenType::Keyword(KeywordTokenType::Sizeof)
+            | TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+    ) || prefix_operator(token).is_some()
+}
+
 fn is_postfix_starter(token: TokenType) -> bool {
     matches!(
         token,
@@ -5700,7 +5717,7 @@ impl DeclarationSpecifiersFrame {
 
         if token.kind == TokenType::Identifier
             && parser.scopes.is_typedef(token.contents)
-            && (self.mode == SpecifierMode::SpecifierQualifier
+            && (self.mode == SpecifierMode::TypeName
                 || self.specifiers.type_specifiers == TypeSpecifiers::Empty
                 || parser.typedef_name_continues_specifiers(context))
         {
@@ -7018,7 +7035,7 @@ impl StructOrUnionSpecifierFrame {
                     self.current_member_declarator_source = None;
                     self.phase = StructOrUnionPhase::AwaitMemberSpecifiers;
                     ParseAction::Push(ParseFrame::DeclarationSpecifiers(
-                        DeclarationSpecifiersFrame::new(SpecifierMode::SpecifierQualifier),
+                        DeclarationSpecifiersFrame::new(SpecifierMode::StructMember),
                     ))
                 }
             },
@@ -7635,7 +7652,7 @@ impl TypeNameFrame {
                 debug_assert!(returned.is_none());
                 self.phase = TypeNamePhase::AwaitSpecifiers;
                 ParseAction::Push(ParseFrame::DeclarationSpecifiers(
-                    DeclarationSpecifiersFrame::new(SpecifierMode::SpecifierQualifier),
+                    DeclarationSpecifiersFrame::new(SpecifierMode::TypeName),
                 ))
             },
             | TypeNamePhase::AwaitSpecifiers => {
@@ -7865,6 +7882,17 @@ impl ExpressionFrame {
                     self.merge_call_operator_source(context, separator.source_vectors);
                     self.phase = ExpressionPhase::PushCallArgument(base);
                     return ParseAction::Consume;
+                }
+                if token.is_some_and(|token| is_expression_operand_starter(token.kind)) {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionCall(
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = ExpressionPhase::PushCallArgument(base);
+                    return ParseAction::Reprocess;
                 }
                 let consume = if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
@@ -8322,8 +8350,21 @@ impl ExpressionFrame {
                 self.push_error(parser, context);
                 return self.finish(parser, context);
             };
+            // A visible typedef spelling is still a syntactically valid
+            // primary expression. At the first initializer operand, do not
+            // reinterpret declaration-shaped lookahead as recovery evidence.
+            let initial_initializer_typedef_operand = self.mode
+                == ExpressionMode::AssignmentExpression
+                && self.boundary == ExpressionBoundary::Initializer
+                && self.recovery_boundary == ExpressionBoundary::Initializer
+                && self.operands.is_empty()
+                && self.operators.is_empty()
+                && parser.hard_error_count == self.starting_error_count
+                && token.kind == TokenType::Identifier
+                && parser.scopes.is_typedef(token.contents);
             if self.is_owning_boundary(token.kind)
-                || self.is_strong_grammar_boundary(parser, context, token)
+                || !initial_initializer_typedef_operand
+                    && self.is_strong_grammar_boundary(parser, context, token)
             {
                 parser.report(
                     context,
@@ -8674,6 +8715,9 @@ impl ExpressionFrame {
                 )
             )
         {
+            return true;
+        }
+        if self.boundary == ExpressionBoundary::Argument && is_expression_operand_starter(token) {
             return true;
         }
         self.is_owning_boundary(token)
@@ -9127,7 +9171,10 @@ impl InitializerFrame {
                     }
                     return ParseAction::Consume;
                 }
-                if depth == 0 && self.at_array_designator_sync_boundary(parser, context, token) {
+                // An unmatched nested `[` cannot take ownership of the
+                // initializer or declaration boundary. Depth only selects
+                // which later `]` can close this designator.
+                if self.at_array_designator_sync_boundary(parser, context, token) {
                     self.push_array_designator(expression, source_vectors, true);
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
@@ -9953,6 +10000,9 @@ pub(crate) enum ParserErrorType {
     /// C99: parameter-type-list and parameter-list are §6.7.5,
     /// p. 114; PDF p. 126.
     ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(Option<TokenType>),
+    /// A function-call argument was not followed by `,` or `)`.
+    /// C99: argument-expression-list is §6.5.2, p. 69; PDF p. 81.
+    ExpectedCommaOrClosingParenthesisInFunctionCall(Option<TokenType>),
     /// Struct/union child was entered without its owning keyword.
     /// C99: §6.7.2.1, p. 101; PDF p. 113.
     ExpectedStructOrUnionKeyword(Option<TokenType>),
@@ -10118,6 +10168,7 @@ impl GetSeverity for ParserErrorType {
             | Self::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(..)
             | Self::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(..)
             | Self::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(..)
+            | Self::ExpectedCommaOrClosingParenthesisInFunctionCall(..)
             | Self::ExpectedStructOrUnionKeyword(..)
             | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
             | Self::ExpectedClosingCurlyBraceInStructDeclarationList(..)
@@ -10287,6 +10338,12 @@ impl Display for ParserErrorType {
                     "a parameter declaration or `...`",
                     *found,
                 ),
+            | Self::ExpectedCommaOrClosingParenthesisInFunctionCall(found) => write_expected(
+                f,
+                "function-call argument list",
+                "`,` or `)` after an argument",
+                *found,
+            ),
             | Self::ExpectedStructOrUnionKeyword(found) => write_expected(
                 f,
                 "struct-or-union specifier",
@@ -11251,7 +11308,10 @@ mod tests {
 
     #[test]
     fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
-        let parsed = parse("typedef int T; int value = T + 1; int f(void) { return T + 1; }\n");
+        let parsed = parse(
+            "typedef int T; int value = T + 1; int product = T * ptr; int f(void) { return T + 1; \
+             }\n",
+        );
 
         let initializer = init_declarators(&parsed, declaration(&parsed, 1))[0]
             .initializer
@@ -11263,8 +11323,18 @@ mod tests {
         };
         assert_eq!(expression_text(&parsed, initializer_expression), "T+1");
 
+        let initializer = init_declarators(&parsed, declaration(&parsed, 2))[0]
+            .initializer
+            .expect("product must have an initializer");
+        let InitializerType::AssignmentExpression(initializer_expression) =
+            parsed.parser.syntax.initializers[initializer.0 as usize].kind
+        else {
+            panic!("expected a scalar initializer")
+        };
+        assert_eq!(expression_text(&parsed, initializer_expression), "T*ptr");
+
         let [BlockItem::Statement(statement)] =
-            block_items(&parsed, function_definition(&parsed, 2).body)
+            block_items(&parsed, function_definition(&parsed, 3).body)
         else {
             panic!("expected one return statement")
         };
@@ -11399,6 +11469,30 @@ mod tests {
             parsed.parser.syntax.statements[index.0 as usize].kind,
             StatementType::Return(Some(ExpressionSlot::Parsed(_)))
         )));
+    }
+
+    #[test]
+    fn typedef_spelled_struct_member_declarators_are_not_consumed_as_specifiers() {
+        let parsed = parse("typedef int T; struct First { int T; }; struct Second { T T; };\n");
+
+        assert_eq!(parsed.items.len(), 3, "{:#?}", parsed.items);
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .struct_declarators
+                .iter()
+                .filter_map(|member| member
+                    .declarator
+                    .and_then(|declarator| identifier_name(&parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["T", "T"]
+        );
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
     }
 
     #[test]
@@ -14532,6 +14626,42 @@ mod tests {
     }
 
     #[test]
+    fn missing_call_argument_comma_preserves_later_arguments() {
+        let parsed = parse("int f(void) { foo(a b, c); return; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2, "{items:#?}");
+        let BlockItem::Statement(statement) = items[0] else {
+            panic!("expected expression statement")
+        };
+        let StatementType::Expression(ExpressionSlot::Parsed(root)) =
+            parsed.parser.syntax.statements[statement.0 as usize].kind
+        else {
+            panic!("expected parsed expression")
+        };
+        let ExpressionType::Call { arguments, .. } =
+            parsed.parser.syntax.expressions[root.0 as usize].kind
+        else {
+            panic!("expected call expression")
+        };
+        let start = arguments.start_index as usize;
+        let end = start + arguments.length as usize;
+        assert_eq!(
+            parsed.parser.syntax.expression_indices[start..end]
+                .iter()
+                .map(|expression| expression_text(&parsed, *expression))
+                .collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionCall(Some(
+                TokenType::Identifier
+            ))
+        )));
+    }
+
+    #[test]
     fn equal_precedence_chains_nested_conditionals_and_casts_keep_their_associativity() {
         let parsed = parse("int f(void) { a-b-c; a ? b ? c : d : e; (int)(long)a; a+b=c; }\n");
         let items = block_items(&parsed, function_definition(&parsed, 0).body);
@@ -15362,6 +15492,21 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(names, ["x", "after", "later"]);
+
+        let parsed = parse("int x[] = { [1 foo [ 2 } ; int after;\n");
+        assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
+        assert!(matches!(
+            parsed.items[0],
+            ExternalDeclaration::RecoveredDeclaration(_)
+        ));
+        assert_eq!(
+            identifier_name(
+                &parsed,
+                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
     }
 
     #[test]
