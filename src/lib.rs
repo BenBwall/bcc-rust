@@ -27,10 +27,14 @@ use clap::{
 };
 use owo_colors::OwoColorize;
 use thiserror::Error;
+#[cfg(test)]
 use translation_phases::{
     TranslationPhase,
+    parsing::ExternalDeclaration,
+};
+use translation_phases::{
     parsing::{
-        ExternalDeclaration,
+        InspectionOptions,
         Parser as LanguageParser,
     },
     preprocessing::Token,
@@ -116,12 +120,14 @@ impl Iterator for PreprocessorIterator {
     }
 }
 
+#[cfg(test)]
 struct ParserIterator {
     parser:       LanguageParser,
     context:      Context,
     pending_item: Option<ExternalDeclaration>,
 }
 
+#[cfg(test)]
 impl ParserIterator {
     fn new(
         source_filename: Box<Path>,
@@ -145,6 +151,7 @@ impl ParserIterator {
     }
 }
 
+#[cfg(test)]
 impl Iterator for ParserIterator {
     type Item = Result<ExternalDeclaration, TranslationError>;
 
@@ -291,12 +298,15 @@ mod pipeline_iterator_tests {
         ));
         assert!(matches!(
             iterator.next().unwrap().unwrap_err(),
+            TranslationError::InitialProcessing(_)
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
             TranslationError::Preprocessing(PreprocessorError {
                 error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
                 ..
             })
         ));
-        drop(iterator.next().unwrap().unwrap_err());
         assert!(matches!(
             iterator.next().unwrap().unwrap().kind,
             TokenType::Integer(_)
@@ -370,22 +380,73 @@ mod pipeline_iterator_tests {
         ));
         assert!(iterator.next().is_none());
     }
+
+    #[test]
+    fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
+        let mut context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<test>").into_boxed_path(),
+            "int first; int second = 2;\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        let unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+
+        assert_eq!(unit.external_declarations().len(), 2);
+        let ExternalDeclaration::Declaration(first) = unit.external_declarations()[0] else {
+            panic!("expected the first root to be a declaration")
+        };
+        let ExternalDeclaration::Declaration(second) = unit.external_declarations()[1] else {
+            panic!("expected the second root to be a declaration")
+        };
+        assert_eq!(unit.syntax().declaration(first).init_declarators().len(), 1);
+        assert_eq!(
+            unit.syntax().declaration(second).init_declarators().len(),
+            1
+        );
+    }
 }
 
 #[derive(Parser)]
 #[command(author, version, about, long_about, color = ColorChoice::Always)]
 struct Cli {
     #[command(flatten)]
-    input:          CliInput,
+    input: CliInput,
     /// Add directory to include search path.
     #[clap(short = 'q', long = "iquote")]
-    quote_include:  Vec<PathBuf>,
+    quote_include: Vec<PathBuf>,
     /// Add directory to system include search path.
     #[clap(short = 's', long = "isystem")]
     system_include: Vec<PathBuf>,
+    #[command(flatten)]
+    output: CliOutput,
+    /// Suppress the `repeated-specifiers` quality warning group.
+    #[clap(long)]
+    no_repeated_specifier_warnings: bool,
+}
+
+#[derive(Args)]
+struct CliOutput {
     /// Print preprocessor tokens instead of parser output.
     #[clap(long)]
-    tokens:         bool,
+    tokens: bool,
+    #[command(flatten)]
+    parser: ParserOutput,
+}
+
+#[derive(Args)]
+struct ParserOutput {
+    /// Print a deterministic, source-oriented C syntax tree.
+    #[clap(long)]
+    syntax_tree:      bool,
+    /// Include line and column locations in `--syntax-tree` output.
+    #[clap(long, requires = "syntax_tree")]
+    syntax_locations: bool,
+    /// Print raw parser arenas for storage debugging.
+    #[clap(long)]
+    raw_syntax:       bool,
 }
 
 #[derive(Args)]
@@ -435,7 +496,7 @@ pub fn run() -> Result<(), MainError> {
     parse_include_env_var("CPATH", &mut args.system_include);
     parse_include_env_var("C_INCLUDE_PATH", &mut args.system_include);
 
-    if args.tokens {
+    if args.output.tokens {
         print_preprocessor_output(
             source_filename,
             input_string,
@@ -448,6 +509,8 @@ pub fn run() -> Result<(), MainError> {
             input_string,
             args.quote_include.into(),
             args.system_include.into(),
+            &args.output.parser,
+            !args.no_repeated_specifier_warnings,
         );
     }
     Ok(())
@@ -533,40 +596,41 @@ fn print_parser_output(
     input_string: SharedString,
     quote_include: SharedVec<PathBuf>,
     system_include: SharedVec<PathBuf>,
+    output: &ParserOutput,
+    repeated_specifier_warnings: bool,
 ) {
-    eprintln!("{}", "Printing all parser output:".bright_green());
-    let mut iterator =
-        ParserIterator::new(source_filename, input_string, quote_include, system_include);
-    while let Some(item) = iterator.next() {
-        match item {
-            | Ok(item) => eprintln!(
-                "{}",
-                format!("External declaration: {item:#?}").bright_magenta()
-            ),
-            | Err(error) => print_translation_error(
-                &error,
-                &mut iterator.context,
-                iterator.parser.source_file_index(),
-            ),
-        }
+    let mut context = Context::new();
+    context.configuration = context
+        .configuration
+        .with_repeated_specifier_warnings(repeated_specifier_warnings);
+    let preprocessor = Preprocessor::new(
+        &mut context,
+        source_filename,
+        input_string,
+        quote_include,
+        system_include,
+    );
+    let source_file_index = preprocessor.source_file_index();
+    let unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+    while let Some(error) = context.pop_pending_error() {
+        print_translation_error(&error, &mut context, source_file_index);
     }
 
-    eprintln!("{}", "Finished printing all parser output.".bright_green());
-    eprintln!(
-        "{}{}",
-        "Parser syntax store: ".bright_cyan(),
-        format!("{:#?}", iterator.parser.syntax_debug()).bright_cyan()
-    );
-    eprintln!(
-        "{}{}",
-        "String cache contents: ".bright_yellow(),
-        iterator.context.string_cache.bright_yellow()
-    );
-    eprintln!(
-        "{}{}",
-        "Source vectors: ".bright_green(),
-        iterator.context.source_vectors.bright_green()
-    );
+    if output.syntax_tree {
+        eprint!(
+            "{}",
+            unit.syntax().inspect(
+                unit.external_declarations(),
+                &context,
+                InspectionOptions {
+                    show_locations: output.syntax_locations,
+                },
+            )
+        );
+    }
+    if output.raw_syntax {
+        eprintln!("{:#?}", unit.syntax().raw_debug());
+    }
 }
 
 fn print_translation_error(

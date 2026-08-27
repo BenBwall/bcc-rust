@@ -100,13 +100,16 @@ Exit:
 - no Phase 02 or Phase 03 expression/initializer future-child seam remains on a
   supported C99 grammar path.
 
-## Remaining parser phase
+## Completed closure phase
 
 ### Phase 05: Recovery and C99 parser closure
 
-Audit the complete translation-unit grammar against the C99 compliance matrix.
-Harden cross-family recovery, translation limits, source provenance, and parser
-inspection output. Close any remaining syntax-model or reachability gaps.
+Status: complete.
+
+The complete translation-unit grammar is audited against the C99 compliance
+matrix. Cross-family recovery, translation limits, source provenance, phase-7
+totality, diagnostics, and parser inspection output are hardened. Remaining
+constraint and semantic work is explicitly assigned to later analysis.
 
 Exit:
 
@@ -122,7 +125,7 @@ Exit:
 
 ## Meaning of parser-complete
 
-After Phase 05, the language parser is complete for the project's declared C99
+With Phase 05 complete, the language parser is complete for the project's declared C99
 syntax target when it can construct source-backed syntax for complete
 translation units and recover predictably from malformed input.
 
@@ -138,8 +141,7 @@ Parser-complete does not mean compiler-complete. The following remain separate:
 
 ## Phase rule
 
-Each phase must leave one reachable parser control flow. Temporary deferred
-children are permitted only where this roadmap assigns their implementation to
-a later phase. They must use typed syntax or child results, stable diagnostics,
-source provenance, and parent-owned delimiters. A phase brief may narrow its
-own scope, but it may not silently move work across these phase boundaries.
+Each completed phase leaves one reachable parser control flow. No deferred
+child remains on a supported C99 syntax path. Typed syntax, stable structured
+diagnostics, source provenance, parent-owned delimiters, and explicit semantic
+handoffs remain the governing rule for later front-end work.

@@ -11,17 +11,18 @@
 //! with its arena handle so later semantic analysis can continue. The distinct
 //! status prevents repaired syntax from being mistaken for fully valid input.
 //!
-//! Phase 04 implements declarations, function definitions, compound blocks,
-//! every C99 statement family, expressions, type names, initializers, and the
-//! scope transitions needed for typedef-sensitive grammar decisions. All
-//! productions use heap-backed frames and retain recovered syntax at their
-//! owning grammar boundaries.
+//! Phase 05 closes declarations, function definitions, compound blocks, every
+//! C99 statement family, expressions, type names, initializers, and the scope
+//! transitions needed for typedef-sensitive grammar decisions into a complete
+//! translation-unit interface. All productions use heap-backed frames and
+//! retain recovered syntax at their owning grammar boundaries.
 //!
 //! Standard references in this module cite WG14/N1256, ISO/IEC 9899:TC3
 //! (C99 with Technical Corrigenda 1, 2, and 3). Each reference gives the
 //! normative clause, the standard's printed page, and the one-based page in
 //! the repository's `c-spec.pdf`.
 
+mod inspection;
 use std::{
     collections::VecDeque,
     fmt::{
@@ -32,6 +33,8 @@ use std::{
     },
     hash::Hash,
 };
+
+pub(crate) use inspection::InspectionOptions;
 
 use super::{
     Context,
@@ -44,6 +47,7 @@ use super::{
     SetSourceFileIndex,
     SourcePosition,
     SourceVectors,
+    TranslationError,
     TranslationPhase,
     preprocessing::{
         CharacterTokenType,
@@ -96,15 +100,58 @@ pub(crate) struct Parser {
     recovery: RecoveryState,
     /// Number of hard parser diagnostics emitted so far.
     hard_error_count: usize,
+    /// Frame currently executing, captured into every parser diagnostic.
+    active_frame: ParseFrameKind,
     /// Whether at least one external declaration has reduced successfully or
     /// through recovery.
     has_external_declaration: bool,
     /// Prevents repeated end-of-stream polling from diagnosing an empty
     /// translation unit more than once.
     reported_empty_translation_unit: bool,
+    external_declaration_count: usize,
+    limits: ParserLimits,
+    resource_limit_reported: bool,
     #[cfg(test)]
     /// Driver actions retained only for machine and recovery regressions.
     trace: Vec<FrameTraceEvent>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ParserLimits {
+    external_declarations: usize,
+    syntax_nodes:          usize,
+    frame_depth:           usize,
+}
+
+impl Default for ParserLimits {
+    fn default() -> Self {
+        Self {
+            external_declarations: 1_000_000,
+            syntax_nodes:          8_000_000,
+            frame_depth:           1_000_000,
+        }
+    }
+}
+
+/// One completely parsed translation unit and the syntax storage referenced by
+/// its source-ordered roots.
+///
+/// This is the shared boundary for callers, inspection, tests, and the future
+/// semantic-analysis phase. Parser-machine state is deliberately not exposed.
+#[derive(Debug)]
+pub(crate) struct ParsedTranslationUnit {
+    roots:  Box<[ExternalDeclaration]>,
+    syntax: SyntaxTree,
+}
+
+impl ParsedTranslationUnit {
+    pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration] {
+        &self.roots
+    }
+
+    pub(crate) fn syntax(&self) -> &SyntaxTree {
+        &self.syntax
+    }
 }
 
 impl GetPosition for Parser {
@@ -248,16 +295,14 @@ bitflags::bitflags! {
 /// - unsigned
 /// - _Bool
 /// - _Complex
-/// - _Imaginary
 /// - struct-or-union-specifier
 /// - enum-specifier
 /// - typedef-name
 ///
 /// Core variants represent valid combinations of type specifiers. For example,
 /// the declaration `unsigned int foo` is represented as
-/// `TypeSpecifiers::UnsignedInt`. The `Imaginary` variants retain the existing
-/// extension surface; strict C99 mode must diagnose them rather than treating
-/// them as normative §6.7.2 alternatives.
+/// `TypeSpecifiers::UnsignedInt`. `_Imaginary` is diagnosed before this model
+/// is constructed and therefore has no valid-looking type variant.
 ///
 /// C99: §6.7.2, pp. 99-100; PDF pp. 111-112. `_Imaginary` is listed as a
 /// keyword by §6.4.1, p. 50; PDF p. 62, but is not a core type-specifier in
@@ -303,11 +348,6 @@ pub(crate) enum TypeSpecifiers {
     ComplexDouble,
     ComplexLong,
     ComplexLongDouble,
-    Imaginary,
-    ImaginaryFloat,
-    ImaginaryDouble,
-    ImaginaryLong,
-    ImaginaryLongDouble,
     StructOrUnion(StructOrUnionSpecifierIndex),
     Enum(EnumSpecifierIndex),
     TypedefName(Identifier),
@@ -352,11 +392,6 @@ impl Display for TypeSpecifiers {
             | TypeSpecifiers::ComplexDouble => write!(f, "_Complex double"),
             | TypeSpecifiers::ComplexLong => write!(f, "_Complex long"),
             | TypeSpecifiers::ComplexLongDouble => write!(f, "_Complex long double"),
-            | TypeSpecifiers::Imaginary => write!(f, "_Imaginary"),
-            | TypeSpecifiers::ImaginaryFloat => write!(f, "_Imaginary float"),
-            | TypeSpecifiers::ImaginaryDouble => write!(f, "_Imaginary double"),
-            | TypeSpecifiers::ImaginaryLong => write!(f, "_Imaginary long"),
-            | TypeSpecifiers::ImaginaryLongDouble => write!(f, "_Imaginary long double"),
             | TypeSpecifiers::Void => write!(f, "void"),
             | TypeSpecifiers::StructOrUnion(_) => write!(f, "<struct-or-union-declarator>"),
             | TypeSpecifiers::Enum(_) => write!(f, "<enum-declarator>"),
@@ -501,9 +536,7 @@ impl TypeSpecifiers {
         | TypeSpecifiers::UnsignedLongLongInt
         | TypeSpecifiers::LongDouble
         | TypeSpecifiers::ComplexLong
-        | TypeSpecifiers::ComplexLongDouble
-        | TypeSpecifiers::ImaginaryLong
-        | TypeSpecifiers::ImaginaryLongDouble,
+        | TypeSpecifiers::ComplexLongDouble,
 
         | TypeSpecifiers::Empty => TypeSpecifiers::Long,
         | TypeSpecifiers::Int => TypeSpecifiers::LongInt,
@@ -518,8 +551,6 @@ impl TypeSpecifiers {
         | TypeSpecifiers::Double => TypeSpecifiers::LongDouble,
         | TypeSpecifiers::Complex => TypeSpecifiers::ComplexLong,
         | TypeSpecifiers::ComplexDouble => TypeSpecifiers::ComplexLongDouble,
-        | TypeSpecifiers::Imaginary => TypeSpecifiers::ImaginaryLong,
-        | TypeSpecifiers::ImaginaryDouble => TypeSpecifiers::ImaginaryLongDouble,
     );
 
     map_fn!(map_char, make_char, is_char, Char,
@@ -534,26 +565,20 @@ impl TypeSpecifiers {
 
     map_fn!(map_float, make_float, is_float, Float,
         | TypeSpecifiers::Float
-        | TypeSpecifiers::ComplexFloat
-        | TypeSpecifiers::ImaginaryFloat,
+        | TypeSpecifiers::ComplexFloat,
 
         | TypeSpecifiers::Empty => TypeSpecifiers::Float,
         | TypeSpecifiers::Complex => TypeSpecifiers::ComplexFloat,
-        | TypeSpecifiers::Imaginary => TypeSpecifiers::ImaginaryFloat,
     );
 
     map_fn!(map_double, make_double, is_double, Double,
         | TypeSpecifiers::ComplexDouble
         | TypeSpecifiers::ComplexLongDouble
-        | TypeSpecifiers::ImaginaryDouble
-        | TypeSpecifiers::ImaginaryLongDouble
         | TypeSpecifiers::LongDouble,
 
         | TypeSpecifiers::Empty => TypeSpecifiers::Double,
         | TypeSpecifiers::Complex => TypeSpecifiers::ComplexDouble,
         | TypeSpecifiers::ComplexLong => TypeSpecifiers::ComplexLongDouble,
-        | TypeSpecifiers::Imaginary => TypeSpecifiers::ImaginaryDouble,
-        | TypeSpecifiers::ImaginaryLong => TypeSpecifiers::ImaginaryLongDouble,
         | TypeSpecifiers::Long => TypeSpecifiers::LongDouble
     );
 
@@ -583,20 +608,6 @@ impl TypeSpecifiers {
         | TypeSpecifiers::LongDouble => TypeSpecifiers::ComplexLongDouble,
     );
 
-    map_fn!(map_imaginary, make_imaginary, is_imaginary, Imaginary,
-        | TypeSpecifiers::Imaginary
-        | TypeSpecifiers::ImaginaryFloat
-        | TypeSpecifiers::ImaginaryDouble
-        | TypeSpecifiers::ImaginaryLong
-        | TypeSpecifiers::ImaginaryLongDouble,
-
-        | TypeSpecifiers::Empty => TypeSpecifiers::Imaginary,
-        | TypeSpecifiers::Float => TypeSpecifiers::ImaginaryFloat,
-        | TypeSpecifiers::Double => TypeSpecifiers::ImaginaryDouble,
-        | TypeSpecifiers::Long => TypeSpecifiers::ImaginaryLong,
-        | TypeSpecifiers::LongDouble => TypeSpecifiers::ImaginaryLongDouble,
-    );
-
     fn is_long_long(self) -> bool {
         match self {
             | TypeSpecifiers::LongLong
@@ -611,9 +622,7 @@ impl TypeSpecifiers {
 
     fn is_long_double(self) -> bool {
         match self {
-            | TypeSpecifiers::LongDouble
-            | TypeSpecifiers::ComplexLongDouble
-            | TypeSpecifiers::ImaginaryLongDouble => true,
+            | TypeSpecifiers::LongDouble | TypeSpecifiers::ComplexLongDouble => true,
             | _ => false,
         }
     }
@@ -826,7 +835,9 @@ pub(crate) struct FunctionSpecifiers {
 /// specified by §6.7.1-§6.7.4, pp. 98-113; PDF pp. 110-125.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct DeclarationSpecifiers {
-    pub(crate) storage_class:       StorageClass,
+    /// `None` preserves the grammatical absence of a storage-class specifier;
+    /// it is not equivalent to an explicitly written `auto`.
+    pub(crate) storage_class:       Option<StorageClass>,
     pub(crate) type_qualifiers:     TypeQualifiers,
     pub(crate) type_specifiers:     TypeSpecifiers,
     pub(crate) function_specifiers: FunctionSpecifiers,
@@ -842,7 +853,7 @@ impl Default for DeclarationSpecifiers {
 impl DeclarationSpecifiers {
     fn new() -> Self {
         Self {
-            storage_class:       StorageClass::Auto,
+            storage_class:       None,
             type_qualifiers:     TypeQualifiers::empty(),
             type_specifiers:     TypeSpecifiers::Empty,
             function_specifiers: FunctionSpecifiers { is_inline: false },
@@ -1059,6 +1070,190 @@ struct SyntaxStore {
     struct_declarators:         Vec<StructDeclarator>,
     enum_specifiers:            Vec<EnumSpecifier>,
     enumerators:                Vec<Enumerator>,
+}
+
+/// Validated, read-only access to arena-backed C syntax.
+///
+/// Typed handles cannot be constructed outside this module. List-bearing
+/// views resolve their ranges here so callers never coordinate raw vectors or
+/// perform unchecked arithmetic themselves.
+#[derive(Debug)]
+pub(crate) struct SyntaxTree {
+    store: SyntaxStore,
+}
+
+impl SyntaxTree {
+    fn new(store: SyntaxStore) -> Self {
+        let tree = Self { store };
+        tree.validate();
+        tree
+    }
+
+    fn validate(&self) {
+        for declaration in &self.store.declarations {
+            let _ = Self::checked_slice(&self.store.init_declarators, declaration.init_declarators);
+        }
+        for definition in &self.store.function_definitions {
+            let _ = Self::checked_slice(
+                &self.store.declaration_indices,
+                definition.old_style_declarations,
+            );
+            let _ = self.statement(definition.body);
+        }
+        for expression in &self.store.expressions {
+            if let ExpressionType::Call { arguments, .. } = expression.kind {
+                let _ = Self::checked_slice(&self.store.expression_indices, arguments);
+            }
+        }
+        for initializer in &self.store.initializers {
+            if let InitializerType::InitializerList(elements) = initializer.kind {
+                let _ = Self::checked_slice(&self.store.initializer_elements, elements);
+            }
+        }
+        for designation in &self.store.designations {
+            let _ = Self::checked_slice(&self.store.designators, designation.designators);
+        }
+        for statement in &self.store.statements {
+            if let StatementType::Compound { items } = statement.kind {
+                let _ = Self::checked_slice(&self.store.block_items, items);
+            }
+        }
+    }
+
+    fn checked_slice<T>(arena: &[T], range: VectorSlice<T>) -> &[T] {
+        let start = range.start_index as usize;
+        let end = start
+            .checked_add(range.length as usize)
+            .expect("validated syntax range length overflowed usize");
+        arena
+            .get(start..end)
+            .expect("parser produced an invalid typed syntax range")
+    }
+
+    pub(crate) fn declaration(&self, index: DeclarationIndex) -> DeclarationView<'_> {
+        let declaration = self
+            .store
+            .declarations
+            .get(index.0 as usize)
+            .expect("validated declaration handle");
+        DeclarationView {
+            tree: self,
+            declaration,
+        }
+    }
+
+    pub(crate) fn function_definition(
+        &self,
+        index: FunctionDefinitionIndex,
+    ) -> &FunctionDefinition {
+        self.store
+            .function_definitions
+            .get(index.0 as usize)
+            .expect("validated function-definition handle")
+    }
+
+    pub(crate) fn statement(&self, index: StatementIndex) -> &Statement {
+        self.store
+            .statements
+            .get(index.0 as usize)
+            .expect("validated statement handle")
+    }
+
+    pub(crate) fn expression(&self, index: ExpressionIndex) -> &Expression {
+        self.store
+            .expressions
+            .get(index.0 as usize)
+            .expect("validated expression handle")
+    }
+
+    pub(crate) fn type_name(&self, index: TypeNameIndex) -> &TypeName {
+        self.store
+            .type_names
+            .get(index.0 as usize)
+            .expect("validated type-name handle")
+    }
+
+    pub(crate) fn initializer(&self, index: InitializerIndex) -> InitializerView<'_> {
+        let initializer = self
+            .store
+            .initializers
+            .get(index.0 as usize)
+            .expect("validated initializer handle");
+        InitializerView {
+            tree: self,
+            initializer,
+        }
+    }
+
+    pub(crate) fn raw_debug(&self) -> impl Debug + '_ {
+        &self.store
+    }
+}
+
+impl SyntaxStore {
+    fn node_count(&self) -> usize {
+        self.type_names.len()
+            + self.declarations.len()
+            + self.init_declarators.len()
+            + self.initializers.len()
+            + self.initializer_elements.len()
+            + self.designations.len()
+            + self.designators.len()
+            + self.expressions.len()
+            + self.expression_indices.len()
+            + self.statements.len()
+            + self.block_items.len()
+            + self.function_definitions.len()
+            + self.declaration_indices.len()
+            + self.type_qualifiers.len()
+            + self.direct_declarators.len()
+            + self.identifiers.len()
+            + self.parameter_declarations.len()
+            + self.struct_or_union_specifiers.len()
+            + self.struct_declarations.len()
+            + self.struct_declarators.len()
+            + self.enum_specifiers.len()
+            + self.enumerators.len()
+    }
+}
+
+pub(crate) struct DeclarationView<'a> {
+    tree:        &'a SyntaxTree,
+    declaration: &'a Declaration,
+}
+
+impl<'a> DeclarationView<'a> {
+    pub(crate) fn syntax(&self) -> &'a Declaration {
+        self.declaration
+    }
+
+    pub(crate) fn init_declarators(&self) -> &'a [InitDeclarator] {
+        SyntaxTree::checked_slice(
+            &self.tree.store.init_declarators,
+            self.declaration.init_declarators,
+        )
+    }
+}
+
+pub(crate) struct InitializerView<'a> {
+    tree:        &'a SyntaxTree,
+    initializer: &'a Initializer,
+}
+
+impl<'a> InitializerView<'a> {
+    pub(crate) fn syntax(&self) -> &'a Initializer {
+        self.initializer
+    }
+
+    pub(crate) fn elements(&self) -> Option<&'a [InitializerElement]> {
+        let InitializerType::InitializerList(elements) = self.initializer.kind else {
+            return None;
+        };
+        Some(SyntaxTree::checked_slice(
+            &self.tree.store.initializer_elements,
+            elements,
+        ))
+    }
 }
 
 /// Parser-visible classification in C's ordinary-identifier namespace.
@@ -1558,9 +1753,12 @@ impl RecoveryState {
 #[derive(Debug, Clone, Copy)]
 struct ExternalDeclarationFrame {
     /// Current root-frame transition.
-    phase:                ExternalDeclarationPhase,
+    phase:                     ExternalDeclarationPhase,
     /// Hard-error count at entry, used only to classify the yielded AST.
-    starting_error_count: usize,
+    starting_error_count:      usize,
+    /// Pending-diagnostic boundary used to attach root-level recovery context
+    /// to the primary diagnostic for this external declaration.
+    starting_diagnostic_count: usize,
 }
 
 /// Transitions for one external declaration.
@@ -1578,10 +1776,11 @@ enum ExternalDeclarationPhase {
 }
 
 impl ExternalDeclarationFrame {
-    fn new(starting_error_count: usize) -> Self {
+    fn new(starting_error_count: usize, starting_diagnostic_count: usize) -> Self {
         Self {
             phase: ExternalDeclarationPhase::Start,
             starting_error_count,
+            starting_diagnostic_count,
         }
     }
 }
@@ -2704,7 +2903,7 @@ impl StatementFrame {
                     && token.kind == TokenType::Identifier
                     && is_operator(parser.cursor.following(context), OperatorTokenType::Colon)
                 {
-                    let identifier = Identifier::new(token.contents);
+                    let identifier = Identifier::from_token(token);
                     if let Some(labels) = parser.label_scopes.last_mut() {
                         _ = labels.definitions.insert(identifier.name);
                     }
@@ -2907,7 +3106,7 @@ impl StatementFrame {
                 let identifier = if let Some(token) = token
                     && token.kind == TokenType::Identifier
                 {
-                    let identifier = Identifier::new(token.contents);
+                    let identifier = Identifier::from_token(token);
                     if let Some(labels) = parser.label_scopes.last_mut() {
                         _ = labels.references.insert(identifier.name);
                     }
@@ -2920,7 +3119,14 @@ impl StatementFrame {
                         ParserErrorType::ExpectedGotoLabel(token.map(|token| token.kind)),
                         token,
                     );
-                    Identifier::new(context.string_cache.intern("<missing-label>"))
+                    Identifier::new(
+                        context.string_cache.intern("<missing-label>"),
+                        context.create_source_vectors(
+                            parser.position(context),
+                            parser.source_file_index(),
+                            0,
+                        ),
+                    )
                 };
                 self.phase = StatementPhase::GotoSemicolon(identifier);
                 ParseAction::Reprocess
@@ -3976,11 +4182,21 @@ impl Parser {
             switch_scopes: Vec::new(),
             recovery: RecoveryState::default(),
             hard_error_count: 0,
+            active_frame: ParseFrameKind::ExternalDeclaration,
             has_external_declaration: false,
             reported_empty_translation_unit: false,
+            external_declaration_count: 0,
+            limits: ParserLimits::default(),
+            resource_limit_reported: false,
             #[cfg(test)]
             trace: Vec::new(),
         }
+    }
+
+    #[cfg(test)]
+    fn with_limits(mut self, limits: ParserLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// Returns the complete arena-backed syntax store for diagnostic output.
@@ -3988,8 +4204,22 @@ impl Parser {
     /// External declarations contain compact handles, so the CLI prints this
     /// view after the item stream to make those handles manually inspectable
     /// without exposing parser storage as part of the parser interface.
+    #[cfg(test)]
     pub(crate) fn syntax_debug(&self) -> impl Debug + '_ {
         &self.syntax
+    }
+
+    /// Parses the remaining phase-7 input into one source-ordered translation
+    /// unit and transfers the validated syntax arenas to the result.
+    pub(crate) fn parse_translation_unit(mut self, context: &mut Context) -> ParsedTranslationUnit {
+        let mut roots = Vec::new();
+        while let Some(root) = self.drive(context) {
+            roots.push(root);
+        }
+        ParsedTranslationUnit {
+            roots:  roots.into_boxed_slice(),
+            syntax: SyntaxTree::new(self.syntax),
+        }
     }
 
     /// Runs owned frame actions until one external declaration reduces or EOF
@@ -4004,6 +4234,7 @@ impl Parser {
                     unreachable!("the returned value was just checked")
                 };
                 self.has_external_declaration = true;
+                self.external_declaration_count += 1;
                 return Some(external);
             }
             debug_assert!(
@@ -4019,14 +4250,40 @@ impl Parser {
                     }
                     return None;
                 }
+                if self.external_declaration_count >= self.limits.external_declarations {
+                    return self.resource_failure(
+                        context,
+                        ParserResource::ExternalDeclarations,
+                        self.limits.external_declarations,
+                    );
+                }
                 self.frames.push(ParseFrame::ExternalDeclaration(
-                    ExternalDeclarationFrame::new(self.hard_error_count),
+                    ExternalDeclarationFrame::new(
+                        self.hard_error_count,
+                        context.pending_errors.len(),
+                    ),
                 ));
+            }
+
+            if self.frames.len() > self.limits.frame_depth {
+                return self.resource_failure(
+                    context,
+                    ParserResource::FrameDepth,
+                    self.limits.frame_depth,
+                );
+            }
+            if self.syntax.node_count() > self.limits.syntax_nodes {
+                return self.resource_failure(
+                    context,
+                    ParserResource::SyntaxNodes,
+                    self.limits.syntax_nodes,
+                );
             }
 
             let token = self.cursor.current(context);
             let mut frame = self.frames.pop().expect("parser frame stack is nonempty");
             let returned = self.returned.take();
+            self.active_frame = frame.kind();
             let FrameStep { frame_kind, action } = frame.step(self, context, token, returned);
 
             #[cfg(test)]
@@ -4082,6 +4339,38 @@ impl Parser {
                 },
             }
         }
+    }
+
+    fn resource_failure(
+        &mut self,
+        context: &mut Context,
+        resource: ParserResource,
+        limit: usize,
+    ) -> Option<ExternalDeclaration> {
+        if self.resource_limit_reported {
+            return None;
+        }
+        self.resource_limit_reported = true;
+        let token = self.cursor.current(context);
+        let source_vectors = token.map_or_else(
+            || context.create_source_vectors(self.position(context), self.source_file_index(), 0),
+            |token| token.source_vectors,
+        );
+        self.report(
+            context,
+            ParserErrorType::ResourceLimitExceeded { resource, limit },
+            token,
+        );
+        while self.cursor.current(context).is_some() {
+            self.cursor.consume();
+        }
+        self.frames.clear();
+        self.returned = None;
+        self.recovery = RecoveryState::default();
+        self.scopes.restore_depth(0);
+        self.label_scopes.clear();
+        self.switch_scopes.clear();
+        Some(ExternalDeclaration::Error(source_vectors))
     }
 
     /// Consumes malformed input until the active synchronization policy says
@@ -4244,6 +4533,31 @@ impl Parser {
             self.cursor.consume();
             consumed_tokens += 1;
         }
+        let stopped_token = self.cursor.current(context);
+        let stopped_at = stopped_token.map(|token| token.kind);
+        if let Some(TranslationError::Parsing(error)) = context
+            .pending_errors
+            .iter_mut()
+            .rev()
+            .find(|error| matches!(error, TranslationError::Parsing(error) if error.recovery.is_none()))
+        {
+            if let Some(discarded) = source_vectors {
+                error.ranges = vec![discarded].into_boxed_slice();
+            }
+            if let Some(stopped_token) = stopped_token {
+                error.related = vec![RelatedParserDiagnostic {
+                    message: "parsing resumes here",
+                    source_vectors: stopped_token.source_vectors,
+                }]
+                .into_boxed_slice();
+            }
+            error.recovery = Some(RecoverySummary {
+                owner: set.target,
+                discarded: source_vectors,
+                discarded_tokens: consumed_tokens,
+                stopped_at,
+            });
+        }
         self.recovery.finish();
         source_vectors
     }
@@ -4254,6 +4568,12 @@ impl Parser {
     /// diagnostic under §5.1.1.3, p. 11; PDF p. 23: implementations must
     /// “produce at least one diagnostic message”.
     fn report(&mut self, context: &mut Context, error_type: ParserErrorType, token: Option<Token>) {
+        let warning_group = error_type.warning_group();
+        if warning_group == Some(ParserWarningGroup::RepeatedSpecifiers)
+            && !context.configuration.repeated_specifier_warnings()
+        {
+            return;
+        }
         if error_type.severity() == ErrorSeverity::Error {
             self.hard_error_count += 1;
         }
@@ -4262,8 +4582,17 @@ impl Parser {
             |token| token.source_vectors,
         );
         context.parser_error(ParserError {
+            code: error_type.code(),
+            severity: error_type.severity(),
+            warning_group,
+            frame: self.active_frame,
+            expected: error_type.expected_syntax(),
+            found: token.map(|token| token.kind),
             error_type,
             source_vectors,
+            ranges: Box::new([]),
+            related: Box::new([]),
+            recovery: None,
         });
     }
 
@@ -4431,6 +4760,16 @@ impl Parser {
     fn declaration_is_definition_head(&self, declaration: DeclarationIndex) -> bool {
         self.syntax.declarations[declaration.0 as usize].is_function_definition_head
             && self.declaration_head_declarator(declaration).is_some()
+    }
+
+    fn declaration_is_meaningful(&self, declaration: DeclarationIndex) -> bool {
+        let declaration = &self.syntax.declarations[declaration.0 as usize];
+        let specifiers = declaration.declaration_specifiers;
+        declaration.init_declarators.length > 0
+            || specifiers.storage_class.is_some()
+            || !specifiers.type_qualifiers.is_empty()
+            || specifiers.type_specifiers != TypeSpecifiers::Empty
+            || specifiers.function_specifiers.is_inline
     }
 
     fn declaration_is_old_style_function_head(&self, declaration: DeclarationIndex) -> bool {
@@ -5056,6 +5395,24 @@ fn is_statement_keyword(token: TokenType) -> bool {
 }
 
 impl ParseFrame {
+    fn kind(&self) -> ParseFrameKind {
+        match self {
+            | Self::ExternalDeclaration(_) => ParseFrameKind::ExternalDeclaration,
+            | Self::Declaration(_) => ParseFrameKind::Declaration,
+            | Self::DeclarationSpecifiers(_) => ParseFrameKind::DeclarationSpecifiers,
+            | Self::Declarator(_) => ParseFrameKind::Declarator,
+            | Self::ParameterList(_) => ParseFrameKind::ParameterList,
+            | Self::StructOrUnionSpecifier(_) => ParseFrameKind::StructOrUnionSpecifier,
+            | Self::EnumSpecifier(_) => ParseFrameKind::EnumSpecifier,
+            | Self::TypeName(_) => ParseFrameKind::TypeName,
+            | Self::Expression(_) => ParseFrameKind::Expression,
+            | Self::Initializer(_) => ParseFrameKind::Initializer,
+            | Self::FunctionDefinition(_) => ParseFrameKind::FunctionDefinition,
+            | Self::CompoundStatement(_) => ParseFrameKind::CompoundStatement,
+            | Self::Statement(_) => ParseFrameKind::Statement,
+        }
+    }
+
     /// Adds tokens consumed by recovery to the syntax object owned by this
     /// frame; frames without an owned syntax range intentionally ignore them.
     fn merge_recovered_sources(&mut self, context: &mut Context, recovered: Option<SourceVectors>) {
@@ -5152,7 +5509,7 @@ impl ExternalDeclarationFrame {
     fn step(
         &mut self,
         parser: &mut Parser,
-        _context: &mut Context,
+        context: &mut Context,
         token: Option<Token>,
         returned: Option<ParseValue>,
     ) -> ParseAction {
@@ -5184,6 +5541,38 @@ impl ExternalDeclarationFrame {
                     ));
                 }
                 if parser.hard_error_count > self.starting_error_count {
+                    if !parser.declaration_is_meaningful(declaration) {
+                        let declaration_source =
+                            parser.syntax.declarations[declaration.0 as usize].source_vectors;
+                        let source = if declaration_source.length == 0 {
+                            token.map_or(declaration_source, |token| token.source_vectors)
+                        } else {
+                            declaration_source
+                        };
+                        if let Some(TranslationError::Parsing(error)) = context
+                            .pending_errors
+                            .iter_mut()
+                            .skip(self.starting_diagnostic_count)
+                            .find(|error| matches!(error, TranslationError::Parsing(error) if error.severity == ErrorSeverity::Error && error.recovery.is_none()))
+                        {
+                            if let Some(token) = token {
+                                error.related = vec![RelatedParserDiagnostic {
+                                    message: "parsing resumes here",
+                                    source_vectors: token.source_vectors,
+                                }]
+                                .into_boxed_slice();
+                            }
+                            error.recovery = Some(RecoverySummary {
+                                owner: ParseFrameKind::ExternalDeclaration,
+                                discarded: None,
+                                discarded_tokens: 0,
+                                stopped_at: token.map(|token| token.kind),
+                            });
+                        }
+                        return ParseAction::Reduce(ParseValue::ExternalDeclaration(
+                            ExternalDeclaration::Error(source),
+                        ));
+                    }
                     return ParseAction::Reduce(ParseValue::ExternalDeclaration(
                         ExternalDeclaration::RecoveredDeclaration(declaration),
                     ));
@@ -5247,7 +5636,7 @@ impl DeclarationFrame {
                 // init-declarator-list. A typedef is the exception: it must
                 // still introduce a name, so retain the tree but diagnose it.
                 if is_operator(token, OperatorTokenType::Semicolon) {
-                    if specifiers.storage_class == StorageClass::Typedef {
+                    if specifiers.storage_class == Some(StorageClass::Typedef) {
                         parser.report(
                             context,
                             ParserErrorType::ExpectedDeclaratorInTypedef(
@@ -5304,10 +5693,9 @@ impl DeclarationFrame {
                 // initializer or a later comma-separated declarator. Publish
                 // now so typedef shadowing affects the very next token.
                 if let Some(identifier) = parser.declarator_identifier(declarator) {
-                    let class = if self
-                        .declaration_specifiers
-                        .is_some_and(|specifiers| specifiers.storage_class == StorageClass::Typedef)
-                    {
+                    let class = if self.declaration_specifiers.is_some_and(|specifiers| {
+                        specifiers.storage_class == Some(StorageClass::Typedef)
+                    }) {
                         NameClass::Typedef
                     } else {
                         NameClass::Ordinary
@@ -5697,13 +6085,15 @@ impl DeclarationSpecifiersFrame {
                 parser.report(
                     context,
                     ParserErrorType::StorageClassRedefinition(
-                        self.specifiers.storage_class,
+                        self.specifiers
+                            .storage_class
+                            .expect("storage_seen implies a storage class"),
                         token.kind,
                     ),
                     Some(token),
                 );
             }
-            self.specifiers.storage_class = storage_class;
+            self.specifiers.storage_class = Some(storage_class);
             self.storage_seen = true;
             parser.merge_source(context, &mut self.source_vectors, token);
             self.consumed = true;
@@ -5755,7 +6145,7 @@ impl DeclarationSpecifiersFrame {
             self.specifiers.type_specifiers.make_typedef_name(
                 parser,
                 context,
-                Identifier::new(token.contents),
+                Identifier::from_token(token),
                 token,
             );
             parser.merge_source(context, &mut self.source_vectors, token);
@@ -5851,7 +6241,6 @@ impl DeclarationSpecifiersFrame {
                     ParserErrorType::UnsupportedImaginaryTypeSpecifier,
                     Some(token),
                 );
-                apply_once!(is_imaginary, make_imaginary);
             },
         }
     }
@@ -6011,9 +6400,7 @@ impl DeclaratorFrame {
                 {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.direct_declarators
-                        .push(DirectDeclarator::Identifier(Identifier::new(
-                            token.contents,
-                        )));
+                        .push(DirectDeclarator::Identifier(Identifier::from_token(token)));
                     self.has_direct_declarator = true;
                     self.phase = DeclaratorPhase::Suffix;
                     return ParseAction::Consume;
@@ -6575,7 +6962,7 @@ impl ParameterListFrame {
                         target: ParseFrameKind::ParameterList,
                     });
                 }
-                self.identifiers.push(Identifier::new(token.contents));
+                self.identifiers.push(Identifier::from_token(token));
                 parser.merge_source(context, &mut self.source_vectors, token);
                 self.phase = ParameterListPhase::KAndRSeparator;
                 ParseAction::Consume
@@ -7002,7 +7389,7 @@ impl StructOrUnionSpecifierFrame {
                 if let Some(token) = token
                     && token.kind == TokenType::Identifier
                 {
-                    self.identifier = Some(Identifier::new(token.contents));
+                    self.identifier = Some(Identifier::from_token(token));
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = StructOrUnionPhase::AfterName;
                     ParseAction::Consume
@@ -7381,7 +7768,7 @@ impl EnumSpecifierFrame {
                 if let Some(token) = token
                     && token.kind == TokenType::Identifier
                 {
-                    self.name = Some(Identifier::new(token.contents));
+                    self.name = Some(Identifier::from_token(token));
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = EnumPhase::AfterName;
                     ParseAction::Consume
@@ -7439,7 +7826,7 @@ impl EnumSpecifierFrame {
                 } else if let Some(token) = token
                     && token.kind == TokenType::Identifier
                 {
-                    self.current_enumerator = Some(Identifier::new(token.contents));
+                    self.current_enumerator = Some(Identifier::from_token(token));
                     self.current_enumerator_source = Some(token.source_vectors);
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = EnumPhase::AfterEnumeratorName;
@@ -8000,12 +8387,12 @@ impl ExpressionFrame {
                 let kind = if indirect {
                     ExpressionType::IndirectMember {
                         base_expression: base,
-                        member:          Identifier::new(member_token.contents),
+                        member:          Identifier::from_token(member_token),
                     }
                 } else {
                     ExpressionType::DirectMember {
                         base_expression: base,
-                        member:          Identifier::new(member_token.contents),
+                        member:          Identifier::from_token(member_token),
                     }
                 };
                 let index = parser.store_expression(
@@ -8468,7 +8855,7 @@ impl ExpressionFrame {
             }
             let kind = match token.kind {
                 | TokenType::Identifier =>
-                    ExpressionType::Identifier(Identifier::new(token.contents)),
+                    ExpressionType::Identifier(Identifier::from_token(token)),
                 | TokenType::Integer(value) => ExpressionType::Constant(Constant::Integer(value)),
                 | TokenType::Float(value) => ExpressionType::Constant(Constant::Float(value)),
                 | TokenType::Character(value) => ExpressionType::Constant(Constant::Char(value)),
@@ -9215,7 +9602,7 @@ impl InitializerFrame {
                 let source_vectors =
                     context.merge_vectors(operator_source_vectors, identifier.source_vectors);
                 self.current_designators.push(Designator {
-                    kind: DesignatorType::Field(Identifier::new(identifier.contents)),
+                    kind: DesignatorType::Field(Identifier::from_token(identifier)),
                     operator_source_vectors,
                     closing_bracket_source_vectors: None,
                     source_vectors,
@@ -9692,10 +10079,6 @@ pub(crate) enum ExternalDeclaration {
     /// Function definition containing locally recovered syntax.
     RecoveredFunctionDefinition(FunctionDefinitionIndex),
     /// Provenance-only placeholder when no meaningful AST can be recovered.
-    #[expect(
-        dead_code,
-        reason = "Current declaration recovery always retains a meaningful syntax node."
-    )]
     Error(SourceVectors),
 }
 
@@ -9997,12 +10380,22 @@ pub(crate) enum UnaryOperator {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Identifier {
     /// Handle into [`Context`]'s shared string cache.
-    pub(crate) name: StringCacheId,
+    pub(crate) name:           StringCacheId,
+    /// Exact provenance of this identifier token, including macro/include
+    /// contributions.
+    pub(crate) source_vectors: SourceVectors,
 }
 
 impl Identifier {
-    pub(crate) fn new(name: StringCacheId) -> Self {
-        Self { name }
+    pub(crate) fn new(name: StringCacheId, source_vectors: SourceVectors) -> Self {
+        Self {
+            name,
+            source_vectors,
+        }
+    }
+
+    fn from_token(token: Token) -> Self {
+        Self::new(token.contents, token.source_vectors)
     }
 }
 
@@ -10027,12 +10420,70 @@ pub(crate) enum StorageClass {
 /// Structured parser diagnostic paired with original-source provenance.
 ///
 /// C99: the diagnostic requirement is §5.1.1.3, p. 11; PDF p. 23.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ParserDiagnosticCode {
+    Syntax,
+    Constraint,
+    Quality,
+    InternalInvariant,
+    ResourceLimit,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ParserResource {
+    ExternalDeclarations,
+    SyntaxNodes,
+    FrameDepth,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ParserWarningGroup {
+    RepeatedSpecifiers,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ExpectedSyntax {
+    ExternalDeclaration,
+    DeclarationSpecifier,
+    TypeSpecifier,
+    Declarator,
+    Expression,
+    Statement,
+    Identifier,
+    SeparatorOrCloser,
+    OwnedDelimiter,
+    None,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct RelatedParserDiagnostic {
+    pub(crate) message:        &'static str,
+    pub(crate) source_vectors: SourceVectors,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct RecoverySummary {
+    pub(crate) owner:            ParseFrameKind,
+    pub(crate) discarded:        Option<SourceVectors>,
+    pub(crate) discarded_tokens: usize,
+    pub(crate) stopped_at:       Option<TokenType>,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct ParserError {
+    pub(crate) code:           ParserDiagnosticCode,
+    pub(crate) severity:       ErrorSeverity,
+    pub(crate) warning_group:  Option<ParserWarningGroup>,
+    pub(crate) frame:          ParseFrameKind,
+    pub(crate) expected:       ExpectedSyntax,
+    pub(crate) found:          Option<TokenType>,
     /// Dedicated diagnostic kind and its grammar-specific payload.
     pub(crate) error_type:     ParserErrorType,
     /// Source segments to underline when the diagnostic is rendered.
     pub(crate) source_vectors: SourceVectors,
+    pub(crate) ranges:         Box<[SourceVectors]>,
+    pub(crate) related:        Box<[RelatedParserDiagnostic]>,
+    pub(crate) recovery:       Option<RecoverySummary>,
 }
 
 impl Display for ParserError {
@@ -10043,7 +10494,7 @@ impl Display for ParserError {
 
 impl GetSeverity for ParserError {
     fn severity(&self) -> ErrorSeverity {
-        self.error_type.severity()
+        self.severity
     }
 }
 
@@ -10076,6 +10527,11 @@ pub(crate) enum ParserErrorType {
     /// The preprocessed token stream contained no external declaration.
     /// C99: §6.9, p. 140; PDF p. 152.
     EmptyTranslationUnit,
+    /// A configured, catchable parser resource ceiling was exceeded.
+    ResourceLimitExceeded {
+        resource: ParserResource,
+        limit:    usize,
+    },
     /// Internal invariant failure: a typed frame attempted to consume EOF.
     /// C99: implementation guard supporting §5.1.1.3, p. 11; PDF p. 23.
     ParserFrameConsumedAtEndOfInput(ParseFrameKind),
@@ -10299,10 +10755,129 @@ pub(crate) enum ParserErrorType {
     EmptyStructDeclarator,
 }
 
+impl ParserErrorType {
+    fn code(&self) -> ParserDiagnosticCode {
+        match self {
+            | Self::ResourceLimitExceeded { .. } => ParserDiagnosticCode::ResourceLimit,
+            | Self::ParserFrameConsumedAtEndOfInput(..) => ParserDiagnosticCode::InternalInvariant,
+            | Self::ConstSpecifiedTwice
+            | Self::VolatileSpecifiedTwice
+            | Self::RestrictSpecifiedTwice
+            | Self::InlineSpecifiedTwice => ParserDiagnosticCode::Quality,
+            | Self::StorageClassRedefinition(..)
+            | Self::StaticSpecifiedTwice
+            | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
+            | Self::ConflictingTypeSpecifiers(..)
+            | Self::TypeSpecifierSpecifiedTwice(..)
+            | Self::LongSpecifiedThrice
+            | Self::LongLongDoubleSpecified
+            | Self::BothStaticAndPointerInArrayDirectDeclarator
+            | Self::PointerSpecifiedTwice
+            | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
+            | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
+            | Self::DuplicateDefaultLabel => ParserDiagnosticCode::Constraint,
+            | _ => ParserDiagnosticCode::Syntax,
+        }
+    }
+
+    fn warning_group(&self) -> Option<ParserWarningGroup> {
+        match self {
+            | Self::ConstSpecifiedTwice
+            | Self::VolatileSpecifiedTwice
+            | Self::RestrictSpecifiedTwice
+            | Self::InlineSpecifiedTwice => Some(ParserWarningGroup::RepeatedSpecifiers),
+            | _ => None,
+        }
+    }
+
+    fn expected_syntax(&self) -> ExpectedSyntax {
+        match self {
+            | Self::EmptyTranslationUnit => ExpectedSyntax::ExternalDeclaration,
+            | Self::UnexpectedEndBeforeDeclarationSpecifier
+            | Self::EmptyDeclarationSpecifiers(..) => ExpectedSyntax::DeclarationSpecifier,
+            | Self::UnexpectedEndBeforeTypeSpecifier
+            | Self::NoTypeSpecifiersInDeclarationSpecifiers(..) => ExpectedSyntax::TypeSpecifier,
+            | Self::ExpectedDeclaratorInTypedef(..)
+            | Self::ExpectedDeclaratorInDeclaration(..)
+            | Self::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
+            | Self::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(..) =>
+                ExpectedSyntax::Declarator,
+            | Self::ExpectedStatement(..) => ExpectedSyntax::Statement,
+            | Self::ExpectedStatementExpression(..)
+            | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator =>
+                ExpectedSyntax::Expression,
+            | Self::ExpectedGotoLabel(..)
+            | Self::ExpectedMemberIdentifier(..)
+            | Self::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
+            | Self::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(..) =>
+                ExpectedSyntax::Identifier,
+            | Self::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(..)
+            | Self::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(..)
+            | Self::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(..)
+            | Self::ExpectedCommaOrClosingParenthesisInFunctionCall(..)
+            | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(..)
+            | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(..) =>
+                ExpectedSyntax::SeparatorOrCloser,
+            | Self::ExpectedFunctionBody(..)
+            | Self::ExpectedOpeningCurlyBraceInCompoundStatement(..)
+            | Self::ExpectedClosingCurlyBraceInCompoundStatement(..)
+            | Self::ExpectedClosingSquareBracketInSubscript(..)
+            | Self::ExpectedClosingSquareBracketInArrayDesignator(..)
+            | Self::ExpectedClosingCurlyBraceInInitializerList(..)
+            | Self::ExpectedEqualsAfterInitializerDesignation(..)
+            | Self::ExpectedOpeningParenthesisInStatement(..)
+            | Self::ExpectedClosingParenthesisInStatement(..)
+            | Self::ExpectedSemicolonInStatement(..)
+            | Self::ExpectedColonInLabel(..)
+            | Self::ExpectedWhileAfterDoBody(..)
+            | Self::ExpectedClosingParenthesisAfterParenthesizedDeclarator(..)
+            | Self::ExpectedClosingSquareBracketInArrayDirectDeclarator(..)
+            | Self::ExpectedClosingCurlyBraceInStructDeclarationList(..)
+            | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList
+            | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(..)
+            | Self::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
+                ..,
+            ) => ExpectedSyntax::OwnedDelimiter,
+            | Self::ResourceLimitExceeded { .. }
+            | Self::ParserFrameConsumedAtEndOfInput(..)
+            | Self::ExpectedDeclarationContinuationAfterDeclarator(..)
+            | Self::UnexpectedEndOfFunctionDeclaratorParameterList
+            | Self::ExpectedStructOrUnionKeyword(..)
+            | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
+            | Self::ExpectedStructDeclarationBeforeClosingCurlyBrace
+            | Self::ExpectedEnumKeyword(..)
+            | Self::EnumSpecifierWithoutNameAndBody(..)
+            | Self::ExpectedEnumeratorBeforeClosingCurlyBrace
+            | Self::StorageClassRedefinition(..)
+            | Self::ConstSpecifiedTwice
+            | Self::VolatileSpecifiedTwice
+            | Self::RestrictSpecifiedTwice
+            | Self::InlineSpecifiedTwice
+            | Self::StaticSpecifiedTwice
+            | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
+            | Self::ConflictingTypeSpecifiers(..)
+            | Self::TypeSpecifierSpecifiedTwice(..)
+            | Self::UnsupportedImaginaryTypeSpecifier
+            | Self::LongSpecifiedThrice
+            | Self::LongLongDoubleSpecified
+            | Self::BothStaticAndPointerInArrayDirectDeclarator
+            | Self::UnexpectedEndOfArrayDeclaratorAfterPointer
+            | Self::PointerSpecifiedTwice
+            | Self::TypeQualifiersWithoutDeclarator
+            | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
+            | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
+            | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList
+            | Self::EmptyStructDeclarator
+            | Self::DuplicateDefaultLabel => ExpectedSyntax::None,
+        }
+    }
+}
+
 impl GetSeverity for ParserErrorType {
     fn severity(&self) -> ErrorSeverity {
         match self {
             | Self::EmptyTranslationUnit
+            | Self::ResourceLimitExceeded { .. }
             | Self::ParserFrameConsumedAtEndOfInput(..)
             | Self::ExpectedFunctionBody(..)
             | Self::ExpectedOpeningCurlyBraceInCompoundStatement(..)
@@ -10384,6 +10959,10 @@ impl Display for ParserErrorType {
             | Self::EmptyTranslationUnit => write!(
                 f,
                 "Translation unit is empty; expected an external declaration."
+            ),
+            | Self::ResourceLimitExceeded { resource, limit } => write!(
+                f,
+                "Configured parser resource limit {resource:?} ({limit}) was exceeded."
             ),
             | Self::ParserFrameConsumedAtEndOfInput(frame) => write!(
                 f,
@@ -10699,10 +11278,20 @@ impl TranslationPhase for Parser {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{
+        fmt::Write as _,
+        path::PathBuf,
+    };
+
+    use proptest::prelude::*;
 
     use super::*;
     use crate::{
+        configuration::{
+            CStandard,
+            CompilerConfiguration,
+            ExtensionPolicy,
+        },
         translation_phases::TranslationError,
         util::shared::SharedVec,
     };
@@ -10716,8 +11305,24 @@ mod tests {
     }
 
     fn parse(source: &str) -> Parsed {
+        parse_with(source, CompilerConfiguration::default(), None)
+    }
+
+    fn parse_with_configuration(source: &str, configuration: CompilerConfiguration) -> Parsed {
+        parse_with(source, configuration, None)
+    }
+
+    fn parse_with_limits(source: &str, limits: ParserLimits) -> Parsed {
+        parse_with(source, CompilerConfiguration::default(), Some(limits))
+    }
+
+    fn parse_with(
+        source: &str,
+        configuration: CompilerConfiguration,
+        limits: Option<ParserLimits>,
+    ) -> Parsed {
         let source = source.to_owned();
-        let mut context = Context::new();
+        let mut context = Context::with_configuration(configuration);
         let preprocessor = Preprocessor::new(
             &mut context,
             PathBuf::from("<parser-test>").into_boxed_path(),
@@ -10726,6 +11331,9 @@ mod tests {
             SharedVec::default(),
         );
         let mut parser = Parser::new(preprocessor);
+        if let Some(limits) = limits {
+            parser = parser.with_limits(limits);
+        }
         let mut items = Vec::new();
         while let Some(item) = parser.next_item(&mut context) {
             items.push(item);
@@ -12586,17 +13194,19 @@ mod tests {
             .map(|init| identifier_name(&parsed, init.declarator).expect("named declarator"))
             .collect::<Vec<_>>();
         assert_eq!(names, ["x", "x2", "y", "p", "q", "T", "value"]);
+        let TypeSpecifiers::TypedefName(identifier) = declaration(&parsed, 5)
+            .declaration_specifiers
+            .type_specifiers
+        else {
+            panic!("expected a typedef-name specifier")
+        };
         assert_eq!(
-            declaration(&parsed, 5)
-                .declaration_specifiers
-                .type_specifiers,
-            TypeSpecifiers::TypedefName(Identifier::new(
-                parsed
-                    .context
-                    .string_cache
-                    .get_id_from_string("T")
-                    .expect("interned T")
-            ))
+            identifier.name,
+            parsed
+                .context
+                .string_cache
+                .get_id_from_string("T")
+                .expect("interned T")
         );
 
         let pointer_declaration = declaration(&parsed, 3);
@@ -12652,7 +13262,7 @@ mod tests {
         assert_eq!(parsed.items.len(), 2);
         assert_eq!(
             declaration(&parsed, 0).declaration_specifiers.storage_class,
-            StorageClass::Typedef
+            Some(StorageClass::Typedef)
         );
         assert!(
             parser_errors(&parsed)
@@ -12663,12 +13273,12 @@ mod tests {
             .string_cache
             .get_id_from_string("T")
             .expect("interned T");
-        assert_eq!(
+        assert!(matches!(
             declaration(&parsed, 1)
                 .declaration_specifiers
                 .type_specifiers,
-            TypeSpecifiers::TypedefName(Identifier::new(t))
-        );
+            TypeSpecifiers::TypedefName(identifier) if identifier.name == t
+        ));
         assert_eq!(
             identifier_name(
                 &parsed,
@@ -12936,7 +13546,10 @@ mod tests {
             .string_cache
             .get_id_from_string("duplicate")
             .expect("interned identifier");
-        assert!(TypeSpecifiers::TypedefName(Identifier::new(duplicate)).is_typedef_name());
+        assert!(
+            TypeSpecifiers::TypedefName(Identifier::new(duplicate, VectorSlice::empty()))
+                .is_typedef_name()
+        );
     }
 
     #[test]
@@ -13111,12 +13724,12 @@ mod tests {
     }
 
     #[test]
-    fn malformed_external_declarations_retain_recovered_nodes_and_continue() {
+    fn pure_external_garbage_yields_an_error_node_and_continues() {
         let parsed = parse("}\nint after;\n");
 
         assert!(matches!(
             parsed.items.first(),
-            Some(ExternalDeclaration::RecoveredDeclaration(_))
+            Some(ExternalDeclaration::Error(_))
         ));
         assert!(matches!(
             parsed.items.get(1),
@@ -14006,11 +14619,12 @@ mod tests {
             ("int x }\nint after;\n", "intx}"),
         ] {
             let parsed = parse(source);
-            let Some(ExternalDeclaration::RecoveredDeclaration(index)) = parsed.items.first()
-            else {
-                panic!("malformed declaration should retain recovered syntax")
+            let source_vectors = match parsed.items.first() {
+                | Some(ExternalDeclaration::RecoveredDeclaration(index)) =>
+                    parsed.parser.syntax.declarations[index.0 as usize].source_vectors,
+                | Some(ExternalDeclaration::Error(source_vectors)) => *source_vectors,
+                | root => panic!("expected recovered syntax or an error root: {root:?}"),
             };
-            let source_vectors = parsed.parser.syntax.declarations[index.0 as usize].source_vectors;
 
             assert_eq!(
                 sourced_text(&parsed, source_vectors),
@@ -14090,12 +14704,12 @@ mod tests {
             parsed.parser.scopes.file_scope.get(&a),
             Some(&NameClass::Typedef)
         );
-        assert_eq!(
+        assert!(matches!(
             declaration(&parsed, 2)
                 .declaration_specifiers
                 .type_specifiers,
-            TypeSpecifiers::TypedefName(Identifier::new(a))
-        );
+            TypeSpecifiers::TypedefName(identifier) if identifier.name == a
+        ));
         assert_eq!(
             identifier_name(
                 &parsed,
@@ -16559,5 +17173,434 @@ mod tests {
             ),
             "?:"
         );
+    }
+
+    #[test]
+    fn phase_05_syntax_facts_preserve_absence_and_identifier_provenance() {
+        let parsed = parse(
+            "int implicit; auto int explicit; typedef int T; struct S { int member; }; enum E { \
+             VALUE }; int f(void) { label: goto label; explicit.member; T designated = { .member \
+             = VALUE }; return designated.member; }\n",
+        );
+
+        assert_eq!(
+            declaration(&parsed, 0).declaration_specifiers.storage_class,
+            None
+        );
+        assert_eq!(
+            declaration(&parsed, 1).declaration_specifiers.storage_class,
+            Some(StorageClass::Auto)
+        );
+
+        let mut identifiers = Vec::new();
+        for direct in &parsed.parser.syntax.direct_declarators {
+            if let DirectDeclarator::Identifier(identifier) = direct {
+                identifiers.push(*identifier);
+            }
+        }
+        identifiers.extend(parsed.parser.syntax.identifiers.iter().copied());
+        for specifier in &parsed.parser.syntax.struct_or_union_specifiers {
+            identifiers.extend(specifier.identifier);
+        }
+        for specifier in &parsed.parser.syntax.enum_specifiers {
+            identifiers.extend(specifier.name);
+        }
+        identifiers.extend(
+            parsed
+                .parser
+                .syntax
+                .enumerators
+                .iter()
+                .map(|enumerator| enumerator.name),
+        );
+        for expression in &parsed.parser.syntax.expressions {
+            match expression.kind {
+                | ExpressionType::Identifier(identifier)
+                | ExpressionType::DirectMember {
+                    member: identifier, ..
+                }
+                | ExpressionType::IndirectMember {
+                    member: identifier, ..
+                } => identifiers.push(identifier),
+                | _ => {},
+            }
+        }
+        for designator in &parsed.parser.syntax.designators {
+            if let DesignatorType::Field(identifier) = designator.kind {
+                identifiers.push(identifier);
+            }
+        }
+        for statement in &parsed.parser.syntax.statements {
+            match statement.kind {
+                | StatementType::Goto(identifier) | StatementType::Label(identifier, _) => {
+                    identifiers.push(identifier);
+                },
+                | _ => {},
+            }
+        }
+        assert!(!identifiers.is_empty());
+        for identifier in identifiers {
+            assert!(identifier.source_vectors.length > 0, "{identifier:?}");
+            assert_eq!(
+                sourced_text(&parsed, identifier.source_vectors),
+                parsed.context.string_cache.at(identifier.name)
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_specifier_warning_group_is_named_and_suppressible() {
+        let strict = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny);
+        let warned = parse_with_configuration("const const int f(void) { return 0; }\n", strict);
+        let warning = warned.errors.iter().find_map(|error| match error {
+            | TranslationError::Parsing(error)
+                if error.warning_group == Some(ParserWarningGroup::RepeatedSpecifiers) =>
+                Some(error),
+            | _ => None,
+        });
+        let warning = warning.expect("expected the named quality warning");
+        assert_eq!(warning.severity, ErrorSeverity::Warning);
+        assert_eq!(warning.code, ParserDiagnosticCode::Quality);
+        assert!(matches!(
+            warned.items[0],
+            ExternalDeclaration::FunctionDefinition(_)
+        ));
+
+        let suppressed = parse_with_configuration(
+            "const const int f(void) { return 0; }\n",
+            strict.with_repeated_specifier_warnings(false),
+        );
+        assert!(suppressed.errors.iter().all(|error| !matches!(
+            error,
+            TranslationError::Parsing(ParserError {
+                warning_group: Some(ParserWarningGroup::RepeatedSpecifiers),
+                ..
+            })
+        )));
+        assert!(matches!(
+            suppressed.items[0],
+            ExternalDeclaration::FunctionDefinition(_)
+        ));
+    }
+
+    #[test]
+    fn strict_c99_compatibility_corpus_matches_reviewed_parser_boundaries() {
+        let strict = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny);
+        let fixtures = [
+            (
+                "repeated-specifiers.c",
+                include_str!("../../tests/fixtures/parser/compatibility/repeated-specifiers.c"),
+                false,
+            ),
+            (
+                "imaginary-type.c",
+                include_str!("../../tests/fixtures/parser/compatibility/imaginary-type.c"),
+                true,
+            ),
+            (
+                "gnu-statement-expression.c",
+                include_str!(
+                    "../../tests/fixtures/parser/compatibility/gnu-statement-expression.c"
+                ),
+                true,
+            ),
+            (
+                "constraint-invalid-lvalue.c",
+                include_str!(
+                    "../../tests/fixtures/parser/compatibility/constraint-invalid-lvalue.c"
+                ),
+                false,
+            ),
+            (
+                "typedef-parameter-preference.c",
+                include_str!(
+                    "../../tests/fixtures/parser/compatibility/typedef-parameter-preference.c"
+                ),
+                false,
+            ),
+        ];
+
+        for (name, source, expect_hard_parser_diagnostic) in fixtures {
+            let parsed = parse_with_configuration(source, strict);
+            let has_hard_parser_diagnostic = parsed.errors.iter().any(|error| {
+                matches!(
+                    error,
+                    TranslationError::Parsing(error) if error.severity == ErrorSeverity::Error
+                )
+            });
+            assert_eq!(
+                has_hard_parser_diagnostic, expect_hard_parser_diagnostic,
+                "compatibility classification drifted for {name}: {:?}",
+                parsed.errors
+            );
+            assert!(parsed.parser.frames.is_empty(), "{name}");
+            assert!(parsed.parser.returned.is_none(), "{name}");
+            assert_eq!(parsed.parser.scopes.depth(), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn parser_diagnostics_expose_structured_context_and_fifo_recovery() {
+        let parsed = parse("}\nconst const inline inline int value;\n");
+        let diagnostics = parsed
+            .errors
+            .iter()
+            .filter_map(|error| match error {
+                | TranslationError::Parsing(error) => Some(error),
+                | _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let first = diagnostics[0];
+        assert_eq!(first.code, ParserDiagnosticCode::Syntax);
+        assert_eq!(first.severity, ErrorSeverity::Error);
+        assert_eq!(first.frame, ParseFrameKind::DeclarationSpecifiers);
+        assert_eq!(first.expected, ExpectedSyntax::DeclarationSpecifier);
+        assert_eq!(
+            first.found,
+            Some(TokenType::Operator(OperatorTokenType::ClosingCurlyBrace))
+        );
+        assert!(first.source_vectors.length > 0);
+        assert!(first.recovery.is_some());
+        assert!(first.ranges.is_empty());
+        assert_eq!(first.related.len(), 1);
+        assert_eq!(first.related[0].message, "parsing resumes here");
+
+        let warnings = diagnostics
+            .iter()
+            .filter(|error| error.warning_group.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 2);
+        assert!(
+            warnings[0].position(&parsed.context).index
+                < warnings[1].position(&parsed.context).index
+        );
+    }
+
+    #[test]
+    fn configured_external_declaration_limit_has_boundary_evidence() {
+        let limits = ParserLimits {
+            external_declarations: 2,
+            ..ParserLimits::default()
+        };
+        for source in ["int a;\n", "int a; int b;\n"] {
+            let parsed = parse_with_limits(source, limits);
+            assert!(
+                parser_errors(&parsed)
+                    .all(|error| !matches!(error, ParserErrorType::ResourceLimitExceeded { .. }))
+            );
+        }
+
+        let parsed = parse_with_limits("int a; int b; int c;\n", limits);
+        assert!(matches!(
+            parsed.items.last(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ResourceLimitExceeded {
+                resource: ParserResource::ExternalDeclarations,
+                limit:    2,
+            }
+        )));
+        assert!(parsed.parser.frames.is_empty());
+        assert!(parsed.parser.returned.is_none());
+        assert_eq!(parsed.parser.scopes.depth(), 0);
+    }
+
+    #[test]
+    fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
+        let node_limited = parse_with_limits(
+            "int value = 1;\n",
+            ParserLimits {
+                syntax_nodes: 0,
+                ..ParserLimits::default()
+            },
+        );
+        assert!(parser_errors(&node_limited).any(|error| matches!(
+            error,
+            ParserErrorType::ResourceLimitExceeded {
+                resource: ParserResource::SyntaxNodes,
+                limit:    0,
+            }
+        )));
+        assert!(matches!(
+            node_limited.items.last(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+
+        let frame_limited = parse_with_limits(
+            "int value;\n",
+            ParserLimits {
+                frame_depth: 1,
+                ..ParserLimits::default()
+            },
+        );
+        assert!(parser_errors(&frame_limited).any(|error| matches!(
+            error,
+            ParserErrorType::ResourceLimitExceeded {
+                resource: ParserResource::FrameDepth,
+                limit:    1,
+            }
+        )));
+        assert!(matches!(
+            frame_limited.items.last(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+
+        for parsed in [&node_limited, &frame_limited] {
+            assert!(parsed.parser.frames.is_empty());
+            assert!(parsed.parser.returned.is_none());
+            assert!(parsed.parser.recovery.active.is_none());
+            assert_eq!(parsed.parser.scopes.depth(), 0);
+        }
+
+        let defaults = ParserLimits::default();
+        assert!(defaults.external_declarations < u32::MAX as usize);
+        assert!(defaults.syntax_nodes < u32::MAX as usize);
+        assert!(defaults.frame_depth < u32::MAX as usize);
+    }
+
+    #[test]
+    fn deterministic_inspection_uses_spellings_and_marks_recovery() {
+        let mut context = Context::new();
+        let source = "int good = 1; } int after;\n";
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<inspection-test>").into_boxed_path(),
+            source.to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+        let first = unit.syntax().inspect(
+            unit.external_declarations(),
+            &context,
+            InspectionOptions::default(),
+        );
+        let second = unit.syntax().inspect(
+            unit.external_declarations(),
+            &context,
+            InspectionOptions::default(),
+        );
+
+        assert_eq!(first, second);
+        assert!(first.contains("declarator good"), "{first}");
+        assert!(first.contains("error"), "{first}");
+        assert!(first.contains("declarator after"), "{first}");
+        assert!(!first.contains("StringCacheId"), "{first}");
+        assert!(!first.contains("Index("), "{first}");
+    }
+
+    #[test]
+    fn every_representative_token_truncation_terminates_with_clean_state() {
+        let fixtures = [
+            "int f(int x) { if (x) return x; else return 0; }",
+            "struct S { int x : 3; }; enum E { A = 1, B, };",
+            "int a[4] = { [1] = 2, 3 };",
+            "typedef int T; int f(void) { return ((T){ 1 }); }",
+        ];
+        for fixture in fixtures {
+            for end in 0..=fixture.len() {
+                if !fixture.is_char_boundary(end) {
+                    continue;
+                }
+                let parsed = parse(&fixture[..end]);
+                assert!(parsed.parser.frames.is_empty(), "{fixture:?} at {end}");
+                assert!(parsed.parser.returned.is_none(), "{fixture:?} at {end}");
+                assert!(
+                    parsed.parser.recovery.active.is_none(),
+                    "{fixture:?} at {end}"
+                );
+                assert_eq!(parsed.parser.scopes.depth(), 0, "{fixture:?} at {end}");
+                assert!(
+                    parsed.parser.label_scopes.is_empty(),
+                    "{fixture:?} at {end}"
+                );
+                assert!(
+                    parsed.parser.switch_scopes.is_empty(),
+                    "{fixture:?} at {end}"
+                );
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(96))]
+
+        #[test]
+        fn bounded_token_shaped_input_never_panics_or_leaks_state(
+            pieces in prop::collection::vec(
+                prop_oneof![
+                    Just("int"), Just("x"), Just("typedef"), Just("return"),
+                    Just("if"), Just("else"), Just("for"), Just("struct"),
+                    Just("enum"), Just("("), Just(")"), Just("["), Just("]"),
+                    Just("{"), Just("}"), Just(";"), Just(","), Just(":"),
+                    Just("?"), Just("="), Just("+"), Just("*"), Just("0")
+                ],
+                0..80,
+            )
+        ) {
+            let source = pieces.join(" ");
+            let mut parsed = parse(&source);
+            prop_assert!(parsed.parser.frames.is_empty());
+            prop_assert!(parsed.parser.returned.is_none());
+            prop_assert!(parsed.parser.recovery.active.is_none());
+            prop_assert_eq!(parsed.parser.scopes.depth(), 0);
+            prop_assert!(parsed.parser.label_scopes.is_empty());
+            prop_assert!(parsed.parser.switch_scopes.is_empty());
+            for error in &parsed.errors {
+                let vectors = error.source_vectors(&mut parsed.context);
+                prop_assert!(vectors.length > 0 || source.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn remaining_c99_parser_translation_floors_are_supported() {
+        let derived = format!("int value{};\n", "[1]".repeat(12));
+        assert!(parser_errors(&parse(&derived)).next().is_none());
+
+        let block_identifiers = (0..511)
+            .map(|index| format!("b{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let block = format!("int f(void) {{ int {block_identifiers}; return 0; }}\n");
+        assert!(parser_errors(&parse(&block)).next().is_none());
+
+        let external_identifiers = (0..4095)
+            .map(|index| format!("e{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let external = format!("int {external_identifiers};\n");
+        assert!(parser_errors(&parse(&external)).next().is_none());
+
+        let cases = (0..1023).fold(String::new(), |mut cases, index| {
+            write!(cases, "case {index}: ;").expect("writing to a String cannot fail");
+            cases
+        });
+        let switch = format!("int f(int x) {{ switch (x) {{ {cases} }} return 0; }}\n");
+        assert!(parser_errors(&parse(&switch)).next().is_none());
+
+        let members = (0..1023).fold(String::new(), |mut members, index| {
+            write!(members, "int m{index};").expect("writing to a String cannot fail");
+            members
+        });
+        let structure = format!("struct S {{ {members} }};\n");
+        assert!(parser_errors(&parse(&structure)).next().is_none());
+
+        let enumerators = (0..1023)
+            .map(|index| format!("E{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let enumeration = format!("enum E {{ {enumerators} }};\n");
+        assert!(parser_errors(&parse(&enumeration)).next().is_none());
+
+        let mut nested = "int leaf;".to_owned();
+        for index in (0..63).rev() {
+            nested = format!("struct S{index} {{ {nested} }} member{index};");
+        }
+        let nested = format!("struct Outer {{ {nested} }};\n");
+        assert!(parser_errors(&parse(&nested)).next().is_none());
     }
 }
