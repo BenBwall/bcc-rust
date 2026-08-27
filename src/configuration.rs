@@ -10,6 +10,8 @@ pub(crate) enum ExtensionPolicy {
     Deny,
 }
 
+const _: (ExtensionPolicy, ExtensionPolicy) = (ExtensionPolicy::Warn, ExtensionPolicy::Deny);
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct CompilerConfiguration {
     standard:         CStandard,

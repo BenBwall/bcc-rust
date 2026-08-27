@@ -1,5 +1,6 @@
 #include "./float_parsing.h"
 #include <inttypes.h>
+#include <float.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,9 +10,16 @@
 size_t long_double_to_string_get_size(long_double_t value)
 {
   long double ld_value;
+  char probe[1];
   memcpy(&ld_value, value.bytes, sizeof(value));
-  int err = snprintf(NULL, 0, "%Lf", ld_value);
-  return (size_t) err;
+#if defined(__MINGW32__) && LDBL_MANT_DIG > DBL_MANT_DIG
+  int err = __mingw_snprintf(probe, sizeof(probe), "%Lf", ld_value);
+#elif LDBL_MANT_DIG == DBL_MANT_DIG
+  int err = snprintf(probe, sizeof(probe), "%f", (double)ld_value);
+#else
+  int err = snprintf(probe, sizeof(probe), "%Lf", ld_value);
+#endif
+  return (size_t) err + 1;
 }
 
 size_t long_double_to_string(long_double_t value, char *buffer,
@@ -19,7 +27,13 @@ size_t long_double_to_string(long_double_t value, char *buffer,
 {
   long double ld_value;
   memcpy(&ld_value, value.bytes, sizeof(value));
+#if defined(__MINGW32__) && LDBL_MANT_DIG > DBL_MANT_DIG
+  int err = __mingw_snprintf(buffer, buffer_size, "%Lf", ld_value);
+#elif LDBL_MANT_DIG == DBL_MANT_DIG
+  int err = snprintf(buffer, buffer_size, "%f", (double)ld_value);
+#else
   int err = snprintf(buffer, buffer_size, "%Lf", ld_value);
+#endif
   return (size_t) err;
 }
 

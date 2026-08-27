@@ -43,9 +43,8 @@ Phase 03 goal:
 
 Phase boundary:
 
-- Phase 04 owns general expression and type-name parsing.
-- Phase 05 owns initializer parsing and expression-dependent declaration
-  branches.
+- Phase 04 owns general expression, type-name, initializer, and
+  expression-dependent declaration parsing.
 - In Phase 03, every present expression position must be an explicit typed
   deferred child with source provenance and the stable unsupported diagnostic.
   Represent syntactic absence separately from a present-but-deferred
@@ -56,7 +55,7 @@ Phase boundary:
   seam.
 - Remove `FunctionBodyNotImplemented` and balanced-body skipping from valid
   function-definition paths. Expression and initializer future-child seams are
-  expected Phase 03 output and must be documented for Phases 04 and 05.
+  expected Phase 03 output and must be documented for Phase 04.
 
 Implement the plan as vertical parser paths reachable through
 `Parser::next_item`. Keep frame phases private and reuse the existing
@@ -97,7 +96,7 @@ Finish with a concise report containing:
 
 - the implemented grammar and syntax-store changes;
 - the scope and recovery behavior added;
-- the expression and initializer seams deliberately left for Phases 04 and 05;
+- the expression and initializer seams deliberately left for Phase 04;
 - every validation command and result;
 - any genuine blocker or remaining Phase 03 completion criterion.
 

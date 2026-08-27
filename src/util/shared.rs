@@ -43,6 +43,8 @@ where
                     clippy::multiple_unsafe_ops_per_block,
                     reason = "The safety comment explains why both operations are okay."
                 )]
+                // SAFETY: Both raw pointers originate from valid Box allocations and are only
+                // reconstructed once their shared reference count reaches zero.
                 unsafe {
                     drop(Box::from_raw(this.ref_count.as_ptr()));
                     drop(Box::from_raw(this.contents.as_ptr()));
@@ -65,7 +67,7 @@ where
             abort();
         }
 
-        _ = self.ref_cnt().update(|count| count + 1);
+        () = self.ref_cnt().update(|count| count + 1);
 
         Self {
             ref_count: self.ref_count,
@@ -141,6 +143,10 @@ where
         }
     }
 
+    #[expect(
+        dead_code,
+        reason = "Reference-count inspection is retained for debugging callers."
+    )]
     pub(crate) fn strong_reference_count(&self) -> usize {
         self.ref_cnt().get()
     }
@@ -158,6 +164,10 @@ where
 }
 
 impl SharedString {
+    #[expect(
+        dead_code,
+        reason = "The explicit string view is retained for API ergonomics."
+    )]
     pub(crate) fn as_str(&self) -> &str {
         self
     }
@@ -168,6 +178,10 @@ impl SharedString {
 }
 
 impl<T> SharedVec<T> {
+    #[expect(
+        dead_code,
+        reason = "The explicit slice view is retained for API ergonomics."
+    )]
     pub(crate) fn as_slice(&self) -> &[T] {
         self
     }

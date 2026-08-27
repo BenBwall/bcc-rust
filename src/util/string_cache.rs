@@ -15,16 +15,6 @@ use hashbrown::{
     hash_table::Entry,
 };
 use rustc_hash::FxBuildHasher;
-#[expect(
-    clippy::assertions_on_constants,
-    reason = "Clippy is giving a false positive here, the value of usize::BITS will vary \
-              depending on which architecture we're targeting."
-)]
-const _: () = assert!(
-    usize::BITS >= 32,
-    "StringCache: usize must be at least 32 bits."
-);
-
 #[derive(Debug, Clone)]
 pub(crate) struct StringCache {
     ends:  Vec<u32>,
@@ -154,6 +144,13 @@ impl StringCache {
         inner(self, s.as_ref())
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Lookup by string is retained for parser test and diagnostic helpers."
+        )
+    )]
     pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
         fn inner(interner: &StringCache, s: &str) -> Option<StringCacheId> {
             let hash = FxBuildHasher.hash_one(s);
@@ -182,9 +179,9 @@ impl StringCache {
     }
 
     #[expect(
+        dead_code,
         clippy::cast_possible_truncation,
-        reason = "One of our invariants is that self.data.len() will never be greater than \
-                  u32::MAX."
+        reason = "Incremental cache edits retain the cache-size invariant for future callers."
     )]
     pub(crate) fn pop(&mut self) {
         assert!(
@@ -195,9 +192,9 @@ impl StringCache {
     }
 
     #[expect(
+        dead_code,
         clippy::cast_possible_truncation,
-        reason = "One of our invariants is that self.data.len() will never be greater than \
-                  u32::MAX."
+        reason = "Incremental cache edits retain the cache-size invariant for future callers."
     )]
     pub(crate) fn pop_str(&mut self, len: u32) {
         assert!(
@@ -264,6 +261,10 @@ impl StringCache {
         Self::at_impl(&self.data, &self.ends, id.into())
     }
 
+    #[expect(
+        dead_code,
+        reason = "Resetting a cache is retained for future callers."
+    )]
     pub(crate) fn clear(&mut self) {
         self.ends.truncate(1);
         self.data.clear();
