@@ -15949,21 +15949,22 @@ mod tests {
             else {
                 panic!("expected scalar string initializer")
             };
-            let ExpressionType::StringLiteral(literal) =
-                parsed.parser.syntax.expressions[expression.0 as usize].kind
-            else {
+            let expression = &parsed.parser.syntax.expressions[expression.0 as usize];
+            let ExpressionType::StringLiteral(literal) = expression.kind else {
                 panic!("expected string literal expression")
             };
-            literal
+            (literal, expression.source_vectors)
         };
-        let StringTokenType::String(ordinary) = literal(0) else {
+        let (StringTokenType::String(ordinary), ordinary_source_vectors) = literal(0) else {
             panic!("ordinary concatenation must remain ordinary")
         };
-        let StringTokenType::WideString(wide) = literal(1) else {
+        let (StringTokenType::WideString(wide), wide_source_vectors) = literal(1) else {
             panic!("a mixed concatenation must become wide")
         };
         assert_eq!(parsed.context.string_cache.at(ordinary), "ab");
         assert_eq!(parsed.context.string_cache.at(wide), "xy");
+        assert_eq!(sourced_text(&parsed, ordinary_source_vectors), "\"a\"\"b\"");
+        assert_eq!(sourced_text(&parsed, wide_source_vectors), "\"x\"L\"y\"");
         assert!(parser_errors(&parsed).next().is_none());
     }
 
