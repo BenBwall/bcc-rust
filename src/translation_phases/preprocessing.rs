@@ -159,6 +159,43 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
+        let mut context = Context::new();
+        let mut preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<phase-7-totality-test>").into_boxed_path(),
+            String::new().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let contents = context.string_cache.intern("internal-only");
+
+        for kind in [
+            PreprocessorTokenType::Placeholder,
+            PreprocessorTokenType::AngleBracketString,
+            PreprocessorTokenType::IncludeString,
+            PreprocessorTokenType::Whitespace,
+        ] {
+            let token = PreprocessorToken {
+                kind,
+                source_vectors: SourceVectors::default(),
+                contents,
+            };
+            assert_eq!(
+                preprocessor.map_preprocessor_token(&mut context, token),
+                None
+            );
+            assert!(matches!(
+                context.pop_pending_error(),
+                Some(TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::UnexpectedTokenAtPhase7(actual),
+                    ..
+                })) if actual == kind
+            ));
+        }
+    }
+
     fn strict_c99() -> CompilerConfiguration {
         CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny)
     }
@@ -1012,6 +1049,7 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression
             | PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(_)
             | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
+            | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy) =>
@@ -1126,6 +1164,7 @@ pub(crate) enum PreprocessorErrorType {
     IdentifierInsteadOfBinaryOperatorInPreprocessorExpression,
     CharacterInsteadOfBinaryOperatorInPreprocessorExpression,
     UnexpectedTokenInPreprocessorExpression(PreprocessorTokenType),
+    UnexpectedTokenAtPhase7(PreprocessorTokenType),
     FloatInsteadOfIntegerInPreprocessorExpression,
     ExpectedBinaryOperatorInPreprocessorExpression,
     MissingOpeningParenthesisOrIdentifierInDefinedDirective(PreprocessorTokenType),
@@ -1762,6 +1801,10 @@ impl Display for PreprocessorErrorType {
                     "Unexpected token {tt:#?} in preprocessor constant expression!",
                 )
             },
+            | Self::UnexpectedTokenAtPhase7(tt) => write!(
+                f,
+                "Preprocessing token {tt:#?} cannot reach C syntax parsing."
+            ),
             | Self::MissingIdentifierInDefinedDirective(tt) => {
                 write!(
                     f,
@@ -2277,8 +2320,8 @@ impl Preprocessor {
                 self.pending_parser_errors.extend(generated_errors);
                 break;
             };
-            context.append_pending_errors(generated_errors);
             context.append_pending_errors(existing_errors);
+            context.append_pending_errors(generated_errors);
             let next_contents = match next_kind {
                 | StringTokenType::String(contents) => contents,
                 | StringTokenType::WideString(contents) => {
@@ -3927,7 +3970,16 @@ impl Preprocessor {
                 return None;
             },
 
-            | x => todo!("{x:#?}"),
+            | PreprocessorTokenType::Placeholder
+            | PreprocessorTokenType::AngleBracketString
+            | PreprocessorTokenType::IncludeString
+            | PreprocessorTokenType::Whitespace => {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::UnexpectedTokenAtPhase7(token.kind),
+                    source_vectors: token.source_vectors,
+                });
+                return None;
+            },
         })
     }
 

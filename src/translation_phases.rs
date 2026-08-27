@@ -1,6 +1,7 @@
 #[cfg(feature = "benchmarking-internals")]
 use std::path::PathBuf;
 use std::{
+    collections::VecDeque,
     convert::Infallible,
     fmt::{
         Debug,
@@ -390,7 +391,7 @@ pub(crate) struct Context {
     pub(crate) string_cache:      StringCache,
     is_tokenizing_include_string: bool,
     ignore_tokenizer_errors:      bool,
-    pending_errors:               Vec<TranslationError>,
+    pending_errors:               VecDeque<TranslationError>,
     pub(crate) source_files:      DedupArena<Box<Path>, FxBuildHasher>,
 }
 
@@ -406,7 +407,7 @@ impl Context {
             string_cache: StringCache::new(),
             is_tokenizing_include_string: false,
             ignore_tokenizer_errors: false,
-            pending_errors: Vec::new(),
+            pending_errors: VecDeque::new(),
             source_files: DedupArena::new(),
         }
     }
@@ -517,7 +518,7 @@ impl Context {
     pub(crate) fn missing_final_newline(&mut self, vector: SourceVector) {
         if !self.ignore_tokenizer_errors() {
             self.pending_errors
-                .push(TranslationError::InitialProcessing(
+                .push_back(TranslationError::InitialProcessing(
                     InitialProcessorError::MissingFinalNewline(vector),
                 ));
         }
@@ -528,7 +529,7 @@ impl Context {
     pub(crate) fn preprocessor_tokenizer_error(&mut self, error: PreprocessorTokenizerError) {
         if !self.ignore_tokenizer_errors() {
             self.pending_errors
-                .push(TranslationError::PreprocessorTokenizining(error));
+                .push_back(TranslationError::PreprocessorTokenizining(error));
         }
     }
 
@@ -536,22 +537,23 @@ impl Context {
     #[inline(never)]
     pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError) {
         self.pending_errors
-            .push(TranslationError::Preprocessing(error));
+            .push_back(TranslationError::Preprocessing(error));
     }
 
     #[cold]
     #[inline(never)]
     pub(crate) fn raw_preprocessor_error(
-        self_pending_errors: &mut Vec<TranslationError>,
+        self_pending_errors: &mut impl Extend<TranslationError>,
         error: PreprocessorError,
     ) {
-        self_pending_errors.push(TranslationError::Preprocessing(error));
+        self_pending_errors.extend([TranslationError::Preprocessing(error)]);
     }
 
     #[cold]
     #[inline(never)]
     pub(crate) fn parser_error(&mut self, error: ParserError) {
-        self.pending_errors.push(TranslationError::Parsing(error));
+        self.pending_errors
+            .push_back(TranslationError::Parsing(error));
     }
 
     #[cold]
@@ -561,24 +563,24 @@ impl Context {
         reason = "We aren't using this yet, but we will be when the parser is implemented."
     )]
     pub(crate) fn raw_parser_error(
-        self_pending_errors: &mut Vec<TranslationError>,
+        self_pending_errors: &mut impl Extend<TranslationError>,
         error: ParserError,
     ) {
-        self_pending_errors.push(TranslationError::Parsing(error));
+        self_pending_errors.extend([TranslationError::Parsing(error)]);
     }
 
     #[cold]
     #[inline(never)]
     pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError> {
-        self.pending_errors.pop()
+        self.pending_errors.pop_front()
     }
 
     pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError> {
-        std::mem::take(&mut self.pending_errors)
+        std::mem::take(&mut self.pending_errors).into()
     }
 
-    pub(crate) fn append_pending_errors(&mut self, mut errors: Vec<TranslationError>) {
-        self.pending_errors.append(&mut errors);
+    pub(crate) fn append_pending_errors(&mut self, errors: Vec<TranslationError>) {
+        self.pending_errors.extend(errors);
     }
 
     pub(crate) fn get_source_vectors(&self, source_vectors: SourceVectors) -> &[SourceVector] {
