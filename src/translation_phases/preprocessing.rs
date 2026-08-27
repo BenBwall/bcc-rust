@@ -160,6 +160,27 @@ mod tests {
     }
 
     #[test]
+    fn malformed_include_restores_include_tokenization_mode() {
+        let (identifiers, errors) = preprocess("#include 123\nint x = a < b > c;\n");
+
+        assert_eq!(identifiers, ["x", "a", "b", "c"]);
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                ..
+            })
+        )));
+        assert!(errors.iter().all(|error| !matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::UnexpectedTokenAtPhase7(_),
+                ..
+            })
+        )));
+    }
+
+    #[test]
     fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
         let mut context = Context::new();
         let mut preprocessor = Preprocessor::new(
@@ -5689,7 +5710,7 @@ impl Preprocessor {
 
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         context.set_is_tokenizing_include_string(true);
-        let Some(include_string) =
+        let include_string =
             self.expect_token::<true>(
                 context,
                 |_, context, token| match token.kind {
@@ -5708,11 +5729,11 @@ impl Preprocessor {
                     })
                 },
                 "parsing include directive",
-            )
-        else {
+            );
+        context.set_is_tokenizing_include_string(false);
+        let Some(include_string) = include_string else {
             return;
         };
-        context.set_is_tokenizing_include_string(false);
         let header_source_index = match include_string.kind {
             | PreprocessorTokenType::IncludeString => {
                 let contents = context

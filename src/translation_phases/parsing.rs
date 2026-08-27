@@ -1083,40 +1083,312 @@ pub(crate) struct SyntaxTree {
 }
 
 impl SyntaxTree {
-    fn new(store: SyntaxStore) -> Self {
+    fn new(store: SyntaxStore, roots: &[ExternalDeclaration]) -> Self {
         let tree = Self { store };
-        tree.validate();
+        tree.validate(roots);
         tree
     }
 
-    fn validate(&self) {
+    fn validate(&self, roots: &[ExternalDeclaration]) {
+        for root in roots {
+            match *root {
+                | ExternalDeclaration::Declaration(index)
+                | ExternalDeclaration::RecoveredDeclaration(index) => {
+                    let _ = self.declaration(index);
+                },
+                | ExternalDeclaration::FunctionDefinition(index)
+                | ExternalDeclaration::RecoveredFunctionDefinition(index) => {
+                    let _ = self.function_definition(index);
+                },
+                | ExternalDeclaration::Error(_) => {},
+            }
+        }
         for declaration in &self.store.declarations {
-            let _ = Self::checked_slice(&self.store.init_declarators, declaration.init_declarators);
+            let _ = self.init_declarators(declaration.init_declarators);
+            self.validate_specifiers(declaration.declaration_specifiers);
         }
         for definition in &self.store.function_definitions {
-            let _ = Self::checked_slice(
-                &self.store.declaration_indices,
-                definition.old_style_declarations,
-            );
+            self.validate_declarator(definition.declarator);
+            for declaration in self.declaration_indices(definition.old_style_declarations) {
+                let _ = self.declaration(*declaration);
+            }
             let _ = self.statement(definition.body);
+            self.validate_specifiers(definition.declaration_specifiers);
+        }
+        for init in &self.store.init_declarators {
+            self.validate_declarator(init.declarator);
+            if let Some(initializer) = init.initializer {
+                let _ = self.initializer(initializer);
+            }
         }
         for expression in &self.store.expressions {
-            if let ExpressionType::Call { arguments, .. } = expression.kind {
-                let _ = Self::checked_slice(&self.store.expression_indices, arguments);
+            match expression.kind {
+                | ExpressionType::Parenthesized { expression }
+                | ExpressionType::Unary {
+                    operand_expression: expression,
+                    ..
+                }
+                | ExpressionType::SizeofExpr(expression) => {
+                    let _ = self.expression(expression);
+                },
+                | ExpressionType::Conditional {
+                    condition_expression,
+                    then_expression,
+                    else_expression,
+                } => {
+                    let _ = self.expression(condition_expression);
+                    let _ = self.expression(then_expression);
+                    let _ = self.expression(else_expression);
+                },
+                | ExpressionType::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } => {
+                    let _ = self.expression(left_expression);
+                    let _ = self.expression(right_expression);
+                },
+                | ExpressionType::Call {
+                    function_expression,
+                    arguments,
+                } => {
+                    let _ = self.expression(function_expression);
+                    for argument in self.expression_indices(arguments) {
+                        let _ = self.expression(*argument);
+                    }
+                },
+                | ExpressionType::DirectMember {
+                    base_expression, ..
+                }
+                | ExpressionType::IndirectMember {
+                    base_expression, ..
+                } => {
+                    let _ = self.expression(base_expression);
+                },
+                | ExpressionType::CompoundLiteral {
+                    type_name,
+                    initializer,
+                } => {
+                    let _ = self.type_name(type_name);
+                    let _ = self.initializer(initializer);
+                },
+                | ExpressionType::SizeofType(type_name) => {
+                    let _ = self.type_name(type_name);
+                },
+                | ExpressionType::Cast {
+                    target_type,
+                    operand_expression,
+                } => {
+                    let _ = self.type_name(target_type);
+                    let _ = self.expression(operand_expression);
+                },
+                | ExpressionType::Identifier(_)
+                | ExpressionType::Constant(_)
+                | ExpressionType::StringLiteral(_)
+                | ExpressionType::Error => {},
             }
+        }
+        for expression in &self.store.expression_indices {
+            let _ = self.expression(*expression);
         }
         for initializer in &self.store.initializers {
-            if let InitializerType::InitializerList(elements) = initializer.kind {
-                let _ = Self::checked_slice(&self.store.initializer_elements, elements);
+            match initializer.kind {
+                | InitializerType::AssignmentExpression(expression) => {
+                    let _ = self.expression(expression);
+                },
+                | InitializerType::InitializerList(elements) => {
+                    let _ = self.initializer_elements(elements);
+                },
             }
+        }
+        for element in &self.store.initializer_elements {
+            if let Some(designation) = element.designation {
+                let _ = self.designation(designation);
+            }
+            let _ = self.initializer(element.initializer);
         }
         for designation in &self.store.designations {
-            let _ = Self::checked_slice(&self.store.designators, designation.designators);
+            let _ = self.designators(designation.designators);
+        }
+        for designator in &self.store.designators {
+            if let DesignatorType::Array(expression) = designator.kind {
+                let _ = self.expression(expression.into());
+            }
         }
         for statement in &self.store.statements {
-            if let StatementType::Compound { items } = statement.kind {
-                let _ = Self::checked_slice(&self.store.block_items, items);
+            match statement.kind {
+                | StatementType::Compound { items } => {
+                    let _ = self.block_items(items);
+                },
+                | StatementType::Expression(slot) => self.validate_expression_slot(slot),
+                | StatementType::If {
+                    condition_expression,
+                    then_statement,
+                    else_statement,
+                } => {
+                    self.validate_expression_slot(condition_expression);
+                    let _ = self.statement(then_statement);
+                    if let Some(statement) = else_statement {
+                        let _ = self.statement(statement);
+                    }
+                },
+                | StatementType::Switch {
+                    condition_expression,
+                    body_statement,
+                }
+                | StatementType::While {
+                    condition_expression,
+                    body_statement,
+                }
+                | StatementType::DoWhile {
+                    condition_expression,
+                    body_statement,
+                } => {
+                    self.validate_expression_slot(condition_expression);
+                    let _ = self.statement(body_statement);
+                },
+                | StatementType::For {
+                    initializer,
+                    condition_expression,
+                    iteration_expression,
+                    body_statement,
+                } => {
+                    if let Some(initializer) = initializer {
+                        match initializer {
+                            | ForInitializer::Expression(slot) => {
+                                self.validate_expression_slot(slot);
+                            },
+                            | ForInitializer::Declaration(declaration) => {
+                                let _ = self.declaration(declaration);
+                            },
+                        }
+                    }
+                    if let Some(slot) = condition_expression {
+                        self.validate_expression_slot(slot);
+                    }
+                    if let Some(slot) = iteration_expression {
+                        self.validate_expression_slot(slot);
+                    }
+                    let _ = self.statement(body_statement);
+                },
+                | StatementType::Return(slot) =>
+                    if let Some(slot) = slot {
+                        self.validate_expression_slot(slot);
+                    },
+                | StatementType::Label(_, child) | StatementType::Default(child) => {
+                    let _ = self.statement(child);
+                },
+                | StatementType::Case(expression, child) => {
+                    if let ConstantExpressionSlot::Parsed(expression) = expression {
+                        let _ = self.expression(expression.into());
+                    }
+                    let _ = self.statement(child);
+                },
+                | StatementType::Break
+                | StatementType::Continue
+                | StatementType::Goto(_)
+                | StatementType::Null => {},
             }
+        }
+        for item in &self.store.block_items {
+            match *item {
+                | BlockItem::Declaration(declaration) => {
+                    let _ = self.declaration(declaration);
+                },
+                | BlockItem::Statement(statement) => {
+                    let _ = self.statement(statement);
+                },
+            }
+        }
+        for declaration in &self.store.declaration_indices {
+            let _ = self.declaration(*declaration);
+        }
+        for type_name in &self.store.type_names {
+            self.validate_specifiers(type_name.declaration_specifiers);
+            if let Some(declarator) = type_name.declarator {
+                self.validate_declarator(declarator);
+            }
+        }
+        for direct in &self.store.direct_declarators {
+            match *direct {
+                | DirectDeclarator::Parenthesized(declarator) => {
+                    self.validate_declarator(declarator);
+                },
+                | DirectDeclarator::KAndRStyleFunction { parameters } => {
+                    let _ = self.identifiers(parameters);
+                },
+                | DirectDeclarator::Array {
+                    assignment_expression,
+                    ..
+                } =>
+                    if let Some(expression) = assignment_expression {
+                        let _ = self.expression(expression);
+                    },
+                | DirectDeclarator::Function { parameter_list, .. } => {
+                    let _ = self.parameter_declarations(parameter_list);
+                },
+                | DirectDeclarator::Identifier(_) => {},
+            }
+        }
+        for parameter in &self.store.parameter_declarations {
+            self.validate_specifiers(parameter.declaration_specifiers);
+            if let Some(declarator) = parameter.declarator {
+                self.validate_declarator(declarator);
+            }
+        }
+        for specifier in &self.store.struct_or_union_specifiers {
+            if let Some(declarations) = specifier.struct_declaration_list {
+                let _ = self.struct_declarations(declarations);
+            }
+        }
+        for declaration in &self.store.struct_declarations {
+            self.validate_type_specifiers(declaration.type_specifiers);
+            let _ = self.struct_declarators(declaration.struct_declarator_list);
+        }
+        for declarator in &self.store.struct_declarators {
+            if let Some(syntax) = declarator.declarator {
+                self.validate_declarator(syntax);
+            }
+            if let Some(expression) = declarator.bitfield_width {
+                let _ = self.expression(expression.into());
+            }
+        }
+        for specifier in &self.store.enum_specifiers {
+            if let Some(enumerators) = specifier.enumeration_list {
+                let _ = self.enumerators(enumerators);
+            }
+        }
+        for enumerator in &self.store.enumerators {
+            if let Some(expression) = enumerator.expression {
+                let _ = self.expression(expression.into());
+            }
+        }
+    }
+
+    fn validate_specifiers(&self, specifiers: DeclarationSpecifiers) {
+        self.validate_type_specifiers(specifiers.type_specifiers);
+    }
+
+    fn validate_type_specifiers(&self, specifiers: TypeSpecifiers) {
+        match specifiers {
+            | TypeSpecifiers::StructOrUnion(index) => {
+                let _ = self.struct_or_union_specifier(index);
+            },
+            | TypeSpecifiers::Enum(index) => {
+                let _ = self.enum_specifier(index);
+            },
+            | _ => {},
+        }
+    }
+
+    fn validate_declarator(&self, declarator: Declarator) {
+        let _ = self.pointer_qualifiers(declarator.pointer.type_qualifiers_list);
+        let _ = self.direct_declarators(declarator.kind);
+    }
+
+    fn validate_expression_slot(&self, slot: ExpressionSlot) {
+        if let ExpressionSlot::Parsed(expression) = slot {
+            let _ = self.expression(expression);
         }
     }
 
@@ -1185,6 +1457,106 @@ impl SyntaxTree {
         }
     }
 
+    pub(crate) fn designation(&self, index: DesignationIndex) -> &Designation {
+        self.store
+            .designations
+            .get(index.0 as usize)
+            .expect("validated designation handle")
+    }
+
+    pub(crate) fn struct_or_union_specifier(
+        &self,
+        index: StructOrUnionSpecifierIndex,
+    ) -> &StructOrUnionSpecifier {
+        self.store
+            .struct_or_union_specifiers
+            .get(index.0 as usize)
+            .expect("validated struct-or-union handle")
+    }
+
+    pub(crate) fn enum_specifier(&self, index: EnumSpecifierIndex) -> &EnumSpecifier {
+        self.store
+            .enum_specifiers
+            .get(index.0 as usize)
+            .expect("validated enum handle")
+    }
+
+    pub(crate) fn init_declarators(&self, range: VectorSlice<InitDeclarator>) -> &[InitDeclarator] {
+        Self::checked_slice(&self.store.init_declarators, range)
+    }
+
+    pub(crate) fn initializer_elements(
+        &self,
+        range: VectorSlice<InitializerElement>,
+    ) -> &[InitializerElement] {
+        Self::checked_slice(&self.store.initializer_elements, range)
+    }
+
+    pub(crate) fn designators(&self, range: VectorSlice<Designator>) -> &[Designator] {
+        Self::checked_slice(&self.store.designators, range)
+    }
+
+    pub(crate) fn expression_indices(
+        &self,
+        range: VectorSlice<ExpressionIndex>,
+    ) -> &[ExpressionIndex] {
+        Self::checked_slice(&self.store.expression_indices, range)
+    }
+
+    pub(crate) fn block_items(&self, range: VectorSlice<BlockItem>) -> &[BlockItem] {
+        Self::checked_slice(&self.store.block_items, range)
+    }
+
+    pub(crate) fn declaration_indices(
+        &self,
+        range: VectorSlice<DeclarationIndex>,
+    ) -> &[DeclarationIndex] {
+        Self::checked_slice(&self.store.declaration_indices, range)
+    }
+
+    pub(crate) fn pointer_qualifiers(
+        &self,
+        range: VectorSlice<TypeQualifiers>,
+    ) -> &[TypeQualifiers] {
+        Self::checked_slice(&self.store.type_qualifiers, range)
+    }
+
+    pub(crate) fn direct_declarators(
+        &self,
+        range: VectorSlice<DirectDeclarator>,
+    ) -> &[DirectDeclarator] {
+        Self::checked_slice(&self.store.direct_declarators, range)
+    }
+
+    pub(crate) fn identifiers(&self, range: VectorSlice<Identifier>) -> &[Identifier] {
+        Self::checked_slice(&self.store.identifiers, range)
+    }
+
+    pub(crate) fn parameter_declarations(
+        &self,
+        range: VectorSlice<ParameterDeclaration>,
+    ) -> &[ParameterDeclaration] {
+        Self::checked_slice(&self.store.parameter_declarations, range)
+    }
+
+    pub(crate) fn struct_declarations(
+        &self,
+        range: VectorSlice<StructDeclaration>,
+    ) -> &[StructDeclaration] {
+        Self::checked_slice(&self.store.struct_declarations, range)
+    }
+
+    pub(crate) fn struct_declarators(
+        &self,
+        range: VectorSlice<StructDeclarator>,
+    ) -> &[StructDeclarator] {
+        Self::checked_slice(&self.store.struct_declarators, range)
+    }
+
+    pub(crate) fn enumerators(&self, range: VectorSlice<Enumerator>) -> &[Enumerator] {
+        Self::checked_slice(&self.store.enumerators, range)
+    }
+
     pub(crate) fn raw_debug(&self) -> impl Debug + '_ {
         &self.store
     }
@@ -1228,10 +1600,8 @@ impl<'a> DeclarationView<'a> {
     }
 
     pub(crate) fn init_declarators(&self) -> &'a [InitDeclarator] {
-        SyntaxTree::checked_slice(
-            &self.tree.store.init_declarators,
-            self.declaration.init_declarators,
-        )
+        self.tree
+            .init_declarators(self.declaration.init_declarators)
     }
 }
 
@@ -1249,10 +1619,7 @@ impl<'a> InitializerView<'a> {
         let InitializerType::InitializerList(elements) = self.initializer.kind else {
             return None;
         };
-        Some(SyntaxTree::checked_slice(
-            &self.tree.store.initializer_elements,
-            elements,
-        ))
+        Some(self.tree.initializer_elements(elements))
     }
 }
 
@@ -1897,6 +2264,8 @@ struct DeclarationSpecifiersFrame {
     consumed:               bool,
     /// Whether a storage-class specifier has already appeared.
     storage_seen:           bool,
+    /// Whether an invalid token occupied the mandatory type-specifier slot.
+    invalid_type_seen:      bool,
     /// Owning tag keyword retained while its child frame runs.
     pending_type_specifier: Option<Token>,
     /// Provenance accumulated across the complete specifier sequence.
@@ -1925,6 +2294,7 @@ impl DeclarationSpecifiersFrame {
             specifiers: DeclarationSpecifiers::new(),
             consumed: false,
             storage_seen: false,
+            invalid_type_seen: false,
             pending_type_specifier: None,
             source_vectors: None,
         }
@@ -4216,10 +4586,9 @@ impl Parser {
         while let Some(root) = self.drive(context) {
             roots.push(root);
         }
-        ParsedTranslationUnit {
-            roots:  roots.into_boxed_slice(),
-            syntax: SyntaxTree::new(self.syntax),
-        }
+        let roots = roots.into_boxed_slice();
+        let syntax = SyntaxTree::new(self.syntax, &roots);
+        ParsedTranslationUnit { roots, syntax }
     }
 
     /// Runs owned frame actions until one external declaration reduces or EOF
@@ -4272,7 +4641,10 @@ impl Parser {
                     self.limits.frame_depth,
                 );
             }
-            if self.syntax.node_count() > self.limits.syntax_nodes {
+            let retained_nodes = self.frames.iter().fold(0_usize, |total, frame| {
+                total.saturating_add(frame.retained_node_count())
+            });
+            if self.syntax.node_count().saturating_add(retained_nodes) > self.limits.syntax_nodes {
                 return self.resource_failure(
                     context,
                     ParserResource::SyntaxNodes,
@@ -4351,6 +4723,7 @@ impl Parser {
             return None;
         }
         self.resource_limit_reported = true;
+        self.has_external_declaration = true;
         let token = self.cursor.current(context);
         let source_vectors = token.map_or_else(
             || context.create_source_vectors(self.position(context), self.source_file_index(), 0),
@@ -5395,6 +5768,37 @@ fn is_statement_keyword(token: TokenType) -> bool {
 }
 
 impl ParseFrame {
+    /// Counts arena entries retained by a frame before their final bulk insert.
+    fn retained_node_count(&self) -> usize {
+        match self {
+            | Self::Declarator(frame) => frame
+                .pointer_qualifiers
+                .len()
+                .saturating_add(frame.direct_declarators.len()),
+            | Self::ParameterList(frame) => frame
+                .parameters
+                .len()
+                .saturating_add(frame.identifiers.len()),
+            | Self::StructOrUnionSpecifier(frame) => frame
+                .declarations
+                .len()
+                .saturating_add(frame.member_declarators.len()),
+            | Self::EnumSpecifier(frame) => frame.enumerators.len(),
+            | Self::Expression(frame) => frame.call_arguments.len(),
+            | Self::Initializer(frame) => frame
+                .elements
+                .len()
+                .saturating_add(frame.current_designators.len()),
+            | Self::FunctionDefinition(frame) => frame.old_style_declarations.len(),
+            | Self::CompoundStatement(frame) => frame.items.len(),
+            | Self::ExternalDeclaration(_)
+            | Self::Declaration(_)
+            | Self::DeclarationSpecifiers(_)
+            | Self::TypeName(_)
+            | Self::Statement(_) => 0,
+        }
+    }
+
     fn kind(&self) -> ParseFrameKind {
         match self {
             | Self::ExternalDeclaration(_) => ParseFrameKind::ExternalDeclaration,
@@ -6049,7 +6453,9 @@ impl DeclarationSpecifiersFrame {
                     ParserErrorType::UnexpectedEndBeforeDeclarationSpecifier,
                     None,
                 );
-            } else if self.specifiers.type_specifiers == TypeSpecifiers::Empty {
+            } else if self.specifiers.type_specifiers == TypeSpecifiers::Empty
+                && !self.invalid_type_seen
+            {
                 parser.report(
                     context,
                     ParserErrorType::UnexpectedEndBeforeTypeSpecifier,
@@ -6162,7 +6568,7 @@ impl DeclarationSpecifiersFrame {
                 Some(token),
             );
         }
-        if self.specifiers.type_specifiers == TypeSpecifiers::Empty {
+        if self.specifiers.type_specifiers == TypeSpecifiers::Empty && !self.invalid_type_seen {
             parser.report(
                 context,
                 ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(token.kind),
@@ -6236,6 +6642,7 @@ impl DeclarationSpecifiersFrame {
             | PrimitiveTypeSpecifier::Bool => apply_once!(is_bool, make_bool),
             | PrimitiveTypeSpecifier::Complex => apply_once!(is_complex, make_complex),
             | PrimitiveTypeSpecifier::Imaginary => {
+                self.invalid_type_seen = true;
                 parser.report(
                     context,
                     ParserErrorType::UnsupportedImaginaryTypeSpecifier,
@@ -17083,6 +17490,32 @@ mod tests {
     }
 
     #[test]
+    fn imaginary_type_specifier_does_not_cascade_into_missing_type() {
+        let parsed = parse("_Imaginary value; int after;\n");
+        let errors = parser_errors(&parsed).collect::<Vec<_>>();
+
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| matches!(error, ParserErrorType::UnsupportedImaginaryTypeSpecifier))
+                .count(),
+            1
+        );
+        assert!(errors.iter().all(|error| !matches!(
+            error,
+            ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(_)
+                | ParserErrorType::UnexpectedEndBeforeTypeSpecifier
+        )));
+        assert!(matches!(
+            parsed.items.as_slice(),
+            [
+                ExternalDeclaration::RecoveredDeclaration(_),
+                ExternalDeclaration::Declaration(_)
+            ]
+        ));
+    }
+
+    #[test]
     fn recovered_expression_children_mark_every_composite_parent() {
         let parsed = parse("int f(void) { return foo(1 + ) + 2; }\n");
 
@@ -17378,6 +17811,43 @@ mod tests {
     }
 
     #[test]
+    fn discarded_recovery_exposes_its_complete_summary() {
+        let parsed = parse("int first extra junk; int after;\n");
+        let diagnostic = parsed
+            .errors
+            .iter()
+            .find_map(|error| match error {
+                | TranslationError::Parsing(error)
+                    if error
+                        .recovery
+                        .is_some_and(|recovery| recovery.discarded_tokens > 0) =>
+                    Some(error),
+                | _ => None,
+            })
+            .expect("expected a diagnostic with discarded input");
+        let recovery = diagnostic.recovery.expect("recovery summary");
+        let discarded = recovery.discarded.expect("discarded provenance");
+
+        assert_eq!(recovery.owner, ParseFrameKind::Declaration);
+        assert_eq!(recovery.discarded_tokens, 2);
+        assert_eq!(
+            recovery.stopped_at,
+            Some(TokenType::Operator(OperatorTokenType::Semicolon))
+        );
+        assert_eq!(sourced_text(&parsed, discarded), "extrajunk");
+        assert_eq!(diagnostic.ranges.as_ref(), [discarded]);
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].message, "parsing resumes here");
+        assert!(matches!(
+            parsed.items.as_slice(),
+            [
+                ExternalDeclaration::RecoveredDeclaration(_),
+                ExternalDeclaration::Declaration(_)
+            ]
+        ));
+    }
+
+    #[test]
     fn configured_external_declaration_limit_has_boundary_evidence() {
         let limits = ParserLimits {
             external_declarations: 2,
@@ -17453,12 +17923,47 @@ mod tests {
             assert!(parsed.parser.returned.is_none());
             assert!(parsed.parser.recovery.active.is_none());
             assert_eq!(parsed.parser.scopes.depth(), 0);
+            assert_eq!(
+                parser_errors(parsed)
+                    .filter(|error| matches!(error, ParserErrorType::ResourceLimitExceeded { .. }))
+                    .count(),
+                1
+            );
+            assert!(
+                parser_errors(parsed)
+                    .all(|error| !matches!(error, ParserErrorType::EmptyTranslationUnit))
+            );
         }
 
         let defaults = ParserLimits::default();
         assert!(defaults.external_declarations < u32::MAX as usize);
         assert!(defaults.syntax_nodes < u32::MAX as usize);
         assert!(defaults.frame_depth < u32::MAX as usize);
+    }
+
+    #[test]
+    fn syntax_limit_counts_nodes_retained_by_active_frames() {
+        let limit = 2;
+        let parsed = parse_with_limits(
+            "enum E { A, B, C };\n",
+            ParserLimits {
+                syntax_nodes: limit,
+                ..ParserLimits::default()
+            },
+        );
+
+        assert!(parser_errors(&parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ResourceLimitExceeded {
+                resource: ParserResource::SyntaxNodes,
+                limit: actual,
+            } if *actual == limit
+        )));
+        assert!(parsed.parser.syntax.node_count() <= limit);
+        assert!(matches!(
+            parsed.items.as_slice(),
+            [ExternalDeclaration::Error(_)]
+        ));
     }
 
     #[test]
@@ -17485,11 +17990,71 @@ mod tests {
         );
 
         assert_eq!(first, second);
-        assert!(first.contains("declarator good"), "{first}");
-        assert!(first.contains("error"), "{first}");
-        assert!(first.contains("declarator after"), "{first}");
+        let good = first.find("declarator good").expect("good declaration");
+        let error = first.find("root[1] error").expect("error root");
+        let after = first
+            .find("declarator after")
+            .expect("following declaration");
+        assert!(good < error && error < after, "{first}");
         assert!(!first.contains("StringCacheId"), "{first}");
         assert!(!first.contains("Index("), "{first}");
+    }
+
+    #[test]
+    fn inspection_traverses_declarators_tags_parameters_and_designations() {
+        let mut context = Context::new();
+        let source = "struct S { int member : 3; }; int values[2] = { [1] = 7 }; int f(int arg);\n";
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<inspection-shapes-test>").into_boxed_path(),
+            source.to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+        let output = unit.syntax().inspect(
+            unit.external_declarations(),
+            &context,
+            InspectionOptions::default(),
+        );
+
+        for expected in [
+            "struct S",
+            "member bit-field",
+            "width: constant",
+            "array static=false",
+            "array-designator",
+            "index: constant",
+            "function variadic=false",
+            "parameter type=int",
+            "identifier arg",
+        ] {
+            assert!(output.contains(expected), "missing {expected:?}:\n{output}");
+        }
+
+        let mut multi_context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut multi_context,
+            PathBuf::from("<inspection-order-test>").into_boxed_path(),
+            "int a = 1, b = 2;\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let multi = Parser::new(preprocessor).parse_translation_unit(&mut multi_context);
+        let multi = multi.syntax().inspect(
+            multi.external_declarations(),
+            &multi_context,
+            InspectionOptions::default(),
+        );
+        let a = multi.find("declarator a").expect("first declarator");
+        let one = multi
+            .find("constant Integer(Int(1))")
+            .expect("first initializer");
+        let b = multi.find("declarator b").expect("second declarator");
+        let two = multi
+            .find("constant Integer(Int(2))")
+            .expect("second initializer");
+        assert!(a < one && one < b && b < two, "{multi}");
     }
 
     #[test]

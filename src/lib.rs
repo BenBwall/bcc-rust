@@ -10,6 +10,7 @@ mod shut_up_clippy_about_unused_dev_dependencies {
 }
 use std::{
     env::var,
+    fmt::Write as _,
     path::{
         Path,
         PathBuf,
@@ -36,6 +37,7 @@ use translation_phases::{
     parsing::{
         InspectionOptions,
         Parser as LanguageParser,
+        ParserError,
     },
     preprocessing::Token,
 };
@@ -407,6 +409,40 @@ mod pipeline_iterator_tests {
             1
         );
     }
+
+    #[test]
+    fn cli_parser_details_render_recovery_ranges_and_notes() {
+        let mut context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<test>").into_boxed_path(),
+            "int first extra junk; int after;\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let _unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+        let errors = context.take_pending_errors();
+        let diagnostic = errors
+            .iter()
+            .find_map(|error| match error {
+                | TranslationError::Parsing(error)
+                    if error
+                        .recovery
+                        .is_some_and(|recovery| recovery.discarded_tokens > 0) =>
+                    Some(error),
+                | _ => None,
+            })
+            .expect("expected discarded-input recovery");
+
+        let rendered = format_parser_diagnostic_details(diagnostic, &context);
+        assert!(rendered.contains("code=Syntax"), "{rendered}");
+        assert!(rendered.contains("discarded input:"), "{rendered}");
+        assert!(rendered.contains("discarded-tokens=2"), "{rendered}");
+        assert!(
+            rendered.contains("note: parsing resumes here"),
+            "{rendered}"
+        );
+    }
 }
 
 #[derive(Parser)]
@@ -646,6 +682,41 @@ fn print_translation_error(
         source_file_index,
         vectors.bright_blue(),
     );
+    if let TranslationError::Parsing(error) = error {
+        eprint!("{}", format_parser_diagnostic_details(error, context));
+    }
+}
+
+fn format_parser_diagnostic_details(error: &ParserError, context: &Context) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "  context: code={:?} frame={:?} expected={:?} found={:?}",
+        error.code, error.frame, error.expected, error.found,
+    );
+    for range in &error.ranges {
+        let _ = writeln!(
+            output,
+            "  discarded input: {:?}",
+            context.get_source_vectors(*range),
+        );
+    }
+    if let Some(recovery) = error.recovery {
+        let _ = writeln!(
+            output,
+            "  recovery: owner={:?} discarded-tokens={} stopped-at={:?}",
+            recovery.owner, recovery.discarded_tokens, recovery.stopped_at,
+        );
+    }
+    for related in &error.related {
+        let _ = writeln!(
+            output,
+            "  note: {} at {:?}",
+            related.message,
+            context.get_source_vectors(related.source_vectors),
+        );
+    }
+    output
 }
 
 #[doc(hidden)]
