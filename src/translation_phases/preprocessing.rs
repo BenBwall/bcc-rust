@@ -161,9 +161,33 @@ mod tests {
 
     #[test]
     fn malformed_include_restores_include_tokenization_mode() {
-        let (identifiers, errors) = preprocess("#include 123\nint x = a < b > c;\n");
+        let mut context = Context::new();
+        let mut preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<test>").into_boxed_path(),
+            "#include 123 extra\nint x = a < b > c;\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let mut tokens = Vec::new();
+        while let Some(token) = preprocessor.next_item(&mut context) {
+            tokens.push((
+                token.kind,
+                context.string_cache.at(token.contents).to_owned(),
+            ));
+        }
+        let errors = context.take_pending_errors();
 
-        assert_eq!(identifiers, ["x", "a", "b", "c"]);
+        assert_eq!(
+            tokens
+                .iter()
+                .filter_map(|(kind, spelling)| (*kind == TokenType::Identifier)
+                    .then_some(spelling.as_str()))
+                .collect::<Vec<_>>(),
+            ["x", "a", "b", "c"]
+        );
+        assert!(tokens.iter().all(|(_, spelling)| spelling != "123"));
+        assert!(tokens.iter().all(|(_, spelling)| spelling != "extra"));
         assert!(errors.iter().any(|error| matches!(
             error,
             TranslationError::Preprocessing(PreprocessorError {
@@ -5732,6 +5756,7 @@ impl Preprocessor {
             );
         context.set_is_tokenizing_include_string(false);
         let Some(include_string) = include_string else {
+            self.skip_until_newline(context);
             return;
         };
         let header_source_index = match include_string.kind {
