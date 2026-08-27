@@ -11,7 +11,12 @@ use super::{
     Context,
     DeclarationIndex,
     Declarator,
+    DesignationIndex,
+    Designator,
+    DesignatorType,
     DirectDeclarator,
+    EnumSpecifierIndex,
+    Enumerator,
     ExpressionIndex,
     ExpressionSlot,
     ExpressionType,
@@ -20,14 +25,22 @@ use super::{
     FunctionDefinitionIndex,
     GetPosition,
     Identifier,
+    InitDeclarator,
+    InitializerElement,
     InitializerIndex,
     InitializerType,
+    ParameterDeclaration,
     SourceVectors,
     StatementIndex,
     StatementType,
     StringTokenType,
+    StructDeclaration,
+    StructDeclarator,
+    StructOrUnion,
+    StructOrUnionSpecifierIndex,
     SyntaxTree,
     TypeNameIndex,
+    TypeSpecifiers,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -36,15 +49,33 @@ pub(crate) struct InspectionOptions {
 }
 
 enum Work {
+    Root(ExternalDeclaration, usize),
     Declaration(DeclarationIndex, usize, &'static str),
-    Function(FunctionDefinitionIndex, usize),
+    InitDeclarator(InitDeclarator, usize),
+    Function(FunctionDefinitionIndex, usize, &'static str),
+    Declarator(Declarator, usize, &'static str),
+    DirectDeclarator(DirectDeclarator, usize),
+    Identifier(Identifier, usize, &'static str),
+    Parameter(ParameterDeclaration, usize),
+    StructOrUnion(StructOrUnionSpecifierIndex, usize),
+    StructDeclaration(StructDeclaration, usize),
+    StructDeclarator(StructDeclarator, usize),
+    Enum(EnumSpecifierIndex, usize),
+    Enumerator(Enumerator, usize),
     Statement(StatementIndex, usize, &'static str),
     Expression(ExpressionIndex, usize, &'static str),
     Initializer(InitializerIndex, usize, &'static str),
+    InitializerElement(InitializerElement, usize),
+    Designation(DesignationIndex, usize),
+    Designator(Designator, usize),
     TypeName(TypeNameIndex, usize, &'static str),
 }
 
 impl SyntaxTree {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "One iterative dispatcher keeps traversal order and cycle handling centralized."
+    )]
     pub(crate) fn inspect(
         &self,
         roots: &[ExternalDeclaration],
@@ -52,50 +83,46 @@ impl SyntaxTree {
         options: InspectionOptions,
     ) -> String {
         let mut output = String::new();
-        let mut work = Vec::new();
-        for (ordinal, root) in roots.iter().copied().enumerate().rev() {
-            match root {
-                | ExternalDeclaration::Declaration(index) => {
-                    work.push(Work::Declaration(index, 0, "declaration"));
-                },
-                | ExternalDeclaration::RecoveredDeclaration(index) => {
-                    work.push(Work::Declaration(index, 0, "recovered-declaration"));
-                },
-                | ExternalDeclaration::FunctionDefinition(index) => {
-                    work.push(Work::Function(index, 0));
-                },
-                | ExternalDeclaration::RecoveredFunctionDefinition(index) => {
-                    Self::line(
-                        &mut output,
-                        0,
-                        &format!("root[{ordinal}] recovered-function-definition"),
-                        None,
-                        context,
-                        options,
-                    );
-                    work.push(Work::Function(index, 1));
-                },
-                | ExternalDeclaration::Error(source) => Self::line(
-                    &mut output,
-                    0,
-                    &format!("root[{ordinal}] error"),
-                    Some(source),
-                    context,
-                    options,
-                ),
-            }
-        }
-
+        let mut work = roots
+            .iter()
+            .copied()
+            .enumerate()
+            .rev()
+            .map(|(ordinal, root)| Work::Root(root, ordinal))
+            .collect::<Vec<_>>();
         let mut seen = HashSet::new();
+
         while let Some(item) = work.pop() {
             match item {
+                | Work::Root(root, ordinal) => match root {
+                    | ExternalDeclaration::Declaration(index) => {
+                        work.push(Work::Declaration(index, 0, "declaration"));
+                    },
+                    | ExternalDeclaration::RecoveredDeclaration(index) => {
+                        work.push(Work::Declaration(index, 0, "recovered-declaration"));
+                    },
+                    | ExternalDeclaration::FunctionDefinition(index) => {
+                        work.push(Work::Function(index, 0, "function-definition"));
+                    },
+                    | ExternalDeclaration::RecoveredFunctionDefinition(index) =>
+                        work.push(Work::Function(index, 0, "recovered-function-definition")),
+                    | ExternalDeclaration::Error(source) => Self::line(
+                        &mut output,
+                        0,
+                        &format!("root[{ordinal}] error"),
+                        Some(source),
+                        context,
+                        options,
+                    ),
+                },
                 | Work::Declaration(index, indent, role) => {
-                    if !seen.insert((0_u8, index.0)) {
-                        Self::line(
+                    if !seen.insert((0_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                        Self::shared(
                             &mut output,
                             indent,
-                            &format!("{role}: declaration#{} (shared)", index.0),
-                            None,
+                            role,
+                            "declaration",
+                            index.0,
                             context,
                             options,
                         );
@@ -103,44 +130,65 @@ impl SyntaxTree {
                     }
                     let view = self.declaration(index);
                     let declaration = view.syntax();
-                    let status = if declaration.recovered {
-                        " recovered"
-                    } else {
-                        ""
-                    };
                     Self::line(
                         &mut output,
                         indent,
                         &format!(
-                            "{role}: declaration{status} storage={:?} type={}",
+                            "{role}: declaration{} storage={:?} type={}",
+                            if declaration.recovered {
+                                " recovered"
+                            } else {
+                                ""
+                            },
                             declaration.declaration_specifiers.storage_class,
-                            declaration.declaration_specifiers.type_specifiers
+                            self.type_label(
+                                declaration.declaration_specifiers.type_specifiers,
+                                context,
+                            ),
                         ),
                         Some(declaration.source_vectors),
                         context,
                         options,
                     );
                     for init in view.init_declarators().iter().rev() {
-                        let name = self
-                            .declarator_identifier(init.declarator)
-                            .map_or("<abstract>", |identifier| {
-                                context.string_cache.at(identifier.name)
-                            });
-                        Self::line(
+                        work.push(Work::InitDeclarator(init.clone(), indent + 1));
+                    }
+                    Self::push_type_details(
+                        &mut work,
+                        declaration.declaration_specifiers.type_specifiers,
+                        indent + 1,
+                    );
+                },
+                | Work::InitDeclarator(init, indent) => {
+                    let name = self
+                        .declarator_identifier(init.declarator)
+                        .map_or("<abstract>", |identifier| {
+                            context.string_cache.at(identifier.name)
+                        });
+                    Self::line(
+                        &mut output,
+                        indent,
+                        &format!("declarator {name}"),
+                        Some(init.source_vectors),
+                        context,
+                        options,
+                    );
+                    if let Some(initializer) = init.initializer {
+                        work.push(Work::Initializer(initializer, indent + 1, "initializer"));
+                    }
+                    work.push(Work::Declarator(init.declarator, indent + 1, "shape"));
+                },
+                | Work::Function(index, indent, role) => {
+                    if !seen.insert((1_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                        Self::shared(
                             &mut output,
-                            indent + 1,
-                            &format!("declarator {name}"),
-                            Some(init.source_vectors),
+                            indent,
+                            role,
+                            "function",
+                            index.0,
                             context,
                             options,
                         );
-                        if let Some(initializer) = init.initializer {
-                            work.push(Work::Initializer(initializer, indent + 2, "initializer"));
-                        }
-                    }
-                },
-                | Work::Function(index, indent) => {
-                    if !seen.insert((1_u8, index.0)) {
                         continue;
                     }
                     let function = self.function_definition(index);
@@ -153,17 +201,287 @@ impl SyntaxTree {
                         &mut output,
                         indent,
                         &format!(
-                            "function-definition {name}{}",
-                            if function.recovered { " recovered" } else { "" }
+                            "{role} {name}{} type={}",
+                            if function.recovered { " recovered" } else { "" },
+                            self.type_label(
+                                function.declaration_specifiers.type_specifiers,
+                                context
+                            ),
                         ),
                         Some(function.source_vectors),
                         context,
                         options,
                     );
                     work.push(Work::Statement(function.body, indent + 1, "body"));
+                    for declaration in self
+                        .declaration_indices(function.old_style_declarations)
+                        .iter()
+                        .rev()
+                    {
+                        work.push(Work::Declaration(
+                            *declaration,
+                            indent + 1,
+                            "old-style-parameter",
+                        ));
+                    }
+                    work.push(Work::Declarator(
+                        function.declarator,
+                        indent + 1,
+                        "declarator",
+                    ));
+                    Self::push_type_details(
+                        &mut work,
+                        function.declaration_specifiers.type_specifiers,
+                        indent + 1,
+                    );
+                },
+                | Work::Declarator(declarator, indent, role) => {
+                    let key = (
+                        6_u8,
+                        declarator.kind.start_index,
+                        declarator.kind.length,
+                        declarator.pointer.type_qualifiers_list.start_index,
+                        declarator.pointer.type_qualifiers_list.length,
+                    );
+                    if !seen.insert(key) {
+                        Self::line(
+                            &mut output,
+                            indent,
+                            &format!("{role}: declarator (shared)"),
+                            None,
+                            context,
+                            options,
+                        );
+                        continue;
+                    }
+                    let pointers = self.pointer_qualifiers(declarator.pointer.type_qualifiers_list);
+                    Self::line(
+                        &mut output,
+                        indent,
+                        &format!("{role}: declarator pointer-levels={}", pointers.len()),
+                        Some(declarator.source_vectors),
+                        context,
+                        options,
+                    );
+                    for direct in self.direct_declarators(declarator.kind).iter().rev() {
+                        work.push(Work::DirectDeclarator(*direct, indent + 1));
+                    }
+                },
+                | Work::DirectDeclarator(direct, indent) => match direct {
+                    | DirectDeclarator::Identifier(identifier) => {
+                        work.push(Work::Identifier(identifier, indent, "identifier"));
+                    },
+                    | DirectDeclarator::Parenthesized(declarator) => {
+                        Self::line(
+                            &mut output,
+                            indent,
+                            "parenthesized-declarator",
+                            Some(declarator.source_vectors),
+                            context,
+                            options,
+                        );
+                        work.push(Work::Declarator(declarator, indent + 1, "nested"));
+                    },
+                    | DirectDeclarator::KAndRStyleFunction { parameters } => {
+                        Self::line(
+                            &mut output,
+                            indent,
+                            "function identifier-list",
+                            None,
+                            context,
+                            options,
+                        );
+                        for identifier in self.identifiers(parameters).iter().rev() {
+                            work.push(Work::Identifier(*identifier, indent + 1, "parameter"));
+                        }
+                    },
+                    | DirectDeclarator::Array {
+                        type_qualifiers,
+                        is_static,
+                        is_pointer,
+                        assignment_expression,
+                    } => {
+                        Self::line(
+                            &mut output,
+                            indent,
+                            &format!(
+                                "array static={is_static} variable-length={is_pointer} \
+                                 qualifiers={type_qualifiers:?}"
+                            ),
+                            None,
+                            context,
+                            options,
+                        );
+                        if let Some(expression) = assignment_expression {
+                            work.push(Work::Expression(expression, indent + 1, "bound"));
+                        }
+                    },
+                    | DirectDeclarator::Function {
+                        parameter_list,
+                        is_variadic,
+                    } => {
+                        Self::line(
+                            &mut output,
+                            indent,
+                            &format!("function variadic={is_variadic}"),
+                            None,
+                            context,
+                            options,
+                        );
+                        for parameter in self.parameter_declarations(parameter_list).iter().rev() {
+                            work.push(Work::Parameter(parameter.clone(), indent + 1));
+                        }
+                    },
+                },
+                | Work::Identifier(identifier, indent, role) => Self::line(
+                    &mut output,
+                    indent,
+                    &format!("{role} {}", context.string_cache.at(identifier.name)),
+                    Some(identifier.source_vectors),
+                    context,
+                    options,
+                ),
+                | Work::Parameter(parameter, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        &format!(
+                            "parameter type={}",
+                            self.type_label(
+                                parameter.declaration_specifiers.type_specifiers,
+                                context,
+                            )
+                        ),
+                        Some(parameter.source_vectors),
+                        context,
+                        options,
+                    );
+                    if let Some(declarator) = parameter.declarator {
+                        work.push(Work::Declarator(declarator, indent + 1, "declarator"));
+                    }
+                    Self::push_type_details(
+                        &mut work,
+                        parameter.declaration_specifiers.type_specifiers,
+                        indent + 1,
+                    );
+                },
+                | Work::StructOrUnion(index, indent) => {
+                    if !seen.insert((7_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                        continue;
+                    }
+                    let specifier = self.struct_or_union_specifier(index);
+                    let kind = match specifier.struct_or_union {
+                        | StructOrUnion::Struct => "struct",
+                        | StructOrUnion::Union => "union",
+                    };
+                    let name = specifier.identifier.map_or("<anonymous>", |identifier| {
+                        context.string_cache.at(identifier.name)
+                    });
+                    Self::line(
+                        &mut output,
+                        indent,
+                        &format!("{kind} {name}"),
+                        Some(specifier.source_vectors),
+                        context,
+                        options,
+                    );
+                    if let Some(declarations) = specifier.struct_declaration_list {
+                        for declaration in self.struct_declarations(declarations).iter().rev() {
+                            work.push(Work::StructDeclaration(*declaration, indent + 1));
+                        }
+                    }
+                },
+                | Work::StructDeclaration(declaration, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        &format!(
+                            "member-declaration type={} qualifiers={:?}",
+                            self.type_label(declaration.type_specifiers, context),
+                            declaration.type_qualifiers,
+                        ),
+                        Some(declaration.source_vectors),
+                        context,
+                        options,
+                    );
+                    for declarator in self
+                        .struct_declarators(declaration.struct_declarator_list)
+                        .iter()
+                        .rev()
+                    {
+                        work.push(Work::StructDeclarator(*declarator, indent + 1));
+                    }
+                    Self::push_type_details(&mut work, declaration.type_specifiers, indent + 1);
+                },
+                | Work::StructDeclarator(declarator, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        if declarator.bitfield_width.is_some() {
+                            "member bit-field"
+                        } else {
+                            "member declarator"
+                        },
+                        Some(declarator.source_vectors),
+                        context,
+                        options,
+                    );
+                    if let Some(width) = declarator.bitfield_width {
+                        work.push(Work::Expression(width.into(), indent + 1, "width"));
+                    }
+                    if let Some(declarator) = declarator.declarator {
+                        work.push(Work::Declarator(declarator, indent + 1, "declarator"));
+                    }
+                },
+                | Work::Enum(index, indent) => {
+                    if !seen.insert((8_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                        continue;
+                    }
+                    let specifier = self.enum_specifier(index);
+                    let name = specifier.name.map_or("<anonymous>", |identifier| {
+                        context.string_cache.at(identifier.name)
+                    });
+                    Self::line(
+                        &mut output,
+                        indent,
+                        &format!("enum {name}"),
+                        Some(specifier.source_vectors),
+                        context,
+                        options,
+                    );
+                    if let Some(enumerators) = specifier.enumeration_list {
+                        for enumerator in self.enumerators(enumerators).iter().rev() {
+                            work.push(Work::Enumerator(*enumerator, indent + 1));
+                        }
+                    }
+                },
+                | Work::Enumerator(enumerator, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        &format!(
+                            "enumerator {}",
+                            context.string_cache.at(enumerator.name.name)
+                        ),
+                        Some(enumerator.source_vectors),
+                        context,
+                        options,
+                    );
+                    if let Some(expression) = enumerator.expression {
+                        work.push(Work::Expression(expression.into(), indent + 1, "value"));
+                    }
                 },
                 | Work::Statement(index, indent, role) => {
-                    if !seen.insert((2_u8, index.0)) {
+                    if !seen.insert((2_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                        Self::shared(
+                            &mut output,
+                            indent,
+                            role,
+                            "statement",
+                            index.0,
+                            context,
+                            options,
+                        );
                         continue;
                     }
                     let statement = self.statement(index);
@@ -183,107 +501,16 @@ impl SyntaxTree {
                         context,
                         options,
                     );
-                    match statement.kind {
-                        | StatementType::Compound { items } => {
-                            for item in Self::checked_slice(&self.store.block_items, items)
-                                .iter()
-                                .rev()
-                            {
-                                match *item {
-                                    | BlockItem::Declaration(index) => work
-                                        .push(Work::Declaration(index, indent + 1, "block-item")),
-                                    | BlockItem::Statement(index) =>
-                                        work.push(Work::Statement(index, indent + 1, "block-item")),
-                                }
-                            }
-                        },
-                        | StatementType::Expression(slot) => {
-                            Self::push_slot(&mut work, slot, indent + 1, "expression");
-                        },
-                        | StatementType::If {
-                            condition_expression,
-                            then_statement,
-                            else_statement,
-                        } => {
-                            if let Some(index) = else_statement {
-                                work.push(Work::Statement(index, indent + 1, "else"));
-                            }
-                            work.push(Work::Statement(then_statement, indent + 1, "then"));
-                            Self::push_slot(
-                                &mut work,
-                                condition_expression,
-                                indent + 1,
-                                "condition",
-                            );
-                        },
-                        | StatementType::Switch {
-                            condition_expression,
-                            body_statement,
-                        }
-                        | StatementType::While {
-                            condition_expression,
-                            body_statement,
-                        }
-                        | StatementType::DoWhile {
-                            condition_expression,
-                            body_statement,
-                        } => {
-                            work.push(Work::Statement(body_statement, indent + 1, "body"));
-                            Self::push_slot(
-                                &mut work,
-                                condition_expression,
-                                indent + 1,
-                                "condition",
-                            );
-                        },
-                        | StatementType::For {
-                            initializer,
-                            condition_expression,
-                            iteration_expression,
-                            body_statement,
-                        } => {
-                            work.push(Work::Statement(body_statement, indent + 1, "body"));
-                            if let Some(slot) = iteration_expression {
-                                Self::push_slot(&mut work, slot, indent + 1, "iteration");
-                            }
-                            if let Some(slot) = condition_expression {
-                                Self::push_slot(&mut work, slot, indent + 1, "condition");
-                            }
-                            if let Some(initializer) = initializer {
-                                match initializer {
-                                    | ForInitializer::Expression(slot) =>
-                                        Self::push_slot(&mut work, slot, indent + 1, "initializer"),
-                                    | ForInitializer::Declaration(index) => work
-                                        .push(Work::Declaration(index, indent + 1, "initializer")),
-                                }
-                            }
-                        },
-                        | StatementType::Return(Some(slot)) => {
-                            Self::push_slot(&mut work, slot, indent + 1, "return-value");
-                        },
-                        | StatementType::Label(_, child) | StatementType::Default(child) => {
-                            work.push(Work::Statement(child, indent + 1, "labeled"));
-                        },
-                        | StatementType::Case(expression, child) => {
-                            work.push(Work::Statement(child, indent + 1, "labeled"));
-                            if let ConstantExpressionSlot::Parsed(index) = expression {
-                                work.push(Work::Expression(index.into(), indent + 1, "case-value"));
-                            }
-                        },
-                        | StatementType::Return(None)
-                        | StatementType::Break
-                        | StatementType::Continue
-                        | StatementType::Goto(_)
-                        | StatementType::Null => {},
-                    }
+                    self.push_statement_children(&mut work, &statement.kind, indent + 1);
                 },
                 | Work::Expression(index, indent, role) => {
-                    if !seen.insert((3_u8, index.0)) {
-                        Self::line(
+                    if !seen.insert((3_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                        Self::shared(
                             &mut output,
                             indent,
-                            &format!("{role}: expression#{} (shared)", index.0),
-                            None,
+                            role,
+                            "expression",
+                            index.0,
                             context,
                             options,
                         );
@@ -309,7 +536,16 @@ impl SyntaxTree {
                     self.push_expression_children(&mut work, &expression.kind, indent + 1);
                 },
                 | Work::Initializer(index, indent, role) => {
-                    if !seen.insert((4_u8, index.0)) {
+                    if !seen.insert((4_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                        Self::shared(
+                            &mut output,
+                            indent,
+                            role,
+                            "initializer",
+                            index.0,
+                            context,
+                            options,
+                        );
                         continue;
                     }
                     let view = self.initializer(index);
@@ -342,18 +578,89 @@ impl SyntaxTree {
                         | InitializerType::InitializerList(_) => {
                             if let Some(elements) = view.elements() {
                                 for element in elements.iter().rev() {
-                                    work.push(Work::Initializer(
-                                        element.initializer,
-                                        indent + 1,
-                                        "element",
-                                    ));
+                                    work.push(Work::InitializerElement(*element, indent + 1));
                                 }
                             }
                         },
                     }
                 },
+                | Work::InitializerElement(element, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        "element",
+                        Some(element.source_vectors),
+                        context,
+                        options,
+                    );
+                    work.push(Work::Initializer(element.initializer, indent + 1, "value"));
+                    if let Some(designation) = element.designation {
+                        work.push(Work::Designation(designation, indent + 1));
+                    }
+                },
+                | Work::Designation(index, indent) => {
+                    if !seen.insert((9_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                        continue;
+                    }
+                    let designation = self.designation(index);
+                    Self::line(
+                        &mut output,
+                        indent,
+                        &format!(
+                            "designation{}",
+                            if designation.recovered {
+                                " recovered"
+                            } else {
+                                ""
+                            }
+                        ),
+                        Some(designation.source_vectors),
+                        context,
+                        options,
+                    );
+                    for designator in self.designators(designation.designators).iter().rev() {
+                        work.push(Work::Designator(*designator, indent + 1));
+                    }
+                },
+                | Work::Designator(designator, indent) => {
+                    let label = match designator.kind {
+                        | DesignatorType::Array(_) => "array-designator".to_owned(),
+                        | DesignatorType::Field(identifier) => format!(
+                            "field-designator .{}",
+                            context.string_cache.at(identifier.name)
+                        ),
+                        | DesignatorType::Error => "error-designator".to_owned(),
+                    };
+                    Self::line(
+                        &mut output,
+                        indent,
+                        &format!(
+                            "{label}{}",
+                            if designator.recovered {
+                                " recovered"
+                            } else {
+                                ""
+                            }
+                        ),
+                        Some(designator.source_vectors),
+                        context,
+                        options,
+                    );
+                    if let DesignatorType::Array(expression) = designator.kind {
+                        work.push(Work::Expression(expression.into(), indent + 1, "index"));
+                    }
+                },
                 | Work::TypeName(index, indent, role) => {
-                    if !seen.insert((5_u8, index.0)) {
+                    if !seen.insert((5_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                        Self::shared(
+                            &mut output,
+                            indent,
+                            role,
+                            "type-name",
+                            index.0,
+                            context,
+                            options,
+                        );
                         continue;
                     }
                     let type_name = self.type_name(index);
@@ -367,11 +674,22 @@ impl SyntaxTree {
                             } else {
                                 ""
                             },
-                            type_name.declaration_specifiers.type_specifiers
+                            self.type_label(
+                                type_name.declaration_specifiers.type_specifiers,
+                                context,
+                            ),
                         ),
                         Some(type_name.source_vectors),
                         context,
                         options,
+                    );
+                    if let Some(declarator) = type_name.declarator {
+                        work.push(Work::Declarator(declarator, indent + 1, "declarator"));
+                    }
+                    Self::push_type_details(
+                        &mut work,
+                        type_name.declaration_specifiers.type_specifiers,
+                        indent + 1,
                     );
                 },
             }
@@ -379,11 +697,54 @@ impl SyntaxTree {
         output
     }
 
+    fn push_type_details(work: &mut Vec<Work>, specifiers: TypeSpecifiers, indent: usize) {
+        match specifiers {
+            | TypeSpecifiers::StructOrUnion(index) => work.push(Work::StructOrUnion(index, indent)),
+            | TypeSpecifiers::Enum(index) => work.push(Work::Enum(index, indent)),
+            | _ => {},
+        }
+    }
+
+    fn type_label(&self, specifiers: TypeSpecifiers, context: &Context) -> String {
+        match specifiers {
+            | TypeSpecifiers::TypedefName(identifier) => {
+                format!("typedef {}", context.string_cache.at(identifier.name))
+            },
+            | TypeSpecifiers::StructOrUnion(index) => {
+                let specifier = self.struct_or_union_specifier(index);
+                let kind = match specifier.struct_or_union {
+                    | StructOrUnion::Struct => "struct",
+                    | StructOrUnion::Union => "union",
+                };
+                specifier.identifier.map_or_else(
+                    || format!("{kind} <anonymous>"),
+                    |identifier| format!("{kind} {}", context.string_cache.at(identifier.name)),
+                )
+            },
+            | TypeSpecifiers::Enum(index) => {
+                let specifier = self.enum_specifier(index);
+                specifier.name.map_or_else(
+                    || "enum <anonymous>".to_owned(),
+                    |identifier| format!("enum {}", context.string_cache.at(identifier.name)),
+                )
+            },
+            | _ => specifiers.to_string(),
+        }
+    }
+
     fn declarator_identifier(&self, mut declarator: Declarator) -> Option<Identifier> {
+        let mut seen = HashSet::new();
         loop {
-            let directs = Self::checked_slice(&self.store.direct_declarators, declarator.kind);
+            if !seen.insert((
+                declarator.kind.start_index,
+                declarator.kind.length,
+                declarator.pointer.type_qualifiers_list.start_index,
+                declarator.pointer.type_qualifiers_list.length,
+            )) {
+                return None;
+            }
             let mut nested = None;
-            for direct in directs {
+            for direct in self.direct_declarators(declarator.kind) {
                 match *direct {
                     | DirectDeclarator::Identifier(identifier) => return Some(identifier),
                     | DirectDeclarator::Parenthesized(child) => nested = Some(child),
@@ -391,6 +752,93 @@ impl SyntaxTree {
                 }
             }
             declarator = nested?;
+        }
+    }
+
+    fn push_statement_children(&self, work: &mut Vec<Work>, kind: &StatementType, indent: usize) {
+        match *kind {
+            | StatementType::Compound { items } => {
+                for item in self.block_items(items).iter().rev() {
+                    match *item {
+                        | BlockItem::Declaration(index) => {
+                            work.push(Work::Declaration(index, indent, "block-item"));
+                        },
+                        | BlockItem::Statement(index) => {
+                            work.push(Work::Statement(index, indent, "block-item"));
+                        },
+                    }
+                }
+            },
+            | StatementType::Expression(slot) => {
+                Self::push_slot(work, slot, indent, "expression");
+            },
+            | StatementType::If {
+                condition_expression,
+                then_statement,
+                else_statement,
+            } => {
+                if let Some(index) = else_statement {
+                    work.push(Work::Statement(index, indent, "else"));
+                }
+                work.push(Work::Statement(then_statement, indent, "then"));
+                Self::push_slot(work, condition_expression, indent, "condition");
+            },
+            | StatementType::Switch {
+                condition_expression,
+                body_statement,
+            }
+            | StatementType::While {
+                condition_expression,
+                body_statement,
+            }
+            | StatementType::DoWhile {
+                condition_expression,
+                body_statement,
+            } => {
+                work.push(Work::Statement(body_statement, indent, "body"));
+                Self::push_slot(work, condition_expression, indent, "condition");
+            },
+            | StatementType::For {
+                initializer,
+                condition_expression,
+                iteration_expression,
+                body_statement,
+            } => {
+                work.push(Work::Statement(body_statement, indent, "body"));
+                if let Some(slot) = iteration_expression {
+                    Self::push_slot(work, slot, indent, "iteration");
+                }
+                if let Some(slot) = condition_expression {
+                    Self::push_slot(work, slot, indent, "condition");
+                }
+                if let Some(initializer) = initializer {
+                    match initializer {
+                        | ForInitializer::Expression(slot) => {
+                            Self::push_slot(work, slot, indent, "initializer");
+                        },
+                        | ForInitializer::Declaration(index) => {
+                            work.push(Work::Declaration(index, indent, "initializer"));
+                        },
+                    }
+                }
+            },
+            | StatementType::Return(Some(slot)) => {
+                Self::push_slot(work, slot, indent, "return-value");
+            },
+            | StatementType::Label(_, child) | StatementType::Default(child) => {
+                work.push(Work::Statement(child, indent, "labeled"));
+            },
+            | StatementType::Case(expression, child) => {
+                work.push(Work::Statement(child, indent, "labeled"));
+                if let ConstantExpressionSlot::Parsed(index) = expression {
+                    work.push(Work::Expression(index.into(), indent, "case-value"));
+                }
+            },
+            | StatementType::Return(None)
+            | StatementType::Break
+            | StatementType::Continue
+            | StatementType::Goto(_)
+            | StatementType::Null => {},
         }
     }
 
@@ -488,10 +936,7 @@ impl SyntaxTree {
                 function_expression,
                 arguments,
             } => {
-                for argument in Self::checked_slice(&self.store.expression_indices, *arguments)
-                    .iter()
-                    .rev()
-                {
+                for argument in self.expression_indices(*arguments).iter().rev() {
                     work.push(Work::Expression(*argument, indent, "argument"));
                 }
                 work.push(Work::Expression(*function_expression, indent, "callee"));
@@ -501,7 +946,9 @@ impl SyntaxTree {
             }
             | ExpressionType::IndirectMember {
                 base_expression, ..
-            } => work.push(Work::Expression(*base_expression, indent, "base")),
+            } => {
+                work.push(Work::Expression(*base_expression, indent, "base"));
+            },
             | ExpressionType::CompoundLiteral {
                 type_name,
                 initializer,
@@ -524,6 +971,25 @@ impl SyntaxTree {
             | ExpressionType::StringLiteral(_)
             | ExpressionType::Error => {},
         }
+    }
+
+    fn shared(
+        output: &mut String,
+        indent: usize,
+        role: &str,
+        kind: &str,
+        index: u32,
+        context: &Context,
+        options: InspectionOptions,
+    ) {
+        Self::line(
+            output,
+            indent,
+            &format!("{role}: {kind}#{index} (shared)"),
+            None,
+            context,
+            options,
+        );
     }
 
     fn line(
