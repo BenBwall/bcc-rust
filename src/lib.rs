@@ -106,8 +106,7 @@ impl Iterator for PreprocessorIterator {
             return Some(Ok(token));
         }
 
-        self.context.source_vectors.0.clear();
-        let token = self.preprocessor.next_item(&mut self.context);
+        let token = self.preprocessor.next_iterator_item(&mut self.context);
         if let Some(error) = self.context.pop_pending_error() {
             self.pending_token = token;
             Some(Err(error))
@@ -221,6 +220,122 @@ mod pipeline_iterator_tests {
     }
 
     #[test]
+    fn adjacent_string_lookahead_keeps_the_buffered_token_provenance() {
+        let mut iterator = PreprocessorIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "\"a\" identifier\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        let string = iterator.next().unwrap().unwrap();
+        assert!(matches!(string.kind, TokenType::String(_)));
+        let identifier = iterator.next().unwrap().unwrap();
+        assert_eq!(identifier.kind, TokenType::Identifier);
+        assert_eq!(
+            iterator.context.string_cache.at(identifier.contents),
+            "identifier"
+        );
+        assert!(
+            !iterator
+                .context
+                .get_source_vectors(identifier.source_vectors)
+                .is_empty()
+        );
+        assert!(iterator.next().is_none());
+    }
+
+    #[test]
+    fn adjacent_string_lookahead_defers_buffered_token_diagnostics() {
+        let mut iterator = PreprocessorIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "\"a\" 0xg\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::String(_)
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
+                ..
+            })
+        ));
+        assert!(iterator.next().is_some());
+        assert!(iterator.next().is_none());
+    }
+
+    #[test]
+    fn adjacent_string_lookahead_keeps_current_token_before_later_diagnostics() {
+        let mut iterator = PreprocessorIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "\"\\q\" 0xg".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidEscapeSequence,
+                ..
+            })
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::String(_)
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
+                ..
+            })
+        ));
+        drop(iterator.next().unwrap().unwrap_err());
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::Integer(_)
+        ));
+        assert!(iterator.next().is_none());
+    }
+
+    #[test]
+    fn adjacent_string_lookahead_keeps_deferred_eof_diagnostic_provenance() {
+        let mut iterator = PreprocessorIterator::new(
+            PathBuf::from("<test>").into_boxed_path(),
+            "\"a\"\n#error boom\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::String(_)
+        ));
+        let error = iterator.next().unwrap().unwrap_err();
+        assert!(matches!(
+            &error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::ErrorDirective(message),
+                ..
+            }) if message.trim() == "boom"
+        ));
+        let source_vectors = error.source_vectors(&mut iterator.context);
+        assert!(
+            !iterator
+                .context
+                .get_source_vectors(source_vectors)
+                .is_empty()
+        );
+        assert!(iterator.next().is_none());
+    }
+
+    #[test]
     fn parser_iterator_yields_declarations_and_exposes_the_syntax_store() {
         let mut iterator = ParserIterator::new(
             PathBuf::from("<test>").into_boxed_path(),
@@ -241,12 +356,7 @@ mod pipeline_iterator_tests {
     }
 
     #[test]
-    fn parser_iterator_yields_a_diagnostic_before_its_recovered_item() {
-        use crate::translation_phases::parsing::{
-            ParserError,
-            ParserErrorType,
-        };
-
+    fn parser_iterator_yields_a_parsed_initialized_declaration() {
         let mut iterator = ParserIterator::new(
             PathBuf::from("<test>").into_boxed_path(),
             "int value = 1;\n".to_owned().into(),
@@ -255,15 +365,8 @@ mod pipeline_iterator_tests {
         );
 
         assert!(matches!(
-            iterator.next().unwrap().unwrap_err(),
-            TranslationError::Parsing(ParserError {
-                error_type: ParserErrorType::InitializerNotImplemented,
-                ..
-            })
-        ));
-        assert!(matches!(
             iterator.next().unwrap().unwrap(),
-            ExternalDeclaration::RecoveredDeclaration(_)
+            ExternalDeclaration::Declaration(_)
         ));
         assert!(iterator.next().is_none());
     }

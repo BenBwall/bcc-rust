@@ -36,6 +36,7 @@ use super::{
     SourceVectors,
     StrExt,
     TokenString,
+    TranslationError,
     TranslationPhase,
     preprocessor_tokenizer::{
         PreprocessorToken,
@@ -124,6 +125,38 @@ mod tests {
 
     fn preprocess(source: &str) -> (Vec<String>, Vec<TranslationError>) {
         preprocess_with_configuration(source, CompilerConfiguration::default())
+    }
+
+    #[test]
+    fn adjacent_string_lookahead_restores_diagnostics_to_the_phase_context() {
+        let (_, errors) = preprocess("\"a\" 0xg\n");
+
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
+                ..
+            })
+        )));
+    }
+
+    #[test]
+    fn adjacent_string_diagnostics_remain_in_source_order() {
+        let (_, errors) = preprocess("\"\\q\" \"\\u1\"\n");
+
+        assert!(matches!(
+            errors.as_slice(),
+            [
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::InvalidEscapeSequence,
+                    ..
+                }),
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
+                    ..
+                })
+            ]
+        ));
     }
 
     fn strict_c99() -> CompilerConfiguration {
@@ -294,7 +327,7 @@ pub(crate) enum HashHash {
     Empty,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug)]
 pub(crate) struct Preprocessor {
     pub(crate) tokenizer:       PreprocessorTokenizer,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame>,
@@ -309,6 +342,8 @@ pub(crate) struct Preprocessor {
     quote_include_directories:  SharedVec<PathBuf>,
     system_include_directories: SharedVec<PathBuf>,
     expression_parser:          PreprocessorExpressionParser,
+    pending_parser_token:       Option<Token>,
+    pending_parser_errors:      Vec<TranslationError>,
 }
 
 impl GetPosition for Preprocessor {
@@ -2125,6 +2160,19 @@ pub(crate) struct FunctionLikeMacroArgument {
     tokenizer: PreprocessorTokenizer,
 }
 
+#[expect(
+    clippy::needless_continue,
+    reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "Preprocessor-expression conversion reports out-of-range values before conversion."
+)]
+#[expect(
+    clippy::while_let_loop,
+    reason = "The macro-parameter loop has multiple semantic exit conditions."
+)]
 impl Preprocessor {
     pub(crate) fn new(
         context: &mut Context,
@@ -2157,6 +2205,100 @@ impl Preprocessor {
             quote_include_directories,
             system_include_directories,
             expression_parser: PreprocessorExpressionParser::new(),
+            pending_parser_token: None,
+            pending_parser_errors: Vec::new(),
+        }
+    }
+
+    fn next_parser_token(&mut self, context: &mut Context) -> Option<Token> {
+        context.append_pending_errors(take(&mut self.pending_parser_errors));
+        if let Some(token) = self.pending_parser_token.take() {
+            return Some(token);
+        }
+        loop {
+            let Some(token) = self.next_preprocessor_token::<true>(context) else {
+                if self.if_directive_balance != 0 {
+                    self.if_directive_balance = 0;
+                    let source_vectors = context.create_source_vectors(
+                        self.position(context),
+                        self.source_file_index(),
+                        0,
+                    );
+                    context.preprocessor_error(PreprocessorError {
+                        error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
+                        source_vectors,
+                    });
+                }
+                return None;
+            };
+
+            if let Some(result) = self.map_preprocessor_token(context, token) {
+                return Some(result);
+            }
+        }
+    }
+
+    /// Produces the next iterator item while keeping buffered provenance alive.
+    ///
+    /// Adjacent-string concatenation may already have mapped a later token or
+    /// EOF diagnostic. Source-vector compaction therefore belongs to the
+    /// producer that owns that buffered work, not to each iterator consumer.
+    pub(crate) fn next_iterator_item(&mut self, context: &mut Context) -> Option<Token> {
+        if self.pending_parser_token.is_none() && self.pending_parser_errors.is_empty() {
+            context.source_vectors.0.clear();
+        }
+        self.next_item(context)
+    }
+
+    fn concatenate_adjacent_strings(&mut self, context: &mut Context, first: Token) -> Token {
+        let TokenType::String(first_kind) = first.kind else {
+            return first;
+        };
+        let mut wide = matches!(first_kind, StringTokenType::WideString(_));
+        let first_contents = match first_kind {
+            | StringTokenType::String(contents) | StringTokenType::WideString(contents) => contents,
+        };
+        let mut contents = context.string_cache.at(first_contents).to_string();
+        let mut source_vectors = first.source_vectors;
+
+        loop {
+            let existing_errors = context.take_pending_errors();
+            let next = self.next_parser_token(context);
+            let generated_errors = context.take_pending_errors();
+
+            let Some(next) = next else {
+                context.append_pending_errors(existing_errors);
+                self.pending_parser_errors.extend(generated_errors);
+                break;
+            };
+            let TokenType::String(next_kind) = next.kind else {
+                context.append_pending_errors(existing_errors);
+                self.pending_parser_token = Some(next);
+                self.pending_parser_errors.extend(generated_errors);
+                break;
+            };
+            context.append_pending_errors(generated_errors);
+            context.append_pending_errors(existing_errors);
+            let next_contents = match next_kind {
+                | StringTokenType::String(contents) => contents,
+                | StringTokenType::WideString(contents) => {
+                    wide = true;
+                    contents
+                },
+            };
+            contents.push_str(context.string_cache.at(next_contents));
+            source_vectors = context.merge_vectors(source_vectors, next.source_vectors);
+        }
+
+        let contents = context.string_cache.intern(&contents);
+        Token {
+            kind: if wide {
+                TokenType::String(StringTokenType::WideString(contents))
+            } else {
+                TokenType::String(StringTokenType::String(contents))
+            },
+            contents,
+            source_vectors,
         }
     }
 
@@ -2562,7 +2704,7 @@ impl Preprocessor {
                         | TokenizerFrame {
                             frame_type:
                                 TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                                | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                                | TokenizerFrameType::ObjectLikeMacroInvocation,
                             ..
                         } =>
                             if token.kind == PreprocessorTokenType::Newline {
@@ -2669,6 +2811,11 @@ impl Preprocessor {
         false
     }
 
+    #[expect(
+        dead_code,
+        clippy::type_complexity,
+        reason = "Macro-frame inspection is retained for pending expansion paths."
+    )]
     fn current_function_like_macro(
         &self,
         _context: &Context,
@@ -2696,14 +2843,18 @@ impl Preprocessor {
         }
     }
 
+    #[expect(
+        dead_code,
+        reason = "Macro-frame inspection is retained for pending expansion paths."
+    )]
     fn current_is_function_like_macro(&self, _context: &Context) -> bool {
-        match self.tokenizer_stack.last() {
-            | Some(TokenizerFrame {
+        matches!(
+            self.tokenizer_stack.last(),
+            Some(TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
                 ..
-            }) => true,
-            | _ => false,
-        }
+            })
+        )
     }
 
     fn handle_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
@@ -2739,7 +2890,7 @@ impl Preprocessor {
             let hash_hash = if let Some(TokenizerFrame {
                 frame_type:
                     TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                    | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                    | TokenizerFrameType::ObjectLikeMacroInvocation,
                 ..
             }) = self.tokenizer_stack.last()
             {
@@ -3048,7 +3199,7 @@ impl Preprocessor {
                                 kind:           PreprocessorTokenType::String,
                                 contents:       context
                                     .string_cache
-                                    .intern(&source_file.to_string_lossy()),
+                                    .intern(source_file.to_string_lossy()),
                                 source_vectors: context.create_source_vectors(
                                     SourcePosition {
                                         index:  0,
@@ -3197,7 +3348,7 @@ impl Preprocessor {
             }
         };
         self.generate_placeholders = false;
-        self.current_is_newline = ret.map_or(true, |t| t.kind == PreprocessorTokenType::Newline);
+        self.current_is_newline = ret.is_none_or(|t| t.kind == PreprocessorTokenType::Newline);
         ret
     }
 
@@ -3526,14 +3677,14 @@ impl Preprocessor {
         let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
         let is_octal = contents.starts_with('0') && !is_hex && !is_binary;
         if is_hex {
-            if contents.contains(|c| c == '.' || c == 'p' || c == 'P') {
+            if contents.contains(['.', 'p', 'P']) {
                 self.parse_hexadecimal_float(context, token)
             } else {
                 self.parse_hexadecimal_integer(context, token)
             }
         } else if is_binary {
             self.parse_binary_integer(context, token)
-        } else if contents.contains(|c| c == '.' || c == 'e' || c == 'E') {
+        } else if contents.contains(['.', 'e', 'E']) {
             self.parse_decimal_float(context, token)
         } else if is_octal {
             self.parse_octal_integer(context, token)
@@ -3761,7 +3912,7 @@ impl Preprocessor {
                     Some(TokenizerFrame {
                         frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. }
                             | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                            | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                            | TokenizerFrameType::ObjectLikeMacroInvocation,
                         ..
                     })
                 ) {
@@ -4996,7 +5147,7 @@ impl Preprocessor {
                         while let Some(mut entry) =
                             last_entry(&mut self.expression_parser.operator_stack)
                         {
-                            match *entry.get() {
+                            match *entry {
                                 | PreprocessorExpressionOperator::QuestionMark => {
                                     _ = entry.insert(PreprocessorExpressionOperator::Conditional);
                                     matched_question_mark = true;
@@ -5009,13 +5160,13 @@ impl Preprocessor {
                                 },
                             }
                         }
-                        if !matched_question_mark {
+                        if matched_question_mark {
+                            self.expression_parser.state = UNARY;
+                        } else {
                             context.preprocessor_error(PreprocessorError {
                                 error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
                                 source_vectors: token.source_vectors,
                             });
-                        } else {
-                            self.expression_parser.state = UNARY;
                         }
                     },
                     (
@@ -5112,7 +5263,7 @@ impl Preprocessor {
                                 | IntegerTokenType::UnsignedLongLong(ull) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ull)),
                             },
                             _ => unreachable!("Compiler bug: parse_number should return a number token."),
-                        };
+                        }
                         self.expression_parser.state = BINARY;
                     },
                     (PreprocessorTokenType::Number, BINARY) => context.preprocessor_error(PreprocessorError {
@@ -5357,11 +5508,10 @@ impl Preprocessor {
                 })
             },
             "parsing ifdef directive",
-        ) {
-            if !self.macro_definitions.contains_key(&name.contents) {
-                self.skip_over_dead_code(context);
-                return;
-            }
+        ) && !self.macro_definitions.contains_key(&name.contents)
+        {
+            self.skip_over_dead_code(context);
+            return;
         }
         if self
             .expect_token_from_previous_phase::<true>(
@@ -5395,11 +5545,10 @@ impl Preprocessor {
                 })
             },
             "parsing ifndef directive",
-        ) {
-            if !self.macro_definitions.contains_key(&name.contents) {
-                self.skip_over_dead_code(context);
-                return;
-            }
+        ) && !self.macro_definitions.contains_key(&name.contents)
+        {
+            self.skip_over_dead_code(context);
+            return;
         }
         if self
             .expect_token_from_previous_phase::<true>(
@@ -6475,26 +6624,7 @@ impl TranslationPhase for Preprocessor {
     type Item = Token;
 
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
-        loop {
-            let Some(token) = self.next_preprocessor_token::<true>(context) else {
-                if self.if_directive_balance != 0 {
-                    self.if_directive_balance = 0;
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    );
-                    context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
-                        source_vectors,
-                    });
-                }
-                return None;
-            };
-
-            if let Some(result) = self.map_preprocessor_token(context, token) {
-                return Some(result);
-            }
-        }
+        let token = self.next_parser_token(context)?;
+        Some(self.concatenate_adjacent_strings(context, token))
     }
 }

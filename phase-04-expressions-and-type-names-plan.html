@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Implementation plan for Phase 04 of the bcc-rust C99 parser: non-recursive expression, type-name, and initializer parsing.">
+  <title>Phase 04 — Expressions, type names, and initializers</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1013;
+      --panel: #111a1f;
+      --panel-2: #172329;
+      --line: #2a3a40;
+      --line-strong: #3a5159;
+      --ink: #edf4f3;
+      --muted: #aab9b8;
+      --dim: #738686;
+      --cyan: #65d8d0;
+      --cyan-soft: rgba(101, 216, 208, .12);
+      --amber: #f0bd63;
+      --amber-soft: rgba(240, 189, 99, .12);
+      --coral: #f08372;
+      --coral-soft: rgba(240, 131, 114, .12);
+      --green: #79d397;
+      --green-soft: rgba(121, 211, 151, .11);
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 82% 0%, rgba(101, 216, 208, .10), transparent 30rem),
+        radial-gradient(circle at 5% 28%, rgba(240, 189, 99, .06), transparent 28rem),
+        var(--bg);
+      font: 15px/1.65 var(--sans);
+    }
+    a { color: var(--cyan); text-underline-offset: 3px; }
+    a:hover { color: #a7f4ee; }
+    code, .mono { font-family: var(--mono); }
+    code {
+      padding: .08rem .32rem;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #080d10;
+      color: #d9efed;
+      font-size: .89em;
+    }
+    button { font: inherit; }
+    h1, h2, h3 { text-wrap: balance; }
+    h2 { margin: 0; font-size: clamp(29px, 4vw, 43px); line-height: 1.08; letter-spacing: -.04em; }
+    h3 { margin: 0; font-size: 17px; line-height: 1.35; }
+    p { margin-top: 0; }
+    ul { padding-left: 1.2rem; }
+    li + li { margin-top: .38rem; }
+
+    .page { width: min(1180px, calc(100% - 52px)); margin: 0 auto; padding-bottom: 70px; }
+    .topbar {
+      min-height: 64px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 11px; font: 750 12px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    .brand-mark { width: 25px; height: 15px; position: relative; }
+    .brand-mark::before, .brand-mark::after { position: absolute; top: 0; font: 850 15px/1 var(--mono); }
+    .brand-mark::before { content: "E"; left: 0; color: var(--cyan); }
+    .brand-mark::after { content: "04"; left: 10px; color: var(--amber); font-size: 10px; top: 3px; }
+    .top-actions { display: flex; align-items: center; gap: 12px; color: var(--muted); font: 11px/1 var(--mono); }
+    .button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 99px; background: transparent; color: var(--ink); cursor: pointer; text-decoration: none; }
+    .button:hover { border-color: var(--cyan); color: var(--cyan); }
+
+    .hero { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(280px, .55fr); gap: 64px; padding: 76px 0 56px; align-items: end; }
+    .kicker { margin: 0 0 18px; color: var(--cyan); font: 750 11px/1.2 var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 830px; font-size: clamp(45px, 7vw, 79px); line-height: .96; letter-spacing: -.06em; font-weight: 760; }
+    .lead { max-width: 800px; margin: 28px 0 0; color: #c6d3d2; font-size: 19px; line-height: 1.56; }
+    .baseline { padding: 25px 0 6px 26px; border-left: 1px solid var(--line-strong); }
+    .eyebrow { color: var(--dim); font: 11px/1.4 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    .baseline strong { display: block; margin: 13px 0 8px; color: var(--green); font: 760 30px/1 var(--mono); letter-spacing: -.04em; }
+    .baseline p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .metrics { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--panel); }
+    .metric { min-height: 115px; padding: 20px; border-right: 1px solid var(--line); }
+    .metric:last-child { border-right: 0; }
+    .metric-value { display: block; font: 750 25px/1 var(--mono); letter-spacing: -.04em; }
+    .metric-label { display: block; margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    .section { padding: 45px 0; border-top: 1px solid var(--line); }
+    .section-head { display: grid; grid-template-columns: 185px minmax(0, 1fr); gap: 30px; margin-bottom: 28px; }
+    .section-id { color: var(--dim); font: 11px/1.5 var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    .intro { max-width: 830px; color: var(--muted); font-size: 16px; }
+
+    .two-col, .three-col { display: grid; gap: 16px; }
+    .two-col { grid-template-columns: 1fr 1fr; }
+    .three-col { grid-template-columns: repeat(3, 1fr); }
+    .card { padding: 24px; border: 1px solid var(--line); border-radius: 9px; background: rgba(17, 26, 31, .88); }
+    .card p { margin: 9px 0 0; color: var(--muted); }
+    .card ul { margin-bottom: 0; color: #cad6d5; }
+    .card.owned { box-shadow: inset 3px 0 0 var(--cyan); }
+    .card.deferred { box-shadow: inset 3px 0 0 var(--amber); }
+    .card.excluded { box-shadow: inset 3px 0 0 var(--coral); }
+    .notice { margin-top: 16px; padding: 20px 22px; border-left: 3px solid var(--amber); background: var(--amber-soft); color: #d9d2c3; }
+    .notice strong { color: var(--amber); }
+
+    .flow { display: grid; grid-template-columns: 1fr 50px 1fr 50px 1fr; align-items: stretch; gap: 9px; }
+    .node { min-height: 175px; padding: 21px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .node.hot { border-color: var(--cyan); box-shadow: inset 0 3px 0 var(--cyan); }
+    .node small { color: var(--dim); font: 10px/1.2 var(--mono); text-transform: uppercase; }
+    .node h3 { margin-top: 23px; }
+    .node p { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+    .arrow { display: grid; place-items: center; color: var(--dim); font: 22px/1 var(--mono); }
+    pre { margin: 17px 0 0; padding: 20px; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: #070c0f; color: #d6e6e4; font: 12px/1.65 var(--mono); }
+
+    table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); background: rgba(17, 26, 31, .83); }
+    th, td { padding: 14px 15px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+    tr:last-child td { border-bottom: 0; }
+    th { color: var(--muted); background: var(--panel-2); font: 700 10px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .09em; }
+    td:first-child { font-weight: 650; }
+    td:last-child { color: var(--muted); }
+    .pill { display: inline-block; padding: 5px 8px; border-radius: 99px; font: 750 10px/1 var(--mono); text-transform: uppercase; white-space: nowrap; }
+    .cyan { color: var(--cyan); background: var(--cyan-soft); }
+    .amber { color: var(--amber); background: var(--amber-soft); }
+    .coral { color: var(--coral); background: var(--coral-soft); }
+
+    .steps { counter-reset: step; margin: 0; padding: 0; list-style: none; }
+    .steps > li { counter-increment: step; display: grid; grid-template-columns: 42px minmax(0, 1fr) 215px; gap: 17px; padding: 22px 0; border-top: 1px solid var(--line); }
+    .steps > li::before { content: counter(step, decimal-leading-zero); color: var(--cyan); font: 750 12px/1.7 var(--mono); }
+    .steps strong { display: block; font-size: 17px; }
+    .steps p { margin: 6px 0 0; color: var(--muted); }
+    .exit { padding-left: 15px; border-left: 1px solid var(--line); color: var(--dim); font: 10px/1.65 var(--mono); text-transform: uppercase; }
+    .exit b { display: block; margin-bottom: 5px; color: var(--amber); font-weight: 750; }
+
+    .check-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .check { position: relative; min-height: 100px; padding: 17px 18px 17px 48px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
+    .check::before { content: "✓"; position: absolute; left: 18px; top: 17px; color: var(--green); font: 800 14px/1.5 var(--mono); }
+    .check strong { color: #dce7e6; }
+    .check p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+
+    .commit-list { margin: 0; padding: 0; list-style: none; counter-reset: commit; }
+    .commit-list li { counter-increment: commit; display: grid; grid-template-columns: 32px 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+    .commit-list li::before { content: counter(commit, decimal-leading-zero); color: var(--dim); font: 11px/1.7 var(--mono); }
+    .commit-list code { width: fit-content; }
+
+    .footer { display: grid; grid-template-columns: 185px 1fr; gap: 30px; padding: 28px 0 0; border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; }
+    .footer p { margin: 0; }
+
+    @media (max-width: 930px) {
+      .hero { grid-template-columns: 1fr; gap: 34px; }
+      .baseline { max-width: 500px; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .metric { border-bottom: 1px solid var(--line); }
+      .metric:nth-child(2n) { border-right: 0; }
+      .metric:last-child { grid-column: 1 / -1; border-bottom: 0; }
+      .three-col { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); min-height: 28px; }
+      .steps > li { grid-template-columns: 36px 1fr; }
+      .exit { grid-column: 2; }
+    }
+    @media (max-width: 680px) {
+      .page { width: min(100% - 30px, 1180px); }
+      .top-actions span { display: none; }
+      .hero { padding: 50px 0 38px; }
+      .section { padding: 35px 0; }
+      .section-head, .footer { grid-template-columns: 1fr; gap: 10px; }
+      .two-col, .check-grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr; }
+      .metric { border-right: 0; }
+      .metric:last-child { grid-column: auto; }
+      table { display: block; overflow-x: auto; }
+    }
+    @media print {
+      :root { color-scheme: light; --bg:#fff; --panel:#fff; --panel-2:#f4f8f7; --ink:#101718; --muted:#4c5c5b; --dim:#687776; --line:#d7e0df; --line-strong:#bdcac8; }
+      body { background: #fff; font-size: 11px; }
+      .page { width: auto; padding: 0 18px; }
+      .button { display: none; }
+      .hero { padding: 36px 0 28px; }
+      .section { padding: 25px 0; }
+      .card, .node, .metric, .check, .steps > li { break-inside: avoid; }
+      h1 { font-size: 51px; }
+      code, pre { background: #f3f7f6; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span> bcc-rust parser plan</div>
+      <div class="top-actions">
+        <span>Baseline 63a2f6d · 24 Aug 2026</span>
+        <a class="button" href="phase-04-expressions-and-type-names-plan.md">Markdown</a>
+        <button class="button" type="button" onclick="window.print()">Print</button>
+      </div>
+    </div>
+
+    <header class="hero">
+      <div>
+        <p class="kicker">Phase 04 / Implementation plan</p>
+        <h1>Parse the whole expression cluster.</h1>
+        <p class="lead">Add non-recursive <code>ExpressionFrame</code>, <code>TypeNameFrame</code>, and <code>InitializerFrame</code> families, with expression reduction owned directly by the language parser, and replace every Phase 02 and Phase 03 future child with source-backed syntax.</p>
+      </div>
+      <aside class="baseline" aria-label="Planning baseline">
+        <div class="eyebrow">Verified planning baseline</div>
+        <strong>137 / 137</strong>
+        <p>All-target tests pass. Nightly formatting is clean. No expression, type-name, or initializer frame is reachable yet.</p>
+      </aside>
+    </header>
+
+    <div class="metrics" role="list" aria-label="Phase summary">
+      <div class="metric" role="listitem"><span class="metric-value">3</span><span class="metric-label">Public expression entry modes</span></div>
+      <div class="metric" role="listitem"><span class="metric-value">15</span><span class="metric-label">C99 operator-precedence levels</span></div>
+      <div class="metric" role="listitem"><span class="metric-value">3</span><span class="metric-label">New mutually recursive frame families</span></div>
+      <div class="metric" role="listitem"><span class="metric-value">0</span><span class="metric-label">Target recursive grammar calls</span></div>
+      <div class="metric" role="listitem"><span class="metric-value">25–40</span><span class="metric-label">Estimated focused agent-days</span></div>
+    </div>
+
+    <section class="section" id="objective">
+      <div class="section-head"><div class="section-id">01 / Objective</div><h2>Finish expressions and every grammar family that calls back into them</h2></div>
+      <p class="intro">The existing parser already owns statements, declarations, delimiters, scopes, recovery, and typed deferred children. Phase 04 supplies expressions, type names, initializers, and expression-dependent declaration children while preserving that protocol: one control stack, one delimiter owner, typed reductions, exact provenance, and bounded recovery.</p>
+      <div class="notice"><strong>Design revision:</strong> the language and preprocessor expression parsers intentionally keep independent reducer implementations. Do not add a shared reducer module; <code>src/translation_phases/</code> contains only C translation phases.</div>
+      <div class="three-col">
+        <article class="card owned">
+          <h3>Phase 04 owns</h3>
+          <ul>
+            <li>Primary through comma expressions.</li>
+            <li>Type names for casts, <code>sizeof</code>, and compound literals.</li>
+            <li>Scalar, braced, nested, and designated initializers.</li>
+            <li>Every statement and declaration future child.</li>
+            <li>Parser-local precedence reduction owned by <code>ExpressionFrame</code>.</li>
+          </ul>
+        </article>
+        <article class="card deferred">
+          <h3>Phase 05 closes the parser</h3>
+          <ul>
+            <li>Audit the complete C99 grammar matrix.</li>
+            <li>Harden cross-family recovery and limits.</li>
+            <li>Close omissions found by the audit.</li>
+            <li>No planned grammar-family handoff.</li>
+          </ul>
+        </article>
+        <article class="card excluded">
+          <h3>Later semantic work</h3>
+          <ul>
+            <li>Type resolution and conversions.</li>
+            <li>Lvalues, member lookup, and call checking.</li>
+            <li>Constant evaluation and sequence analysis.</li>
+            <li>Initializer current-object, brace-elision, and override rules.</li>
+            <li>Backend lowering and extensions.</li>
+          </ul>
+        </article>
+      </div>
+      <div class="notice"><strong>Merged cluster:</strong> <code>ExpressionFrame</code> pushes type names and compound-literal initializers; <code>InitializerFrame</code> pushes assignment and constant expressions; declarator, struct, enum, and declaration frames push the same expression/initializer entry modes. Phase 04 lands and verifies that full cycle.</div>
+    </section>
+
+    <section class="section" id="baseline">
+      <div class="section-head"><div class="section-id">02 / Baseline</div><h2>Build from the Phase 03 machine that actually exists</h2></div>
+      <div class="two-col">
+        <article class="card">
+          <h3>Implemented foundation</h3>
+          <ul>
+            <li><code>Parser</code> owns a buffered cursor, control frames, arenas, scopes, recovery, and diagnostics.</li>
+            <li><code>DeclaratorFrame(Abstract)</code> already handles abstract pointer, grouping, array, and function shapes.</li>
+            <li><code>ScopeStack</code> publishes and shadows typedef names at parser-visible token positions.</li>
+            <li>Statements and declarations expose typed future-child seams with parent-owned delimiters.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>Model and reachability gaps</h3>
+          <ul>
+            <li><code>ParseFrame</code> and <code>ParseValue</code> have no expression, type-name, or initializer variants.</li>
+            <li>Expression/type-name storage is incomplete; initializer/designator arena storage is absent.</li>
+            <li>Calls and initializer lists need stable child slices; malformed children need typed recovery nodes.</li>
+            <li>The preprocessor has an independent reducer implementation that Phase 04 leaves unchanged.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="contracts">
+      <div class="section-head"><div class="section-id">03 / Contracts</div><h2>Entry mode and delimiter ownership make comma and colon predictable</h2></div>
+      <table>
+        <thead><tr><th>Entry</th><th>Outermost grammar</th><th>Top-level comma</th><th>Callers</th></tr></thead>
+        <tbody>
+          <tr><td><code>Expression</code></td><td>Full expression</td><td><span class="pill cyan">Operator</span></td><td>Statements, grouping, subscripts, conditional middle</td></tr>
+          <tr><td><code>AssignmentExpression</code></td><td>Assignment expression</td><td><span class="pill amber">Separator</span></td><td>Call arguments, scalar initializers, and array bounds</td></tr>
+          <tr><td><code>ConstantExpression</code></td><td>Conditional expression</td><td><span class="pill amber">Separator</span></td><td><code>case</code>, bit-field, enumerator, and array-designator callers</td></tr>
+        </tbody>
+      </table>
+      <table style="margin-top:16px">
+        <thead><tr><th>Context</th><th>Child entry</th><th>Boundary owner</th></tr></thead>
+        <tbody>
+          <tr><td>Expression or return statement</td><td><code>Expression</code></td><td><code>StatementFrame</code> owns <code>;</code></td></tr>
+          <tr><td>Selection/iteration header</td><td><code>Expression</code></td><td><code>StatementFrame</code> owns <code>)</code> and header semicolons</td></tr>
+          <tr><td><code>case</code> label</td><td><code>ConstantExpression</code></td><td><code>StatementFrame</code> owns label <code>:</code></td></tr>
+          <tr><td>Grouped primary / subscript</td><td><code>Expression</code></td><td>Expression marker owns <code>)</code> / <code>]</code></td></tr>
+          <tr><td>Call argument</td><td><code>AssignmentExpression</code></td><td>Call marker owns comma and <code>)</code></td></tr>
+          <tr><td>Conditional middle</td><td><code>Expression</code></td><td>Nearest unmatched <code>?</code> marker owns <code>:</code></td></tr>
+          <tr><td>Cast or <code>sizeof(type-name)</code></td><td><code>TypeNameFrame</code></td><td><code>ExpressionFrame</code> owns both parentheses</td></tr>
+          <tr><td>Scalar initializer</td><td><code>AssignmentExpression</code></td><td><code>InitializerFrame</code> leaves caller delimiter unconsumed</td></tr>
+          <tr><td>Brace initializer / compound literal</td><td><code>InitializerFrame</code></td><td>Initializer owns braces and list commas</td></tr>
+          <tr><td>Array designator</td><td><code>ConstantExpression</code></td><td>Initializer owns <code>[</code> and <code>]</code></td></tr>
+          <tr><td>Array bound / bit field / enumerator</td><td>Assignment or constant expression</td><td>Declarator, struct, or enum frame owns its delimiter</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="architecture">
+      <div class="section-head"><div class="section-id">04 / Architecture</div><h2>One parser driver with expression reduction owned by its frame</h2></div>
+      <div class="flow" aria-label="Parser architecture">
+        <div class="node"><small>Input and control</small><h3>Parser driver</h3><p>Buffered typed tokens, <code>Vec&lt;ParseFrame&gt;</code>, typed child return, recovery state, scopes, and arenas.</p></div>
+        <div class="arrow" aria-hidden="true">→</div>
+        <div class="node hot"><small>Parser-local mechanism</small><h3><code>ExpressionFrame</code> reduction</h3><p>Operand/operator state, stacks, precedence, associativity, blocking markers, provenance, and progress invariants.</p></div>
+        <div class="arrow" aria-hidden="true">↔</div>
+        <div class="node"><small>Typed child grammar</small><h3>Type names / initializers</h3><p>The language parser pushes typed child frames and constructs expression handles and source-backed syntax.</p></div>
+      </div>
+      <pre>enum ParseFrame {
+    // Phase 03 frames...
+    TypeName(TypeNameFrame),
+    Expression(ExpressionFrame),
+    Initializer(InitializerFrame),
+}
+
+enum ParseValue {
+    // Phase 03 values...
+    TypeName(TypeNameIndex),
+    Expression(ExpressionResult),
+    ConstantExpression(ConstantExpressionResult),
+    Initializer(InitializerResult),
+}</pre>
+      <div class="two-col" style="margin-top:16px">
+        <article class="card">
+          <h3><code>ExpressionFrame</code> owns</h3>
+          <ul>
+            <li>Entry mode and caller stop set.</li>
+            <li>Operator stack with provenance and blocking markers.</li>
+            <li>Operand handles plus assignment-left grammar category.</li>
+            <li>Arguments, type-name waits, initializer children, and recovery.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3>The preprocessor remains separate</h3>
+          <ul>
+            <li>It retains its own operand/operator stacks and state.</li>
+            <li>It retains integer evaluation and short-circuit bookkeeping.</li>
+            <li>It retains extension policy and diagnostic wording.</li>
+            <li>No cross-phase reducer module is added under <code>src/translation_phases/</code>.</li>
+          </ul>
+        </article>
+      </div>
+      <div class="notice"><strong><code>InitializerFrame</code> owns:</strong> scalar-versus-braced selection, nested list state, list commas and braces, optional designation chains, field and array designators, expression children, and recovery before its caller's delimiter.</div>
+    </section>
+
+    <section class="section" id="model">
+      <div class="section-head"><div class="section-id">05 / Syntax model</div><h2>Store the mutually recursive grammar behind stable typed handles</h2></div>
+      <div class="three-col">
+        <article class="card"><h3>Type names</h3><p>Add <code>TypeNameIndex</code>. Casts, <code>sizeof</code>, and compound literals refer to the type-name arena instead of cloning inline values.</p></article>
+        <article class="card"><h3>Expressions and initializers</h3><p>Calls use stable <code>ExpressionIndex</code> slices. Initializers use <code>InitializerIndex</code> plus ordered element, designation, and designator storage.</p></article>
+        <article class="card"><h3>Recovery</h3><p>Add recovered/error expressions and initializers. Remove every final <code>FutureChild</code>; retain <code>Missing</code> only for truly absent required syntax.</p></article>
+      </div>
+      <div class="notice"><strong>Typedef decision:</strong> after <code>(</code> in operand state, a type keyword/qualifier or currently visible typedef name starts <code>TypeNameFrame</code>; otherwise parse a grouped expression. If any implementation tentatively parses, it must roll back cursor, arenas, reducer stacks, diagnostics, and scope state before trying the alternative.</div>
+    </section>
+
+    <section class="section" id="delivery">
+      <div class="section-head"><div class="section-id">06 / Delivery</div><h2>Land vertical slices with a checkable exit at every step</h2></div>
+      <ol class="steps">
+        <li><div><strong>Freeze the baseline and grammar matrix</strong><p>Characterize every future-child site, operator/initializer form, entry mode, ambiguity, stop token, malformed state, and preprocessor behavior.</p></div><div class="exit"><b>Exit</b>Every Phase 04 grammar and recovery row has a named test and owner; the 137-test baseline is locked.</div></li>
+        <li><div><strong>Repair syntax and arena storage</strong><p>Add stable type-name, expression, initializer, element, designation, designator, and child-list storage with recovery/provenance forms.</p></div><div class="exit"><b>Exit</b>Every in-scope form is losslessly representable and no final AST form requires <code>FutureChild</code>.</div></li>
+        <li><div><strong>Implement private language-expression reduction</strong><p>Keep operand/operator stacks, state, precedence, associativity, markers, provenance, and progress rules directly in <code>ExpressionFrame</code>; do not change preprocessing.</p></div><div class="exit"><b>Exit</b>The public parser operator matrix passes and the independent preprocessor suite remains green.</div></li>
+        <li><div><strong>Implement <code>TypeNameFrame</code></strong><p>Compose specifier-qualifier parsing with optional abstract declarators; preserve prototype scope and a typed within-phase array-bound contract.</p></div><div class="exit"><b>Exit</b>Expression-independent type names return source-backed handles without recursion or identifier-bearing declarators.</div></li>
+        <li><div><strong>Parse primary and postfix expressions</strong><p>Land identifiers, constants, strings, grouping, subscripts, calls, member access, and postfix increments/decrements through real statement paths.</p></div><div class="exit"><b>Exit</b>Postfix chains compose; <code>f(a,b)</code> and <code>f((a,b))</code> have different argument shapes.</div></li>
+        <li><div><strong>Parse unary, casts, and <code>sizeof</code></strong><p>Preserve the asymmetric unary/cast grammar and push type-name children only after current-scope typedef classification selects them.</p></div><div class="exit"><b>Exit</b>Chained casts, both <code>sizeof</code> forms, grouping, and scope shadowing choose the correct syntax.</div></li>
+        <li><div><strong>Complete infix and comma reduction</strong><p>Add every binary level, nested conditional handling, all assignments, comma, and operand grammar categories for assignment-left syntax.</p></div><div class="exit"><b>Exit</b>The operator matrix and all associativity/comma contexts produce exact ASTs or focused diagnostics.</div></li>
+        <li><div><strong>Parse scalar and brace initializers</strong><p>Implement assignment-expression initializers and iterative nested initializer lists with owned braces, commas, and optional trailing comma.</p></div><div class="exit"><b>Exit</b>Scalar and nested list initializers produce stable handles; malformed children retain list shape.</div></li>
+        <li><div><strong>Parse designations and designators</strong><p>Parse ordered field/array designator chains, constant-expression indices, member identifiers, required <code>=</code>, and the designated initializer.</p></div><div class="exit"><b>Exit</b>Chained and mixed designations recover without stealing element or list delimiters.</div></li>
+        <li><div><strong>Build compound literals</strong><p>Delay cast reduction through lookahead, push the real initializer frame, store its handle, and resume postfix parsing.</p></div><div class="exit"><b>Exit</b>Every compound literal has parsed type-name and initializer handles; following postfix syntax composes.</div></li>
+        <li><div><strong>Replace Phase 03 expression seams</strong><p>Connect expression statements, selection/iteration controls, all <code>for</code> slots, returns, and <code>case</code> labels while preserving statement delimiters.</p></div><div class="exit"><b>Exit</b>Every valid present statement expression is parsed; <code>StatementExpressionNotImplemented</code> is gone.</div></li>
+        <li><div><strong>Replace declaration-side seams</strong><p>Connect array bounds, bit-field widths, enumerator values, and declaration initializers with correct entry modes, publication timing, and parent delimiters.</p></div><div class="exit"><b>Exit</b>All declaration-dependent positions contain parsed handles; unsupported diagnostics are gone from valid paths.</div></li>
+        <li><div><strong>Harden recovery and limits</strong><p>Cover every expression/type-name/initializer/designator/EOF state, later-item continuation, 63 nested parentheses, 127 arguments, and deep initializer lists.</p></div><div class="exit"><b>Exit</b>All paths terminate with balanced reducer/frame/scope state and no caller delimiter theft.</div></li>
+        <li><div><strong>Verify, document, and hand off</strong><p>Run canonical checks, inspect all syntax families via the CLI, update status/compliance guidance, and hand only closure/audit work to Phase 05.</p></div><div class="exit"><b>Exit</b>Tests and formatting pass; changed files are Clippy-clean; no supported future-child path remains.</div></li>
+      </ol>
+    </section>
+
+    <section class="section" id="tests">
+      <div class="section-head"><div class="section-id">07 / Test matrix</div><h2>Prove context, associativity, recovery, and heap-backed depth</h2></div>
+      <table>
+        <thead><tr><th>Area</th><th>Required evidence</th></tr></thead>
+        <tbody>
+          <tr><td>Primary and postfix</td><td>All literal payloads; grouping; subscripts; empty/nonempty/nested calls; member access; prefix/postfix increment; arbitrary postfix chains.</td></tr>
+          <tr><td>Precedence</td><td>Every operator; every equal-precedence left chain; right-associative casts, conditionals, and assignments; invalid assignment-left grammar.</td></tr>
+          <tr><td>Conditional</td><td><code>a?b?c:d:e</code>, <code>a?b:c?d:e</code>, comma in the middle, grouping boundaries, unmatched markers, and missing third operands.</td></tr>
+          <tr><td>Comma contexts</td><td><code>f(a,b)</code>, <code>f((a,b))</code>, nested mixtures, statement commas, and caller separators at every depth.</td></tr>
+          <tr><td>Type-name ambiguity</td><td>Pointer/array/function abstract forms; casts and both <code>sizeof</code> forms under file, parameter, function, block, and implicit-scope typedef shadowing.</td></tr>
+          <tr><td>Initializers</td><td>Scalar, nested brace, trailing-comma, field/array/chained/mixed designations, malformed lists, and exact source order.</td></tr>
+          <tr><td>Compound literals</td><td>Parsed type-name and initializer handles, nested/designated lists, argument/grouping contexts, and following postfix suffixes.</td></tr>
+          <tr><td>Statements</td><td>Every Phase 03 expression position, absent optional clauses, missing required children, and unchanged parent delimiter traces.</td></tr>
+          <tr><td>Declarations</td><td>Array bounds, bit-field widths, enumerator values, file/block/<code>for</code> initializers, typedef publication timing, and parent delimiters.</td></tr>
+          <tr><td>Recovery and limits</td><td>Every frame phase at EOF; later element/statement/declaration/file-item continuation; 63 parenthesized expressions; 127 arguments; deep initializer lists.</td></tr>
+          <tr><td>Preprocessor regression</td><td>Evaluation, extension policy, comma liveness, parentheses, nested conditional middles/right branches, and diagnostic wording remain stable.</td></tr>
+        </tbody>
+      </table>
+      <div class="notice"><strong>Assertions:</strong> syntax shape, expression/initializer/designator arena slices, exact source vectors, recovered/error state, diagnostics, typedef classification and publication timing, scope/reducer cleanup, and frame/cursor ownership traces.</div>
+    </section>
+
+    <section class="section" id="commits">
+      <div class="section-head"><div class="section-id">08 / Commit sequence</div><h2>Keep expression reduction local and each vertical slice green</h2></div>
+      <div class="two-col">
+        <ol class="commit-list">
+          <li><code>test(parser): characterize phase 4 future-child seams</code></li>
+          <li><code>refactor(parser): complete expression type-name and initializer storage</code></li>
+          <li><code>feat(parser): add private expression reduction machinery</code></li>
+          <li><code>feat(parser): parse type names on the control stack</code></li>
+          <li><code>feat(parser): parse primary and postfix expressions</code></li>
+          <li><code>feat(parser): parse unary cast and sizeof expressions</code></li>
+          <li><code>feat(parser): parse binary and conditional expressions</code></li>
+          <li><code>feat(parser): parse assignment and comma expressions</code></li>
+        </ol>
+        <ol class="commit-list" style="counter-reset:commit 8">
+          <li><code>feat(parser): parse scalar and brace-enclosed initializers</code></li>
+          <li><code>feat(parser): parse initializer designations and designators</code></li>
+          <li><code>feat(parser): build compound literals with parsed initializers</code></li>
+          <li><code>feat(parser): connect expressions to every statement position</code></li>
+          <li><code>feat(parser): replace declaration expression and initializer seams</code></li>
+          <li><code>test(parser): harden phase 4 recovery and translation limits</code></li>
+          <li><code>docs(parser): record phase 4 grammar completion</code></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" id="done">
+      <div class="section-head"><div class="section-id">09 / Done</div><h2>Phase 04 exits only when the full grammar cluster is complete</h2></div>
+      <div class="check-grid">
+        <div class="check"><strong>One reachable expression frame</strong><p>Primary through comma grammar runs through the existing driver with no recursive grammar calls.</p></div>
+        <div class="check"><strong>One reachable initializer frame</strong><p>Scalar, braced, nested, and designated initializers run through the same driver without recursive grammar calls.</p></div>
+        <div class="check"><strong>Independent reducer ownership</strong><p>The language and preprocessor expression parsers each own their tested stacks, state, values, operators, and diagnostics.</p></div>
+        <div class="check"><strong>Complete operator evidence</strong><p>Every C99 operator, precedence level, associativity rule, comma role, and nested conditional shape is covered.</p></div>
+        <div class="check"><strong>Scope-correct type names</strong><p>Casts, grouping, <code>sizeof</code>, and compound literals use classification at the current token position.</p></div>
+        <div class="check"><strong>Statements contain handles</strong><p>Every valid present expression has <code>ExpressionIndex</code>; every valid <code>case</code> has <code>ConstantExpressionIndex</code>.</p></div>
+        <div class="check"><strong>Declarations contain handles</strong><p>Array bounds, bit fields, enumerators, declaration initializers, and compound literals contain parsed children.</p></div>
+        <div class="check"><strong>No supported future child remains</strong><p><code>FutureChildKind</code> and unsupported diagnostics are absent from every supported C99 grammar path.</p></div>
+        <div class="check"><strong>Recovery preserves the machine</strong><p>Malformed input terminates, retains useful syntax, leaves caller delimiters, and permits later file items.</p></div>
+        <div class="check"><strong>Depth is heap-backed</strong><p>63 nested parenthesized expressions and 127 call arguments pass without process-stack recursion.</p></div>
+        <div class="check"><strong>Canonical checks are accounted for</strong><p>Tests and formatting pass; changed Phase 04 files are Clippy-clean; <code>git diff --check</code> passes.</p></div>
+        <div class="check"><strong>The handoff is exact</strong><p>CLI inspection reaches every representative node and Phase 05 receives only closure/audit work plus explicit semantic gaps.</p></div>
+      </div>
+    </section>
+
+    <section class="section" id="verification">
+      <div class="section-head"><div class="section-id">10 / Verification</div><h2>Canonical final checks</h2></div>
+      <pre>cargo test --all-targets
+cargo +nightly fmt --check
+cargo clippy --all-targets -- -D warnings
+git diff --check</pre>
+      <p class="intro" style="margin-top:16px">If workspace Clippy still reports baseline debt, preserve the full evidence and prove that no diagnostic points at a Phase 04 changed file. Manually inspect the CLI syntax dump for every expression, type-name, initializer, designation, designator, statement/declaration integration, compound-literal, and malformed recovery family; verify <code>--tokens</code> remains available.</p>
+    </section>
+
+    <footer class="footer">
+      <div class="section-id">Source of truth</div>
+      <p>This visual companion mirrors <a href="phase-04-expressions-and-type-names-plan.md"><code>phase-04-expressions-and-type-names-plan.md</code></a>. The Markdown file contains the full required-reading list, detailed step instructions, completion criteria, out-of-scope boundary, and handoff requirements. Prepared from the repository at commit <code>63a2f6d</code> on 24 August 2026.</p>
+    </footer>
+  </main>
+</body>
+</html>

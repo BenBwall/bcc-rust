@@ -24,6 +24,10 @@ where
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "SmallQueue operations are retained for future parser queueing work."
+)]
 impl<T, const N: usize> SmallQueue<T, N>
 where
     T: Copy + Default,

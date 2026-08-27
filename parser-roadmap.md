@@ -34,9 +34,9 @@ Exit: the migrated declaration subset is reachable through
 `Parser::next_item`, uses no recursive parser calls, and recovers with
 source-backed valid or recovered declaration nodes.
 
-## Remaining parser phases
-
 ### Phase 03: Statements, blocks, and function definitions
+
+Status: complete.
 
 Add the structural parser machinery for function definitions, compound
 statements, ordered block items, statement forms, and function/block scope.
@@ -63,15 +63,27 @@ Exit:
 - expression and initializer gaps remain explicit typed seams rather than
   ad hoc token skipping.
 
-### Phase 04: Expressions and type names
+### Phase 04: Expressions, type names, and initializers
+
+Status: complete.
 
 Implement the non-recursive language `ExpressionFrame` using the agreed
 Double-E-style precedence reducer. Add the type-name parsing required by casts,
-`sizeof`, and compound literals, including typedef-name ambiguity.
+`sizeof`, and compound literals, including typedef-name ambiguity. Implement
+scalar and brace-enclosed initializers, initializer lists, designations, and
+designators in a non-recursive `InitializerFrame`.
 
 Connect expression children in statements and function bodies. Replace the
 Phase 03 deferred statement-expression slots with expression indices while
-preserving parent delimiter ownership.
+preserving parent delimiter ownership. Connect the same expression entry modes
+to every deferred declaration position: array bounds, bit-field widths,
+explicit enumerator values, declaration initializers, and compound-literal
+initializers.
+
+Plans:
+
+- `phase-04-expressions-and-type-names-plan.md`;
+- `phase-04-expressions-and-type-names-plan.html`.
 
 Exit:
 
@@ -79,25 +91,18 @@ Exit:
   assignment, and comma expressions produce source-backed syntax nodes;
 - cast-versus-grouping decisions use current parser-visible name classes;
 - all expression-bearing statement positions contain parsed expression nodes;
-- malformed expressions synchronize without corrupting the parser stack.
-
-### Phase 05: Initializers and expression-dependent declarations
-
-Implement scalar and brace-enclosed initializers, initializer lists,
-designations, and designators. Connect the expression parser to every deferred
-declaration position: array bounds, bit-field widths, explicit enumerator
-values, and initializers.
-
-Exit:
-
 - file-scope and block-scope object initializers produce syntax nodes;
 - C99 designated initializers and nested initializer lists parse;
 - array bounds, bit-field widths, and enumerator values contain parsed
   expressions;
+- malformed expressions, type names, initializers, and designators synchronize
+  without corrupting the parser stack;
 - no Phase 02 or Phase 03 expression/initializer future-child seam remains on a
   supported C99 grammar path.
 
-### Phase 06: Recovery and C99 parser closure
+## Remaining parser phase
+
+### Phase 05: Recovery and C99 parser closure
 
 Audit the complete translation-unit grammar against the C99 compliance matrix.
 Harden cross-family recovery, translation limits, source provenance, and parser
@@ -117,7 +122,7 @@ Exit:
 
 ## Meaning of parser-complete
 
-After Phase 06, the language parser is complete for the project's declared C99
+After Phase 05, the language parser is complete for the project's declared C99
 syntax target when it can construct source-backed syntax for complete
 translation units and recover predictably from malformed input.
 

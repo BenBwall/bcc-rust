@@ -17,6 +17,10 @@ where
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "StackQueue is retained for SmallQueue's inline storage."
+)]
 impl<T, const N: usize> StackQueue<T, N>
 where
     T: Copy + Default,

@@ -12,11 +12,6 @@ use hashbrown::{
     hash_table::Entry,
 };
 
-#[expect(
-    dead_code,
-    reason = "We're not currently this, but it's still here because I don't want to have to \
-              reimplement it."
-)]
 pub(crate) struct DedupArena<T, H> {
     indices: HashTable<u32>,
     data:    Vec<T>,
@@ -39,6 +34,10 @@ impl<T, H> DedupArena<T, H> {
         Self::with_hasher(H::default())
     }
 
+    #[expect(
+        dead_code,
+        reason = "Preallocation support is retained for future arena callers."
+    )]
     pub(crate) fn with_capacity_and_hasher(capacity: usize, hasher: H) -> Self {
         Self {
             indices: HashTable::with_capacity(capacity),
@@ -47,6 +46,10 @@ impl<T, H> DedupArena<T, H> {
         }
     }
 
+    #[expect(
+        dead_code,
+        reason = "Preallocation support is retained for future arena callers."
+    )]
     pub(crate) fn with_capacity(capacity: usize) -> Self
     where
         H: Default,
@@ -83,6 +86,10 @@ impl<T, H> DedupArena<T, H> {
 
     /// SAFETY: The caller must ensure that the values in the arena remain
     /// unique.
+    #[expect(
+        dead_code,
+        reason = "Mutable access is retained for future arena callers."
+    )]
     pub(crate) unsafe fn as_mut_slice(&mut self) -> &mut [T] {
         self.data.as_mut_slice()
     }

@@ -259,6 +259,10 @@ pub(crate) trait GetSourceVectors {
 
 pub(crate) trait SetPosition: GetPosition {
     fn set_position(&mut self, context: &mut Context, position: SourcePosition);
+    #[expect(
+        dead_code,
+        reason = "Position setters are retained for translation-phase implementations."
+    )]
     #[inline(always)]
     fn set_index(&mut self, context: &mut Context, index: usize) {
         self.set_position(
@@ -270,6 +274,10 @@ pub(crate) trait SetPosition: GetPosition {
             },
         );
     }
+    #[expect(
+        dead_code,
+        reason = "Position setters are retained for translation-phase implementations."
+    )]
     #[inline(always)]
     fn set_column(&mut self, context: &mut Context, column: u32) {
         self.set_position(
@@ -563,6 +571,14 @@ impl Context {
     #[inline(never)]
     pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError> {
         self.pending_errors.pop()
+    }
+
+    pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError> {
+        std::mem::take(&mut self.pending_errors)
+    }
+
+    pub(crate) fn append_pending_errors(&mut self, mut errors: Vec<TranslationError>) {
+        self.pending_errors.append(&mut errors);
     }
 
     pub(crate) fn get_source_vectors(&self, source_vectors: SourceVectors) -> &[SourceVector] {
