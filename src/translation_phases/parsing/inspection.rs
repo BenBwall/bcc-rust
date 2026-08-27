@@ -238,10 +238,10 @@ impl SyntaxTree {
                 | Work::Declarator(declarator, indent, role) => {
                     let key = (
                         6_u8,
-                        declarator.kind.start_index,
-                        declarator.kind.length,
-                        declarator.pointer.type_qualifiers_list.start_index,
-                        declarator.pointer.type_qualifiers_list.length,
+                        declarator.kind.start_index(),
+                        declarator.kind.length(),
+                        declarator.pointer.type_qualifiers_list.start_index(),
+                        declarator.pointer.type_qualifiers_list.length(),
                     );
                     if !seen.insert(key) {
                         Self::line(
@@ -736,10 +736,10 @@ impl SyntaxTree {
         let mut seen = HashSet::new();
         loop {
             if !seen.insert((
-                declarator.kind.start_index,
-                declarator.kind.length,
-                declarator.pointer.type_qualifiers_list.start_index,
-                declarator.pointer.type_qualifiers_list.length,
+                declarator.kind.start_index(),
+                declarator.kind.length(),
+                declarator.pointer.type_qualifiers_list.start_index(),
+                declarator.pointer.type_qualifiers_list.length(),
             )) {
                 return None;
             }

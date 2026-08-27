@@ -475,13 +475,13 @@ struct CliOutput {
 #[derive(Args)]
 struct ParserOutput {
     /// Print a deterministic, source-oriented C syntax tree.
-    #[clap(long)]
+    #[clap(long, conflicts_with = "tokens")]
     syntax_tree:      bool,
     /// Include line and column locations in `--syntax-tree` output.
     #[clap(long, requires = "syntax_tree")]
     syntax_locations: bool,
     /// Print raw parser arenas for storage debugging.
-    #[clap(long)]
+    #[clap(long, conflicts_with = "tokens")]
     raw_syntax:       bool,
 }
 
