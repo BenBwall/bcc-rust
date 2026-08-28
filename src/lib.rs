@@ -445,6 +445,72 @@ mod pipeline_iterator_tests {
     }
 }
 
+#[cfg(test)]
+mod syntax_tree_consumer_tests {
+    use super::*;
+    use crate::translation_phases::parsing::{
+        DirectDeclarator,
+        TypeSpecifiers,
+    };
+
+    #[test]
+    fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
+        let mut context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<syntax-tree-consumer-test>").into_boxed_path(),
+            "struct S { int member : 3; }; int f(int parameter);"
+                .to_owned()
+                .into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+        let tree = unit.syntax();
+
+        let ExternalDeclaration::Declaration(struct_root) = unit.external_declarations()[0] else {
+            panic!("expected struct declaration")
+        };
+        let TypeSpecifiers::StructOrUnion(struct_index) = tree
+            .declaration(struct_root)
+            .syntax()
+            .declaration_specifiers
+            .type_specifiers
+        else {
+            panic!("expected struct type specifier")
+        };
+        let members = tree.struct_declarations(
+            tree.struct_or_union_specifier(struct_index)
+                .struct_declaration_list
+                .expect("struct definition has members"),
+        );
+        assert_eq!(members[0].type_specifiers, TypeSpecifiers::Int);
+        let member_declarators = tree.struct_declarators(members[0].struct_declarator_list);
+        assert!(member_declarators[0].declarator.is_some());
+        assert!(member_declarators[0].bitfield_width.is_some());
+
+        let ExternalDeclaration::Declaration(function_root) = unit.external_declarations()[1]
+        else {
+            panic!("expected function declaration")
+        };
+        let declarator = tree.declaration(function_root).init_declarators()[0].declarator;
+        let parameter_list = tree
+            .direct_declarators(declarator.kind)
+            .iter()
+            .find_map(|direct| match direct {
+                | DirectDeclarator::Function { parameter_list, .. } => Some(*parameter_list),
+                | _ => None,
+            })
+            .expect("function declarator has a parameter list");
+        let parameters = tree.parameter_declarations(parameter_list);
+        assert_eq!(
+            parameters[0].declaration_specifiers.type_specifiers,
+            TypeSpecifiers::Int
+        );
+        assert!(parameters[0].declarator.is_some());
+    }
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about, color = ColorChoice::Always)]
 struct Cli {
@@ -672,10 +738,15 @@ fn print_parser_output(
 fn print_translation_error(
     error: &TranslationError,
     context: &mut Context,
-    source_file_index: u32,
+    fallback_source_file_index: u32,
 ) {
     let source_vectors = error.source_vectors(context);
     let vectors = context.get_source_vectors(source_vectors);
+    let source_file_index = vectors
+        .first()
+        .map_or(fallback_source_file_index, |vector| {
+            vector.source_file_index
+        });
     eprintln!(
         "{}: {error} at {:?}:{:?}",
         error.severity(),

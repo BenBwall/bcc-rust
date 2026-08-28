@@ -205,6 +205,26 @@ mod tests {
     }
 
     #[test]
+    fn malformed_macro_expanded_include_unwinds_before_the_following_line() {
+        for source in [
+            "#define BAD 123\n#include BAD extra\nint sentinel;\n",
+            "#define BAD() 123\n#include BAD() extra\nint sentinel;\n",
+            "#define VALUE 123\n#define BAD VALUE\n#include BAD extra\nint sentinel;\n",
+        ] {
+            let (identifiers, errors) = preprocess(source);
+
+            assert_eq!(identifiers, ["sentinel"], "{source:?}");
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                    ..
+                })
+            )));
+        }
+    }
+
+    #[test]
     fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
         let mut context = Context::new();
         let mut preprocessor = Preprocessor::new(
@@ -5756,7 +5776,7 @@ impl Preprocessor {
             );
         context.set_is_tokenizing_include_string(false);
         let Some(include_string) = include_string else {
-            self.skip_until_newline(context);
+            self.skip_and_expand_until_newline(context);
             return;
         };
         let header_source_index = match include_string.kind {
