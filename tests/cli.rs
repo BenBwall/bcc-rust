@@ -80,4 +80,57 @@ mod tests {
         assert!(stderr.contains("at 1:"), "{stderr}");
         assert!(!stderr.contains("at 0:[SourceVector"), "{stderr}");
     }
+
+    #[test]
+    fn recovery_diagnostic_details_are_wired_through_the_cli() {
+        let output = run(&[
+            "--syntax-tree",
+            "--input",
+            "int first extra junk; int after;\n",
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            stderr.contains(
+                "context: code=Syntax frame=Declaration expected=DeclarationContinuation"
+            ),
+            "{stderr}"
+        );
+        assert!(stderr.contains("discarded input:"), "{stderr}");
+        assert!(
+            stderr.contains("recovery: owner=Declaration discarded-tokens=2"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("note: parsing resumes here"), "{stderr}");
+        assert!(stderr.contains("declarator after"), "{stderr}");
+    }
+
+    #[test]
+    fn repeated_specifier_warnings_can_be_suppressed_through_the_cli() {
+        let default = run(&["--syntax-tree", "--input", "const const int value;\n"]);
+        let suppressed = run(&[
+            "--syntax-tree",
+            "--no-repeated-specifier-warnings",
+            "--input",
+            "const const int value;\n",
+        ]);
+        let default_stderr = String::from_utf8_lossy(&default.stderr);
+        let suppressed_stderr = String::from_utf8_lossy(&suppressed.stderr);
+
+        assert!(default.status.success(), "{default:?}");
+        assert!(suppressed.status.success(), "{suppressed:?}");
+        assert!(
+            default_stderr.contains("`const` keyword specified twice"),
+            "{default_stderr}"
+        );
+        assert!(
+            !suppressed_stderr.contains("`const` keyword specified twice"),
+            "{suppressed_stderr}"
+        );
+        assert!(
+            suppressed_stderr.contains("declarator value"),
+            "{suppressed_stderr}"
+        );
+    }
 }

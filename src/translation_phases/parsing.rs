@@ -11602,16 +11602,19 @@ impl ParserErrorType {
             | Self::ExpectedWhileAfterDoBody(..)
             | Self::ExpectedClosingParenthesisAfterParenthesizedDeclarator(..)
             | Self::ExpectedClosingSquareBracketInArrayDirectDeclarator(..)
+            | Self::UnexpectedEndOfFunctionDeclaratorParameterList
             | Self::ExpectedClosingCurlyBraceInStructDeclarationList(..)
             | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList
             | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(..)
+            | Self::UnexpectedEndOfArrayDeclaratorAfterPointer
             | Self::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                 ..,
-            ) => ExpectedSyntax::OwnedDelimiter,
+            )
+            | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList =>
+                ExpectedSyntax::OwnedDelimiter,
             | Self::ResourceLimitExceeded { .. }
             | Self::ParserFrameConsumedAtEndOfInput(..)
             | Self::DeclarationListAfterParameterTypeList
-            | Self::UnexpectedEndOfFunctionDeclaratorParameterList
             | Self::ExpectedStructOrUnionKeyword(..)
             | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
             | Self::ExpectedStructDeclarationBeforeClosingCurlyBrace
@@ -11632,12 +11635,10 @@ impl ParserErrorType {
             | Self::LongSpecifiedThrice
             | Self::LongLongDoubleSpecified
             | Self::BothStaticAndPointerInArrayDirectDeclarator
-            | Self::UnexpectedEndOfArrayDeclaratorAfterPointer
             | Self::PointerSpecifiedTwice
             | Self::TypeQualifiersWithoutDeclarator
             | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
             | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
-            | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList
             | Self::EmptyStructDeclarator
             | Self::DuplicateDefaultLabel => ExpectedSyntax::None,
         }
@@ -18544,6 +18545,83 @@ mod tests {
             .expect("expected declaration-continuation diagnostic");
 
         assert_eq!(diagnostic.expected, ExpectedSyntax::DeclarationContinuation);
+    }
+
+    #[test]
+    fn eof_delimiter_diagnostics_have_structured_expectations() {
+        for source in ["int f(\n", "int f(int value, ...\n"] {
+            let parsed = parse(source);
+            let diagnostic = parsed
+                .errors
+                .iter()
+                .find_map(|error| match error {
+                    | TranslationError::Parsing(error)
+                        if matches!(
+                            error.error_type,
+                            ParserErrorType::UnexpectedEndOfFunctionDeclaratorParameterList
+                                | ParserErrorType::UnexpectedEndOfVariadicFunctionDeclaratorParameterList
+                        ) =>
+                        Some(error),
+                    | _ => None,
+                })
+                .expect("expected an EOF delimiter diagnostic");
+
+            assert_eq!(diagnostic.expected, ExpectedSyntax::OwnedDelimiter);
+        }
+        assert_eq!(
+            ParserErrorType::UnexpectedEndOfArrayDeclaratorAfterPointer.expected_syntax(),
+            ExpectedSyntax::OwnedDelimiter
+        );
+    }
+
+    #[test]
+    fn mixed_declarator_translation_floor_uses_the_typed_tree() {
+        fn count_derivations(tree: &SyntaxTree, declarator: Declarator) -> (usize, usize, usize) {
+            let mut counts = (
+                tree.pointer_qualifiers(declarator.pointer.type_qualifiers_list)
+                    .len(),
+                0,
+                0,
+            );
+            for direct in tree.direct_declarators(declarator.kind) {
+                match *direct {
+                    | DirectDeclarator::Parenthesized(nested) => {
+                        let nested = count_derivations(tree, nested);
+                        counts.0 += nested.0;
+                        counts.1 += nested.1;
+                        counts.2 += nested.2;
+                    },
+                    | DirectDeclarator::Array { .. } => counts.1 += 1,
+                    | DirectDeclarator::Function { .. }
+                    | DirectDeclarator::KAndRStyleFunction { .. } => counts.2 += 1,
+                    | DirectDeclarator::Identifier(_) => {},
+                }
+            }
+            counts
+        }
+
+        let (unit, mut context) = parse_unit(
+            "struct Incomplete (*(*(*(*(*(*value)[1])(void))(void))(void))(void))(void);\n",
+        );
+        assert!(context.take_pending_errors().is_empty());
+        let ExternalDeclaration::Declaration(root) = unit.external_declarations()[0] else {
+            panic!("expected a declaration root")
+        };
+        let declaration = unit.syntax().declaration(root);
+        let TypeSpecifiers::StructOrUnion(specifier) =
+            declaration.syntax().declaration_specifiers.type_specifiers
+        else {
+            panic!("expected an incomplete structure base type")
+        };
+        assert!(
+            unit.syntax()
+                .struct_or_union_specifier(specifier)
+                .struct_declaration_list
+                .is_none()
+        );
+        let declarator = declaration.init_declarators()[0].declarator;
+
+        assert_eq!(count_derivations(unit.syntax(), declarator), (6, 1, 5));
     }
 
     fn assert_syntax_node_limit_boundary(source: &str) {

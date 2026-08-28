@@ -30,12 +30,12 @@ git diff --check
 
 ## Code map and cautions
 
-- `src/translation_phases.rs` owns shared phase, provenance, context, and diagnostic concepts. Its phase modules proceed from `initial_processing.rs` through `preprocessor_tokenizer.rs`, `preprocessing.rs`, and the incomplete `parsing.rs`.
+- `src/translation_phases.rs` owns shared phase, provenance, context, and diagnostic concepts. Its phase modules proceed from `initial_processing.rs` through `preprocessor_tokenizer.rs`, `preprocessing.rs`, and the completed C99 syntax parser in `parsing.rs`.
 - `src/lib.rs` drives the parser inspection CLI by default and retains the preprocessing-token dump behind `--tokens`. There is no semantic-analysis pipeline or backend/code-generation path.
-- `parsing.rs` implements declarations, function definitions, compound blocks, statements, expressions, type names, and initializers through `Parser::next_item`. Re-run the canonical checks before quoting test counts or gate status.
+- `parsing.rs` implements declarations, function definitions, compound blocks, statements, expressions, type names, initializers, structured recovery, and validated syntax-tree access. `Parser::parse_translation_unit` is the normal caller seam; `Parser::next_item` remains the streaming adapter. Re-run the canonical checks before quoting test counts or gate status.
 - External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, function-definition, compound-statement, statement, expression, type-name, and initializer frames are implemented. Phase 04 removed the supported expression/initializer future-child seams; Phase 05 owns recovery and parser closure.
 - `ScopeStack` implements file, function, prototype, block, and implicit selection/iteration lifetimes for typedef-sensitive parsing. Function-local label and switch state use distinct parser stacks; broader redeclaration and control-flow constraints remain semantic work.
-- Preserve source provenance and structured diagnostics across phase changes. Malformed user input should reduce to diagnostics plus explicitly recovered syntax (or an error node when no meaningful syntax survives) and synchronization, not compiler panics.
+- Preserve source provenance and structured diagnostics across phase changes. Malformed user input should reduce to diagnostics plus explicitly recovered syntax (or an error node when no meaningful syntax survives) and synchronization, not compiler panics. Semantic constraints remain later-phase work.
 
 ## Agreed parser direction
 
@@ -43,7 +43,7 @@ The whole language parser is to use one explicit control stack of specialized, r
 
 Double-E is the precedence reducer inside the expression frame and may inspire a declarator-construction reducer. Declaration, declarator, type-name, initializer, statement, function, and translation-unit frames remain phase/state machines. Frames return small owned actions so the machine can push, reduce, reprocess lookahead, or recover without retaining mutable borrows. The language parser and preprocessor evaluator intentionally own independent reducers because their operands, outputs, diagnostics, and legal operators differ.
 
-The Phase 04 parser implements this architecture through expressions, type names, initializers, declarations, functions, compounds, and statements. Keep implemented behavior and proposed Phase 05 closure work visibly separate.
+The completed Phase 05 parser implements this architecture through whole translation units, expressions, type names, initializers, declarations, functions, compounds, statements, recovery, and inspection. Keep syntax parsing visibly separate from future semantic-analysis work.
 
 ## First-party skills
 
