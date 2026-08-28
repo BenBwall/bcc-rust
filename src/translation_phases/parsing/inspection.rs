@@ -214,14 +214,14 @@ impl SyntaxTree {
                     );
                     work.push(Work::Statement(function.body, indent + 1, "body"));
                     for declaration in self
-                        .declaration_indices(function.old_style_declarations)
+                        .declaration_indices(function.declaration_list)
                         .iter()
                         .rev()
                     {
                         work.push(Work::Declaration(
                             *declaration,
                             indent + 1,
-                            "old-style-parameter",
+                            "declaration-list",
                         ));
                     }
                     work.push(Work::Declarator(

@@ -64,4 +64,20 @@ mod tests {
             assert!(!contradictory.status.success(), "{contradictory:?}");
         }
     }
+
+    #[test]
+    fn parser_diagnostics_use_the_included_files_primary_index() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test-programs")
+            .join("once.c");
+        let output = run(&[
+            "--syntax-tree",
+            source.to_str().expect("fixture path is valid UTF-8"),
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(output.status.success(), "{output:?}");
+        assert!(stderr.contains("at 1:"), "{stderr}");
+        assert!(!stderr.contains("at 0:[SourceVector"), "{stderr}");
+    }
 }
