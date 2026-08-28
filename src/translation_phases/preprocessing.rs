@@ -225,6 +225,38 @@ mod tests {
     }
 
     #[test]
+    fn malformed_macro_include_does_not_repeat_expansion_diagnostics() {
+        let source = "#define BAD(x) x\n#include BAD(123,456) extra\nint sentinel;\n";
+        let (identifiers, errors) = preprocess(source);
+
+        assert_eq!(identifiers, ["sentinel"]);
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| matches!(
+                    error,
+                    TranslationError::Preprocessing(PreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
+                                ..
+                            },
+                        ..
+                    })
+                ))
+                .count(),
+            1,
+            "{errors:#?}"
+        );
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                ..
+            })
+        )));
+    }
+
+    #[test]
     fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
         let mut context = Context::new();
         let mut preprocessor = Preprocessor::new(
@@ -2459,6 +2491,46 @@ impl Preprocessor {
     fn expect_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         context: &mut Context,
+        is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
+        on_wrong_token_type: impl FnMut(
+            &mut Self,
+            &mut Context,
+            PreprocessorToken,
+        ) -> ControlFlow<PreprocessorError>,
+        eof_message: &'static str,
+    ) -> Option<PreprocessorToken> {
+        self.expect_token_with_rewind::<SHOULD_IGNORE_WHITESPACE>(
+            context,
+            is_correct_token,
+            on_wrong_token_type,
+            eof_message,
+            true,
+        )
+    }
+
+    fn expect_token_without_rewind<const SHOULD_IGNORE_WHITESPACE: bool>(
+        &mut self,
+        context: &mut Context,
+        is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
+        on_wrong_token_type: impl FnMut(
+            &mut Self,
+            &mut Context,
+            PreprocessorToken,
+        ) -> ControlFlow<PreprocessorError>,
+        eof_message: &'static str,
+    ) -> Option<PreprocessorToken> {
+        self.expect_token_with_rewind::<SHOULD_IGNORE_WHITESPACE>(
+            context,
+            is_correct_token,
+            on_wrong_token_type,
+            eof_message,
+            false,
+        )
+    }
+
+    fn expect_token_with_rewind<const SHOULD_IGNORE_WHITESPACE: bool>(
+        &mut self,
+        context: &mut Context,
         mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
@@ -2466,6 +2538,7 @@ impl Preprocessor {
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
+        rewind_on_error: bool,
     ) -> Option<PreprocessorToken> {
         loop {
             let start = self.position(context);
@@ -2480,14 +2553,18 @@ impl Preprocessor {
                     match on_wrong_token_type(self, context, token) {
                         | ControlFlow::Continue(()) => continue,
                         | ControlFlow::Break(e) => {
-                            self.set_position(context, start);
+                            if rewind_on_error {
+                                self.set_position(context, start);
+                            }
                             context.preprocessor_error(e);
                             return None;
                         },
                     }
                 },
                 | None => {
-                    self.set_position(context, start);
+                    if rewind_on_error {
+                        self.set_position(context, start);
+                    }
                     let source_vectors =
                         context.create_source_vectors(start, self.source_file_index(), 0);
                     context.preprocessor_error(PreprocessorError {
@@ -5755,7 +5832,7 @@ impl Preprocessor {
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         context.set_is_tokenizing_include_string(true);
         let include_string =
-            self.expect_token::<true>(
+            self.expect_token_without_rewind::<true>(
                 context,
                 |_, context, token| match token.kind {
                     | PreprocessorTokenType::AngleBracketString
