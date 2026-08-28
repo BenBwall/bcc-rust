@@ -35,6 +35,15 @@ _Avoid_: Parser context
 The complete sequence of external declarations produced from one preprocessed C input. It is not identical to a physical source file because inclusion and macro expansion may contribute input.
 _Avoid_: Source file
 
+**Parsed translation unit** *(implemented as `ParsedTranslationUnit`)*:
+The owning parser result containing source-ordered external roots and one
+validated `SyntaxTree`. It is the shared caller and behavior-test seam.
+
+**Syntax tree** *(implemented as `SyntaxTree`)*:
+Read-only typed access to arena-backed declarations, definitions, statements,
+expressions, type names, and initializers. Raw arena storage is an opt-in debug
+view, not the normal consumer interface.
+
 **External declaration**:
 A top-level declaration or function definition within a translation unit.
 
@@ -115,10 +124,9 @@ The grammar and reduction policy of one expression parser. The preprocessing dia
 
 ## Parser stack-machine vocabulary
 
-The Phase 04 parser implements this vocabulary through declarations, function
-definitions, statements, expressions, type names, and initializers.
-`parser-roadmap.md` keeps the authoritative boundary for the remaining closure
-work.
+The completed Phase 05 parser implements this vocabulary through whole
+translation units, declarations, function definitions, statements,
+expressions, type names, initializers, and recovery.
 
 **ParserMachine** *(implemented as `Parser`)*:
 The single driver that owns the buffered token cursor, control stack, typed child return, syntax arenas, file-scope name classification, and diagnostic/recovery state for language parsing.
@@ -156,11 +164,25 @@ valid syntax.
 **Recovered function definition**:
 A function-definition AST retained after a hard error in its head, old-style declaration list, or body. The distinct external-declaration variant preserves inspectable syntax without presenting it as valid.
 
-**Error node** *(reserved)*:
+**Error node** *(implemented)*:
 A provenance-only syntax placeholder for malformed input from which no
-meaningful AST can be recovered. Current declaration recovery always constructs
-a recovered declaration, so `ExternalDeclaration::Error` is reserved for a
-future unrecoverable grammar path.
+meaningful AST can be recovered. Pure top-level garbage yields
+`ExternalDeclaration::Error`; meaningful malformed declarations retain typed
+recovered syntax instead.
+
+**Structured parser diagnostic**:
+A parser diagnostic with a symbolic code, severity, active frame, expected and
+found syntax categories, primary provenance, optional ranges and related
+locations, and recovery summary. Diagnostics are delivered in emission FIFO.
+
+**Parser resource limit**:
+A configured ceiling for external roots, syntax nodes, or active frame depth.
+Crossing a ceiling emits a stable resource diagnostic, clears transient parser
+state, and returns an explicit external error root rather than panicking.
+
+**Syntax inspection view**:
+The deterministic, iterative, source-oriented rendering selected by
+`--syntax-tree`. `--raw-syntax` is the separate storage-debugging view.
 
 ## Compiler boundaries
 

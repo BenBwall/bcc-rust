@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Loop"
+  short_description: "Review, fix, push, and repeat until the PR converges"
+  default_prompt: "Use $review-pr-loop to review and fix the open PR associated with this checkout, commit and push each verified fix round, and hand off until the review converges."

@@ -159,6 +159,160 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn malformed_include_restores_include_tokenization_mode() {
+        let mut context = Context::new();
+        let mut preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<test>").into_boxed_path(),
+            "#include 123 extra\nint x = a < b > c;\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let mut tokens = Vec::new();
+        while let Some(token) = preprocessor.next_item(&mut context) {
+            tokens.push((
+                token.kind,
+                context.string_cache.at(token.contents).to_owned(),
+            ));
+        }
+        let errors = context.take_pending_errors();
+
+        assert_eq!(
+            tokens
+                .iter()
+                .filter_map(|(kind, spelling)| (*kind == TokenType::Identifier)
+                    .then_some(spelling.as_str()))
+                .collect::<Vec<_>>(),
+            ["x", "a", "b", "c"]
+        );
+        assert!(tokens.iter().all(|(_, spelling)| spelling != "123"));
+        assert!(tokens.iter().all(|(_, spelling)| spelling != "extra"));
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                ..
+            })
+        )));
+        assert!(errors.iter().all(|error| !matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::UnexpectedTokenAtPhase7(_),
+                ..
+            })
+        )));
+    }
+
+    #[test]
+    fn empty_include_preserves_the_following_logical_line() {
+        for source in [
+            "#include\nint sentinel;\n",
+            "#include /* comment */\nint sentinel;\n",
+            "#include\n#define TYPE int\nTYPE sentinel;\n",
+        ] {
+            let (identifiers, errors) = preprocess(source);
+
+            assert_eq!(identifiers, ["sentinel"], "{source:?}");
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                    ..
+                })
+            )));
+        }
+    }
+
+    #[test]
+    fn malformed_macro_expanded_include_unwinds_before_the_following_line() {
+        for source in [
+            "#define BAD 123\n#include BAD extra\nint sentinel;\n",
+            "#define BAD() 123\n#include BAD() extra\nint sentinel;\n",
+            "#define VALUE 123\n#define BAD VALUE\n#include BAD extra\nint sentinel;\n",
+        ] {
+            let (identifiers, errors) = preprocess(source);
+
+            assert_eq!(identifiers, ["sentinel"], "{source:?}");
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                    ..
+                })
+            )));
+        }
+    }
+
+    #[test]
+    fn malformed_macro_include_does_not_repeat_expansion_diagnostics() {
+        let source = "#define BAD(x) x\n#include BAD(123,456) extra\nint sentinel;\n";
+        let (identifiers, errors) = preprocess(source);
+
+        assert_eq!(identifiers, ["sentinel"]);
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| matches!(
+                    error,
+                    TranslationError::Preprocessing(PreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
+                                ..
+                            },
+                        ..
+                    })
+                ))
+                .count(),
+            1,
+            "{errors:#?}"
+        );
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                ..
+            })
+        )));
+    }
+
+    #[test]
+    fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
+        let mut context = Context::new();
+        let mut preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<phase-7-totality-test>").into_boxed_path(),
+            String::new().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let contents = context.string_cache.intern("internal-only");
+
+        for kind in [
+            PreprocessorTokenType::Placeholder,
+            PreprocessorTokenType::AngleBracketString,
+            PreprocessorTokenType::IncludeString,
+            PreprocessorTokenType::Whitespace,
+        ] {
+            let token = PreprocessorToken {
+                kind,
+                source_vectors: SourceVectors::default(),
+                contents,
+            };
+            assert_eq!(
+                preprocessor.map_preprocessor_token(&mut context, token),
+                None
+            );
+            assert!(matches!(
+                context.pop_pending_error(),
+                Some(TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::UnexpectedTokenAtPhase7(actual),
+                    ..
+                })) if actual == kind
+            ));
+        }
+    }
+
     fn strict_c99() -> CompilerConfiguration {
         CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny)
     }
@@ -1012,6 +1166,7 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression
             | PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(_)
             | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
+            | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy) =>
@@ -1126,6 +1281,7 @@ pub(crate) enum PreprocessorErrorType {
     IdentifierInsteadOfBinaryOperatorInPreprocessorExpression,
     CharacterInsteadOfBinaryOperatorInPreprocessorExpression,
     UnexpectedTokenInPreprocessorExpression(PreprocessorTokenType),
+    UnexpectedTokenAtPhase7(PreprocessorTokenType),
     FloatInsteadOfIntegerInPreprocessorExpression,
     ExpectedBinaryOperatorInPreprocessorExpression,
     MissingOpeningParenthesisOrIdentifierInDefinedDirective(PreprocessorTokenType),
@@ -1762,6 +1918,10 @@ impl Display for PreprocessorErrorType {
                     "Unexpected token {tt:#?} in preprocessor constant expression!",
                 )
             },
+            | Self::UnexpectedTokenAtPhase7(tt) => write!(
+                f,
+                "Preprocessing token {tt:#?} cannot reach C syntax parsing."
+            ),
             | Self::MissingIdentifierInDefinedDirective(tt) => {
                 write!(
                     f,
@@ -2277,8 +2437,8 @@ impl Preprocessor {
                 self.pending_parser_errors.extend(generated_errors);
                 break;
             };
-            context.append_pending_errors(generated_errors);
             context.append_pending_errors(existing_errors);
+            context.append_pending_errors(generated_errors);
             let next_contents = match next_kind {
                 | StringTokenType::String(contents) => contents,
                 | StringTokenType::WideString(contents) => {
@@ -2351,6 +2511,46 @@ impl Preprocessor {
     fn expect_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         context: &mut Context,
+        is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
+        on_wrong_token_type: impl FnMut(
+            &mut Self,
+            &mut Context,
+            PreprocessorToken,
+        ) -> ControlFlow<PreprocessorError>,
+        eof_message: &'static str,
+    ) -> Option<PreprocessorToken> {
+        self.expect_token_with_rewind::<SHOULD_IGNORE_WHITESPACE>(
+            context,
+            is_correct_token,
+            on_wrong_token_type,
+            eof_message,
+            true,
+        )
+    }
+
+    fn expect_token_without_rewind<const SHOULD_IGNORE_WHITESPACE: bool>(
+        &mut self,
+        context: &mut Context,
+        is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
+        on_wrong_token_type: impl FnMut(
+            &mut Self,
+            &mut Context,
+            PreprocessorToken,
+        ) -> ControlFlow<PreprocessorError>,
+        eof_message: &'static str,
+    ) -> Option<PreprocessorToken> {
+        self.expect_token_with_rewind::<SHOULD_IGNORE_WHITESPACE>(
+            context,
+            is_correct_token,
+            on_wrong_token_type,
+            eof_message,
+            false,
+        )
+    }
+
+    fn expect_token_with_rewind<const SHOULD_IGNORE_WHITESPACE: bool>(
+        &mut self,
+        context: &mut Context,
         mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
@@ -2358,6 +2558,7 @@ impl Preprocessor {
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
+        rewind_on_error: bool,
     ) -> Option<PreprocessorToken> {
         loop {
             let start = self.position(context);
@@ -2372,14 +2573,18 @@ impl Preprocessor {
                     match on_wrong_token_type(self, context, token) {
                         | ControlFlow::Continue(()) => continue,
                         | ControlFlow::Break(e) => {
-                            self.set_position(context, start);
+                            if rewind_on_error {
+                                self.set_position(context, start);
+                            }
                             context.preprocessor_error(e);
                             return None;
                         },
                     }
                 },
                 | None => {
-                    self.set_position(context, start);
+                    if rewind_on_error {
+                        self.set_position(context, start);
+                    }
                     let source_vectors =
                         context.create_source_vectors(start, self.source_file_index(), 0);
                     context.preprocessor_error(PreprocessorError {
@@ -3927,7 +4132,16 @@ impl Preprocessor {
                 return None;
             },
 
-            | x => todo!("{x:#?}"),
+            | PreprocessorTokenType::Placeholder
+            | PreprocessorTokenType::AngleBracketString
+            | PreprocessorTokenType::IncludeString
+            | PreprocessorTokenType::Whitespace => {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::UnexpectedTokenAtPhase7(token.kind),
+                    source_vectors: token.source_vectors,
+                });
+                return None;
+            },
         })
     }
 
@@ -5637,8 +5851,8 @@ impl Preprocessor {
 
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         context.set_is_tokenizing_include_string(true);
-        let Some(include_string) =
-            self.expect_token::<true>(
+        let include_string =
+            self.expect_token_without_rewind::<true>(
                 context,
                 |_, context, token| match token.kind {
                     | PreprocessorTokenType::AngleBracketString
@@ -5656,11 +5870,14 @@ impl Preprocessor {
                     })
                 },
                 "parsing include directive",
-            )
-        else {
+            );
+        context.set_is_tokenizing_include_string(false);
+        let Some(include_string) = include_string else {
+            if !self.current_is_newline {
+                self.skip_and_expand_until_newline(context);
+            }
             return;
         };
-        context.set_is_tokenizing_include_string(false);
         let header_source_index = match include_string.kind {
             | PreprocessorTokenType::IncludeString => {
                 let contents = context

@@ -1,14 +1,33 @@
 # bcc-rust
 
-`bcc-rust` is an experimental Rust implementation of a C compiler front end targeting C99-era syntax. It is a development snapshot: the preprocessing pipeline is substantial, but the language parser is incomplete and there is no code-generation path.
+`bcc-rust` is an experimental Rust implementation of a C compiler front end
+targeting C99 syntax. Its non-recursive language parser is complete for the
+declared syntax scope, but semantic analysis and code generation are not yet
+implemented.
 
 ## Current status
 
-The current CLI entry point is a parser inspection tool. It accepts a C source file or an input string, runs it through preprocessing and the language parser, then prints each external-declaration handle, the complete arena-backed syntax store, string-cache contents, source provenance, and diagnostics. Pass `--tokens` to inspect the parser-facing preprocessing tokens instead. The CLI does not emit an object file or executable.
+The CLI accepts a C source file or an input string, runs preprocessing and the
+language parser, and prints diagnostics. Pass `--syntax-tree` for a stable,
+source-oriented tree, `--syntax-locations` to add locations, `--raw-syntax` for
+arena debugging, or `--tokens` for parser-facing preprocessing tokens. Normal
+operation does not dump internal arenas. The CLI does not emit an object file
+or executable.
 
-The repository builds, and `Parser::next_item` runs declarations, prototype-style and old-style function definitions, compound blocks, every C99 statement family, expressions, type names, and initializers through one explicit non-recursive frame stack. Expression syntax covers primary through comma expressions, casts, `sizeof`, calls, and compound literals. Initializer syntax covers scalar and recursive brace lists with C99 designators. Expression-dependent declaration positions retain parsed syntax handles, and current typedef classification resolves declaration/expression and type-name/grouping choices. Hard syntax errors retain repaired syntax with provenance and an explicit recovered state.
+`Parser::parse_translation_unit` returns an ordered `ParsedTranslationUnit` and
+validated, read-only `SyntaxTree`. Declarations, prototype-style and old-style
+function definitions, blocks, every C99 statement family, expressions, type
+names, and initializers run through one explicit heap-backed frame stack.
+Malformed input retains repaired syntax where meaningful, produces a
+provenance-only external error node for pure top-level garbage, and emits
+structured FIFO diagnostics with recovery context.
 
-Phase 05 still needs to audit the complete grammar, harden cross-family recovery and translation limits, and close any remaining syntax gaps. Semantic analysis—including type/lvalue constraints, constant-expression evaluation, and initializer current-object rules—and code generation also remain unimplemented. This is not yet a production-ready or conforming C99 compiler.
+Phase 05 is complete. The parser meets the parser-relevant C99 minimum
+translation floors, diagnoses excluded extensions and invalid phase-7 input,
+and has deterministic truncation/property coverage. Semantic analysis—including
+type/lvalue constraints, constant-expression evaluation, initializer
+current-object rules, and linkage—and code generation remain unimplemented.
+This is not yet a production-ready or conforming C99 compiler.
 
 ## Prerequisites
 
@@ -30,11 +49,14 @@ cargo +nightly fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-Formatting and all-target tests are the canonical Phase 04 gates. The repository-wide strict-Clippy command remains an attribution gate for existing project lint debt. The parser uses narrowly justified structural Clippy expectations where the C grammar makes the representation intentional. Exercise the parser with either input form, or add `--tokens` to retain the preprocessing-token view:
+These are the canonical Phase 05 gates. Exercise the parser with either input
+form, and opt into the desired inspection view:
 
 ```sh
 cargo run -- --input 'typedef int T;
 T *value;'
+cargo run -- --syntax-tree --syntax-locations test-programs/test.c
+cargo run -- --raw-syntax --input 'int value = 1;'
 cargo run -- test-programs/test.c
 cargo run -- --tokens --input '#define N 3
 N + 1'
@@ -56,17 +78,23 @@ Use `--iquote <directory>` (`-q`) and `--isystem <directory>` (`-s`) to add incl
 
 ## Parser direction
 
-The language parser uses one explicit control stack of specialized, resumable frames. `Parser` owns the buffered cursor, frame stack, typed child result, syntax stores, scope and label state, and recovery state. Phase 04 adds expression, type-name, and initializer frames without recursive parser calls; a private trace characterizes token ownership, delimiter ownership, scope lifetime, and frame depth.
+The language parser uses one explicit control stack of specialized, resumable
+frames. `Parser` owns the buffered cursor, frame stack, typed child result,
+syntax stores, scope and label state, recovery state, and resource ceilings.
 
-`ExpressionFrame` owns Double-E-style operator/operand reduction alongside `TypeNameFrame` and `InitializerFrame`, and all supported statement and declaration expression sites now contain parsed handles. The preprocessor evaluator retains its independent reducer implementation. Phase 05 will audit and harden the complete parser rather than implement a separately deferred grammar family. See the [project glossary](CONTEXT.md) for canonical terms and the [Double-E integration report](double-e-integration-report.html) for the point-in-time design study.
+`ExpressionFrame` owns Double-E-style operator/operand reduction alongside
+`TypeNameFrame` and `InitializerFrame`, and all supported statement and
+declaration expression sites contain parsed handles. The preprocessor evaluator
+retains its independent reducer. Phase 05 closes the parser through structured
+diagnostics, cross-family recovery, syntax provenance, compatibility fixtures,
+translation floors, and opt-in inspection. See the [project glossary](CONTEXT.md)
+for canonical terms.
 
 ## Parser roadmap
 
-Phases 03 and 04 are complete. One syntax-parser phase remains:
-
-1. **Phase 05 — recovery and C99 parser closure.** Audit the full grammar and
-   harden cross-family recovery, provenance, inspection, and translation
-   limits.
+All five syntax-parser phases are complete. Phase 05 audited the full grammar
+and closed cross-family recovery, provenance, inspection, phase-7 totality,
+diagnostics, and translation limits.
 
 The authoritative phase boundaries and the distinction between
 parser-complete and compiler-complete are in the
@@ -76,6 +104,9 @@ and its [HTML companion](phase-03-statements-and-function-definitions-plan.html)
 The merged Phase 04 scope is defined by the
 [Phase 04 Markdown plan](phase-04-expressions-and-type-names-plan.md) and its
 [HTML companion](phase-04-expressions-and-type-names-plan.html).
+Phase 05 closure is defined by the
+[Phase 05 plan](phase-05-recovery-and-c99-parser-closure-plan.md) and the
+[C99 parser compliance checklist](c99-parser-compliance-checklist.md).
 
 ## Further reading
 

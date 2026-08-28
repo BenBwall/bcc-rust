@@ -14,8 +14,9 @@ const _: (ExtensionPolicy, ExtensionPolicy) = (ExtensionPolicy::Warn, ExtensionP
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct CompilerConfiguration {
-    standard:         CStandard,
-    extension_policy: ExtensionPolicy,
+    standard:                    CStandard,
+    extension_policy:            ExtensionPolicy,
+    repeated_specifier_warnings: bool,
 }
 
 impl CompilerConfiguration {
@@ -23,6 +24,7 @@ impl CompilerConfiguration {
         Self {
             standard,
             extension_policy,
+            repeated_specifier_warnings: true,
         }
     }
 
@@ -32,6 +34,15 @@ impl CompilerConfiguration {
 
     pub(crate) const fn extension_policy(self) -> ExtensionPolicy {
         self.extension_policy
+    }
+
+    pub(crate) const fn repeated_specifier_warnings(self) -> bool {
+        self.repeated_specifier_warnings
+    }
+
+    pub(crate) const fn with_repeated_specifier_warnings(mut self, enabled: bool) -> Self {
+        self.repeated_specifier_warnings = enabled;
+        self
     }
 }
 
