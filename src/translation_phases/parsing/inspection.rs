@@ -64,6 +64,7 @@ enum Work {
     Enumerator(Enumerator, usize),
     Statement(StatementIndex, usize, &'static str),
     Expression(ExpressionIndex, usize, &'static str),
+    Missing(SourceVectors, usize, &'static str),
     Initializer(InitializerIndex, usize, &'static str),
     InitializerElement(InitializerElement, usize),
     Designation(DesignationIndex, usize),
@@ -535,6 +536,14 @@ impl SyntaxTree {
                     );
                     self.push_expression_children(&mut work, &expression.kind, indent + 1);
                 },
+                | Work::Missing(source, indent, role) => Self::line(
+                    &mut output,
+                    indent,
+                    &format!("{role}: missing"),
+                    Some(source),
+                    context,
+                    options,
+                ),
                 | Work::Initializer(index, indent, role) => {
                     if !seen.insert((4_u8, index.0, 0_u32, 0_u32, 0_u32)) {
                         Self::shared(
@@ -830,8 +839,13 @@ impl SyntaxTree {
             },
             | StatementType::Case(expression, child) => {
                 work.push(Work::Statement(child, indent, "labeled"));
-                if let ConstantExpressionSlot::Parsed(index) = expression {
-                    work.push(Work::Expression(index.into(), indent, "case-value"));
+                match expression {
+                    | ConstantExpressionSlot::Parsed(index) => {
+                        work.push(Work::Expression(index.into(), indent, "case-value"));
+                    },
+                    | ConstantExpressionSlot::Missing(source) => {
+                        work.push(Work::Missing(source, indent, "case-value"));
+                    },
                 }
             },
             | StatementType::Return(None)
@@ -900,8 +914,9 @@ impl SyntaxTree {
     }
 
     fn push_slot(work: &mut Vec<Work>, slot: ExpressionSlot, indent: usize, role: &'static str) {
-        if let ExpressionSlot::Parsed(index) = slot {
-            work.push(Work::Expression(index, indent, role));
+        match slot {
+            | ExpressionSlot::Parsed(index) => work.push(Work::Expression(index, indent, role)),
+            | ExpressionSlot::Missing(source) => work.push(Work::Missing(source, indent, role)),
         }
     }
 

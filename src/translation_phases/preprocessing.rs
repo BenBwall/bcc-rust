@@ -205,6 +205,26 @@ mod tests {
     }
 
     #[test]
+    fn empty_include_preserves_the_following_logical_line() {
+        for source in [
+            "#include\nint sentinel;\n",
+            "#include /* comment */\nint sentinel;\n",
+            "#include\n#define TYPE int\nTYPE sentinel;\n",
+        ] {
+            let (identifiers, errors) = preprocess(source);
+
+            assert_eq!(identifiers, ["sentinel"], "{source:?}");
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                    ..
+                })
+            )));
+        }
+    }
+
+    #[test]
     fn malformed_macro_expanded_include_unwinds_before_the_following_line() {
         for source in [
             "#define BAD 123\n#include BAD extra\nint sentinel;\n",
@@ -5853,7 +5873,9 @@ impl Preprocessor {
             );
         context.set_is_tokenizing_include_string(false);
         let Some(include_string) = include_string else {
-            self.skip_and_expand_until_newline(context);
+            if !self.current_is_newline {
+                self.skip_and_expand_until_newline(context);
+            }
             return;
         };
         let header_source_index = match include_string.kind {

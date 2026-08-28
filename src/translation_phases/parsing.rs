@@ -97,6 +97,8 @@ pub(crate) struct Parser {
     returned: Option<ParseValue>,
     /// Arenas owning every syntax node produced by this parser.
     syntax: SyntaxStore,
+    /// Roots already returned through the streaming adapter.
+    emitted_roots: Vec<ExternalDeclaration>,
     /// Parser-visible ordinary-name classification used for typedef ambiguity.
     scopes: ScopeStack,
     /// Function-local label namespaces, independent of ordinary identifiers.
@@ -3121,7 +3123,7 @@ struct InitializerFrame {
     designation_equals_source_vectors: Option<SourceVectors>,
     current_designator_source: Option<SourceVectors>,
     current_designation_recovered: bool,
-    synchronized_designator: Option<(ConstantExpressionIndex, SourceVectors, usize)>,
+    synchronized_designator: Option<(ConstantExpressionIndex, SourceVectors, DelimiterDepth)>,
     starting_error_count: usize,
     /// Whether `)` belongs to an enclosing expression or `for` header.
     closing_parenthesis_is_caller_boundary: bool,
@@ -3256,9 +3258,11 @@ impl FunctionDefinitionFrame {
                         true,
                     )))
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
-                    if !parser.declaration_is_old_style_function_head(self.head)
-                        && !self.diagnosed_prototype_declaration_list
-                    {
+                    let has_parameter_type_list = parser
+                        .declaration_head_declarator(self.head)
+                        .and_then(|declarator| parser.function_suffix(declarator))
+                        .is_some_and(|suffix| matches!(suffix, DirectDeclarator::Function { .. }));
+                    if has_parameter_type_list && !self.diagnosed_prototype_declaration_list {
                         self.diagnosed_prototype_declaration_list = true;
                         parser.report(
                             context,
@@ -4258,7 +4262,19 @@ impl StatementFrame {
             },
             | StatementPhase::ForCondition(initializer) => {
                 debug_assert!(returned.is_none());
-                if is_operator(token, OperatorTokenType::Semicolon) {
+                if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
+                    self.own_semicolon_or_report(parser, context, token, "for condition");
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedClosingParenthesisInStatement(
+                            "for statement",
+                            token.map(|token| token.kind),
+                        ),
+                        token,
+                    );
+                    self.phase = StatementPhase::ForPushBody(initializer, None, None);
+                    ParseAction::Reprocess
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
                     self.merge_token(parser, context, token.expect("semicolon exists"));
                     self.phase = StatementPhase::ForIteration(initializer, None);
                     ParseAction::Consume
@@ -4820,6 +4836,7 @@ impl Parser {
             frames: Vec::new(),
             returned: None,
             syntax: SyntaxStore::default(),
+            emitted_roots: Vec::new(),
             scopes: ScopeStack::default(),
             label_scopes: Vec::new(),
             switch_scopes: Vec::new(),
@@ -4860,10 +4877,14 @@ impl Parser {
         &self.syntax
     }
 
-    /// Parses the remaining phase-7 input into one source-ordered translation
+    /// Parses the complete phase-7 input into one source-ordered translation
     /// unit and transfers the validated syntax arenas to the result.
+    ///
+    /// Roots already observed through [`TranslationPhase::next_item`] remain
+    /// part of the aggregate result so mixing the streaming adapter with the
+    /// owning seam cannot silently produce a suffix-only translation unit.
     pub(crate) fn parse_translation_unit(mut self, context: &mut Context) -> ParsedTranslationUnit {
-        let mut roots = Vec::new();
+        let mut roots = std::mem::take(&mut self.emitted_roots);
         while let Some(root) = self.drive(context) {
             roots.push(root);
         }
@@ -5145,31 +5166,32 @@ impl Parser {
                     && !has_pending_conditional_at_depth
                     && token.kind == TokenType::Identifier
                     && is_operator(self.cursor.following(context), OperatorTokenType::Colon);
-            let at_statement_body_brace =
-                (matches!(
-                    recovery_set.kind,
-                    SynchronizationKind::StatementExpression(
-                        ExpressionTerminator::ClosingParenthesis | ExpressionTerminator::Semicolon
-                    )
-                ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration))
-                    && at_top_level
-                    && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-                    && (state.last_token
-                        != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
-                        || !state.last_closed_parenthesis_was_type_name
-                        || state.last_closed_parenthesis_was_sizeof_type_name
-                            && self.cursor.following(context).is_some_and(|following| {
-                                is_statement_keyword(following.kind)
-                                    || following.kind != TokenType::Identifier
-                                        && self.declaration_starter(following)
-                                    || matches!(
-                                        following.kind,
-                                        TokenType::Operator(
-                                            OperatorTokenType::Semicolon
-                                                | OperatorTokenType::ClosingCurlyBrace
-                                        )
+            let at_statement_body_brace = (matches!(
+                recovery_set.kind,
+                SynchronizationKind::StatementExpression(
+                    ExpressionTerminator::ClosingParenthesis | ExpressionTerminator::Semicolon
+                )
+            ) || matches!(
+                recovery_set.kind,
+                SynchronizationKind::BlockDeclaration | SynchronizationKind::ForInitializer
+            )) && at_top_level
+                && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                && (state.last_token
+                    != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
+                    || !state.last_closed_parenthesis_was_type_name
+                    || state.last_closed_parenthesis_was_sizeof_type_name
+                        && self.cursor.following(context).is_some_and(|following| {
+                            is_statement_keyword(following.kind)
+                                || following.kind != TokenType::Identifier
+                                    && self.declaration_starter(following)
+                                || matches!(
+                                    following.kind,
+                                    TokenType::Operator(
+                                        OperatorTokenType::Semicolon
+                                            | OperatorTokenType::ClosingCurlyBrace
                                     )
-                            }));
+                                )
+                        }));
             let at_next_statement_keyword = matches!(
                 recovery_set.kind,
                 SynchronizationKind::Statement | SynchronizationKind::ForInitializer
@@ -5446,12 +5468,6 @@ impl Parser {
             || !specifiers.type_qualifiers.is_empty()
             || specifiers.type_specifiers != TypeSpecifiers::Empty
             || specifiers.function_specifiers.is_inline
-    }
-
-    fn declaration_is_old_style_function_head(&self, declaration: DeclarationIndex) -> bool {
-        self.declaration_head_declarator(declaration)
-            .and_then(|declarator| self.function_suffix(declarator))
-            .is_some_and(|suffix| matches!(suffix, DirectDeclarator::KAndRStyleFunction { .. }))
     }
 
     fn function_suffix(&self, mut declarator: Declarator) -> Option<DirectDeclarator> {
@@ -6454,28 +6470,17 @@ impl DeclarationFrame {
                             .last_init_index
                             .and_then(|index| parser.syntax.init_declarators.get(index as usize))
                             .is_some_and(|init| init.initializer.is_none());
-                let function_suffix = self
-                    .last_init_index
-                    .and_then(|index| parser.syntax.init_declarators.get(index as usize))
-                    .and_then(|init| parser.function_suffix(init.declarator));
-                let is_old_style_function_declarator = matches!(
-                    function_suffix,
-                    Some(DirectDeclarator::KAndRStyleFunction { .. })
-                );
-                let has_unrecovered_function_declarator = function_suffix.is_some()
-                    && parser.hard_error_count == self.starting_error_count;
                 let starts_function_definition = self.context == DeclarationContext::External
                     && has_sole_uninitialized_declarator
                     && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
-                        || (is_old_style_function_declarator
-                            || has_unrecovered_function_declarator)
+                        || parser.hard_error_count == self.starting_error_count
                             && token.is_some_and(|token| parser.declaration_starter(token)));
                 // The same prefix can continue as another init-declarator, an
                 // initializer, a completed declaration, or a function body.
-                // A sole declarator followed by `{`, or a function declarator
-                // followed by a declaration-list, matches the function-
-                // definition production. Whether the declaration-list is
-                // permitted for that function form is a separate C constraint.
+                // A sole declarator followed by `{` or a declaration-list
+                // matches the function-definition production. Whether that
+                // declarator denotes a function type, and whether its form
+                // permits a declaration-list, are separate C constraints.
                 if is_operator(token, OperatorTokenType::Comma) {
                     if let Some(token) = token {
                         parser.merge_source(context, &mut self.source_vectors, token);
@@ -6549,13 +6554,12 @@ impl DeclarationFrame {
                     );
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Reprocess
-                } else if self.context == DeclarationContext::Block
-                    && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
-                        || token.is_some_and(|token| token.kind == TokenType::Identifier)
-                            && is_operator(
-                                parser.cursor.following(context),
-                                OperatorTokenType::Colon,
-                            ))
+                } else if matches!(
+                    self.context,
+                    DeclarationContext::Block | DeclarationContext::ForInitializer
+                ) && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
+                    || token.is_some_and(|token| token.kind == TokenType::Identifier)
+                        && is_operator(parser.cursor.following(context), OperatorTokenType::Colon))
                 {
                     parser.report(
                         context,
@@ -10414,14 +10418,22 @@ impl InitializerFrame {
                         ),
                         token,
                     );
-                    self.synchronized_designator = Some((expression, source_vectors, 0));
+                    self.synchronized_designator = Some((
+                        expression,
+                        source_vectors,
+                        DelimiterDepth {
+                            parentheses: 0,
+                            brackets:    0,
+                            braces:      0,
+                        },
+                    ));
                     self.phase = InitializerPhase::SynchronizeArrayDesignator;
                     ParseAction::Reprocess
                 }
             },
             | InitializerPhase::SynchronizeArrayDesignator => {
                 debug_assert!(returned.is_none());
-                let (expression, mut source_vectors, depth) = self
+                let (expression, mut source_vectors, mut depth) = self
                     .synchronized_designator
                     .take()
                     .expect("array-designator synchronization retains its state");
@@ -10430,7 +10442,7 @@ impl InitializerFrame {
                 {
                     source_vectors = context.merge_vectors(source_vectors, token.source_vectors);
                     self.merge_designation_source(context, token.source_vectors);
-                    if depth == 0 {
+                    if depth.brackets == 0 {
                         self.push_array_designator(
                             expression,
                             source_vectors,
@@ -10439,16 +10451,17 @@ impl InitializerFrame {
                         );
                         self.phase = InitializerPhase::Designation;
                     } else {
-                        self.synchronized_designator =
-                            Some((expression, source_vectors, depth - 1));
+                        depth.brackets -= 1;
+                        self.synchronized_designator = Some((expression, source_vectors, depth));
                         self.phase = InitializerPhase::SynchronizeArrayDesignator;
                     }
                     return ParseAction::Consume;
                 }
-                // An unmatched nested `[` cannot take ownership of the
-                // initializer or declaration boundary. Depth only selects
-                // which later `]` can close this designator.
-                if self.at_array_designator_sync_boundary(parser, context, token) {
+                // Nested delimiters cannot transfer a comma, `=`, or weak
+                // grammar boundary to the surrounding initializer. Owning
+                // outer boundaries still stop the scan despite an unmatched
+                // sibling delimiter.
+                if self.at_array_designator_sync_boundary(parser, context, token, depth) {
                     self.push_array_designator(expression, source_vectors, None, true);
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
@@ -10458,15 +10471,31 @@ impl InitializerFrame {
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
                 };
-                let next_depth =
-                    if token.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket) {
-                        depth + 1
-                    } else {
-                        depth
-                    };
+                match token.kind {
+                    | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
+                        depth.parentheses += 1;
+                    },
+                    | TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                        if depth.parentheses > 0 =>
+                    {
+                        depth.parentheses -= 1;
+                    },
+                    | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
+                        depth.brackets += 1;
+                    },
+                    | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
+                        depth.braces += 1;
+                    },
+                    | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                        if depth.braces > 0 =>
+                    {
+                        depth.braces -= 1;
+                    },
+                    | _ => {},
+                }
                 source_vectors = context.merge_vectors(source_vectors, token.source_vectors);
                 self.merge_designation_source(context, token.source_vectors);
-                self.synchronized_designator = Some((expression, source_vectors, next_depth));
+                self.synchronized_designator = Some((expression, source_vectors, depth));
                 self.phase = InitializerPhase::SynchronizeArrayDesignator;
                 ParseAction::Consume
             },
@@ -10649,27 +10678,34 @@ impl InitializerFrame {
         parser: &mut Parser,
         context: &mut Context,
         token: Option<Token>,
+        depth: DelimiterDepth,
     ) -> bool {
         let Some(token) = token else {
             return true;
         };
-        matches!(
-            token.kind,
-            TokenType::Operator(
-                OperatorTokenType::Equals
-                    | OperatorTokenType::Comma
-                    | OperatorTokenType::Semicolon
-                    | OperatorTokenType::ClosingCurlyBrace
+        let at_top_level = depth.parentheses == 0 && depth.brackets == 0 && depth.braces == 0;
+        at_top_level
+            && matches!(
+                token.kind,
+                TokenType::Operator(OperatorTokenType::Equals | OperatorTokenType::Comma)
             )
-        ) || self.closing_parenthesis_is_caller_boundary
-            && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
-            || is_statement_keyword(token.kind)
-            || ExpressionFrame::is_strong_grammar_boundary_for(
-                parser,
-                context,
-                token,
-                ExpressionBoundary::Initializer,
+            || matches!(
+                token.kind,
+                TokenType::Operator(
+                    OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                )
             )
+            || self.closing_parenthesis_is_caller_boundary
+                && depth.parentheses == 0
+                && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+            || at_top_level
+                && (is_statement_keyword(token.kind)
+                    || ExpressionFrame::is_strong_grammar_boundary_for(
+                        parser,
+                        context,
+                        token,
+                        ExpressionBoundary::Initializer,
+                    ))
     }
 
     fn finish_designation(&mut self, parser: &mut Parser) {
@@ -12056,7 +12092,9 @@ impl TranslationPhase for Parser {
     type Item = ExternalDeclaration;
 
     fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
-        self.drive(context)
+        let root = self.drive(context)?;
+        self.emitted_roots.push(root);
+        Some(root)
     }
 }
 
@@ -13608,6 +13646,30 @@ mod tests {
     }
 
     #[test]
+    fn malformed_for_declaration_preserves_a_compound_body() {
+        let parsed = parse("int f(void) { for (int x junk { x++; } return 0; }\n");
+        let items = block_items(&parsed, function_definition(&parsed, 0).body);
+
+        assert_eq!(items.len(), 2, "{items:#?}");
+        let BlockItem::Statement(for_statement) = items[0] else {
+            panic!("expected a for statement")
+        };
+        let StatementType::For { body_statement, .. } =
+            parsed.parser.syntax.statements[for_statement.0 as usize].kind
+        else {
+            panic!("expected a recovered for statement")
+        };
+        assert!(matches!(
+            parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+            StatementType::Compound { .. }
+        ));
+        assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+            parsed.parser.syntax.statements[index.0 as usize].kind,
+            StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+        )));
+    }
+
+    #[test]
     fn function_block_implicit_and_label_scopes_restore_typedef_classification() {
         let parsed = parse(
             "typedef int T; typedef int __func__;\nint f(int T) { T; __func__; T: ; goto T; { \
@@ -14491,6 +14553,27 @@ mod tests {
             .as_deref(),
             Some("after")
         );
+    }
+
+    #[test]
+    fn declaration_lists_retain_constraint_invalid_function_definitions() {
+        let parsed = parse("int f int parameter; { return 0; }\n");
+
+        assert!(matches!(
+            parsed.items.as_slice(),
+            [ExternalDeclaration::FunctionDefinition(_)]
+        ));
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        let definition = function_definition(&parsed, 0);
+        assert_eq!(definition.declaration_list.length(), 1);
+        assert!(matches!(
+            parsed.parser.syntax.statements[definition.body.0 as usize].kind,
+            StatementType::Compound { .. }
+        ));
     }
 
     #[test]
@@ -17763,6 +17846,21 @@ mod tests {
     }
 
     #[test]
+    fn array_designator_recovery_ignores_nested_commas() {
+        let parsed = parse("int a[] = { [1 junk (2,3)] = 4, 5 }; int after;\n");
+
+        assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
+        assert!(matches!(
+            parsed.items[1],
+            ExternalDeclaration::Declaration(_)
+        ));
+        assert_eq!(parsed.parser.syntax.designators.len(), 1);
+        assert!(parsed.parser.syntax.designators[0].recovered);
+        assert_eq!(parsed.parser.syntax.initializer_elements.len(), 2);
+        assert_eq!(parser_errors(&parsed).count(), 2, "{:#?}", parsed.errors);
+    }
+
+    #[test]
     fn array_designator_recovery_preserves_following_declarations() {
         let parsed = parse("int f(void) { int x = { [1 + int after; int later; }\n");
         let items = block_items(&parsed, function_definition(&parsed, 0).body);
@@ -18116,36 +18214,40 @@ mod tests {
     #[test]
     fn repeated_specifier_warning_group_is_named_and_suppressible() {
         let strict = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny);
-        let warned = parse_with_configuration("const const int f(void) { return 0; }\n", strict);
-        let warning = warned.errors.iter().find_map(|error| match error {
-            | TranslationError::Parsing(error)
-                if error.warning_group == Some(ParserWarningGroup::RepeatedSpecifiers) =>
-                Some(error),
-            | _ => None,
-        });
-        let warning = warning.expect("expected the named quality warning");
-        assert_eq!(warning.severity, ErrorSeverity::Warning);
-        assert_eq!(warning.code, ParserDiagnosticCode::Quality);
-        assert!(matches!(
-            warned.items[0],
-            ExternalDeclaration::FunctionDefinition(_)
-        ));
+        for specifier in ["const", "volatile", "restrict", "inline"] {
+            let source = format!("{specifier} {specifier} int f(void) {{ return 0; }}\n");
+            let warned = parse_with_configuration(&source, strict);
+            let warning = warned.errors.iter().find_map(|error| match error {
+                | TranslationError::Parsing(error)
+                    if error.warning_group == Some(ParserWarningGroup::RepeatedSpecifiers) =>
+                    Some(error),
+                | _ => None,
+            });
+            let warning = warning.expect("expected the named quality warning");
+            assert_eq!(warning.severity, ErrorSeverity::Warning, "{specifier}");
+            assert_eq!(warning.code, ParserDiagnosticCode::Quality, "{specifier}");
+            assert!(matches!(
+                warned.items[0],
+                ExternalDeclaration::FunctionDefinition(_)
+            ));
 
-        let suppressed = parse_with_configuration(
-            "const const int f(void) { return 0; }\n",
-            strict.with_repeated_specifier_warnings(false),
-        );
-        assert!(suppressed.errors.iter().all(|error| !matches!(
-            error,
-            TranslationError::Parsing(ParserError {
-                warning_group: Some(ParserWarningGroup::RepeatedSpecifiers),
-                ..
-            })
-        )));
-        assert!(matches!(
-            suppressed.items[0],
-            ExternalDeclaration::FunctionDefinition(_)
-        ));
+            let suppressed =
+                parse_with_configuration(&source, strict.with_repeated_specifier_warnings(false));
+            assert!(
+                suppressed.errors.iter().all(|error| !matches!(
+                    error,
+                    TranslationError::Parsing(ParserError {
+                        warning_group: Some(ParserWarningGroup::RepeatedSpecifiers),
+                        ..
+                    })
+                )),
+                "{specifier}"
+            );
+            assert!(matches!(
+                suppressed.items[0],
+                ExternalDeclaration::FunctionDefinition(_)
+            ));
+        }
     }
 
     #[test]
@@ -18479,6 +18581,49 @@ mod tests {
     }
 
     #[test]
+    fn complete_translation_unit_retains_roots_already_streamed() {
+        let mut context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<mixed-parser-consumption-test>").into_boxed_path(),
+            "int first; int second;\n".to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let mut parser = Parser::new(preprocessor);
+
+        assert!(matches!(
+            parser.next_item(&mut context),
+            Some(ExternalDeclaration::Declaration(_))
+        ));
+        let unit = parser.parse_translation_unit(&mut context);
+
+        assert_eq!(unit.external_declarations().len(), 2);
+        let names = unit
+            .external_declarations()
+            .iter()
+            .map(|root| {
+                let ExternalDeclaration::Declaration(index) = *root else {
+                    panic!("expected a declaration root")
+                };
+                let declaration = unit.syntax().declaration(index);
+                let declarator = declaration.init_declarators()[0].declarator;
+                let identifier = unit
+                    .syntax()
+                    .direct_declarators(declarator.kind)
+                    .iter()
+                    .find_map(|direct| match direct {
+                        | DirectDeclarator::Identifier(identifier) => Some(*identifier),
+                        | _ => None,
+                    })
+                    .expect("named declaration");
+                context.string_cache.at(identifier.name)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["first", "second"]);
+    }
+
+    #[test]
     fn syntax_tree_rejects_handles_from_another_parsed_unit() {
         let (first, _) = parse_unit("int first;\n");
         let (second, _) = parse_unit("int second;\n");
@@ -18504,6 +18649,84 @@ mod tests {
         assert!(
             foreign_list.is_err(),
             "a foreign list handle must not resolve silently"
+        );
+    }
+
+    #[test]
+    fn typed_identifier_provenance_survives_macros_and_includes() {
+        let mut context = Context::new();
+        let include_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("parser");
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<identifier-provenance-test>").into_boxed_path(),
+            "#define DECL_NAME generated\nint DECL_NAME;\n#include \"identifier-provenance.h\"\n"
+                .to_owned()
+                .into(),
+            vec![include_directory].into(),
+            SharedVec::default(),
+        );
+        let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+
+        assert!(context.take_pending_errors().is_empty());
+        assert_eq!(unit.external_declarations().len(), 2);
+        let identifiers = unit
+            .external_declarations()
+            .iter()
+            .map(|root| {
+                let ExternalDeclaration::Declaration(index) = *root else {
+                    panic!("expected a declaration root")
+                };
+                let declarator = unit.syntax().declaration(index).init_declarators()[0].declarator;
+                unit.syntax()
+                    .direct_declarators(declarator.kind)
+                    .iter()
+                    .find_map(|direct| match direct {
+                        | DirectDeclarator::Identifier(identifier) => Some(*identifier),
+                        | _ => None,
+                    })
+                    .expect("named declaration")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(context.string_cache.at(identifiers[0].name), "generated");
+        let macro_vectors = context.get_source_vectors(identifiers[0].source_vectors);
+        assert!(
+            macro_vectors
+                .iter()
+                .all(|vector| vector.source_file_index == 0)
+        );
+        assert_eq!((macro_vectors[0].line, macro_vectors[0].column), (1, 19));
+
+        assert_eq!(
+            context.string_cache.at(identifiers[1].name),
+            "included_name"
+        );
+        let include_vectors = context.get_source_vectors(identifiers[1].source_vectors);
+        assert!(!include_vectors.is_empty());
+        assert!(
+            include_vectors
+                .iter()
+                .all(|vector| vector.source_file_index == 1)
+        );
+        assert_eq!((include_vectors[0].line, include_vectors[0].column), (1, 5));
+
+        let inspected = unit.syntax().inspect(
+            unit.external_declarations(),
+            &context,
+            InspectionOptions {
+                show_locations: true,
+            },
+        );
+        assert!(
+            inspected.contains("declarator generated @1:19"),
+            "{inspected}"
+        );
+        assert!(
+            inspected.contains("declarator included_name @1:5"),
+            "{inspected}"
         );
     }
 
@@ -18849,6 +19072,47 @@ mod tests {
             .find("constant Integer(Int(2))")
             .expect("second initializer");
         assert!(a < one && one < b && b < two, "{multi}");
+    }
+
+    #[test]
+    fn inspection_has_a_stable_statement_expression_and_missing_slot_golden() {
+        let (unit, context) = parse_unit(
+            "int f(void) { if (x) return a + 1; else return 0; if () ; switch (x) { case : ; } }\n",
+        );
+        let output = unit.syntax().inspect(
+            unit.external_declarations(),
+            &context,
+            InspectionOptions::default(),
+        );
+
+        let expected = [
+            "recovered-function-definition f recovered type=int",
+            "  declarator: declarator pointer-levels=0",
+            "    identifier f",
+            "    function variadic=false",
+            "      parameter type=void",
+            "  body: compound recovered",
+            "    block-item: if",
+            "      condition: identifier x",
+            "      then: return",
+            "        return-value: binary Addition",
+            "          lhs: identifier a",
+            "          rhs: constant Integer(Int(1))",
+            "      else: return",
+            "        return-value: constant Integer(Int(0))",
+            "    block-item: if recovered",
+            "      condition: missing",
+            "      then: null",
+            "    block-item: switch recovered",
+            "      condition: identifier x",
+            "      body: compound recovered",
+            "        block-item: case recovered",
+            "          case-value: missing",
+            "          labeled: null",
+            "",
+        ]
+        .join("\n");
+        assert_eq!(output, expected);
     }
 
     #[test]
