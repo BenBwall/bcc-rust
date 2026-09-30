@@ -1,0 +1,15 @@
+warning: `#line` needs a plain decimal line number
+ --> pp-missing-newline-after-line-directive.c:1:7
+  |
+1 | #line 5 "file.c" extra
+  |       ^ not a digit sequence
+  |
+  = note: C99 §6.10.4p3: the line number is a digit sequence, not any constant
+
+error: unexpected identifier after `#line`
+ --> "file.c":5:18
+
+error: expected `;`, found keyword `int`
+ --> "file.c":6:1
+
+2 errors and 1 warning generated.

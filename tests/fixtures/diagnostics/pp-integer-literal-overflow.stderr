@@ -1,0 +1,9 @@
+error: integer constant is too large
+ --> pp-integer-literal-overflow.c:1:13
+  |
+1 | int value = 18446744073709551616;
+  |             ^^^^^^^^^^^^^^^^^^^^ does not fit in `unsigned long long`
+  |
+  = note: the largest integer type, `unsigned long long`, has 64 bits
+
+1 error generated.

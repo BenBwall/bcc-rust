@@ -1,0 +1,7 @@
+error: expected `,`, `=`, `;`, or a function body after the declarator, found string literal `"abc"`
+ --> parser-expected-declaration-continuation-after-declarator-tab.c:1:12
+  |
+1 |     int value "abc";
+  |               ^^^^^ expected one of `,`, `=`, `;`, or `{`
+
+1 error generated.

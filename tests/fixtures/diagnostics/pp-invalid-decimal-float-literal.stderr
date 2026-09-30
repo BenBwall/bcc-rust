@@ -1,0 +1,9 @@
+error: invalid floating constant `1e+`
+ --> pp-invalid-decimal-float-literal.c:1:16
+  |
+1 | double value = 1e+;
+  |                ^^^ not a valid floating constant
+  |
+  = note: C99 §6.4.4.2: a floating constant is digits with a `.` or an exponent and an optional `f`, `F`, `l`, or `L` suffix, as in `1.5`, `2e10`, or `.5f`
+
+1 error generated.

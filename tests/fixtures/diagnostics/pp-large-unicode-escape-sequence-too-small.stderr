@@ -1,0 +1,7 @@
+error: `\U` escape needs exactly eight hexadecimal digits
+ --> pp-large-unicode-escape-sequence-too-small.c:1:13
+  |
+1 | int value = '\U1234';
+  |             ^^^^^^^^ contains a short `\U` escape
+
+1 error generated.

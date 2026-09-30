@@ -1,0 +1,7 @@
+error: expected `;` after `return` statement, found `}`
+ --> parser-expected-semicolon-in-statement.c:1:24
+  |
+1 | int f(void) { return 0 }
+  |                        ^ expected `;`
+
+1 error generated.

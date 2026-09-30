@@ -1,0 +1,9 @@
+error: expected `)` after `...`, found integer constant `1`
+ --> parser-expected-closing-parenthesis-after-ellipsis-in-function-declarator-parameter-list.c:1:18
+  |
+1 | int f(int a, ... 1);
+  |                  ^ expected `)`
+  |
+  = note: C99 §6.7.5: `...` must be the last parameter
+
+1 error generated.

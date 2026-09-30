@@ -1,0 +1,9 @@
+warning: stray `#` in program
+ --> pp-hash-must-be-first-character-on-line.c:1:12
+  |
+1 | int value; #define X 1
+  |            ^ a directive must start a line
+  |
+  = note: C99 §6.10p2: `#` begins a directive only as the first token on a line; elsewhere it is valid only inside a function-like macro definition
+
+1 warning generated.

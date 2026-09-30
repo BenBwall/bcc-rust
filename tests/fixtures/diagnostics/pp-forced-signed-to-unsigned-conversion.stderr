@@ -1,0 +1,10 @@
+warning: integer constant is so large that it is unsigned
+ --> pp-forced-signed-to-unsigned-conversion.c:1:13
+  |
+1 | int value = 18446744073709551615;
+  |             ^^^^^^^^^^^^^^^^^^^^ this constant has type `unsigned long long`
+  |
+  = note: C99 §6.4.4.1p5: no signed type can represent this decimal constant
+  = help: add a `u` suffix to make the unsigned type explicit
+
+1 warning generated.

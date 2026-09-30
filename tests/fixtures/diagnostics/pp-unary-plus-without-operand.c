@@ -1,0 +1,3 @@
+#if +)
+#endif
+int value;

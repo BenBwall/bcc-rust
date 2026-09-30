@@ -1,0 +1,7 @@
+error: expected an identifier or `(` in the declarator, found `;`
+ --> parser-type-qualifiers-without-declarator.c:1:11
+  |
+1 | int *const;
+  |           ^ expected a name
+
+1 error generated.

@@ -1,0 +1,10 @@
+error: cannot find header `missing-diagnostics-header.h`
+ --> pp-header-not-found-system.c:1:10
+  |
+1 | #include <missing-diagnostics-header.h>
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in any search directory
+  |
+  = note: the path is absolute; no directory was searched
+  = help: add the directory containing it with `--isystem <dir>`
+
+1 error generated.

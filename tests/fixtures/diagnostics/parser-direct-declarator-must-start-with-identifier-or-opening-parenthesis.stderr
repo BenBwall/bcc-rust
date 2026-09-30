@@ -1,0 +1,7 @@
+error: expected an identifier or `(` in the declarator, found integer constant `123`
+ --> parser-direct-declarator-must-start-with-identifier-or-opening-parenthesis.c:1:5
+  |
+1 | int 123;
+  |     ^^^ expected a name
+
+1 error generated.

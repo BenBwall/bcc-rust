@@ -1,0 +1,9 @@
+error: `#if` with no condition
+ --> pp-no-condition-in-if-directive.c:2:1
+  |
+2 | #endif
+  | ^ expected an expression
+  |
+  = help: write the condition to test, as in `#if VERSION >= 2`
+
+1 error generated.

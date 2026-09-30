@@ -1,0 +1,9 @@
+error: this macro takes 2 arguments but 1 argument was supplied
+ --> pp-wrong-number-of-arguments-in-function-like-macro-invocation.c:2:13
+  |
+2 | int value = F(1);
+  |             ^ expected 2 arguments
+  |
+  = note: C99 §6.10.3p4: an invocation must supply one argument per parameter, plus any for `...`
+
+1 error generated.

@@ -1,0 +1,9 @@
+error: expected an array size after `static`
+ --> parser-expected-assignment-expression-after-static-in-array-direct-declarator.c:1:23
+  |
+1 | int f(int array[static]);
+  |                       ^ expected an expression
+  |
+  = note: C99 §6.7.5: `[static N]` requires the minimum size `N`
+
+1 error generated.

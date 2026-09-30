@@ -1,0 +1,7 @@
+warning: integer constant does not fit in `unsigned int`
+ --> pp-forced-unsigned-promotion.c:1:13
+  |
+1 | int value = 4294967296u;
+  |             ^^^^^^^^^^^ this constant has type `unsigned long`
+
+1 warning generated.

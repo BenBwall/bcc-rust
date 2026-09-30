@@ -1,0 +1,10 @@
+warning: `X` is not defined; it evaluates to 0
+ --> pp-undefined-identifier-in-preprocessor-expression.c:1:5
+  |
+1 | #if X
+  |     ^ not a macro
+  |
+  = note: C99 §6.10.1p3: identifiers that are not macro names are replaced with `0` in `#if`
+  = help: use `defined(X)` to test whether it is defined
+
+1 warning generated.

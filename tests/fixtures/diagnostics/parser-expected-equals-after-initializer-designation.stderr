@@ -1,0 +1,9 @@
+error: expected `=` after the designator, found integer constant `2`
+ --> parser-expected-equals-after-initializer-designation.c:1:21
+  |
+1 | int array[] = { [1] 2 };
+  |                     ^ expected `=`
+  |
+  = note: C99 §6.7.8: a designation is written `[index] = value` or `.member = value`
+
+1 error generated.

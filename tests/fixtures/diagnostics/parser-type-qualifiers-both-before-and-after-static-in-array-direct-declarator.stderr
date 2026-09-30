@@ -1,0 +1,9 @@
+error: type qualifiers on both sides of `static`
+ --> parser-type-qualifiers-both-before-and-after-static-in-array-direct-declarator.c:1:30
+  |
+1 | int f(int array[const static volatile 3]);
+  |                              ^^^^^^^^ qualifiers may appear before or after `static`, not both
+  |
+  = note: C99 §6.7.5: write `[static const 3]` or `[const static 3]`
+
+1 error generated.

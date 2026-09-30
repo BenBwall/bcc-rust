@@ -1,0 +1,7 @@
+error: `#elif` without `#if`
+ --> pp-elif-directive-without-if-directive.c:1:2
+  |
+1 | #elif 1
+  |  ^^^^ no conditional directive is open here
+
+1 error generated.

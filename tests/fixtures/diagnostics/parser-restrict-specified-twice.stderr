@@ -1,0 +1,10 @@
+warning: duplicate `restrict`
+ --> parser-restrict-specified-twice.c:1:15
+  |
+1 | int *restrict restrict value;
+  |               ^^^^^^^^ `restrict` was already specified
+  |
+  = note: C99 §6.7.3p4: repeating a qualifier has no effect
+  = note: `repeated-specifiers` warnings are on by default; pass `--no-repeated-specifier-warnings` to silence them
+
+1 warning generated.

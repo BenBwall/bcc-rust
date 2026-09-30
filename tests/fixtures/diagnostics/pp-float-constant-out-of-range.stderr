@@ -1,0 +1,9 @@
+warning: floating constant is too large for `float`
+ --> pp-float-constant-out-of-range.c:1:15
+  |
+1 | float value = 1e999f;
+  |               ^^^^^^ this value becomes infinity
+  |
+  = note: C99 §6.4.4p2: the value of a constant must be representable in its type
+
+1 warning generated.

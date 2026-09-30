@@ -1,0 +1,17 @@
+warning: `#pragma once` in main file
+ --> <pragma string>:1:1
+  |
+1 | once
+  | ^^^^ only affects files that are included
+
+error: expected `)` to close `_Pragma(`, found number `1`
+ --> pp-missing-closing-parenthesis-in-pragma-operator.c:1:16
+  |
+1 | _Pragma("once" 1)
+  |                ^- skipped to recover
+  |                |
+  |                expected `)`
+2 | int value;
+  | --- parsing resumes here
+
+1 error and 1 warning generated.

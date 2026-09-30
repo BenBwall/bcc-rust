@@ -1,0 +1,9 @@
+error: `\u` escape does not name a valid character
+ --> pp-invalid-small-unicode-escape-sequence.c:1:13
+  |
+1 | int value = '\uD800';
+  |             ^^^^^^^^ contains an invalid universal character name
+  |
+  = note: C99 §6.4.3: a universal character name must be a valid code point
+
+1 error generated.

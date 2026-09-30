@@ -1,0 +1,7 @@
+error: expected `]` to close the subscript, found end of file
+ --> parser-expected-closing-square-bracket-in-subscript.c:2:1
+  |
+2 | 
+  | ^ expected `]`
+
+1 error generated.

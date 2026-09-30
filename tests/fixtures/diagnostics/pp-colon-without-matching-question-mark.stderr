@@ -1,0 +1,15 @@
+error: `:` without a matching `?`
+ --> pp-colon-without-matching-question-mark.c:1:7
+  |
+1 | #if 1 : 2
+  |       ^ no `?` precedes this `:` in the same parentheses
+
+error: expected an operator, found number `2`
+ --> pp-colon-without-matching-question-mark.c:1:9
+  |
+1 | #if 1 : 2
+  |         ^ expected a binary operator before this
+  |
+  = note: operands in an `#if` expression must be joined by operators
+
+2 errors generated.

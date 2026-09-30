@@ -1,0 +1,7 @@
+error: `#else` without `#if`
+ --> pp-else-directive-without-if-directive.c:1:2
+  |
+1 | #else
+  |  ^^^^ no conditional directive is open here
+
+1 error generated.

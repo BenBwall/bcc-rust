@@ -1,0 +1,9 @@
+error: invalid binary integer constant `0b102`
+ --> pp-invalid-binary-integer-literal.c:1:13
+  |
+1 | int value = 0b102;
+  |             ^^^^^ not a valid binary constant
+  |
+  = note: binary digits are `0` and `1`
+
+1 error generated.

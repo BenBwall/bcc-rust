@@ -1,0 +1,9 @@
+error: negation overflows in `#if` expression
+ --> pp-unary-minus-overflow.c:2:1
+  |
+2 | #endif
+  | ^ the result is out of range
+  |
+  = note: C99 §6.10.1p3: `#if` arithmetic uses `intmax_t` and `uintmax_t`, and §6.6p4 requires constant expressions to stay in range
+
+1 error generated.

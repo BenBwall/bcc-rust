@@ -1,0 +1,7 @@
+error: expected an expression after `+`
+ --> pp-expected-right-hand-side-of-binary-operator-in-preprocessor-expression.c:2:1
+  |
+2 | #endif
+  | ^ `+` needs an operand here
+
+1 error generated.

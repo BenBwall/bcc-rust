@@ -1,0 +1,11 @@
+error: expected a macro parameter after `#`, found number `1`
+ --> pp-hash-operator-must-be-followed-by-a-macro-argument.c:1:15
+  |
+1 | #define F(a) #1
+  |               ^ expected a parameter name
+2 | int value = F(2);
+  |                 - parsing resumes here
+  |
+  = note: C99 §6.10.3.2p1: in a function-like macro, `#` must be followed by a parameter
+
+1 error generated.

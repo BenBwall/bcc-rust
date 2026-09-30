@@ -1,0 +1,10 @@
+error: unterminated character constant
+ --> tokenizer-newline-in-character.c:1:13
+  |
+1 | int value = 'a
+  |             ^^ the line ends before the closing `'`
+  |
+  = note: C99 §6.4.4.4: a character constant cannot span lines
+  = help: write `\n` for a newline character
+
+1 error generated.

@@ -1,0 +1,9 @@
+error: `long long long` is too long
+ --> parser-long-specified-thrice.c:1:11
+  |
+1 | long long long value;
+  |           ^^^^ third `long`
+  |
+  = note: C99 §6.7.2p2: `long long` is the longest integer type
+
+1 error generated.

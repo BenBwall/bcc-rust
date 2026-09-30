@@ -1,0 +1,10 @@
+error: object-like macro `F` redefined as a function-like macro
+ --> pp-redefinition-of-object-like-macro-as-function-like-macro.c:2:9
+  |
+2 | #define F(a) a
+  |         ^ redefined here
+  |
+  = note: C99 §6.10.3p2: a macro may only be redefined identically
+  = help: add `#undef F` before this definition
+
+1 error generated.

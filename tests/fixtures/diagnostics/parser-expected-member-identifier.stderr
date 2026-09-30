@@ -1,0 +1,7 @@
+error: expected a member name after `.` or `->`, found `;`
+ --> parser-expected-member-identifier.c:1:22
+  |
+1 | int f(void) { object.; }
+  |                      ^ expected an identifier
+
+1 error generated.

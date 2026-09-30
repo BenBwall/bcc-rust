@@ -1,0 +1,15 @@
+error: missing type specifier
+ --> parser-unicode-identifier.c:1:12
+  |
+1 | int value; λ
+  |            ^ expected a type such as `int` before this
+  |
+  = note: C99 §6.7.2p2: every declaration needs at least one type specifier; C99 removed implicit `int`
+
+error: expected `,`, `=`, `;`, or a function body after the declarator, found end of file
+ --> parser-unicode-identifier.c:2:1
+  |
+2 | 
+  | ^ expected one of `,`, `=`, `;`, or `{`
+
+2 errors generated.

@@ -1,0 +1,7 @@
+warning: integer constant does not fit in `int`
+ --> pp-forced-signed-promotion.c:1:13
+  |
+1 | int value = 2147483648;
+  |             ^^^^^^^^^^ this constant has type `long`
+
+1 warning generated.

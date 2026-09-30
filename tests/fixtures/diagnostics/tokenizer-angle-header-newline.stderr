@@ -1,0 +1,10 @@
+error: cannot find header `abc`
+ --> tokenizer-angle-header-newline.c:1:10
+  |
+1 | #include <abc
+  |          ^^^^ not found in any search directory
+  |
+  = note: the path is absolute; no directory was searched
+  = help: add the directory containing it with `--isystem <dir>`
+
+1 error generated.

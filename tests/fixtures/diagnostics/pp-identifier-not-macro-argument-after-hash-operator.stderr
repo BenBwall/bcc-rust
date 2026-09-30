@@ -1,0 +1,11 @@
+error: `b` is not a parameter of this macro
+ --> pp-identifier-not-macro-argument-after-hash-operator.c:1:15
+  |
+1 | #define F(a) #b
+  |               ^ `#` can only stringify a parameter
+2 | int value = F(2);
+  |                 - parsing resumes here
+  |
+  = note: C99 §6.10.3.2p1: in a function-like macro, `#` must be followed by a parameter
+
+1 error generated.

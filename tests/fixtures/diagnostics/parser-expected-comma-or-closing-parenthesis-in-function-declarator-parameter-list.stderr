@@ -1,0 +1,7 @@
+error: expected `,` or `)` after the parameter, found integer constant `1`
+ --> parser-expected-comma-or-closing-parenthesis-in-function-declarator-parameter-list.c:1:13
+  |
+1 | int f(int a 1);
+  |             ^ expected `,` or `)`
+
+1 error generated.

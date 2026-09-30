@@ -1,0 +1,7 @@
+error: expected `:` after default label, found `;`
+ --> parser-expected-colon-in-label.c:1:36
+  |
+1 | int f(void) { switch (1) { default ; } }
+  |                                    ^ expected `:`
+
+1 error generated.

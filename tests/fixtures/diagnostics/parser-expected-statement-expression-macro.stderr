@@ -1,0 +1,7 @@
+error: expected an expression, found `;`
+ --> parser-expected-statement-expression-macro.c:2:16
+  |
+2 | int value = BAD;
+  |                ^ expected an expression
+
+1 error generated.

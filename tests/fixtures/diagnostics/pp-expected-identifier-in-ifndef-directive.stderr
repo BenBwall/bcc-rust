@@ -1,0 +1,7 @@
+error: expected a macro name after `#ifndef`, found number `1`
+ --> pp-expected-identifier-in-ifndef-directive.c:1:9
+  |
+1 | #ifndef 1
+  |         ^ expected a macro name
+
+1 error generated.

@@ -1,0 +1,9 @@
+error: unknown escape sequence
+ --> pp-invalid-escape-sequence.c:1:13
+  |
+1 | int value = '\q';
+  |             ^^^^ contains an escape C99 does not define
+  |
+  = note: C99 §6.4.4.4: the escapes are `\'`, `\"`, `\?`, `\\`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, octal `\ooo`, hexadecimal `\xhh`, and universal `\uXXXX` or `\UXXXXXXXX`
+
+1 error generated.

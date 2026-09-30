@@ -1,0 +1,10 @@
+warning: unknown preprocessing directive `#incldue`
+ --> pp-unknown-directive.c:1:2
+  |
+1 | #incldue "clean.h"
+  |  ^^^^^^^ not a C99 directive
+  |
+  = note: C99 §6.10: the directives are `#if`, `#ifdef`, `#ifndef`, `#elif`, `#else`, `#endif`, `#include`, `#define`, `#undef`, `#line`, `#error`, and `#pragma`
+  = help: did you mean `#include`?
+
+1 warning generated.

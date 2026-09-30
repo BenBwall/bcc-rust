@@ -1,0 +1,7 @@
+warning: extra tokens after the pragma in `_Pragma`
+ --> <pragma string>:2:1
+  |
+2 | 
+  | ^ not part of the pragma
+
+1 warning generated.

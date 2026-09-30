@@ -1,0 +1,15 @@
+error: expected an expression after `+`
+ --> pp-unary-plus-without-operand.c:1:7
+  |
+1 | #if +)
+  |       ^ `+` needs an operand here
+
+error: `#if` with no condition
+ --> pp-unary-plus-without-operand.c:2:1
+  |
+2 | #endif
+  | ^ expected an expression
+  |
+  = help: write the condition to test, as in `#if VERSION >= 2`
+
+2 errors generated.
