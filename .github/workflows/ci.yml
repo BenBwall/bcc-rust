@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  llvm:
+    name: Pinned LLVM toolchain
+    runs-on: ubuntu-24.04
+    # A cold build compiles Clang, libclang, and LLD from source.
+    timeout-minutes: 300
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compute cache key
+        id: key
+        run: |
+          rust=$(git rev-parse HEAD:vendor/rust)
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "key=llvm-${{ runner.os }}-$rust-${{ hashFiles('build_support/llvm.rs', 'rust-toolchain.toml') }}" >> "$GITHUB_OUTPUT"
+      - name: Restore LLVM installation
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            target/llvm
+            !target/llvm/build
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      - name: Install LLVM build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Fetch pinned Rust and LLVM sources
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sparse_fetch() {
+            git init -q "$1"
+            git -C "$1" remote add origin "$2"
+            git -C "$1" config remote.origin.promisor true
+            git -C "$1" config remote.origin.partialclonefilter blob:none
+            git -C "$1" config core.sparseCheckout true
+            git -C "$1" config core.sparseCheckoutCone false
+            cp "$3" "$1/.git/info/sparse-checkout"
+            git -C "$1" fetch -q --depth 1 --filter=blob:none origin "$4"
+            git -C "$1" checkout -q --detach "$4"
+          }
+          sparse_fetch vendor/rust https://github.com/rust-lang/rust.git \
+            build_support/rust.sparse "${{ steps.key.outputs.rust }}"
+          llvm=$(git -C vendor/rust rev-parse HEAD:src/llvm-project)
+          sparse_fetch vendor/rust/src/llvm-project https://github.com/rust-lang/llvm-project.git \
+            build_support/llvm.sparse "$llvm"
+      - name: Install Rust toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: rustup toolchain install
+      - name: Build LLVM through the build script
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cargo check --lib
+      - name: Save LLVM installation
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            target/llvm
+            !target/llvm/build
+          key: ${{ steps.key.outputs.key }}
+
+  clippy:
+    name: Clippy
+    needs: llvm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          llvm-key: ${{ needs.llvm.outputs.key }}
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Tests
+    needs: llvm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          llvm-key: ${{ needs.llvm.outputs.key }}
+      - run: cargo test --all-targets --no-fail-fast
+
+  bench:
+    name: Benchmarks
+    needs: llvm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          llvm-key: ${{ needs.llvm.outputs.key }}
+      - run: cargo bench --features benchmarking-internals --bench bench -- --noplot
+      - name: Upload Criterion results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion
+          path: target/criterion
+          if-no-files-found: ignore
