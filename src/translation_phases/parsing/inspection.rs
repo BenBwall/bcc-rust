@@ -6,7 +6,10 @@ use std::{
 };
 
 use super::{
+    BinaryOperator,
     BlockItem,
+    CharacterTokenType,
+    Constant,
     ConstantExpressionSlot,
     Context,
     DeclarationIndex,
@@ -29,10 +32,12 @@ use super::{
     InitializerElement,
     InitializerIndex,
     InitializerType,
+    IntegerTokenType,
     ParameterDeclaration,
     SourceVectors,
     StatementIndex,
     StatementType,
+    StorageClass,
     StringTokenType,
     StructDeclaration,
     StructDeclarator,
@@ -40,8 +45,11 @@ use super::{
     StructOrUnionSpecifierIndex,
     SyntaxTree,
     TypeNameIndex,
+    TypeQualifiers,
     TypeSpecifiers,
+    UnaryOperator,
 };
+use crate::diagnostics::c_quoted;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct InspectionOptions {
@@ -135,13 +143,16 @@ impl SyntaxTree {
                         &mut output,
                         indent,
                         &format!(
-                            "{role}: declaration{} storage={:?} type={}",
+                            "{role}: declaration{} storage={} type={}",
                             if declaration.recovered {
                                 " recovered"
                             } else {
                                 ""
                             },
-                            declaration.declaration_specifiers.storage_class,
+                            declaration
+                                .declaration_specifiers
+                                .storage_class
+                                .map_or("none", StorageClass::spelling),
                             self.type_label(
                                 declaration.declaration_specifiers.type_specifiers,
                                 context,
@@ -307,7 +318,8 @@ impl SyntaxTree {
                             indent,
                             &format!(
                                 "array static={is_static} variable-length={is_pointer} \
-                                 qualifiers={type_qualifiers:?}"
+                                 qualifiers={}",
+                                qualifier_list(type_qualifiers)
                             ),
                             None,
                             context,
@@ -397,9 +409,9 @@ impl SyntaxTree {
                         &mut output,
                         indent,
                         &format!(
-                            "member-declaration type={} qualifiers={:?}",
+                            "member-declaration type={} qualifiers={}",
                             self.type_label(declaration.type_specifiers, context),
-                            declaration.type_qualifiers,
+                            qualifier_list(declaration.type_qualifiers),
                         ),
                         Some(declaration.source_vectors),
                         context,
@@ -884,8 +896,10 @@ impl SyntaxTree {
         match kind {
             | ExpressionType::Parenthesized { .. } => "parenthesized".to_owned(),
             | ExpressionType::Conditional { .. } => "conditional ?:".to_owned(),
-            | ExpressionType::Binary { operator, .. } => format!("binary {operator:?}"),
-            | ExpressionType::Unary { operator, .. } => format!("unary {operator:?}"),
+            | ExpressionType::Binary { operator, .. } =>
+                format!("binary {}", binary_operator_spelling(*operator)),
+            | ExpressionType::Unary { operator, .. } =>
+                format!("unary {}", unary_operator_spelling(*operator)),
             | ExpressionType::Call { .. } => "call".to_owned(),
             | ExpressionType::DirectMember { member, .. } => {
                 format!("member .{}", context.string_cache.at(member.name))
@@ -897,13 +911,20 @@ impl SyntaxTree {
             | ExpressionType::Identifier(identifier) => {
                 format!("identifier {}", context.string_cache.at(identifier.name))
             },
-            | ExpressionType::Constant(constant) => format!("constant {constant:?}"),
+            | ExpressionType::Constant(constant) =>
+                format!("constant {}", constant_label(constant)),
             | ExpressionType::StringLiteral(string) => match string {
                 | StringTokenType::String(contents) => {
-                    format!("string {:?}", context.string_cache.at(*contents))
+                    format!(
+                        "string {}",
+                        c_quoted("", '"', context.string_cache.at(*contents))
+                    )
                 },
                 | StringTokenType::WideString(contents) => {
-                    format!("wide-string {:?}", context.string_cache.at(*contents))
+                    format!(
+                        "wide-string {}",
+                        c_quoted("L", '"', context.string_cache.at(*contents))
+                    )
                 },
             },
             | ExpressionType::SizeofType(..) => "sizeof type".to_owned(),
@@ -1021,8 +1042,119 @@ impl SyntaxTree {
             && source.length > 0
         {
             let position = source.position(context);
-            let _ = write!(output, " @{}:{}", position.line, position.column);
+            // The main file is interned first; anything else names its file
+            // so declarations from headers are not mistaken for local ones.
+            match context.get_source_vectors(source).first() {
+                | Some(vector) if vector.source_file_index != 0 => {
+                    let _ = write!(
+                        output,
+                        " @{}:{}:{}",
+                        context.get_source_file(vector.source_file_index).display(),
+                        position.line,
+                        position.column
+                    );
+                },
+                | _ => {
+                    let _ = write!(output, " @{}:{}", position.line, position.column);
+                },
+            }
         }
         output.push('\n');
+    }
+}
+
+/// Lists qualifiers in C spelling, such as `const volatile`, or `none`.
+fn qualifier_list(qualifiers: TypeQualifiers) -> String {
+    let names: Vec<&str> = [
+        (TypeQualifiers::CONST, "const"),
+        (TypeQualifiers::VOLATILE, "volatile"),
+        (TypeQualifiers::RESTRICT, "restrict"),
+    ]
+    .into_iter()
+    .filter(|&(flag, _)| qualifiers.contains(flag))
+    .map(|(_, name)| name)
+    .collect();
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(" ")
+    }
+}
+
+fn binary_operator_spelling(operator: BinaryOperator) -> &'static str {
+    match operator {
+        | BinaryOperator::Multiplication => "*",
+        | BinaryOperator::Division => "/",
+        | BinaryOperator::Modulo => "%",
+        | BinaryOperator::Addition => "+",
+        | BinaryOperator::Subtraction => "-",
+        | BinaryOperator::LeftShift => "<<",
+        | BinaryOperator::RightShift => ">>",
+        | BinaryOperator::LessThan => "<",
+        | BinaryOperator::GreaterThan => ">",
+        | BinaryOperator::LessThanOrEqual => "<=",
+        | BinaryOperator::GreaterThanOrEqual => ">=",
+        | BinaryOperator::Equal => "==",
+        | BinaryOperator::NotEqual => "!=",
+        | BinaryOperator::BitwiseAnd => "&",
+        | BinaryOperator::BitwiseXor => "^",
+        | BinaryOperator::BitwiseOr => "|",
+        | BinaryOperator::LogicalAnd => "&&",
+        | BinaryOperator::LogicalOr => "||",
+        | BinaryOperator::Comma => ",",
+        | BinaryOperator::Subscript => "[]",
+        | BinaryOperator::Assignment => "=",
+        | BinaryOperator::MultiplicationAssignment => "*=",
+        | BinaryOperator::DivisionAssignment => "/=",
+        | BinaryOperator::ModuloAssignment => "%=",
+        | BinaryOperator::AdditionAssignment => "+=",
+        | BinaryOperator::SubtractionAssignment => "-=",
+        | BinaryOperator::LeftShiftAssignment => "<<=",
+        | BinaryOperator::RightShiftAssignment => ">>=",
+        | BinaryOperator::BitwiseAndAssignment => "&=",
+        | BinaryOperator::BitwiseXorAssignment => "^=",
+        | BinaryOperator::BitwiseOrAssignment => "|=",
+    }
+}
+
+fn unary_operator_spelling(operator: UnaryOperator) -> &'static str {
+    match operator {
+        | UnaryOperator::AddressOf => "&",
+        | UnaryOperator::Indirection => "*",
+        | UnaryOperator::Plus => "+",
+        | UnaryOperator::Minus => "-",
+        | UnaryOperator::BitwiseNot => "~",
+        | UnaryOperator::LogicalNot => "!",
+        | UnaryOperator::PreIncrement => "++ (prefix)",
+        | UnaryOperator::PreDecrement => "-- (prefix)",
+        | UnaryOperator::PostIncrement => "++ (postfix)",
+        | UnaryOperator::PostDecrement => "-- (postfix)",
+    }
+}
+
+/// Renders a constant's value and C type. Floating values print exactly:
+/// `float` and `double` as the shortest decimal that round-trips, `long
+/// double` in hexadecimal.
+fn constant_label(constant: &Constant) -> String {
+    match *constant {
+        | Constant::Integer(integer) => {
+            let (value, type_name) = match integer {
+                | IntegerTokenType::Int(value) => (i128::from(value), "int"),
+                | IntegerTokenType::Long(value) => (i128::from(value), "long"),
+                | IntegerTokenType::LongLong(value) => (i128::from(value), "long long"),
+                | IntegerTokenType::UnsignedInt(value) => (i128::from(value), "unsigned int"),
+                | IntegerTokenType::UnsignedLong(value) => (i128::from(value), "unsigned long"),
+                | IntegerTokenType::UnsignedLongLong(value) =>
+                    (i128::from(value), "unsigned long long"),
+            };
+            format!("{value} ({type_name})")
+        },
+        | Constant::Float(float) => format!("{float} ({})", float.type_name()),
+        | Constant::Char(CharacterTokenType::Char(c)) =>
+            format!("{} (int)", c_quoted("", '\'', &c.to_string())),
+        | Constant::Char(CharacterTokenType::WideChar(c)) =>
+            format!("{} (wchar_t)", c_quoted("L", '\'', &c.to_string())),
+        | Constant::Char(CharacterTokenType::MultiChar(value)) =>
+            format!("{value} (int, multi-character)"),
     }
 }
