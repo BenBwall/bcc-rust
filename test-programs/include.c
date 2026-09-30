@@ -1,4 +1,4 @@
-#include "test-programs/include.h"
+#include "include.h"
 
 "Hello world!\n"
 

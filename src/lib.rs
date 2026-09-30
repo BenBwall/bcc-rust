@@ -8,9 +8,12 @@ mod shut_up_clippy_about_unused_dev_dependencies {
     use proptest as _;
     use rstest as _;
 }
+// Only the benchmarking binary emits coz progress points.
 use std::{
-    env::var,
-    fmt::Write as _,
+    env::{
+        split_paths,
+        var_os,
+    },
     path::{
         Path,
         PathBuf,
@@ -21,12 +24,9 @@ use clap::{
     Args,
     ColorChoice,
     Parser,
-    error::{
-        ErrorFormatter,
-        RichFormatter,
-    },
 };
-use owo_colors::OwoColorize;
+#[cfg(all(unix, feature = "benchmarking-internals"))]
+use coz as _;
 use thiserror::Error;
 #[cfg(test)]
 use translation_phases::{
@@ -37,7 +37,6 @@ use translation_phases::{
     parsing::{
         InspectionOptions,
         Parser as LanguageParser,
-        ParserError,
     },
     preprocessing::Token,
 };
@@ -45,14 +44,23 @@ use translation_phases::{
 #[cfg(feature = "benchmarking-internals")]
 use crate::translation_phases::box_path_from_str;
 use crate::{
+    diagnostics::{
+        ColorChoice as RenderColor,
+        Diagnostic,
+        Renderer,
+        ToDiagnostic,
+        c_quoted,
+        count_of,
+    },
     translation_phases::{
         Context,
-        GetSeverity,
-        GetSourceFileIndex,
+        ErrorSeverity,
         GetSourceVectors,
+        SourceVector,
         TranslationError,
         preprocessing::{
             CharacterTokenType,
+            IntegerTokenType,
             Preprocessor,
             StringTokenType,
             TokenType,
@@ -68,6 +76,7 @@ use crate::{
 };
 
 pub(crate) mod configuration;
+pub(crate) mod diagnostics;
 pub(crate) mod float_parsing;
 pub(crate) mod translation_phases;
 pub(crate) mod util;
@@ -434,14 +443,25 @@ mod pipeline_iterator_tests {
             })
             .expect("expected discarded-input recovery");
 
-        let rendered = format_parser_diagnostic_details(diagnostic, &context);
-        assert!(rendered.contains("code=Syntax"), "{rendered}");
-        assert!(rendered.contains("discarded input:"), "{rendered}");
-        assert!(rendered.contains("discarded-tokens=2"), "{rendered}");
-        assert!(
-            rendered.contains("note: parsing resumes here"),
-            "{rendered}"
-        );
+        let source = diagnostic.source_vectors(&mut context);
+        let rendered = Renderer::new(RenderColor::Plain)
+            .render(&diagnostic.to_diagnostic(&context, source), &context);
+        let expected = [
+            "error: expected `,`, `=`, `;`, or a function body after the declarator, found \
+             identifier `extra`",
+            " --> <test>:1:11",
+            "  |",
+            "1 | int first extra junk; int after;",
+            "  |           ^^^^^ ---- skipped to recover",
+            "  |           |",
+            "  |           expected one of `,`, `=`, `;`, or `{`",
+            "  |",
+            "  = help: if this starts a new declaration, add `;` before it",
+            "",
+            "",
+        ]
+        .join("\n");
+        assert_eq!(rendered, expected);
     }
 }
 
@@ -565,19 +585,33 @@ struct CliInput {
 #[doc(hidden)]
 #[derive(Debug, Error)]
 pub enum MainError {
-    #[error("{}{}", "Failed to open input file: ".bright_red(), 0.bright_red())]
-    OpenInputFileError(#[from] std::io::Error),
-    #[error("{}{}", "Failed to parse command line arguments ".bright_red(), RichFormatter::format_error(.0).ansi())]
+    #[error("error: cannot read `{}`: {source}", path.display())]
+    OpenInputFileError {
+        path:   PathBuf,
+        source: std::io::Error,
+    },
+    #[error(transparent)]
     ParseArgumentsError(#[from] clap::Error),
 }
 
-fn parse_include_env_var(env_var: &str, vec: &mut Vec<PathBuf>) {
-    vec.extend(
-        var(env_var)
-            .unwrap_or_default()
-            .split(':')
-            .map(PathBuf::from),
-    );
+/// Returns the directories of a GCC-style search-path variable.
+///
+/// Elements use the platform separator (`;` on Windows, `:` elsewhere). As
+/// in GCC and Clang, an empty element names the working directory, while an
+/// unset or empty variable contributes nothing.
+fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
+    match var_os(env_var) {
+        | Some(value) if !value.is_empty() => split_paths(&value)
+            .map(|path| {
+                if path.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    path
+                }
+            })
+            .collect(),
+        | _ => Vec::new(),
+    }
 }
 
 #[doc(hidden)]
@@ -590,13 +624,22 @@ pub fn run() -> Result<(), MainError> {
                 PathBuf::from("<input>").into_boxed_path(),
             ),
             | (None, Some(input_file)) => (
-                SharedString::from(read_to_string_lossy(&input_file)?),
+                SharedString::from(read_to_string_lossy(&input_file).map_err(|source| {
+                    MainError::OpenInputFileError {
+                        path: input_file.clone(),
+                        source,
+                    }
+                })?),
                 input_file.into_boxed_path(),
             ),
             | _ => unreachable!("clap requires exactly one input source"),
         };
-    parse_include_env_var("CPATH", &mut args.system_include);
-    parse_include_env_var("C_INCLUDE_PATH", &mut args.system_include);
+    // GCC searches `CPATH` like `-I` (before `-isystem`) and
+    // `C_INCLUDE_PATH` like a trailing `-isystem`.
+    let mut system_include = include_path_from_env("CPATH");
+    system_include.append(&mut args.system_include);
+    system_include.extend(include_path_from_env("C_INCLUDE_PATH"));
+    args.system_include = system_include;
 
     if args.output.tokens {
         print_preprocessor_output(
@@ -624,73 +667,74 @@ fn print_preprocessor_output(
     quote_include: SharedVec<PathBuf>,
     system_include: SharedVec<PathBuf>,
 ) {
-    eprintln!("{}", "Printing all generated tokens:".bright_green());
+    let mut reporter = DiagnosticReporter::new();
     let mut iterator =
         PreprocessorIterator::new(source_filename, input_string, quote_include, system_include);
     while let Some(item) = iterator.next() {
         match item {
-            | Ok(token) => eprintln!(
-                "{}",
-                match token.kind {
-                    | TokenType::Identifier => format!(
-                        "Identifier: {}",
-                        iterator.context.string_cache.at(token.contents)
-                    ),
-                    | TokenType::Operator(ott) => format!("Operator: {ott:#?}"),
-                    | TokenType::String(sltt) => format!(
-                        "String-like token: {}",
-                        match sltt {
-                            | StringTokenType::WideString(s) | StringTokenType::String(s) => {
-                                iterator.context.string_cache.at(s).to_string()
-                            },
-                        }
-                    ),
-                    | TokenType::Character(c) => format!(
-                        "Character: {}",
-                        match c {
-                            | CharacterTokenType::WideChar(c) | CharacterTokenType::Char(c) => {
-                                format!("{c:#?}")
-                            },
-                        }
-                    ),
-                    | TokenType::Keyword(k) => format!("Keyword: {k:#?}"),
-                    | TokenType::Integer(i) => format!("Integer: {i:#?}"),
-                    | TokenType::Float(f) => format!("Float: {f:#?}"),
-                }
-                .bright_magenta()
-            ),
-            | Err(error) => print_translation_error(
-                &error,
-                &mut iterator.context,
-                iterator.preprocessor.source_file_index(),
-            ),
+            | Ok(token) => {
+                reporter.flush(&iterator.context);
+                eprintln!("{}", describe_token(token, &iterator.context));
+            },
+            | Err(error) => reporter.report(&error, &mut iterator.context),
         }
     }
+    reporter.finish(&iterator.context);
+}
 
-    eprintln!(
-        "{}",
-        "Finished printing all generated tokens.".bright_green()
-    );
-    eprintln!(
-        "{}{}",
-        "String cache contents: ".bright_yellow(),
-        iterator.context.string_cache.bright_yellow()
-    );
-    eprintln!(
-        "{}{:?}",
-        "Hash Hash stack: ".bright_red(),
-        iterator.preprocessor.hash_hash_stack.bright_red()
-    );
-    eprintln!(
-        "{}{:?}",
-        "Tokenizer stack: ".bright_blue(),
-        iterator.preprocessor.tokenizer_stack.bright_blue()
-    );
-    eprintln!(
-        "{}{}",
-        "Source vectors: ".bright_green(),
-        iterator.context.source_vectors.bright_green()
-    );
+/// One line per token: its location, kind, source spelling, and for
+/// constants the value and type the preprocessor assigned.
+fn describe_token(token: Token, context: &Context) -> String {
+    let spelling = context
+        .string_cache
+        .at(token.contents)
+        .trim_end_matches('\0');
+    let description = match token.kind {
+        | TokenType::Identifier => format!("identifier `{spelling}`"),
+        | TokenType::Keyword(keyword) => format!("keyword `{}`", keyword.spelling()),
+        | TokenType::Operator(operator) => format!("punctuator `{}`", operator.spelling()),
+        | TokenType::String(StringTokenType::String(contents)) => format!(
+            "string literal {}",
+            c_quoted("", '"', context.string_cache.at(contents))
+        ),
+        | TokenType::String(StringTokenType::WideString(contents)) => format!(
+            "wide string literal {}",
+            c_quoted("L", '"', context.string_cache.at(contents))
+        ),
+        | TokenType::Character(character) => {
+            let (value, type_name) = match character {
+                | CharacterTokenType::Char(c) => (i64::from(u32::from(c)), "int"),
+                | CharacterTokenType::WideChar(c) => (i64::from(u32::from(c)), "wchar_t"),
+                | CharacterTokenType::MultiChar(value) => (i64::from(value), "int"),
+            };
+            format!("character constant `{spelling}` = {value} ({type_name})")
+        },
+        | TokenType::Integer(integer) => {
+            let (value, type_name) = match integer {
+                | IntegerTokenType::Int(value) => (i128::from(value), "int"),
+                | IntegerTokenType::Long(value) => (i128::from(value), "long"),
+                | IntegerTokenType::LongLong(value) => (i128::from(value), "long long"),
+                | IntegerTokenType::UnsignedInt(value) => (i128::from(value), "unsigned int"),
+                | IntegerTokenType::UnsignedLong(value) => (i128::from(value), "unsigned long"),
+                | IntegerTokenType::UnsignedLongLong(value) =>
+                    (i128::from(value), "unsigned long long"),
+            };
+            format!("integer constant `{spelling}` = {value} ({type_name})")
+        },
+        | TokenType::Float(float) => format!(
+            "floating constant `{spelling}` = {float} ({})",
+            float.type_name()
+        ),
+    };
+    match context.get_source_vectors(token.source_vectors).first() {
+        | Some(vector) => format!(
+            "{}:{}:{}: {description}",
+            context.get_source_file(vector.source_file_index).display(),
+            vector.line,
+            vector.column,
+        ),
+        | None => description,
+    }
 }
 
 fn print_parser_output(
@@ -712,11 +756,12 @@ fn print_parser_output(
         quote_include,
         system_include,
     );
-    let source_file_index = preprocessor.source_file_index();
     let unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+    let mut reporter = DiagnosticReporter::new();
     while let Some(error) = context.pop_pending_error() {
-        print_translation_error(&error, &mut context, source_file_index);
+        reporter.report(&error, &mut context);
     }
+    reporter.flush(&context);
 
     if output.syntax_tree {
         eprint!(
@@ -733,61 +778,72 @@ fn print_parser_output(
     if output.raw_syntax {
         eprintln!("{:#?}", unit.syntax().raw_debug());
     }
+    reporter.finish(&context);
 }
 
-fn print_translation_error(
-    error: &TranslationError,
-    context: &mut Context,
-    fallback_source_file_index: u32,
-) {
-    let source_vectors = error.source_vectors(context);
-    let vectors = context.get_source_vectors(source_vectors);
-    let source_file_index = vectors
-        .first()
-        .map_or(fallback_source_file_index, |vector| {
-            vector.source_file_index
-        });
-    eprintln!(
-        "{}: {error} at {:?}:{:?}",
-        error.severity(),
-        source_file_index,
-        vectors.bright_blue(),
-    );
-    if let TranslationError::Parsing(error) = error {
-        eprint!("{}", format_parser_diagnostic_details(error, context));
-    }
+/// Renders diagnostics to stderr and summarizes them at the end, like
+/// `N errors and M warnings generated`.
+///
+/// An error reported at exactly the same place as the error before it is a
+/// cascade from the same mistake, so it is folded into that error rather
+/// than printed again.
+struct DiagnosticReporter {
+    renderer: Renderer,
+    pending:  Option<(Diagnostic, Vec<SourceVector>)>,
+    errors:   usize,
+    warnings: usize,
 }
 
-fn format_parser_diagnostic_details(error: &ParserError, context: &Context) -> String {
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "  context: code={:?} frame={:?} expected={:?} found={:?}",
-        error.code, error.frame, error.expected, error.found,
-    );
-    for range in &error.ranges {
-        let _ = writeln!(
-            output,
-            "  discarded input: {:?}",
-            context.get_source_vectors(*range),
-        );
+impl DiagnosticReporter {
+    fn new() -> Self {
+        Self {
+            renderer: Renderer::new(RenderColor::for_stderr()),
+            pending:  None,
+            errors:   0,
+            warnings: 0,
+        }
     }
-    if let Some(recovery) = error.recovery {
-        let _ = writeln!(
-            output,
-            "  recovery: owner={:?} discarded-tokens={} stopped-at={:?}",
-            recovery.owner, recovery.discarded_tokens, recovery.stopped_at,
-        );
+
+    fn report(&mut self, error: &TranslationError, context: &mut Context) {
+        let source = error.source_vectors(context);
+        let diagnostic = error.to_diagnostic(context, source);
+        let location = context.get_source_vectors(source).to_vec();
+        if let Some((pending, pending_location)) = &mut self.pending
+            && diagnostic.severity == ErrorSeverity::Error
+            && pending.severity == ErrorSeverity::Error
+            && !location.is_empty()
+            && *pending_location == location
+        {
+            pending.absorb(diagnostic, context);
+            return;
+        }
+        self.flush(context);
+        self.pending = Some((diagnostic, location));
     }
-    for related in &error.related {
-        let _ = writeln!(
-            output,
-            "  note: {} at {:?}",
-            related.message,
-            context.get_source_vectors(related.source_vectors),
-        );
+
+    fn flush(&mut self, context: &Context) {
+        let Some((diagnostic, _)) = self.pending.take() else {
+            return;
+        };
+        match diagnostic.severity {
+            | ErrorSeverity::Error => self.errors += 1,
+            | ErrorSeverity::Warning => self.warnings += 1,
+            | ErrorSeverity::Note => {},
+        }
+        eprint!("{}", self.renderer.render(&diagnostic, context));
     }
-    output
+
+    fn finish(&mut self, context: &Context) {
+        self.flush(context);
+        let counts: Vec<String> = [(self.errors, "error"), (self.warnings, "warning")]
+            .into_iter()
+            .filter(|&(count, _)| count > 0)
+            .map(|(count, noun)| count_of(count, noun))
+            .collect();
+        if !counts.is_empty() {
+            eprintln!("{} generated.", counts.join(" and "));
+        }
+    }
 }
 
 #[doc(hidden)]
@@ -812,4 +868,68 @@ pub fn one_million_input_bytes() -> u64 {
 #[cfg(feature = "benchmarking-internals")]
 fn one_million_lines() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c"))
+}
+
+#[cfg(feature = "benchmarking-internals")]
+#[expect(
+    clippy::large_include_file,
+    reason = "The generated parser benchmark input is intentionally large."
+)]
+fn parser_mix() -> &'static str {
+    include_str!(concat!(env!("OUT_DIR"), "/parser-mix.c"))
+}
+
+/// Summary of one benchmarked parse, returned so the work cannot be elided
+/// and so benchmark setup can reject inputs that produce diagnostics.
+#[doc(hidden)]
+#[cfg(feature = "benchmarking-internals")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParseBenchmarkSummary {
+    pub external_declarations: usize,
+    pub diagnostics:           usize,
+}
+
+#[cfg(feature = "benchmarking-internals")]
+fn parse_benchmark_input(input: &'static str) -> ParseBenchmarkSummary {
+    let mut context = Context::new();
+    let preprocessor = Preprocessor::new(
+        &mut context,
+        box_path_from_str("<input>"),
+        input.to_owned().into(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+    ParseBenchmarkSummary {
+        external_declarations: unit.external_declarations().len(),
+        diagnostics:           context.take_pending_errors().len(),
+    }
+}
+
+#[doc(hidden)]
+#[cfg(feature = "benchmarking-internals")]
+#[must_use]
+pub fn parse_one_million() -> ParseBenchmarkSummary {
+    parse_benchmark_input(one_million_lines())
+}
+
+#[doc(hidden)]
+#[cfg(feature = "benchmarking-internals")]
+#[must_use]
+pub fn parse_mix() -> ParseBenchmarkSummary {
+    parse_benchmark_input(parser_mix())
+}
+
+#[doc(hidden)]
+#[cfg(feature = "benchmarking-internals")]
+#[must_use]
+pub fn parser_mix_input_bytes() -> u64 {
+    u64::try_from(parser_mix().len()).expect("benchmark input length must fit in u64")
+}
+
+#[doc(hidden)]
+#[cfg(feature = "benchmarking-internals")]
+#[must_use]
+pub fn parser_mix_input_lines() -> u64 {
+    u64::try_from(parser_mix().lines().count()).expect("benchmark line count must fit in u64")
 }

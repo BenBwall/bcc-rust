@@ -16,7 +16,14 @@ use super::{
     StrExt,
     TranslationPhase,
 };
-use crate::util::shared::SharedString;
+use crate::{
+    diagnostics::{
+        Diagnostic,
+        Explanation,
+        ToDiagnostic,
+    },
+    util::shared::SharedString,
+};
 
 enum HandleNewline {
     Newline,
@@ -26,8 +33,20 @@ enum HandleNewline {
 
 #[derive(Debug, Error)]
 pub(crate) enum InitialProcessorError {
-    #[error("missing final newline")]
+    #[error("no newline at end of file")]
     MissingFinalNewline(SourceVector),
+}
+
+impl ToDiagnostic for InitialProcessorError {
+    fn to_diagnostic(&self, _context: &Context, source: SourceVectors) -> Diagnostic {
+        match self {
+            | Self::MissingFinalNewline(_) => Explanation::new(self.to_string())
+                .label("the file ends without a newline")
+                .note("C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character")
+                .help("add a newline at the end of the file")
+                .at(self.severity(), source),
+        }
+    }
 }
 
 impl GetPosition for InitialProcessorError {
@@ -304,14 +323,14 @@ impl TranslationPhase for InitialProcessor {
     type Item = char;
 
     fn next_item(&mut self, context: &mut Context) -> Option<char> {
-        // We need to look three characters ahead to handle translation phases 1 and 2.
-        // If we don't consume all three characters, we backtrack.
-        // Translation phases 1 and 2 are handled in the same iterator for performance
-        // reasons, because otherwise we would to store characters we don't consume with
-        // source positions.
+        // We need to look three characters ahead to handle translation phases 1
+        // and 2. If we don't consume all three characters, we
+        // backtrack. Translation phases 1 and 2 are handled in the same
+        // iterator for performance reasons, because otherwise we would
+        // to store characters we don't consume with source positions.
 
-        // Index should be pointing at the start of the next token at the start of every
-        // loop iteration.
+        // Index should be pointing at the start of the next token at the start
+        // of every loop iteration.
         loop {
             let Some(curr) = self.next_char(context) else {
                 if !self.last_was_newline {
