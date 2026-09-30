@@ -22,7 +22,7 @@ use criterion::{
 
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("Preprocessor");
-    group.throughput(Throughput::ElementsAndBytes {
+    _ = group.throughput(Throughput::ElementsAndBytes {
         elements: 1_000_000,
         bytes:    bcc_rust::one_million_input_bytes(),
     });
@@ -32,5 +32,37 @@ fn bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench);
+fn bench_parser(c: &mut Criterion) {
+    let one_million = bcc_rust::parse_one_million();
+    assert_eq!(
+        one_million.diagnostics, 0,
+        "one-million-line parser input must parse cleanly"
+    );
+    assert_eq!(
+        one_million.external_declarations, 1_000_000,
+        "one-million-line parser input must yield one root per line"
+    );
+    let mix = bcc_rust::parse_mix();
+    assert_eq!(mix.diagnostics, 0, "mixed parser input must parse cleanly");
+
+    let mut group = c.benchmark_group("Parser");
+    _ = group.sample_size(20);
+    _ = group.throughput(Throughput::ElementsAndBytes {
+        elements: 1_000_000,
+        bytes:    bcc_rust::one_million_input_bytes(),
+    });
+    _ = group.bench_function("one million lines", |b| {
+        b.iter(bcc_rust::parse_one_million);
+    });
+    _ = group.throughput(Throughput::ElementsAndBytes {
+        elements: bcc_rust::parser_mix_input_lines(),
+        bytes:    bcc_rust::parser_mix_input_bytes(),
+    });
+    _ = group.bench_function("mixed C99 workload", |b| {
+        b.iter(bcc_rust::parse_mix);
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench, bench_parser);
 criterion_main!(benches);
