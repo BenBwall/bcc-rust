@@ -11,7 +11,7 @@ repository = "https://www.github.com/bwallker/bcc-rust"
 rust-version = "1.98.0"
 
 [features]
-benchmarking-internals = []
+benchmarking-internals = ["dep:coz"]
 
 [profile.release]
 lto = "fat"
@@ -112,8 +112,13 @@ rstest = "0.26.1"
 [build-dependencies]
 bindgen = "0.72.1"
 cc = "1.4.4"
+cmake = "0.1.58"
 
 [[bench]]
 name = "bench"
 harness = false
 required-features = ["benchmarking-internals"]
+
+# coz relies on Unix signal APIs and does not build on Windows.
+[target.'cfg(unix)'.dependencies]
+coz = { version = "0.1.3", optional = true }
