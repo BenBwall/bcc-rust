@@ -1,0 +1,9 @@
+error: expected `while` after the `do` body, found keyword `return`
+ --> parser-expected-while-after-do-body.c:1:20
+  |
+1 | int f(void) { do ; return 0; }
+  |                    ^^^^^^ expected `while`
+  |
+  = note: C99 §6.8.5: write `do statement while (condition);`
+
+1 error generated.

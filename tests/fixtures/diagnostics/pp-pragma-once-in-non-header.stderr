@@ -1,0 +1,7 @@
+warning: `#pragma once` in main file
+ --> pp-pragma-once-in-non-header.c:1:9
+  |
+1 | #pragma once
+  |         ^^^^ only affects files that are included
+
+1 warning generated.

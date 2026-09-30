@@ -1,0 +1,7 @@
+error: expected `)` to close the declarator, found `;`
+ --> parser-expected-closing-parenthesis-after-parenthesized-declarator.c:1:11
+  |
+1 | int (value;
+  |           ^ expected `)`
+
+1 error generated.

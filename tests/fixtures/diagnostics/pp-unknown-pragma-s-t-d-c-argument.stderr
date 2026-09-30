@@ -1,0 +1,25 @@
+error: unknown `STDC` pragma `BANANAS`
+ --> pp-unknown-pragma-s-t-d-c-argument.c:1:14
+  |
+1 | #pragma STDC BANANAS ON
+  |              ^^^^^^^ not a standard pragma
+  |
+  = note: C99 §6.10.6: the standard pragmas are `FP_CONTRACT`, `FENV_ACCESS`, and `CX_LIMITED_RANGE`
+
+error: missing type specifier
+ --> pp-unknown-pragma-s-t-d-c-argument.c:1:22
+  |
+1 | #pragma STDC BANANAS ON
+  |                      ^^ expected a type such as `int` before this
+  |
+  = note: C99 §6.7.2p2: every declaration needs at least one type specifier; C99 removed implicit `int`
+
+error: expected `;`, found keyword `int`
+ --> pp-unknown-pragma-s-t-d-c-argument.c:2:1
+  |
+1 | #pragma STDC BANANAS ON
+  |                        - help: add `;` here
+2 | int value;
+  | ^^^ expected one of `,`, `=`, `;`, or `{`
+
+3 errors generated.

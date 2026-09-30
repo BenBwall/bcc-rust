@@ -1,0 +1,7 @@
+error: `\u` escape needs exactly four hexadecimal digits
+ --> pp-small-unicode-escape-sequence-too-short.c:1:13
+  |
+1 | int value = '\u12';
+  |             ^^^^^^ contains a short `\u` escape
+
+1 error generated.

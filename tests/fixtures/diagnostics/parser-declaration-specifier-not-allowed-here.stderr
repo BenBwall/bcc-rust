@@ -1,0 +1,9 @@
+error: `static` is not allowed here
+ --> parser-declaration-specifier-not-allowed-here.c:1:12
+  |
+1 | struct S { static int value; };
+  |            ^^^^^^ only type specifiers and qualifiers may appear here
+  |
+  = note: C99 §6.7.2.1 and §6.7.6: member declarations and type names use a specifier-qualifier list, which excludes storage classes and `inline`
+
+1 error generated.

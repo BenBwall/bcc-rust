@@ -1,0 +1,9 @@
+error: `static` and `*` in one array declarator
+ --> parser-both-static-and-pointer-in-array-direct-declarator.c:1:24
+  |
+1 | int f(int array[static *]);
+  |                        ^ `[*]` cannot be combined with `static`
+  |
+  = note: C99 §6.7.5: `[static N]` and `[*]` are separate forms
+
+1 error generated.

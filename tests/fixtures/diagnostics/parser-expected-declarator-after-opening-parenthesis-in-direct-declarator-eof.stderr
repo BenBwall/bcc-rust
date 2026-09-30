@@ -1,0 +1,7 @@
+error: expected an identifier or `(` in the declarator, found end of file
+ --> parser-expected-declarator-after-opening-parenthesis-in-direct-declarator-eof.c:2:1
+  |
+2 | 
+  | ^ expected a name
+
+1 error generated.

@@ -1,0 +1,9 @@
+error: expected `ON`, `OFF`, or `DEFAULT` in `#pragma STDC`
+ --> pp-s-t-d-c-pragma-directive-without-on-off-switch.c:1:25
+  |
+1 | #pragma STDC FP_CONTRACT
+  |                         ^ the pragma ends here
+  |
+  = note: C99 §6.10.6p2: each standard pragma takes an on-off switch
+
+1 error generated.

@@ -1,0 +1,9 @@
+error: missing type specifier
+ --> parser-no-type-specifiers-in-declaration-specifiers.c:1:7
+  |
+1 | const value;
+  |       ^^^^^ expected a type such as `int` before this
+  |
+  = note: C99 §6.7.2p2: every declaration needs at least one type specifier; C99 removed implicit `int`
+
+1 error generated.

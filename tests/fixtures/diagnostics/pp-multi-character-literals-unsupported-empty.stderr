@@ -1,0 +1,9 @@
+error: empty character constant
+ --> pp-multi-character-literals-unsupported-empty.c:1:13
+  |
+1 | int value = '';
+  |             ^^ contains no character
+  |
+  = note: C99 §6.4.4.4: a character constant contains at least one character
+
+1 error generated.

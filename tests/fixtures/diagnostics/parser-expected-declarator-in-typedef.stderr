@@ -1,0 +1,9 @@
+error: expected a name for the typedef, found `;`
+ --> parser-expected-declarator-in-typedef.c:1:12
+  |
+1 | typedef int;
+  |            ^ expected an identifier
+  |
+  = note: a `typedef` declaration must name the type it defines
+
+1 error generated.

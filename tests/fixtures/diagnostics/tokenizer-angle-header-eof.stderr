@@ -1,0 +1,42 @@
+warning: no newline at end of file
+ --> tokenizer-angle-header-eof.c:1:14
+  |
+1 | #include <abc
+  |              ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+warning: no newline at end of file
+ --> tokenizer-angle-header-eof.c:1:14
+  |
+1 | #include <abc
+  |              ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+error: unexpected end of file while parsing include directive
+ --> tokenizer-angle-header-eof.c:1:2
+  |
+1 | #include <abc
+  |  ^^^^^^^ the file ends here
+
+error: cannot find header `abc`
+ --> tokenizer-angle-header-eof.c:1:10
+  |
+1 | #include <abc
+  |          ^^^^ not found in any search directory
+  |
+  = note: the path is absolute; no directory was searched
+  = help: add the directory containing it with `--isystem <dir>`
+
+error: translation unit is empty
+ --> tokenizer-angle-header-eof.c:1:14
+  |
+1 | #include <abc
+  |              ^ expected a declaration or function definition
+  |
+  = note: C99 §6.9: a translation unit contains at least one external declaration
+
+3 errors and 2 warnings generated.

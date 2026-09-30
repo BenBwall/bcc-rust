@@ -1,0 +1,7 @@
+warning: extra tokens at end of `#include` directive
+ --> pp-extra-tokens-after-include-directive.c:1:20
+  |
+1 | #include "clean.h" extra
+  |                    ^^^^^ ignored
+
+1 warning generated.

@@ -1,0 +1,7 @@
+error: expected `,`, `=`, `;`, or a function body after the declarator, found floating constant `1.5L`
+ --> parser-expected-declaration-continuation-after-declarator-long-double.c:1:11
+  |
+1 | int value 1.5L;
+  |           ^^^^ expected one of `,`, `=`, `;`, or `{`
+
+1 error generated.

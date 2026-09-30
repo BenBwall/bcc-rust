@@ -1,0 +1,7 @@
+error: #error stop here
+ --> pp-error-directive.c:1:2
+  |
+1 | #error stop here
+  |  ^^^^^ `#error` directive
+
+1 error generated.

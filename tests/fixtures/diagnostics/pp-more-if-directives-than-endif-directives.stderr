@@ -1,0 +1,9 @@
+error: unterminated `#if`
+ --> pp-more-if-directives-than-endif-directives.c:1:2
+  |
+1 | #if 1
+  |  ^^ this conditional has no matching `#endif`
+  |
+  = help: add `#endif` where the conditional section should end
+
+1 error generated.

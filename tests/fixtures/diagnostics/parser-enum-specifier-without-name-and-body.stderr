@@ -1,0 +1,7 @@
+error: expected a tag name or `{` after `enum`, found `;`
+ --> parser-enum-specifier-without-name-and-body.c:1:6
+  |
+1 | enum ;
+  |      ^ expected a tag name or `{`
+
+1 error generated.

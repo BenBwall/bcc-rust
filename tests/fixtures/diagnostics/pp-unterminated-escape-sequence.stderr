@@ -1,0 +1,22 @@
+warning: no newline at end of file
+ --> pp-unterminated-escape-sequence.c:1:20
+  |
+1 | char *value = "abc\
+  |                    ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+error: unterminated string literal
+ --> pp-unterminated-escape-sequence.c:1:15
+  |
+1 | char *value = "abc\
+  |               ^^^^^ the file ends before the closing `"`
+
+error: expected `,`, `=`, `;`, or a function body after the declarator, found end of file
+ --> pp-unterminated-escape-sequence.c:1:20
+  |
+1 | char *value = "abc\
+  |                    ^ expected one of `,`, `=`, `;`, or `{`
+
+2 errors and 1 warning generated.

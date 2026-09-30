@@ -1,0 +1,7 @@
+error: expected `,` or `}` in the initializer list, found `;`
+ --> parser-expected-closing-curly-brace-in-initializer-list.c:1:18
+  |
+1 | int array[] = { 1;
+  |                  ^ expected `,` or `}`
+
+1 error generated.

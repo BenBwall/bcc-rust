@@ -1,0 +1,15 @@
+error: pasting `+` and `*` does not give a valid token
+ --> pp-token-merging-error.c:2:15
+  |
+2 | int value = F(+,*);
+  |               ^^^ invalid token paste
+  |
+  = note: C99 §6.10.3.3p3: the result of `##` must be a single valid preprocessing token
+
+error: expected an expression, found `;`
+ --> pp-token-merging-error.c:2:19
+  |
+2 | int value = F(+,*);
+  |                   ^ expected an expression
+
+2 errors generated.

@@ -1,0 +1,7 @@
+error: expected a type specifier, found end of file
+ --> parser-unexpected-end-before-type-specifier.c:2:1
+  |
+2 | 
+  | ^ expected a type specifier
+
+1 error generated.

@@ -1,0 +1,10 @@
+error: cannot combine `long long` with `double`
+ --> parser-long-long-double-specified.c:1:11
+  |
+1 | long long double value;
+  |           ^^^^^^ `long long double` is not a type
+  |
+  = note: C99 §6.7.2p2 lists every valid combination of type specifiers
+  = help: use `long double` for extended precision
+
+1 error generated.

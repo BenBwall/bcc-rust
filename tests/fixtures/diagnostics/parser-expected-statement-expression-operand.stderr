@@ -1,0 +1,7 @@
+error: expected an expression, found `;`
+ --> parser-expected-statement-expression-operand.c:1:19
+  |
+1 | int f(void) { 1 + ; }
+  |                   ^ expected an expression
+
+1 error generated.

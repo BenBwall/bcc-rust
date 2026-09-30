@@ -1,0 +1,7 @@
+warning: extra tokens at end of `#ifndef` directive
+ --> pp-extra-tokens-after-ifndef-directive.c:1:18
+  |
+1 | #ifndef __STDC__ extra
+  |                  ^^^^^ ignored
+
+1 warning generated.

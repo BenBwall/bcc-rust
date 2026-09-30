@@ -1,0 +1,9 @@
+error: expected a header name after `#include`, found number `1`
+ --> pp-expected-include-string-or-angle-bracket-string.c:1:10
+  |
+1 | #include 1
+  |          ^ expected `"file.h"` or `<file.h>`
+  |
+  = note: C99 §6.10.2: `#include` takes `"name"`, `<name>`, or macros that expand to one of them
+
+1 error generated.

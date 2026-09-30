@@ -1,0 +1,7 @@
+error: expected an operator, found `;`
+ --> parser-expected-comma-or-closing-parenthesis-in-function-call.c:1:18
+  |
+1 | int f(void) { f(1; }
+  |                  ^ expected an operator or the end of the expression
+
+1 error generated.

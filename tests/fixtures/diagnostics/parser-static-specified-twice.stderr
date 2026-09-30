@@ -1,0 +1,9 @@
+error: duplicate `static` in array declarator
+ --> parser-static-specified-twice.c:1:24
+  |
+1 | int f(int array[static static 3]);
+  |                        ^^^^^^ `static` was already specified
+  |
+  = note: C99 §6.7.5: an array declarator takes `static` at most once
+
+1 error generated.

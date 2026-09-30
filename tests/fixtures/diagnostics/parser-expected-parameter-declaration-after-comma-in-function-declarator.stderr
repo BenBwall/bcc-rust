@@ -1,0 +1,7 @@
+error: expected a parameter declaration or `...` after `,`, found `)`
+ --> parser-expected-parameter-declaration-after-comma-in-function-declarator.c:1:14
+  |
+1 | int f(int a, );
+  |              ^ expected a parameter
+
+1 error generated.

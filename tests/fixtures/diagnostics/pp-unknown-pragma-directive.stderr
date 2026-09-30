@@ -1,0 +1,9 @@
+warning: unknown pragma ignored
+ --> pp-unknown-pragma-directive.c:1:9
+  |
+1 | #pragma 123
+  |         ^^^ not recognized
+  |
+  = note: bcc recognizes `#pragma once` and the `#pragma STDC` pragmas
+
+1 warning generated.

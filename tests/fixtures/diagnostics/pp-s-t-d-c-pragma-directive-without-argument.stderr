@@ -1,0 +1,7 @@
+error: expected a pragma name after `#pragma STDC`
+ --> pp-s-t-d-c-pragma-directive-without-argument.c:1:13
+  |
+1 | #pragma STDC
+  |             ^ expected `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE`
+
+1 error generated.

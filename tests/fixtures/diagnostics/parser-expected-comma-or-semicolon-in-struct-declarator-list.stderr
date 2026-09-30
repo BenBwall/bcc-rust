@@ -1,0 +1,9 @@
+error: expected `;`, found keyword `int`
+ --> parser-expected-comma-or-semicolon-in-struct-declarator-list.c:2:1
+  |
+1 | struct S { int a
+  |                 - help: add `;` here
+2 | int b; };
+  | ^^^ expected `,` or `;`
+
+1 error generated.

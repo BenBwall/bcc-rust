@@ -1,0 +1,9 @@
+error: `##` outside a macro definition
+ --> pp-hash-hash-used-outside-of-macro.c:1:12
+  |
+1 | int value; ##
+  |            ^^ token pasting only happens in replacement lists
+  |
+  = note: C99 §6.10.3.3: `##` is an operator of macro replacement lists
+
+1 error generated.

@@ -1,0 +1,15 @@
+error: unexpected identifier `extra` after the macro name in `#undef`
+ --> pp-expected-newline-after-undef-directive.c:1:10
+  |
+1 | #undef F extra
+  |          ^^^^^ `#undef` takes one name
+
+error: expected `;`, found keyword `int`
+ --> pp-expected-newline-after-undef-directive.c:2:1
+  |
+1 | #undef F extra
+  |               - help: add `;` here
+2 | int value;
+  | ^^^ expected one of `,`, `=`, `;`, or `{`
+
+2 errors generated.

@@ -1,0 +1,7 @@
+error: expected an expression before `/`
+ --> pp-binary-operator-instead-of-unary-expression-in-preprocessor-expression.c:1:5
+  |
+1 | #if / 1
+  |     ^ `/` needs an operand here
+
+1 error generated.

@@ -1,0 +1,17 @@
+error: unexpected string literal `"abc"` in `#if` expression
+ --> pp-unexpected-token-in-preprocessor-expression.c:1:5
+  |
+1 | #if "abc"
+  |     ^^^^^ not valid in an integer constant expression
+  |
+  = note: C99 §6.10.1p1: the condition must be an integer constant expression
+
+error: `#if` with no condition
+ --> pp-unexpected-token-in-preprocessor-expression.c:2:1
+  |
+2 | #endif
+  | ^ expected an expression
+  |
+  = help: write the condition to test, as in `#if VERSION >= 2`
+
+2 errors generated.

@@ -1,0 +1,7 @@
+error: expected a tag name or `{` after `struct` or `union`, found `;`
+ --> parser-struct-or-union-specifier-without-name-and-body.c:1:8
+  |
+1 | struct ;
+  |        ^ expected a tag name or `{`
+
+1 error generated.

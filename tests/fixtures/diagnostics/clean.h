@@ -1,0 +1,1 @@
+/* Valid header for directive tests. */

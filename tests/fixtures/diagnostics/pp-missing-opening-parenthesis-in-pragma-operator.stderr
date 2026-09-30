@@ -1,0 +1,21 @@
+error: expected `(` after `_Pragma`, found string literal `"once"`
+ --> pp-missing-opening-parenthesis-in-pragma-operator.c:1:9
+  |
+1 | _Pragma "once"
+  |         ^^^^^^ expected `(`
+  |
+  = note: C99 §6.10.9: write `_Pragma("...")`
+
+warning: `#pragma once` in main file
+ --> <pragma string>:1:1
+  |
+1 | once
+  | ^^^^ only affects files that are included
+
+error: expected `)` to close `_Pragma(`, found end of line
+ --> pp-missing-opening-parenthesis-in-pragma-operator.c:1:15
+  |
+1 | _Pragma "once"
+  |               ^ expected `)`
+
+2 errors and 1 warning generated.

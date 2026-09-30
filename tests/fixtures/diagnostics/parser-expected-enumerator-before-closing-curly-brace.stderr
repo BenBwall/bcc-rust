@@ -1,0 +1,9 @@
+error: enum has no enumerators
+ --> parser-expected-enumerator-before-closing-curly-brace.c:1:9
+  |
+1 | enum E {};
+  |         ^ expected an enumerator before `}`
+  |
+  = note: C99 §6.7.2.2: an enumerator list contains at least one enumerator
+
+1 error generated.

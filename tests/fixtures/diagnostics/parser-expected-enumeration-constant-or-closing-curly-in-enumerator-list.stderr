@@ -1,0 +1,7 @@
+error: expected an enumerator name or `}`, found integer constant `1`
+ --> parser-expected-enumeration-constant-or-closing-curly-in-enumerator-list.c:1:10
+  |
+1 | enum E { 1 };
+  |          ^ expected an identifier or `}`
+
+1 error generated.

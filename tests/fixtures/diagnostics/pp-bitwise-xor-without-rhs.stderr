@@ -1,0 +1,7 @@
+error: expected an expression after `^`
+ --> pp-bitwise-xor-without-rhs.c:2:1
+  |
+2 | #endif
+  | ^ `^` needs an operand here
+
+1 error generated.

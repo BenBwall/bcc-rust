@@ -1,0 +1,9 @@
+error: invalid integer constant `123abc`
+ --> pp-invalid-decimal-integer-literal.c:1:13
+  |
+1 | int value = 123abc;
+  |             ^^^^^^ not a valid integer constant
+  |
+  = note: C99 §6.4.4.1: an integer constant is digits followed by an optional suffix such as `u`, `l`, `ll`, or `ull`
+
+1 error generated.

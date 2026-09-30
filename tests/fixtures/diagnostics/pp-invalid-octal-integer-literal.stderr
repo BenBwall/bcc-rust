@@ -1,0 +1,9 @@
+error: invalid octal integer constant `09`
+ --> pp-invalid-octal-integer-literal.c:1:13
+  |
+1 | int value = 09;
+  |             ^^ not a valid octal constant
+  |
+  = note: C99 §6.4.4.1: a constant starting with `0` is octal, and octal digits are `0`-`7`
+
+1 error generated.

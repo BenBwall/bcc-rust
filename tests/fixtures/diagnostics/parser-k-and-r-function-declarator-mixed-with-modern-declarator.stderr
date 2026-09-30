@@ -1,0 +1,9 @@
+error: identifier list mixed with parameter declarations
+ --> parser-k-and-r-function-declarator-mixed-with-modern-declarator.c:1:10
+  |
+1 | int f(a, int);
+  |          ^^^ prototype parameter in an old-style identifier list
+  |
+  = note: C99 §6.7.5: a parameter list is either all names (old style) or all declarations (prototype)
+
+1 error generated.

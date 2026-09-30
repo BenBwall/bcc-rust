@@ -1,0 +1,7 @@
+error: expected `)` in `if` statement, found end of file
+ --> parser-expected-closing-parenthesis-in-statement.c:2:1
+  |
+2 | 
+  | ^ expected `)`
+
+1 error generated.
