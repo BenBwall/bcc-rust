@@ -83,7 +83,7 @@ pub(super) fn compile(out_dir: &str) {
         .lines()
         .find_map(|line| line.strip_prefix("LLVM version: "))
         .unwrap();
-    let prefix = super::llvm::build();
+    let prefix = super::llvm::build(version);
     let directory = prefix.join("bin");
     let clang = find_tool(
         &directory,

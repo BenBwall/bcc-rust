@@ -4,7 +4,9 @@ use std::{
     path::PathBuf,
 };
 
-pub(super) fn build() -> PathBuf {
+/// Builds and installs the pinned LLVM tools unless an installation for
+/// `version` already exists, returning the installation prefix.
+pub(super) fn build(version: &str) -> PathBuf {
     println!("cargo:rerun-if-changed=vendor/rust");
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let prefix = root.join("target/llvm");
@@ -18,6 +20,12 @@ pub(super) fn build() -> PathBuf {
         .open(prefix.join(".build-lock"))
         .unwrap();
     lock.lock().unwrap();
+    // A completed installation records its version, so a restored cache or
+    // an unchanged checkout skips reconfiguring the LLVM build tree.
+    let stamp = prefix.join(".installed-version");
+    if fs::read_to_string(&stamp).is_ok_and(|installed| installed == version) {
+        return prefix;
+    }
 
     let host = env::var("HOST").unwrap();
     let msvc_host = host.replace("windows-gnu", "windows-msvc");
@@ -73,5 +81,7 @@ pub(super) fn build() -> PathBuf {
     ] {
         _ = config.define(format!("LLVM_ENABLE_{option}"), "OFF");
     }
-    config.build()
+    let prefix = config.build();
+    fs::write(stamp, version).unwrap();
+    prefix
 }
