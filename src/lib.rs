@@ -108,6 +108,14 @@ impl PreprocessorIterator {
             pending_token: None,
         }
     }
+
+    /// Whether the next [`Iterator::next`] call can discard preprocessor
+    /// provenance that earlier items still reference.
+    fn compacts_on_next(&self) -> bool {
+        !self.context.has_pending_errors()
+            && self.pending_token.is_none()
+            && self.preprocessor.next_iterator_item_compacts()
+    }
 }
 
 impl Iterator for PreprocessorIterator {
@@ -670,7 +678,15 @@ fn print_preprocessor_output(
     let mut reporter = DiagnosticReporter::new();
     let mut iterator =
         PreprocessorIterator::new(source_filename, input_string, quote_include, system_include);
-    while let Some(item) = iterator.next() {
+    loop {
+        // A deferred diagnostic's labels index the preprocessor arena, which
+        // the next poll may compact; render it while its provenance is live.
+        if iterator.compacts_on_next() {
+            reporter.flush(&iterator.context);
+        }
+        let Some(item) = iterator.next() else {
+            break;
+        };
         match item {
             | Ok(token) => {
                 reporter.flush(&iterator.context);

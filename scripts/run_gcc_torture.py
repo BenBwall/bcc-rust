@@ -109,10 +109,16 @@ def evidence(result, log):
     return {key: value for key, value in result.items() if key not in {"stdout", "stderr"}}
 
 
+# Rendered diagnostics open with a lowercase `error:` or `warning:` heading.
+# Capitalized headings are accepted for logs from earlier builds.
+ERROR_HEADING = re.compile(r"^[Ee]rror: (.*)$", re.MULTILINE)
+WARNING_HEADING = re.compile(r"^[Ww]arning: (.*)$", re.MULTILINE)
+
+
 def bcc_status(result):
     output = result["stdout"] + result["stderr"]
-    errors = re.findall(r"^Error: (.*)$", output, re.MULTILINE)
-    warnings = re.findall(r"^Warning: (.*)$", output, re.MULTILINE)
+    errors = ERROR_HEADING.findall(output)
+    warnings = WARNING_HEADING.findall(output)
     if result["timeout"]:
         status = "timeout"
     elif re.search(r"panicked at|stack overflow|fatal runtime error", output):

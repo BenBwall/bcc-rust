@@ -84,6 +84,14 @@ impl<T, H> DedupArena<T, H> {
         }
     }
 
+    /// Appends a value that interning never returns, giving it an identity
+    /// distinct from every equal value. Indexed values stay unique.
+    pub(crate) fn push_unindexed(&mut self, value: T) -> u32 {
+        let index = u32::try_from(self.data.len()).expect("DedupArena: Too many values.");
+        self.data.push(value);
+        index
+    }
+
     /// SAFETY: The caller must ensure that the values in the arena remain
     /// unique.
     #[expect(

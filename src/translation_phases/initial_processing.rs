@@ -130,6 +130,40 @@ impl InitialProcessor {
         }
     }
 
+    /// Returns where the character `c` just returned by
+    /// [`TranslationPhase::next_item`] starts, past any line splice deleted
+    /// before it, and how many source bytes spell it.
+    ///
+    /// Only valid immediately after `c` was returned as an ordinary or
+    /// trigraph character, not as a newline or comment replacement.
+    pub(crate) fn last_char_start(&self, c: char) -> (SourcePosition, usize) {
+        let end = self.source_file.index;
+        let trigraph = match c {
+            | '#' => Some("??="),
+            | ']' => Some("??)"),
+            | '|' => Some("??!"),
+            | '[' => Some("??("),
+            | '^' => Some("??'"),
+            | '}' => Some("??>"),
+            | '\\' => Some("??/"),
+            | '{' => Some("??<"),
+            | '~' => Some("??-"),
+            | _ => None,
+        }
+        .filter(|spelling| {
+            end.checked_sub(spelling.len())
+                .and_then(|start| self.source_file.source.get(start..end))
+                == Some(*spelling)
+        });
+        let (bytes, columns) = trigraph.map_or((c.len_utf8(), 1), |spelling| (spelling.len(), 3));
+        let start = SourcePosition {
+            index:  end - bytes,
+            column: self.source_file.column - columns,
+            line:   self.source_file.line,
+        };
+        (start, bytes)
+    }
+
     fn next_char(&mut self, _context: &mut Context) -> Option<char> {
         self.source_file.source.char_at(self.source_file.index)
     }

@@ -33,6 +33,7 @@ use super::{
     SetPosition,
     SetSourceFileIndex,
     SourcePosition,
+    SourceVector,
     SourceVectors,
     StrExt,
     TokenString,
@@ -691,9 +692,11 @@ pub(crate) struct Preprocessor {
     macro_definitions:          HashMap<StringCacheId, MacroDefinition>,
     current_is_newline:         bool,
     last_was_newline:           bool,
-    /// The `if`, `ifdef`, or `ifndef` name of each conditional directive
-    /// still waiting for its `#endif`, outermost first.
-    open_conditionals:          Vec<SourceVectors>,
+    /// Provenance of the `if`, `ifdef`, or `ifndef` name of each conditional
+    /// directive still waiting for its `#endif`, outermost first. It is owned
+    /// rather than an arena range because token iteration compacts the
+    /// preprocessor arena while a conditional remains open.
+    open_conditionals:          Vec<Box<[SourceVector]>>,
 
     generate_placeholders:      bool,
     quote_include_directories:  SharedVec<PathBuf>,
@@ -2490,7 +2493,8 @@ impl Preprocessor {
         }
         loop {
             let Some(token) = self.next_preprocessor_token::<true>(context) else {
-                for source_vectors in take(&mut self.open_conditionals) {
+                for vectors in take(&mut self.open_conditionals) {
+                    let source_vectors = context.push_source_vectors(&vectors);
                     context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
                         source_vectors,
@@ -2511,10 +2515,17 @@ impl Preprocessor {
     /// EOF diagnostic. Source-vector compaction therefore belongs to the
     /// producer that owns that buffered work, not to each iterator consumer.
     pub(crate) fn next_iterator_item(&mut self, context: &mut Context) -> Option<Token> {
-        if self.pending_parser_token.is_none() && self.pending_parser_errors.is_empty() {
+        if self.next_iterator_item_compacts() {
             context.source_vectors.0.clear();
         }
         self.next_item(context)
+    }
+
+    /// Whether the next [`Self::next_iterator_item`] call discards the
+    /// preprocessor provenance arena. Consumers retaining provenance across
+    /// calls, such as a deferred diagnostic, must resolve it first.
+    pub(crate) fn next_iterator_item_compacts(&self) -> bool {
+        self.pending_parser_token.is_none() && self.pending_parser_errors.is_empty()
     }
 
     fn concatenate_adjacent_strings(&mut self, context: &mut Context, first: Token) -> Token {
@@ -3563,10 +3574,13 @@ impl Preprocessor {
                                 self.prepare_pragma_operator_string(context, string_token.contents);
 
                             let tokenizer = take(&mut self.tokenizer);
-                            let pragma_string = context.intern_source_file(
+                            // Each operator gets its own identity: diagnostics
+                            // rendered later must quote this payload, not the
+                            // most recent one.
+                            let pragma_string = context.add_synthetic_source_file(
                                 PathBuf::from("<pragma string>").into_boxed_path(),
+                                input.clone(),
                             );
-                            context.record_source_text(pragma_string, input.clone());
                             self.tokenizer = PreprocessorTokenizer::new(pragma_string, input);
                             self.parse_pragma_directive(context, string_token);
                             if self.tokenizer.next_item(context).is_some() {
@@ -5739,9 +5753,11 @@ impl Preprocessor {
             }
             let innermost = self.open_conditionals.len() == depth;
             match context.string_cache.at(name.contents) {
-                | "if" | "ifdef" | "ifndef" => self.open_conditionals.push(name.source_vectors),
+                | "if" | "ifdef" | "ifndef" => self
+                    .open_conditionals
+                    .push(context.get_source_vectors(name.source_vectors).into()),
                 | "endif" => {
-                    _ = self.open_conditionals.pop();
+                    drop(self.open_conditionals.pop());
                 },
                 | "elif" if innermost && mode == SkipMode::FalseGroup => {
                     context.set_ignore_tokenizer_errors(false);
@@ -5770,7 +5786,8 @@ impl Preprocessor {
     }
 
     fn parse_if_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
-        self.open_conditionals.push(directive.source_vectors);
+        self.open_conditionals
+            .push(context.get_source_vectors(directive.source_vectors).into());
         if self
             .eval_preprocessor_expression(context, PreprocessorErrorType::NoConditionInIfDirective)
         {
@@ -5842,7 +5859,8 @@ impl Preprocessor {
         directive: PreprocessorToken,
         wants_defined: bool,
     ) {
-        self.open_conditionals.push(directive.source_vectors);
+        self.open_conditionals
+            .push(context.get_source_vectors(directive.source_vectors).into());
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
@@ -5904,9 +5922,13 @@ impl Preprocessor {
     ///
     /// The process working directory is never searched implicitly, so the
     /// result depends on the source tree rather than where the compiler runs.
+    ///
+    /// `including_file` is the file containing the directive, captured before
+    /// a macro-expanded operand can switch to its definition's tokenizer.
     fn find_header_from_path(
         &mut self,
         context: &mut Context,
+        including_file: u32,
         include_token: PreprocessorToken,
         path: &Path,
         is_system_header: bool,
@@ -5917,7 +5939,7 @@ impl Preprocessor {
         } else {
             let mut candidates = Vec::new();
             if !is_system_header {
-                let including_file = context.get_source_file(self.source_file_index());
+                let including_file = context.get_source_file(including_file);
                 candidates.push(
                     including_file
                         .parent()
@@ -5958,6 +5980,7 @@ impl Preprocessor {
     }
 
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
+        let including_file = self.source_file_index();
         context.set_is_tokenizing_include_string(true);
         let include_string =
             self.expect_token_without_rewind::<true>(
@@ -6013,7 +6036,7 @@ impl Preprocessor {
                     self.skip_until_newline(context);
                 }
 
-                self.find_header_from_path(context, include_string, path, false)
+                self.find_header_from_path(context, including_file, include_string, path, false)
             },
             | PreprocessorTokenType::AngleBracketString => {
                 let contents = context
@@ -6040,7 +6063,7 @@ impl Preprocessor {
                 {
                     self.skip_until_newline(context);
                 }
-                self.find_header_from_path(context, include_string, path, true)
+                self.find_header_from_path(context, including_file, include_string, path, true)
             },
             | _ => {
                 let mut contents = TokenString::new();
@@ -6086,7 +6109,7 @@ impl Preprocessor {
                     contents:       context.string_cache.intern(&contents),
                     kind:           PreprocessorTokenType::AngleBracketString,
                 };
-                self.find_header_from_path(context, synthetic_token, path, true)
+                self.find_header_from_path(context, including_file, synthetic_token, path, true)
             },
         };
         let Some(header_source_index) = header_source_index else {

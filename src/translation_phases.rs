@@ -507,6 +507,13 @@ impl Context {
         start_index
     }
 
+    /// Copies owned provenance back into the preprocessor arena.
+    pub(crate) fn push_source_vectors(&mut self, vectors: &[SourceVector]) -> SourceVectors {
+        let start = self.source_vectors.0.len().to_u32();
+        self.source_vectors.0.extend_from_slice(vectors);
+        SourceArena::Preprocessor.encode(start, self.source_vectors.0.len().to_u32())
+    }
+
     pub(crate) fn create_source_vectors(
         &mut self,
         start_position: SourcePosition,
@@ -729,6 +736,10 @@ impl Context {
         self.pending_errors.pop_front()
     }
 
+    pub(crate) fn has_pending_errors(&self) -> bool {
+        !self.pending_errors.is_empty()
+    }
+
     pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError> {
         std::mem::take(&mut self.pending_errors).into()
     }
@@ -753,6 +764,15 @@ impl Context {
 
     pub(crate) fn intern_source_file(&mut self, path: Box<Path>) -> u32 {
         self.source_files.intern(path)
+    }
+
+    /// Registers synthetic source text under a fresh identity, even when
+    /// `path` names an earlier input, so diagnostics retained from each
+    /// input keep quoting their own text.
+    pub(crate) fn add_synthetic_source_file(&mut self, path: Box<Path>, text: SharedString) -> u32 {
+        let index = self.source_files.push_unindexed(path);
+        self.record_source_text(index, text);
+        index
     }
 
     pub(crate) fn get_source_file(&self, index: u32) -> &Path {

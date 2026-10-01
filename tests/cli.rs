@@ -278,4 +278,99 @@ mod tests {
             "{suppressed_stderr}"
         );
     }
+
+    fn stderr_of(arguments: &[&str]) -> String {
+        let output = run(arguments);
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        assert!(!stderr.contains("panicked"), "{arguments:?}: {stderr}");
+        stderr
+    }
+
+    #[test]
+    fn token_dump_renders_a_trailing_preprocessing_error() {
+        let stderr = stderr_of(&["--tokens", "--input", "int x;\n#error boom\n"]);
+
+        assert!(stderr.contains("error: #error boom"), "{stderr}");
+        assert!(stderr.contains("2 | #error boom"), "{stderr}");
+    }
+
+    #[test]
+    fn token_dump_reports_conditionals_left_open_across_tokens() {
+        let stderr = stderr_of(&["--tokens", "--input", "#if 1\nint x;\n#if 1\nint y;\n"]);
+
+        assert_eq!(
+            stderr.matches("error: unterminated `#if`").count(),
+            2,
+            "{stderr}"
+        );
+        assert!(stderr.contains(" --> <input>:1:2"), "{stderr}");
+        assert!(stderr.contains(" --> <input>:3:2"), "{stderr}");
+    }
+
+    #[test]
+    fn pragma_operator_diagnostics_quote_their_own_payload() {
+        let stderr = stderr_of(&[
+            "--input",
+            "_Pragma(\"aaaaaaaa(\")\n_Pragma(\"b(\")\n_Pragma(\"\u{e9}\u{20ac}(\")\nint x;\n",
+        ]);
+
+        assert!(stderr.contains("1 | aaaaaaaa(\n"), "{stderr}");
+        assert!(stderr.contains("1 | b(\n"), "{stderr}");
+        assert!(stderr.contains("1 | \u{e9}\u{20ac}(\n"), "{stderr}");
+    }
+
+    #[test]
+    fn macro_expanded_quoted_includes_search_beside_the_directive() {
+        let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("macro-include");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("def.h"), "#define H \"sib.h\"\n").unwrap();
+        std::fs::write(sub.join("sib.h"), "int from_definition_directory;\n").unwrap();
+        std::fs::write(root.join("sib.h"), "int from_directive_directory;\n").unwrap();
+        let main = root.join("main.c");
+        std::fs::write(&main, "#include \"sub/def.h\"\n#include H\n").unwrap();
+
+        let stderr = stderr_of(&["--tokens", main.to_str().unwrap()]);
+
+        assert!(
+            stderr.contains("identifier `from_directive_directory`"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn suffixed_exact_zero_floating_constants_do_not_underflow() {
+        for constant in ["0.0f", "0.0F", "0.e0f", "0x0.0p0f"] {
+            let source = format!("float x = {constant};\n");
+            let stderr = stderr_of(&["--input", &source]);
+            assert!(stderr.is_empty(), "{constant}: {stderr}");
+        }
+        let stderr = stderr_of(&["--input", "float x = 1e-999f;\n"]);
+        assert!(stderr.contains("too small for `float`"), "{stderr}");
+    }
+
+    #[test]
+    fn unknown_characters_after_a_line_splice_are_reported_at_themselves() {
+        let stderr = stderr_of(&["--input", "int x = 1 \\\n@;\n"]);
+
+        assert!(stderr.contains("unexpected character `@`"), "{stderr}");
+        assert!(stderr.contains(" --> <input>:2:1"), "{stderr}");
+        assert!(stderr.contains("2 | @;"), "{stderr}");
+    }
+
+    #[test]
+    fn snippets_index_lone_carriage_returns_as_lines() {
+        let stderr = stderr_of(&["--input", "int a;\rint b;\rint c = ;\r"]);
+
+        assert!(stderr.contains(" --> <input>:3:9"), "{stderr}");
+        assert!(stderr.contains("3 | int c = ;\n"), "{stderr}");
+    }
+
+    #[test]
+    fn token_dump_keeps_nul_escapes_apart_from_following_digits() {
+        let stderr = stderr_of(&["--tokens", "--input", "\"\\0\" \"1\"\n"]);
+
+        assert!(stderr.contains("string literal \"\\0001\""), "{stderr}");
+    }
 }

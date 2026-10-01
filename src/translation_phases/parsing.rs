@@ -1170,6 +1170,14 @@ impl TokenCursor {
         self.lookahead.get(index).copied()
     }
 
+    /// Drops buffered tokens and reports EOF without fetching the rest of
+    /// the input.
+    fn abandon(&mut self) {
+        self.current = None;
+        self.lookahead.clear();
+        self.reached_eof = true;
+    }
+
     /// Advances by one token while preserving any buffered lookahead.
     fn consume(&mut self) {
         debug_assert!(self.current.is_some(), "cannot consume parser EOF");
@@ -5035,6 +5043,11 @@ impl Parser {
     /// C99: translation-unit is a nonempty sequence of external-declaration
     /// values under §6.9, p. 140; PDF p. 152.
     fn drive(&mut self, context: &mut Context) -> Option<ExternalDeclaration> {
+        // A resource failure is terminal: the remaining input is neither
+        // fetched nor parsed, so it cannot grow the exhausted storage.
+        if self.resource_limit_reported {
+            return None;
+        }
         loop {
             #[cfg(test)]
             assert!(
@@ -5251,9 +5264,7 @@ impl Parser {
             ParserErrorType::ResourceLimitExceeded { resource, limit },
             token,
         );
-        while self.cursor.current(context).is_some() {
-            self.cursor.consume();
-        }
+        self.cursor.abandon();
         self.frames.clear();
         self.retained_frame_nodes = 0;
         self.returned = None;
@@ -16788,6 +16799,22 @@ mod tests {
             "resource exit retained frames"
         );
         assert_eq!(parsed.parser.scopes.depth(), 0);
+    }
+
+    #[test]
+    fn source_storage_exhaustion_stops_fetching_the_remaining_input() {
+        let parsed = parse_with_limits(
+            &"int a;\n".repeat(1_000),
+            ParserLimits {
+                source_segments: 10,
+                ..ParserLimits::default()
+            },
+        );
+        assert!(
+            parsed.context.source_segment_count() < 100,
+            "provenance kept growing after the limit: {} segments",
+            parsed.context.source_segment_count()
+        );
     }
 
     #[test]

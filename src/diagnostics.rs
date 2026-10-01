@@ -249,7 +249,8 @@ pub(crate) fn c_quoted(prefix: &str, quote: char, value: &str) -> String {
             | '\x08' => out.push_str("\\b"),
             | '\x0B' => out.push_str("\\v"),
             | '\x0C' => out.push_str("\\f"),
-            | '\0' => out.push_str("\\0"),
+            // A fixed-width escape cannot absorb a following octal digit.
+            | '\0' => out.push_str("\\000"),
             | c if c == quote => {
                 out.push('\\');
                 out.push(c);
@@ -265,6 +266,24 @@ pub(crate) fn c_quoted(prefix: &str, quote: char, value: &str) -> String {
     }
     out.push(quote);
     out
+}
+
+/// Byte offsets at which each physical line of `text` starts. Like initial
+/// processing, LF, CRLF, and a lone CR each end a line; every terminator is
+/// one byte before the next start once a CRLF's CR is trimmed.
+fn physical_line_starts(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    std::iter::once(0)
+        .chain(
+            bytes
+                .iter()
+                .enumerate()
+                .filter(|&(index, &byte)| {
+                    byte == b'\n' || (byte == b'\r' && bytes.get(index + 1) != Some(&b'\n'))
+                })
+                .map(|(index, _)| index + 1),
+        )
+        .collect()
 }
 
 /// How rendered text is decorated.
@@ -338,11 +357,10 @@ impl Renderer {
     /// Returns the 1-based physical line containing `offset` and the byte
     /// range of that line, excluding its terminator.
     fn locate(&mut self, file: u32, text: &str, offset: usize) -> (usize, usize, usize) {
-        let starts = self.line_starts.entry(file).or_insert_with(|| {
-            std::iter::once(0)
-                .chain(text.match_indices('\n').map(|(index, _)| index + 1))
-                .collect()
-        });
+        let starts = self
+            .line_starts
+            .entry(file)
+            .or_insert_with(|| physical_line_starts(text));
         let line = starts.partition_point(|&start| start <= offset);
         let start = starts[line - 1];
         let end = starts

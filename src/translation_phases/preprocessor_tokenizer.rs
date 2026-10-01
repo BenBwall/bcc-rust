@@ -214,6 +214,9 @@ impl PreprocessorTokenType {
 pub(crate) struct PreprocessorTokenizerError {
     source_vector: SourceVector,
     error_type:    PreprocessorTokenizerErrorType,
+    /// For an unknown token, the character after phases 1 and 2 that no
+    /// token starts with; its raw spelling may be a trigraph.
+    character:     Option<char>,
 }
 
 impl std::error::Error for PreprocessorTokenizerError {}
@@ -258,8 +261,13 @@ impl Display for PreprocessorTokenizerError {
 
 impl ToDiagnostic for PreprocessorTokenizerError {
     fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic {
+        let mut buffer = [0; 4];
+        let spelling = match self.character {
+            | Some(character) => Some(&*character.encode_utf8(&mut buffer)),
+            | None => context.source_spelling(source),
+        };
         self.error_type
-            .explain(context.source_spelling(source))
+            .explain(spelling)
             .at(self.severity(), source)
     }
 }
@@ -327,8 +335,8 @@ impl TranslationPhase for PreprocessorTokenizer {
                 | '|' => self.tokenize_pipe(context),
                 | '!' => self.tokenize_exclamation_mark(context),
                 | '=' => self.tokenize_equals(context),
-                | _ => {
-                    self.generate_error(context, PreprocessorTokenizerErrorType::UnknownToken);
+                | unknown => {
+                    self.generate_unknown_character_error(context, unknown);
                     continue;
                 },
             });
@@ -355,6 +363,26 @@ impl PreprocessorTokenizer {
                 length:            self.index(context) - position.index,
             },
             error_type,
+            character: None,
+        });
+    }
+
+    /// Reports `character` at its own location rather than at the token
+    /// start, which precedes any line splice deleted before it.
+    #[inline(never)]
+    #[cold]
+    fn generate_unknown_character_error(&mut self, context: &mut Context, character: char) {
+        let (position, length) = self.initial_processor.last_char_start(character);
+        context.preprocessor_tokenizer_error(PreprocessorTokenizerError {
+            source_vector: SourceVector {
+                index: position.index,
+                column: position.column,
+                line: position.line,
+                source_file_index: self.source_file_index(),
+                length,
+            },
+            error_type:    PreprocessorTokenizerErrorType::UnknownToken,
+            character:     Some(character),
         });
     }
 

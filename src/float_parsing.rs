@@ -117,18 +117,19 @@ pub(crate) enum ParseFloatError {
 
 /// Returns whether the significand of a floating constant's spelling has a
 /// nonzero digit, i.e. whether its exact mathematical value is nonzero.
+///
+/// Only digits of the constant's base count, so a suffix such as the `f` of
+/// an exponent-free `0.0f` is not mistaken for a hexadecimal digit.
 fn significand_is_nonzero(spelling: &str) -> bool {
-    let (digits, exponent_markers): (&str, &[char]) = match spelling
+    let (digits, exponent_markers, is_digit): (&str, &[char], fn(&char) -> bool) = match spelling
         .strip_prefix("0x")
         .or_else(|| spelling.strip_prefix("0X"))
     {
-        | Some(hex) => (hex, &['p', 'P']),
-        | None => (spelling, &['e', 'E']),
+        | Some(hex) => (hex, &['p', 'P'], char::is_ascii_hexdigit),
+        | None => (spelling, &['e', 'E'], char::is_ascii_digit),
     };
     let significand = digits.split(exponent_markers).next().unwrap_or_default();
-    significand
-        .chars()
-        .any(|c| c.is_ascii_hexdigit() && c != '0')
+    significand.chars().any(|c| is_digit(&c) && c != '0')
 }
 
 fn range_error(class: FloatClass, spelling: &str) -> Option<FloatRangeError> {
