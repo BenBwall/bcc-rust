@@ -1,2 +1,2 @@
-#line 12
+#line 0x12
 int value;

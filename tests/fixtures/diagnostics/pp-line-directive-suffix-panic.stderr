@@ -1,4 +1,9 @@
+warning: `#line` needs a plain decimal line number
+ --> pp-line-directive-suffix-panic.c:1:7
+  |
+1 | #line 1u
+  |       ^^ not a digit sequence
+  |
+  = note: C99 §6.10.4p3: the line number is a digit sequence, not any constant
 
-thread 'main' (4504) panicked at src\translation_phases\preprocessing.rs:6447:37:
-attempt to subtract with overflow
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+1 warning generated.

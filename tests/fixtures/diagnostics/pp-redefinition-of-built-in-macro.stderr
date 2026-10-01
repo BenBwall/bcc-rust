@@ -1,4 +1,9 @@
+warning: cannot redefine predefined macro `__LINE__`
+ --> pp-redefinition-of-built-in-macro.c:1:9
+  |
+1 | #define __LINE__ 5
+  |         ^^^^^^^^ predefined by the implementation
+  |
+  = note: C99 §6.10.8p4: predefined macro names shall not be redefined
 
-thread 'main' (26888) panicked at src\translation_phases\preprocessing.rs:6263:21:
-internal error: entered unreachable code: The case where name is a built-in macro is handled above
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+1 warning generated.

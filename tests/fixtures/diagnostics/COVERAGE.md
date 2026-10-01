@@ -4,13 +4,13 @@ Each top-level `.c` is run as `bcc-rust <file-name>` with this directory as the 
 
 Run `cargo test --test diagnostics_golden`. Use `BLESS=1 cargo test --test diagnostics_golden` to rewrite every snapshot. The guard remains active while blessing and runs every C fixture again. Both tests accumulate failures so one mismatch does not hide later fixtures.
 
-This corpus intentionally preserves current compiler defects. Two fixtures panic; their exact captured stderr includes a changing OS thread ID. Consequently their golden comparisons remain red until the compiler emits deterministic diagnostics. The guard also fails on those panics and the raw NUL source-snippet leak. Do not bless these away or normalize the thread IDs to make the checks pass.
+Snapshots record current behavior, including defects. The guard test rejects panics, internal representations, and raw NUL bytes in any output, so a crash or control-byte leak cannot be blessed into a passing snapshot. Fix the compiler instead of normalizing such output.
 
 `clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error. The header files are included by C fixtures, not invoked independently.
 
 ## Coverage
 
-There are **218 C inputs and 218 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **6/7 tokenizer**, **125/131 preprocessor**, and **64/73 parser** variants. A further preprocessor variant, `RedefinitionOfBuiltInMacro`, is attempted but crashes before rendering. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 60 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
+There are **218 C inputs and 218 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **6/7 tokenizer**, **126/131 preprocessor**, and **64/73 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 60 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -115,7 +115,7 @@ The mapping below comes from checking the emitter/dispatch paths and their CLI o
 | `ExpectedIdentifierInIfdefDirective` | rendered | [pp-expected-identifier-in-ifdef-directive.c](pp-expected-identifier-in-ifdef-directive.c) |
 | `ExpectedIdentifierInIfndefDirective` | rendered | [pp-expected-identifier-in-ifndef-directive.c](pp-expected-identifier-in-ifndef-directive.c) |
 | `ExpectedIdentifierInDefineDirective` | rendered | [pp-expected-identifier-in-define-directive.c](pp-expected-identifier-in-define-directive.c) |
-| `RedefinitionOfBuiltInMacro` | blocked by panic; not counted | [pp-redefinition-of-built-in-macro.c](pp-redefinition-of-built-in-macro.c) |
+| `RedefinitionOfBuiltInMacro` | rendered | [pp-redefinition-of-built-in-macro.c](pp-redefinition-of-built-in-macro.c) |
 | `UndefinedIdentifierInPreprocessorExpression` | rendered | [pp-undefined-identifier-in-preprocessor-expression.c](pp-undefined-identifier-in-preprocessor-expression.c) |
 | `ExpectedIncludeStringOrAngleBracketString` | rendered | [pp-expected-include-string-or-angle-bracket-string.c](pp-expected-include-string-or-angle-bracket-string.c) |
 | `UnexpectedEndOfInput` | rendered | [pp-unexpected-end-of-input.c](pp-unexpected-end-of-input.c) |

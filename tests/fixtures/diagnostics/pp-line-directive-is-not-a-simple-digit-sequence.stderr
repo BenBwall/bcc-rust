@@ -1,8 +1,8 @@
 warning: `#line` needs a plain decimal line number
  --> pp-line-directive-is-not-a-simple-digit-sequence.c:1:7
   |
-1 | #line 12
-  |       ^^ not a digit sequence
+1 | #line 0x12
+  |       ^^^^ not a digit sequence
   |
   = note: C99 §6.10.4p3: the line number is a digit sequence, not any constant
 

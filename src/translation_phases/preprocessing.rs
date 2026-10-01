@@ -6162,13 +6162,16 @@ impl Preprocessor {
                 | MacroDefinition::FunctionLike { tokenizer, .. }
                 | MacroDefinition::ObjectLike { tokenizer, .. } => Some(tokenizer.clone()),
                 | MacroDefinition::BuiltIn => {
+                    // C99 §6.10.8p4: predefined macro names cannot be
+                    // redefined, so the built-in definition stays in effect.
                     context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::RedefinitionOfBuiltInMacro(
                             context.string_cache.at(name.contents).to_owned(),
                         ),
                         source_vectors: name.source_vectors,
                     });
-                    None
+                    self.skip_until_newline(context);
+                    return;
                 },
             },
         };
@@ -6446,23 +6449,22 @@ impl Preprocessor {
             self.skip_and_expand_until_newline(context);
             return;
         };
+        let digits = context
+            .string_cache
+            .at(token.contents)
+            .trim_end_matches('\0');
+        if !digits.bytes().all(|b| b.is_ascii_digit()) {
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence,
+                source_vectors: token.source_vectors,
+            });
+            self.skip_and_expand_until_newline(context);
+            return;
+        }
         let (value, did_overflow) = {
             let mut value = 0i128;
-            let mut did_generate_error = false;
             let mut did_overflow = false;
-            for b in context.string_cache.at(token.contents).bytes() {
-                if !b.is_ascii_digit() && !did_generate_error {
-                    did_generate_error = true;
-                    Context::raw_preprocessor_error(
-                        &mut context.pending_errors,
-                        PreprocessorError {
-                            error_type:
-                                PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence,
-                            source_vectors: token.source_vectors,
-                        },
-                    );
-                    continue;
-                }
+            for b in digits.bytes() {
                 value *= 10;
                 if value > i128::from(i32::MAX) {
                     did_overflow = true;

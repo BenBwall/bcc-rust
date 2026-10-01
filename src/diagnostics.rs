@@ -655,9 +655,23 @@ impl Renderer {
             "{} {} {}",
             self.paint(&number, Self::gutter_style()),
             self.paint("|", Self::gutter_style()),
-            expand_tabs(source).trim_end(),
+            visible_source(source).trim_end(),
         );
     }
+}
+
+/// Expands tabs and shows other control characters as their one-column
+/// Unicode control pictures, so a snippet never emits raw control bytes
+/// and carets stay aligned.
+fn visible_source(text: &str) -> String {
+    expand_tabs(text)
+        .chars()
+        .map(|c| match u32::from(c) {
+            | code @ 0..0x20 => char::from_u32(0x2400 + code).unwrap_or(c),
+            | 0x7F => '\u{2421}',
+            | _ => c,
+        })
+        .collect()
 }
 
 fn display_width(text: &str) -> usize {

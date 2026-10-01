@@ -1,11 +1,3 @@
-warning: `#line` needs a plain decimal line number
- --> pp-line-directive-number-too-large.c:1:7
-  |
-1 | #line 2147483648
-  |       ^^^^^^^^^^ not a digit sequence
-  |
-  = note: C99 §6.10.4p3: the line number is a digit sequence, not any constant
-
 warning: line number 2147483648 is out of range
  --> pp-line-directive-number-too-large.c:1:7
   |
@@ -14,4 +6,4 @@ warning: line number 2147483648 is out of range
   |
   = note: C99 §6.10.4p3: the line number must be at most 2147483647
 
-2 warnings generated.
+1 warning generated.

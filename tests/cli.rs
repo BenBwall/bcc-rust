@@ -373,4 +373,11 @@ mod tests {
 
         assert!(stderr.contains("string literal \"\\0001\""), "{stderr}");
     }
+
+    #[test]
+    fn plain_line_directives_are_accepted_without_a_diagnostic() {
+        let stderr = stderr_of(&["--input", "#line 12\nint x;\n"]);
+
+        assert!(stderr.is_empty(), "{stderr}");
+    }
 }

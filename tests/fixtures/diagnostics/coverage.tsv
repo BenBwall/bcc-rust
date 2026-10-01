@@ -151,7 +151,7 @@ pp	LessThanEqualsWithoutRhs	pp-less-than-equals-without-rhs.c	folded
 pp	LessThanWithoutRhs	pp-less-than-without-rhs.c	folded
 pp	LineDirectiveIsNotASimpleDigitSequence	pp-line-directive-is-not-a-simple-digit-sequence.c	rendered
 pp	LineDirectiveNumberTooLarge	pp-line-directive-number-too-large.c	rendered
-pp	LineDirectiveIsNotASimpleDigitSequence	pp-line-directive-suffix-panic.c	panic
+pp	LineDirectiveIsNotASimpleDigitSequence	pp-line-directive-suffix-panic.c	rendered
 pp	LogicalAndWithoutRhs	pp-logical-and-without-rhs.c	folded
 pp	LogicalNotWithoutOperand	pp-logical-not-without-operand.c	rendered
 pp	LogicalOrWithoutRhs	pp-logical-or-without-rhs.c	folded
@@ -181,7 +181,7 @@ pp	NoConditionInIfDirective	pp-no-condition-in-if-directive.c	rendered
 pp	NotEqualsWithoutRhs	pp-not-equals-without-rhs.c	folded
 pp	NumberInsteadOfBinaryOperatorInPreprocessorExpression	pp-number-instead-of-binary-operator-in-preprocessor-expression.c	rendered
 pp	PragmaOnceInNonHeader	pp-pragma-once-in-non-header.c	rendered
-pp	RedefinitionOfBuiltInMacro	pp-redefinition-of-built-in-macro.c	panic
+pp	RedefinitionOfBuiltInMacro	pp-redefinition-of-built-in-macro.c	rendered
 pp	RedefinitionOfFunctionLikeMacroAsObjectLikeMacro	pp-redefinition-of-function-like-macro-as-object-like-macro.c	rendered
 pp	RedefinitionOfObjectLikeMacroAsFunctionLikeMacro	pp-redefinition-of-object-like-macro-as-function-like-macro.c	rendered
 pp	RightShiftOverflow	pp-right-shift-overflow.c	rendered
