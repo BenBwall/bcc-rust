@@ -62,9 +62,9 @@ git subtree pull --prefix=vendor/mattpocock-skills https://github.com/mattpocock
 
 Refresh the OpenAI snapshot from the repository and path recorded in `vendor/openai-codex-skills/.source.json`, replace only the `babysit-pr/` directory, and update the recorded revision in the same change. Preserve the `.codex/skills/babysit-pr` overlay and verify that its watcher entrypoint still resolves to `.agents/scripts/babysit_pr_watch.py`. The adapter imports the pinned snapshot at runtime and owns repository-specific compatibility behavior without patching the vendored files.
 
-After an update, expose every vendored skill in both client directories and verify that the name sets match and all links resolve. Keep upstream customization outside the vendored directories. `.claude/CLAUDE.md` imports `../.agents/AGENTS.md` with Claude's `@` syntax; edit this file as the single agent-guide source.
+After an update, expose every vendored skill in both client directories, remove links to skills that upstream deleted, and verify that the name sets match and all links resolve. Keep upstream customization outside the vendored directories. `.claude/CLAUDE.md` imports `../.agents/AGENTS.md` with Claude's `@` syntax; edit this file as the single agent-guide source.
 
-For a newly vendored skill, add both links:
+For a newly vendored skill, add both links. In Git Bash on Windows, set `MSYS=winsymlinks:nativestrict` first; otherwise `ln -s` silently copies the directory:
 
 ```sh
 ln -s ../../vendor/<dependency>/<path-to-skill> .agents/skills/<name>
