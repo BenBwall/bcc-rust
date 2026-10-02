@@ -3,7 +3,7 @@
 ## Objective
 
 Move the parser's substantial existing declaration code onto the explicit
-stack-machine architecture agreed in `CONTEXT.md` and
+stack-machine architecture agreed in `GLOSSARY.md` and
 `parser-stack-migration-plan.html`.
 
 This phase is a replacement, not a second parser. Port one reachable grammar
@@ -52,7 +52,7 @@ substantially complete.
 
 Before editing, read:
 
-- `.agents/AGENTS.md` and `CONTEXT.md`;
+- `.agents/AGENTS.md` and `GLOSSARY.md`;
 - Phase 02, module layout, testing, risk, and cutover sections of
   `parser-stack-migration-plan.html`;
 - the frame protocol and current-parser gap sections of
@@ -315,7 +315,7 @@ Run:
 
 Update:
 
-- `CONTEXT.md` so `ParserMachine`, migrated frames, and actions are current
+- `GLOSSARY.md` so `ParserMachine`, migrated frames, and actions are current
   partial implementation rather than wholly proposed;
 - `README.md` with the closed compile gate and exact declaration subset;
 - `parser-stack-migration-plan.html` with Phase 02 evidence;

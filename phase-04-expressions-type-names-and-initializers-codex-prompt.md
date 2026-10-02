@@ -12,7 +12,7 @@ Start by running `git status --short` and preserve every existing user change
 and untracked artifact. Then read these files completely before editing:
 
 1. `.agents/AGENTS.md`
-2. `CONTEXT.md`
+2. `GLOSSARY.md`
 3. `parser-roadmap.md`
 4. `phase-04-expressions-and-type-names-plan.md`
 5. `phase-03-statements-and-function-definitions-plan.md`
@@ -161,7 +161,7 @@ recovered/error state, diagnostics, typedef classification and publication
 timing, scope restoration, reducer-stack cleanup, frame-stack cleanup, and
 cursor/delimiter traces wherever the plan requires them.
 
-Keep implementation changes focused on merged Phase 04. Update `CONTEXT.md`,
+Keep implementation changes focused on merged Phase 04. Update `GLOSSARY.md`,
 README/status guidance, `parser-roadmap.md`, and the compliance checklist only
 where completed behavior or durable vocabulary changes. Do not create commits
 unless I ask for them.

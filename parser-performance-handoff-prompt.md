@@ -11,7 +11,7 @@ concept or public parser behavior.
 
 1. `.agents/AGENTS.md` (repository rules, canonical checks, commit policy
    pointer) and `CONTRIBUTING.md` before committing.
-2. `CONTEXT.md` — especially **Source vector**, **Context**, the parser machine
+2. `GLOSSARY.md` — especially **Source vector**, **Context**, the parser machine
    vocabulary (`ParserMachine`, `ParseFrame`, `ParseAction`, `ParseValue`,
    synchronization sets). The explicit-stack frame architecture is an agreed
    design decision: do **not** convert the parser to recursive descent or
@@ -114,7 +114,7 @@ diagnostics must render the same locations and ranges as before (check
   indices are exactly the intended ones (beware macro-expanded tokens that
   carry several non-adjacent vectors and the entries earlier merges appended).
 
-This changes the meaning of a documented concept, so update `CONTEXT.md`
+This changes the meaning of a documented concept, so update `GLOSSARY.md`
 (**Source vector** entry) in the same change and confirm the design with the
 user before a large refactor. Add a regression test or benchmark assertion
 proving source-vector growth is linear in token count (e.g. the vector table
@@ -192,6 +192,6 @@ count after the mixed input, and peak memory if you can observe it.
 ## Final deliverable
 
 A short report with a before/after table per work item, the design chosen for
-provenance spans (and the `CONTEXT.md` change), anything deferred, and
+provenance spans (and the `GLOSSARY.md` change), anything deferred, and
 remaining hotspots, including an updated estimate of the frame machine's
 overhead relative to parse time.

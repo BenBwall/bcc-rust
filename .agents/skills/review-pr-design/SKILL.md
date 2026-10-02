@@ -5,7 +5,7 @@ description: Review a bcc-rust PR for architecture, maintainability, and reposit
 
 # Review PR Design
 
-Read [the shared review contract](../review-pr/references/review-contract.md) completely and apply it to this scope. Read `.agents/AGENTS.md`, applicable `CONTEXT.md` material, plans, and ADRs before evaluating intended boundaries.
+Read [the shared review contract](../review-pr/references/review-contract.md) completely and apply it to this scope. Read `.agents/AGENTS.md`, applicable `GLOSSARY.md` material, plans, and ADRs before evaluating intended boundaries.
 
 Review the smallest structure that makes the change durable:
 

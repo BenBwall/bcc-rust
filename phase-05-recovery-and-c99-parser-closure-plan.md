@@ -622,7 +622,7 @@ Actions:
 - update `c99-parser-compliance-checklist.md` with final status and evidence;
 - mark Phase 05 complete in `parser-roadmap.md` only after every exit gate is
   green;
-- update `CONTEXT.md` for durable interface or recovery vocabulary changes;
+- update `GLOSSARY.md` for durable interface or recovery vocabulary changes;
 - update `README.md` with the final parser/CLI status and remove stale
   “incomplete parser” wording only where justified;
 - document the C99 compatibility profile, tie-break rule, differential corpus,
@@ -691,7 +691,7 @@ obvious scaling defects:
 | `src/lib.rs` | Complete-translation-unit CLI use and opt-in readable inspection flags/output |
 | `tests/fixtures/parser/` | Stable C99 source fixtures, versioned compatibility cases/manifest, and concise expected tree output where file-backed fixtures improve readability |
 | `c99-parser-compliance-checklist.md` | Explicit ownership/status/evidence inventory |
-| `CONTEXT.md` | Durable terms for `SyntaxTree`, parsed translation unit, or revised recovery concepts |
+| `GLOSSARY.md` | Durable terms for `SyntaxTree`, parsed translation unit, or revised recovery concepts |
 | `parser-roadmap.md` | Phase status after all closure gates pass |
 | `README.md` | Current parser and inspection behavior after implementation |
 
@@ -787,5 +787,5 @@ Phase 05 is complete only when all of the following are true:
 - [x] `cargo +nightly fmt --check` passes.
 - [x] `cargo clippy --all-targets -- -D warnings` passes.
 - [x] `git diff --check` passes.
-- [x] `parser-roadmap.md`, `CONTEXT.md`, `README.md`, and the compliance checklist
+- [x] `parser-roadmap.md`, `GLOSSARY.md`, `README.md`, and the compliance checklist
       describe the implemented state accurately.

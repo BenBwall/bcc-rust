@@ -67,7 +67,7 @@ a `FunctionDefinition`.
 
 Before editing, read:
 
-- `.agents/AGENTS.md` and `CONTEXT.md`;
+- `.agents/AGENTS.md` and `GLOSSARY.md`;
 - `phase-01a-conditional-expression-foundations-agent-brief.md`;
 - `phase-02-legacy-parser-stack-migration-agent-brief.md` and its HTML
   companion;
@@ -463,7 +463,7 @@ old-style definitions, every statement family, mixed block items, deferred
 expression/initializer slots, and malformed recovery. Confirm `--tokens` still
 provides the tokenizer comparison path.
 
-Update `CONTEXT.md`, parser status documentation, frame/grammar inventories,
+Update `GLOSSARY.md`, parser status documentation, frame/grammar inventories,
 and the next-phase handoff with exact remaining expression, initializer,
 semantic, or extension gaps. Documentation must describe implemented behavior,
 not merely merged types.

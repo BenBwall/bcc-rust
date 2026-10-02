@@ -9,7 +9,7 @@ Deliver one coherent expression-foundations milestone across these repositories:
 
 The milestone adds a reusable last-entry guard, fixes the verified nested-ternary defect in both evaluators, and advances the C99 language-parser rewrite by repairing its expression syntax model.
 
-Read `bcc-rust/CONTEXT.md` first. Consult the expression requirements in `bcc-rust/c99-parser-compliance-checklist.md` and Phase 00/01 of `bcc-rust/parser-stack-migration-plan.html`. This file is the authoritative scope for this implementation slice.
+Read `bcc-rust/GLOSSARY.md` first. Consult the expression requirements in `bcc-rust/c99-parser-compliance-checklist.md` and Phase 00/01 of `bcc-rust/parser-stack-migration-plan.html`. This file is the authoritative scope for this implementation slice.
 
 Expected size: roughly 2–4 focused days for one agent.
 

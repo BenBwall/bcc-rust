@@ -5,7 +5,7 @@ description: Review bcc-rust initial processing and preprocessing-token formatio
 
 # Review PR Lexical Processing
 
-Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `CONTEXT.md`, `README.md`, `src/translation_phases.rs`, `src/translation_phases/initial_processing.rs`, and `src/translation_phases/preprocessor_tokenizer.rs` as applicable. Verify disputed language rules against WG14 N1256 §5.1.1.2 and §6.4 rather than relying on intuition.
+Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `GLOSSARY.md`, `README.md`, `src/translation_phases.rs`, `src/translation_phases/initial_processing.rs`, and `src/translation_phases/preprocessor_tokenizer.rs` as applicable. Verify disputed language rules against WG14 N1256 §5.1.1.2 and §6.4 rather than relying on intuition.
 
 Review translation phases 1-3 as an ordered transformation with source provenance:
 

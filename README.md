@@ -246,7 +246,7 @@ syntax stores, scope and label state, recovery state, and resource ceilings.
 declaration expression sites contain parsed handles. The preprocessor evaluator
 retains its independent reducer. Phase 05 closes the parser through structured
 diagnostics, cross-family recovery, syntax provenance, compatibility fixtures,
-translation floors, and opt-in inspection. See the [project glossary](CONTEXT.md)
+translation floors, and opt-in inspection. See the [project glossary](GLOSSARY.md)
 for canonical terms.
 
 ## Parser roadmap
@@ -270,7 +270,7 @@ Phase 05 closure is defined by the
 ## Further reading
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — commit-message format and hook setup.
-- [`CONTEXT.md`](CONTEXT.md) — canonical compiler-domain and parser vocabulary.
+- [`GLOSSARY.md`](GLOSSARY.md) — canonical compiler-domain and parser vocabulary.
 - [`parser-roadmap.md`](parser-roadmap.md) — authoritative Phase 01–05 language-parser sequence and exit gates.
 - [`phase-03-statements-and-function-definitions-plan.md`](phase-03-statements-and-function-definitions-plan.md) — completed Phase 03 implementation brief and acceptance criteria.
 - [`phase-03-statements-and-function-definitions-codex-prompt.md`](phase-03-statements-and-function-definitions-codex-prompt.md) — archived task prompt used to implement Phase 03.

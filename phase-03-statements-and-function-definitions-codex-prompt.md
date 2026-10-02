@@ -11,7 +11,7 @@ Start by running `git status --short` and preserve every existing user change.
 Then read these files completely before editing:
 
 1. `.agents/AGENTS.md`
-2. `CONTEXT.md`
+2. `GLOSSARY.md`
 3. `parser-roadmap.md`
 4. `phase-03-statements-and-function-definitions-plan.md`
 5. `phase-02-legacy-parser-stack-migration-agent-brief.md`
@@ -72,7 +72,7 @@ body, 127 nested blocks, and 127 parameters. Assert syntax shape, provenance,
 recovery flags, diagnostics, scope restoration, and delimiter traces where the
 plan requires them.
 
-Keep implementation changes focused on Phase 03. Update `CONTEXT.md`, README or
+Keep implementation changes focused on Phase 03. Update `GLOSSARY.md`, README or
 status guidance only where completed behavior or a durable term changes. Keep
 `parser-roadmap.md` phase boundaries intact. Do not create commits unless I ask
 for them.

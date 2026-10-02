@@ -5,7 +5,7 @@ description: Review bcc-rust C language parser changes for C99 grammar, AST shap
 
 # Review PR Parsing
 
-Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `CONTEXT.md`, `parser-roadmap.md`, the applicable phase plan or compliance checklist, `src/translation_phases.rs`, and `src/translation_phases/parsing.rs`. Treat the roadmap as authoritative for current phase boundaries. Verify disputed language rules against WG14 N1256 §6.1-§6.9.
+Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `GLOSSARY.md`, `parser-roadmap.md`, the applicable phase plan or compliance checklist, `src/translation_phases.rs`, and `src/translation_phases/parsing.rs`. Treat the roadmap as authoritative for current phase boundaries. Verify disputed language rules against WG14 N1256 §6.1-§6.9.
 
 Review syntax parsing as an explicit, non-recursive control machine:
 

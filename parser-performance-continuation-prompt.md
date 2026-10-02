@@ -9,7 +9,7 @@ session established and decided, so do not re-ask those questions.
 ## Status at handoff (2026-09-30, ~21:30)
 
 No parser work items have started. `src/translation_phases/parsing.rs`,
-`src/translation_phases.rs`, and `CONTEXT.md` have not been touched by the
+`src/translation_phases.rs`, and `GLOSSARY.md` have not been touched by the
 previous session.
 
 ### Blocker: concurrent edits to `parsing.rs`
@@ -78,7 +78,7 @@ test). Preserve all of it.
      `context.source_vectors.0.len()`. Decide whether the log counts toward
      `ParserLimits::source_segments`, keep the resource-limit tests passing, and
      state the decision in the report.
-   - Update the **Source vector** entry in `CONTEXT.md` in the same change, and
+   - Update the **Source vector** entry in `GLOSSARY.md` in the same change, and
      add a test that source-vector storage stays linear in token count.
 
 ## Profiling setup that works (WSL `coz`)

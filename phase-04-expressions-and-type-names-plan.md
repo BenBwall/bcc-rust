@@ -73,7 +73,7 @@ a supported C99 grammar path.
 
 Before editing, read completely:
 
-- `.agents/AGENTS.md`, `CONTEXT.md`, and `parser-roadmap.md`;
+- `.agents/AGENTS.md`, `GLOSSARY.md`, and `parser-roadmap.md`;
 - this plan and the Phase 03 handoff at
   `phase-03-statements-and-function-definitions-plan.md`;
 - `phase-01a-conditional-expression-foundations-agent-brief.md`;
@@ -631,7 +631,7 @@ case, statement integration site, compound literal, and representative
 malformed recovery. Confirm `--tokens` still exposes the tokenizer comparison
 path.
 
-Update `CONTEXT.md`, the roadmap/status guidance, the C99 compliance matrix,
+Update `GLOSSARY.md`, the roadmap/status guidance, the C99 compliance matrix,
 and the Phase 05 closure handoff with exact remaining parser, semantic, and
 extension gaps. Documentation must state that Phase 04 removed every supported
 future-child path.

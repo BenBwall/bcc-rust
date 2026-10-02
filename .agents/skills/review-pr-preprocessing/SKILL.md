@@ -5,7 +5,7 @@ description: Review bcc-rust preprocessing changes for C99 directive, include, c
 
 # Review PR Preprocessing
 
-Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `CONTEXT.md`, `README.md`, `src/translation_phases.rs`, and `src/translation_phases/preprocessing.rs` as applicable. Verify disputed language rules against WG14 N1256 §5.1.1.2, §6.4, and §6.10.
+Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `GLOSSARY.md`, `README.md`, `src/translation_phases.rs`, and `src/translation_phases/preprocessing.rs` as applicable. Verify disputed language rules against WG14 N1256 §5.1.1.2, §6.4, and §6.10.
 
 Review the full preprocessing lifecycle:
 
