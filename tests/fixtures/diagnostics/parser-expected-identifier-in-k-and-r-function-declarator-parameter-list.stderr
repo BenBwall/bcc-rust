@@ -1,0 +1,9 @@
+error: expected a parameter name in the identifier list, found integer constant `1`
+ --> parser-expected-identifier-in-k-and-r-function-declarator-parameter-list.c:1:10
+  |
+1 | int f(a, 1);
+  |          ^ expected an identifier
+  |
+  = note: C99 §6.7.5.3p11: a typedef name here starts a prototype parameter instead
+
+1 error generated.

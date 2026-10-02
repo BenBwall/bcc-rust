@@ -1,21 +1,13 @@
 use std::{
     ffi::c_char,
     fmt::{
+        Debug,
         Display,
         Formatter,
     },
-    io::Error as IoError,
-    mem::ManuallyDrop,
-    num::NonZeroI32,
 };
 
-use crate::{
-    float_parsing::ffi::ERANGE,
-    translation_phases::preprocessing::{
-        FloatTokenType,
-        PreprocessorExpressionOperand,
-    },
-};
+use crate::translation_phases::preprocessing::FloatTokenType;
 
 mod ffi {
     #![allow(
@@ -32,192 +24,304 @@ mod ffi {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-/// Calls `libc::errno()` and returns the value.
-fn errno() -> i32 {
-    // `std::io::Error::last_os_error().raw_os_error()` is guaranteed to
-    // return Some(i32).
-    // We use ManuallyDrop here in order to avoid an unnecessary branch when calling
-    // the destructor `std::io::Error`.
-    ManuallyDrop::new(IoError::last_os_error())
-        .raw_os_error()
-        .unwrap()
-}
-
-unsafe extern "C" {
-    fn strtod(s: *const c_char, endptr: *mut *mut c_char) -> f64;
-    fn strtof(s: *const c_char, endptr: *mut *mut c_char) -> f32;
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+/// A host `long double` stored as its object representation with any
+/// padding bytes zeroed, so equality and hashing depend only on the value.
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub(crate) struct LongDouble {
     pub(crate) value: [u8; LONG_DOUBLE_BYTES],
 }
 
 const LONG_DOUBLE_BYTES: usize = ffi::LONG_DOUBLE_BYTES as _;
+const LONG_DOUBLE_HEX_CAPACITY: usize = ffi::LONG_DOUBLE_HEX_CAPACITY as _;
 
+impl LongDouble {
+    const ZERO: Self = Self {
+        value: [0; LONG_DOUBLE_BYTES],
+    };
+
+    fn to_ffi(self) -> ffi::long_double_t {
+        ffi::long_double_t { bytes: self.value }
+    }
+
+    fn classify(self) -> FloatClass {
+        // SAFETY: The function only reads the value passed by copy.
+        let class = i64::from(unsafe { ffi::long_double_classify(self.to_ffi()) });
+        // Bindgen types anonymous enum constants per platform, so compare
+        // through a common width.
+        if class == i64::from(ffi::FLOAT_CLASS_ZERO) {
+            FloatClass::Zero
+        } else if class == i64::from(ffi::FLOAT_CLASS_INFINITE) {
+            FloatClass::Infinite
+        } else if class == i64::from(ffi::FLOAT_CLASS_NAN) {
+            FloatClass::NotANumber
+        } else {
+            FloatClass::Nonzero
+        }
+    }
+}
+
+/// Prints the exact value as a C99 hexadecimal floating constant such as
+/// `0x1.8p+0`. The digits come from exact arithmetic rather than the C
+/// library's `printf`, so the text is the same on every host that shares a
+/// `long double` format.
 impl Display for LongDouble {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = long_double_to_string(*self).expect("Converting long_double to string failed.");
-        write!(f, "{s}")
+        let mut buffer = [0_u8; LONG_DOUBLE_HEX_CAPACITY];
+        // SAFETY: The buffer is writable for its full length, which is passed
+        // as the capacity; the function writes at most that many bytes.
+        let length = unsafe {
+            ffi::long_double_to_hex(
+                self.to_ffi(),
+                buffer.as_mut_ptr().cast::<c_char>(),
+                buffer.len(),
+            )
+        };
+        let text = buffer.get(..length).unwrap_or_default();
+        f.write_str(std::str::from_utf8(text).unwrap_or("<long double>"))
     }
 }
 
-fn long_double_to_string_get_size(long_double: LongDouble) -> Result<usize, NonZeroI32> {
-    let ld = ffi::long_double_t {
-        bytes: long_double.value,
-    };
-    // SAFETY: long_double_to_string_get_size is safe to call with any initialized
-    // input.
-    let bytes = unsafe { ffi::long_double_to_string_get_size(ld) };
-    match NonZeroI32::new(errno()) {
-        | Some(error) => Err(error),
-        | None => Ok(bytes),
+impl Debug for LongDouble {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LongDouble({self})")
     }
 }
 
-fn long_double_to_string(long_double: LongDouble) -> Result<String, NonZeroI32> {
-    let bytes = long_double_to_string_get_size(long_double)?;
-    let mut buffer = Vec::with_capacity(bytes);
-    let capacity = buffer.capacity();
-    let ld = ffi::long_double_t {
-        bytes: long_double.value,
-    };
-    let ptr: *mut u8 = buffer.as_mut_ptr();
-    // SAFETY: long_double_to_string is safe to call because we're passing a pointer
-    // to a valid buffer, and we're also passing the capacity of the buffer.
-    let bytes_written = unsafe { ffi::long_double_to_string(ld, ptr.cast::<c_char>(), capacity) };
-    if let Some(error) = NonZeroI32::new(errno()) {
-        return Err(error);
-    }
-    // SAFETY: We trust the C function to have written the correct number of bytes.
-    unsafe {
-        buffer.set_len(bytes_written);
-    }
-    // SAFETY: We trust the C function to have only written valid ASCII bytes into
-    // the buffer.
-    Ok(unsafe { String::from_utf8_unchecked(buffer) })
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum FloatClass {
+    Nonzero,
+    Zero,
+    Infinite,
+    NotANumber,
 }
 
-pub(crate) fn long_double_to_operand(
-    long_double: LongDouble,
-) -> Result<PreprocessorExpressionOperand, NonZeroI32> {
-    let mut error = 0;
-    let ld = ffi::long_double_t {
-        bytes: long_double.value,
-    };
-    // SAFETY: long_double_to_operand is safe to call because we're  passing a
-    // pointer to a valid error variable.
-    let operand = unsafe { ffi::long_double_to_operand(ld, &raw mut error) };
-    if let Some(error) = NonZeroI32::new(error) {
-        return Err(error);
-    }
-    if operand.is_unsigned {
-        // SAFETY: We know that the operand is unsigned because the C function told us
-        // so. We also know that the operand is initialized because it was returned by a
-        // C function.
-        unsafe {
-            Ok(PreprocessorExpressionOperand::Unsigned(
-                operand.value.unsigned_value,
-            ))
-        }
-    } else {
-        // SAFETY: We know that the operand is signed because the C function told us so.
-        // We also know that the operand is initialized because it was returned by a C
-        // function.
-        unsafe {
-            Ok(PreprocessorExpressionOperand::Signed(
-                operand.value.signed_value,
-            ))
-        }
-    }
+/// Why a floating constant's value could not be represented in its type.
+///
+/// Range errors are derived from the converted value and the spelling
+/// instead of `errno`, whose underflow behavior is implementation-defined
+/// (C99 §7.20.1.3p10) and whose storage differs between C runtimes.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum FloatRangeError {
+    /// The magnitude exceeds the largest finite value; it becomes infinity.
+    Overflow,
+    /// A nonzero constant is smaller than the least subnormal; it becomes
+    /// zero.
+    Underflow,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum ParseFloatError {
-    Overflow(FloatTokenType),
     Invalid(FloatTokenType),
+    OutOfRange(FloatTokenType, FloatRangeError),
 }
 
+/// Returns whether the significand of a floating constant's spelling has a
+/// nonzero digit, i.e. whether its exact mathematical value is nonzero.
+///
+/// Only digits of the constant's base count, so a suffix such as the `f` of
+/// an exponent-free `0.0f` is not mistaken for a hexadecimal digit.
+fn significand_is_nonzero(spelling: &str) -> bool {
+    let (digits, exponent_markers, is_digit): (&str, &[char], fn(&char) -> bool) = match spelling
+        .strip_prefix("0x")
+        .or_else(|| spelling.strip_prefix("0X"))
+    {
+        | Some(hex) => (hex, &['p', 'P'], char::is_ascii_hexdigit),
+        | None => (spelling, &['e', 'E'], char::is_ascii_digit),
+    };
+    let significand = digits.split(exponent_markers).next().unwrap_or_default();
+    significand.chars().any(|c| is_digit(&c) && c != '0')
+}
+
+fn range_error(class: FloatClass, spelling: &str) -> Option<FloatRangeError> {
+    match class {
+        | FloatClass::Infinite => Some(FloatRangeError::Overflow),
+        | FloatClass::Zero if significand_is_nonzero(spelling) => Some(FloatRangeError::Underflow),
+        | FloatClass::Zero | FloatClass::Nonzero | FloatClass::NotANumber => None,
+    }
+}
+
+fn class_of(value: f64) -> FloatClass {
+    if value.is_nan() {
+        FloatClass::NotANumber
+    } else if value.is_infinite() {
+        FloatClass::Infinite
+    } else if value == 0.0 {
+        FloatClass::Zero
+    } else {
+        FloatClass::Nonzero
+    }
+}
+
+/// Checks that the C conversion stopped exactly `suffix_bytes` before the
+/// terminating NUL, i.e. that the whole spelling was consumed.
+fn consumed_whole_spelling(s: &str, endptr: *const c_char, suffix_bytes: usize) -> bool {
+    let expected = s.len() - 1 - suffix_bytes;
+    endptr.addr() == s.as_ptr().addr() + expected
+}
+
+/// Converts a NUL-terminated `long double` constant spelling (with its `L`
+/// suffix) to the host `long double`.
 pub(crate) fn string_to_long_double(s: &str) -> Result<LongDouble, ParseFloatError> {
     assert!(
         s.ends_with('\0'),
         "string_to_long_double: string must end with null byte. Was: {s:?}"
     );
     let mut endptr = std::ptr::null_mut();
-    // SAFETY: string_to_long_double is safe to call because our string is
-    // null-terminated, and we're also a pointer to a null pointer, which is
-    // what you're supposed to do.
+    // SAFETY: The string is NUL-terminated and the end pointer is writable.
     let long_double =
         unsafe { ffi::string_to_long_double(s.as_ptr().cast::<c_char>(), &raw mut endptr) };
-    let error = errno();
-    // SAFETY: Pointer arithmetic is safe because we know that the string contains
-    // at least one byte (the null terminator), so adding a len - 1 is guaranteed to
-    // be in bounds.
-    unsafe {
-        if endptr.cast_const().cast() != s.as_ptr().add(s.len() - 2) {
-            return Err(ParseFloatError::Invalid(FloatTokenType::LongDouble(
-                LongDouble {
-                    value: [0; LONG_DOUBLE_BYTES],
-                },
-            )));
-        }
+    if !consumed_whole_spelling(s, endptr, 1) {
+        return Err(ParseFloatError::Invalid(FloatTokenType::LongDouble(
+            LongDouble::ZERO,
+        )));
     }
     let ret = LongDouble {
-        // SAFETY: We know long_double is initialized because it was returned by a C function.
+        // SAFETY: The C function initializes every byte of the union.
         value: unsafe { long_double.bytes },
     };
-    if error == ERANGE as i32 {
-        return Err(ParseFloatError::Overflow(FloatTokenType::LongDouble(ret)));
+    match range_error(ret.classify(), s) {
+        | Some(error) => Err(ParseFloatError::OutOfRange(
+            FloatTokenType::LongDouble(ret),
+            error,
+        )),
+        | None => Ok(ret),
     }
-
-    Ok(ret)
 }
 
+/// Converts a NUL-terminated unsuffixed `double` constant spelling.
 pub(crate) fn string_to_double(s: &str) -> Result<f64, ParseFloatError> {
     assert!(
         s.ends_with('\0'),
         "string_to_double: string must end with null byte. Was: {s:?}"
     );
     let mut endptr = std::ptr::null_mut();
-    // SAFETY: strtod is safe to call because our string is null-terminated, and
-    // we're also a pointer to a null pointer, which is what you're supposed to do.
-    let double = unsafe { strtod(s.as_ptr().cast::<c_char>(), &raw mut endptr) };
-    let error = errno();
-    // SAFETY: Pointer arithmetic is safe because we know that the string contains
-    // at least one byte (the null terminator), so adding a len - 1 is guaranteed to
-    // be in bounds.
-    unsafe {
-        if endptr.cast_const().cast() != s.as_ptr().add(s.len() - 1) {
-            return Err(ParseFloatError::Invalid(FloatTokenType::Double(0.0)));
-        }
+    // SAFETY: The string is NUL-terminated and the end pointer is writable.
+    let double = unsafe { ffi::string_to_double(s.as_ptr().cast::<c_char>(), &raw mut endptr) };
+    if !consumed_whole_spelling(s, endptr, 0) {
+        return Err(ParseFloatError::Invalid(FloatTokenType::Double(0.0)));
     }
-    if error == ERANGE as i32 {
-        return Err(ParseFloatError::Overflow(FloatTokenType::Double(double)));
+    match range_error(class_of(double), s) {
+        | Some(error) => Err(ParseFloatError::OutOfRange(
+            FloatTokenType::Double(double),
+            error,
+        )),
+        | None => Ok(double),
     }
-
-    Ok(double)
 }
 
+/// Converts a NUL-terminated `float` constant spelling (with its `f`
+/// suffix).
 pub(crate) fn string_to_float(s: &str) -> Result<f32, ParseFloatError> {
     assert!(
         s.ends_with('\0'),
         "string_to_float: string must end with null byte. Was: {s:?}"
     );
     let mut endptr = std::ptr::null_mut();
-    // SAFETY: strtof is safe to call because our string is null-terminated, and
-    // we're also a pointer to a null pointer, which is what you're supposed to do.
-    let float = unsafe { strtof(s.as_ptr().cast::<c_char>(), &raw mut endptr) };
-    let error = errno();
-    // SAFETY: Pointer arithmetic is safe because we know that the string contains
-    // at least one byte (the null terminator), so adding a len - 1 is guaranteed to
-    // be in bounds.
-    unsafe {
-        if endptr.cast_const().cast() != s.as_ptr().add(s.len() - 2) {
-            return Err(ParseFloatError::Invalid(FloatTokenType::Float(0.0)));
+    // SAFETY: The string is NUL-terminated and the end pointer is writable.
+    let float = unsafe { ffi::string_to_float(s.as_ptr().cast::<c_char>(), &raw mut endptr) };
+    if !consumed_whole_spelling(s, endptr, 1) {
+        return Err(ParseFloatError::Invalid(FloatTokenType::Float(0.0)));
+    }
+    match range_error(class_of(f64::from(float)), s) {
+        | Some(error) => Err(ParseFloatError::OutOfRange(
+            FloatTokenType::Float(float),
+            error,
+        )),
+        | None => Ok(float),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::hint::black_box;
+
+    use super::{
+        FloatRangeError,
+        LONG_DOUBLE_BYTES,
+        ParseFloatError,
+        ffi,
+        string_to_double,
+        string_to_float,
+        string_to_long_double,
+    };
+
+    /// Leaves recognizable garbage in stack memory that a following FFI call
+    /// may reuse for its return slot.
+    #[inline(never)]
+    fn dirty_stack() {
+        let garbage = black_box([0xA5_u8; 4096]);
+        let _ = black_box(&garbage);
+    }
+
+    #[test]
+    fn long_double_padding_is_deterministic() {
+        dirty_stack();
+        let first = string_to_long_double("1.0L\0").unwrap();
+        dirty_stack();
+        let second = string_to_long_double("1.0L\0").unwrap();
+
+        assert_eq!(first.value, second.value);
+        let value_bytes = ffi::LONG_DOUBLE_VALUE_BYTES as usize;
+        assert!(value_bytes <= LONG_DOUBLE_BYTES);
+        assert!(
+            first.value[value_bytes..].iter().all(|&byte| byte == 0),
+            "long double padding bytes must be zero: {:?}",
+            first.value
+        );
+    }
+
+    #[test]
+    fn long_double_prints_as_exact_hexadecimal() {
+        for (spelling, expected) in [
+            ("1.5L\0", "0x1.8p+0"),
+            ("0.0L\0", "0x0p+0"),
+            ("0x1p-3L\0", "0x1p-3"),
+            ("2.5L\0", "0x1.4p+1"),
+        ] {
+            let value = string_to_long_double(spelling).unwrap();
+            assert_eq!(value.to_string(), expected, "{spelling:?}");
+            assert_eq!(format!("{value:?}"), format!("LongDouble({expected})"));
         }
     }
-    if error == ERANGE as i32 {
-        return Err(ParseFloatError::Overflow(FloatTokenType::Float(float)));
+
+    #[test]
+    fn range_errors_do_not_depend_on_errno() {
+        // Stale errno state from earlier library calls must not matter.
+        drop(std::fs::metadata("this path does not exist"));
+        assert_eq!(string_to_double("1.5\0"), Ok(1.5));
+        assert_eq!(string_to_float("1.5f\0"), Ok(1.5));
+        assert_eq!(
+            string_to_long_double("1.5L\0").unwrap().to_string(),
+            "0x1.8p+0"
+        );
+        assert_eq!(string_to_double("0.0\0"), Ok(0.0));
+        assert_eq!(string_to_double("0x0p-99999\0"), Ok(0.0));
+
+        for result in [
+            string_to_double("1e999\0").map(|_| ()),
+            string_to_float("1e999f\0").map(|_| ()),
+            string_to_long_double("1e99999L\0").map(|_| ()),
+        ] {
+            assert!(
+                matches!(
+                    result,
+                    Err(ParseFloatError::OutOfRange(_, FloatRangeError::Overflow))
+                ),
+                "{result:?}"
+            );
+        }
+        for result in [
+            string_to_double("1e-999\0").map(|_| ()),
+            string_to_float("1e-999f\0").map(|_| ()),
+            string_to_long_double("1e-99999L\0").map(|_| ()),
+        ] {
+            assert!(
+                matches!(
+                    result,
+                    Err(ParseFloatError::OutOfRange(_, FloatRangeError::Underflow))
+                ),
+                "{result:?}"
+            );
+        }
     }
-    Ok(float)
 }

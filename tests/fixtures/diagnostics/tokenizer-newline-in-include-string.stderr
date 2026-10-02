@@ -1,0 +1,9 @@
+error: unterminated header name
+ --> tokenizer-newline-in-include-string.c:1:10
+  |
+1 | #include "abc
+  |          ^^^^ the line ends before the closing delimiter
+  |
+  = note: C99 §6.4.7: a header name cannot span lines
+
+1 error generated.

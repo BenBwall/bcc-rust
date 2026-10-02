@@ -1,0 +1,7 @@
+error: `##` cannot follow a function-like macro invocation
+ --> pp-cannot-use-hash-hash-after-function-like-macro-call.c:1:13
+  |
+1 | #define F(a)##a
+  |             ^^ pasting onto an invocation is not supported
+
+1 error generated.

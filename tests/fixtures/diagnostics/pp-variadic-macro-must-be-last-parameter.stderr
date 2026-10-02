@@ -1,0 +1,9 @@
+error: `...` must be the last parameter of `F`
+ --> pp-variadic-macro-must-be-last-parameter.c:1:9
+  |
+1 | #define F(...,a) a
+  |         ^ parameter after `...`
+  |
+  = note: C99 §6.10.3p12: `...` ends the parameter list
+
+1 error generated.

@@ -1,0 +1,7 @@
+error: expected `]` to close the array designator, found `=`
+ --> parser-expected-closing-square-bracket-in-array-designator.c:1:20
+  |
+1 | int array[] = { [1 = 2 };
+  |                    ^ expected `]`
+
+1 error generated.

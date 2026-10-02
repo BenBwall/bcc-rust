@@ -1,0 +1,7 @@
+error: hexadecimal escape sequence is not a valid character
+ --> pp-invalid-hex-escape-sequence.c:1:13
+  |
+1 | int value = '\x110000';
+  |             ^^^^^^^^^^ contains an invalid `\x` escape
+
+1 error generated.

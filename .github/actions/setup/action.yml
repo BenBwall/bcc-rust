@@ -1,0 +1,26 @@
+name: Set up Rust and pinned LLVM
+description: Install the pinned Rust toolchain and restore the cached LLVM installation.
+
+inputs:
+  llvm-key:
+    description: Cache key produced by the llvm job.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      shell: bash
+      run: rustup toolchain install
+    - name: Cache Cargo dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-targets: false
+    - name: Restore LLVM installation
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          target/llvm
+          !target/llvm/build
+        key: ${{ inputs.llvm-key }}
+        fail-on-cache-miss: true

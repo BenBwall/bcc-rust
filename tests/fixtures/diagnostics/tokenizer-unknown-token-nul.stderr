@@ -1,0 +1,9 @@
+error: unexpected character U+0000 in source
+ --> tokenizer-unknown-token-nul.c:1:11
+  |
+1 | int value;␀
+  |           ^ no C token starts with this character
+  |
+  = note: C99 §5.2.1: `@`, `$`, and `` ` `` are not part of the basic source character set; outside literals and comments they cannot appear
+
+1 error generated.

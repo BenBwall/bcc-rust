@@ -1,0 +1,9 @@
+error: expected `ON`, `OFF`, or `DEFAULT` after `MAYBE`
+ --> pp-missing-on-off-switch-in-s-t-d-c-pragma.c:1:26
+  |
+1 | #pragma STDC FP_CONTRACT MAYBE
+  |                          ^^^^^ expected an on-off switch
+  |
+  = note: C99 §6.10.6p2: each standard pragma takes an on-off switch
+
+1 error generated.

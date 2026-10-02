@@ -1,0 +1,7 @@
+error: `#endif` without `#if`
+ --> pp-more-endif-directives-than-if-directives.c:1:2
+  |
+1 | #endif
+  |  ^^^^^ no conditional directive is open here
+
+1 error generated.

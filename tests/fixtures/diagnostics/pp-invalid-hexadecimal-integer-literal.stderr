@@ -1,0 +1,9 @@
+error: invalid hexadecimal integer constant `0xG`
+ --> pp-invalid-hexadecimal-integer-literal.c:1:13
+  |
+1 | int value = 0xG;
+  |             ^^^ not a valid hexadecimal constant
+  |
+  = note: C99 §6.4.4.1: hexadecimal digits are `0`-`9`, `a`-`f`, and `A`-`F`, optionally followed by an integer suffix such as `u`, `l`, or `ull`
+
+1 error generated.

@@ -1,0 +1,9 @@
+warning: line number 2147483648 is out of range
+ --> pp-line-directive-number-too-large.c:1:7
+  |
+1 | #line 2147483648
+  |       ^^^^^^^^^^ too large
+  |
+  = note: C99 §6.10.4p3: the line number must be at most 2147483647
+
+1 warning generated.

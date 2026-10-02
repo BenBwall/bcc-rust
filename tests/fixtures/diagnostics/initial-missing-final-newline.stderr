@@ -1,0 +1,10 @@
+warning: no newline at end of file
+ --> initial-missing-final-newline.c:1:11
+  |
+1 | int value;
+  |           ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+1 warning generated.

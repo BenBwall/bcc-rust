@@ -1,0 +1,15 @@
+error: expected `)` to close `defined(`, found number `1`
+ --> pp-missing-closing-parenthesis-in-defined-directive.c:1:15
+  |
+1 | #if defined(X 1)
+  |               ^ expected `)`
+
+error: expected an expression inside `()`
+ --> pp-missing-closing-parenthesis-in-defined-directive.c:1:16
+  |
+1 | #if defined(X 1)
+  |                ^ empty parentheses
+  |
+  = note: C99 §6.10.1p1: the condition must be an integer constant expression
+
+2 errors generated.

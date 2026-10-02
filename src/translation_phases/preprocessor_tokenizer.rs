@@ -15,9 +15,17 @@ use super::{
     TranslationPhase,
     initial_processing::InitialProcessor,
 };
-use crate::util::{
-    shared::SharedString,
-    string_cache::StringCacheId,
+use crate::{
+    diagnostics::{
+        Diagnostic,
+        Explanation,
+        ToDiagnostic,
+        quote_spelling,
+    },
+    util::{
+        shared::SharedString,
+        string_cache::StringCacheId,
+    },
 };
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone)]
@@ -63,31 +71,141 @@ pub(crate) enum PreprocessorTokenizerErrorType {
     NewlineInCharacter,
     NewlineInString,
     NewlineInIncludeString,
-    MissingSignInExponent,
+}
+
+impl PreprocessorTokenizerErrorType {
+    /// Describes the error; `spelling` is the source text it points at.
+    pub(crate) fn explain(self, spelling: Option<&str>) -> Explanation {
+        match self {
+            | Self::UnknownToken => {
+                let character = spelling.and_then(|spelling| spelling.chars().next());
+                let quoted = match character {
+                    | Some('`') => "'`'".to_owned(),
+                    | Some(c) if c.is_control() => format!("U+{:04X}", u32::from(c)),
+                    | Some(c) => format!("`{c}`"),
+                    | None => "character".to_owned(),
+                };
+                Explanation::new(format!("unexpected character {quoted} in source"))
+                    .label("no C token starts with this character")
+                    .note(
+                        "C99 §5.2.1: `@`, `$`, and `` ` `` are not part of the basic source \
+                         character set; outside literals and comments they cannot appear",
+                    )
+            },
+            | Self::UnterminatedCharacter => Explanation::new("unterminated character constant")
+                .label("the file ends before the closing `'`"),
+            | Self::UnterminatedString => Explanation::new("unterminated string literal")
+                .label("the file ends before the closing `\"`"),
+            | Self::UnterminatedIncludeString => Explanation::new("unterminated header name")
+                .label("the file ends before the closing delimiter"),
+            | Self::NewlineInCharacter => Explanation::new("unterminated character constant")
+                .label("the line ends before the closing `'`")
+                .note("C99 §6.4.4.4: a character constant cannot span lines")
+                .help("write `\\n` for a newline character"),
+            | Self::NewlineInString => Explanation::new("unterminated string literal")
+                .label("the line ends before the closing `\"`")
+                .note("C99 §6.4.5: a string literal cannot span lines")
+                .help(
+                    "close the literal on this line and start another on the next; adjacent \
+                     literals are concatenated",
+                ),
+            | Self::NewlineInIncludeString => Explanation::new("unterminated header name")
+                .label("the line ends before the closing delimiter")
+                .note("C99 §6.4.7: a header name cannot span lines"),
+        }
+    }
 }
 
 impl Display for PreprocessorTokenizerErrorType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            | Self::UnknownToken => write!(f, "Unknown token"),
-            | Self::UnterminatedCharacter => write!(f, "Unterminated character literal"),
-            | Self::UnterminatedString => write!(f, "Unterminated string literal"),
+        f.write_str(&self.explain(None).message)
+    }
+}
 
-            | Self::UnterminatedIncludeString => write!(f, "Unterminated header include string"),
-            | Self::NewlineInCharacter => write!(
-                f,
-                "Unescaped newlines are not allowed in character literals"
-            ),
-            | Self::NewlineInString => {
-                write!(f, "Unescaped newlines are not allowed in string literals")
-            },
-            | Self::NewlineInIncludeString => write!(
-                f,
-                "Unescaped newlines are not allowed in header include strings"
-            ),
-            | Self::MissingSignInExponent => {
-                write!(f, "Exponent in floating point number is missing a sign")
-            },
+impl PreprocessorTokenType {
+    /// Names the token kind for use in a message, such as "identifier" or
+    /// "`(`".
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            | Self::Identifier => "identifier",
+            | Self::Number => "number",
+            | Self::String | Self::GeneratedString => "string literal",
+            | Self::WideGeneratedString => "wide string literal",
+            | Self::Character => "character constant",
+            | Self::Placeholder => "empty macro argument",
+            | Self::AngleBracketString | Self::IncludeString => "header name",
+            | Self::Newline => "end of line",
+            | Self::Whitespace => "whitespace",
+            | Self::Defined => "`defined`",
+            | Self::OpeningSquareBracket => "`[`",
+            | Self::ClosingSquareBracket => "`]`",
+            | Self::OpeningParenthesis => "`(`",
+            | Self::ClosingParenthesis => "`)`",
+            | Self::OpeningCurlyBrace => "`{`",
+            | Self::ClosingCurlyBrace => "`}`",
+            | Self::Period => "`.`",
+            | Self::Arrow => "`->`",
+            | Self::PlusPlus => "`++`",
+            | Self::MinusMinus => "`--`",
+            | Self::Ampersand => "`&`",
+            | Self::Asterisk => "`*`",
+            | Self::Plus => "`+`",
+            | Self::Minus => "`-`",
+            | Self::Tilde => "`~`",
+            | Self::ExclamationMark => "`!`",
+            | Self::ForwardSlash => "`/`",
+            | Self::Percent => "`%`",
+            | Self::LessThanLessThan => "`<<`",
+            | Self::GreaterThanGreaterThan => "`>>`",
+            | Self::LessThan => "`<`",
+            | Self::GreaterThan => "`>`",
+            | Self::LessThanEquals => "`<=`",
+            | Self::GreaterThanEquals => "`>=`",
+            | Self::EqualsEquals => "`==`",
+            | Self::ExclamationMarkEquals => "`!=`",
+            | Self::Caret => "`^`",
+            | Self::Pipe => "`|`",
+            | Self::AmpersandAmpersand => "`&&`",
+            | Self::PipePipe => "`||`",
+            | Self::QuestionMark => "`?`",
+            | Self::Colon => "`:`",
+            | Self::SemiColon => "`;`",
+            | Self::Ellipsis => "`...`",
+            | Self::Equals => "`=`",
+            | Self::AsteriskEquals => "`*=`",
+            | Self::ForwardSlashEquals => "`/=`",
+            | Self::PercentEquals => "`%=`",
+            | Self::PlusEquals => "`+=`",
+            | Self::MinusEquals => "`-=`",
+            | Self::LessThanLessThanEquals => "`<<=`",
+            | Self::GreaterThanGreaterThanEquals => "`>>=`",
+            | Self::AmpersandEquals => "`&=`",
+            | Self::CaretEquals => "`^=`",
+            | Self::PipeEquals => "`|=`",
+            | Self::Comma => "`,`",
+            | Self::Hash => "`#`",
+            | Self::HashHash => "`##`",
+        }
+    }
+
+    /// Describes a found token, quoting its spelling when the kind alone
+    /// does not say what was written.
+    pub(crate) fn found(self, spelling: Option<&str>) -> String {
+        let spelled = matches!(
+            self,
+            Self::Identifier
+                | Self::Number
+                | Self::String
+                | Self::GeneratedString
+                | Self::WideGeneratedString
+                | Self::Character
+                | Self::AngleBracketString
+                | Self::IncludeString
+        );
+        match spelling {
+            | Some(spelling) if spelled && !spelling.is_empty() =>
+                format!("{} {}", self.description(), quote_spelling(spelling)),
+            | _ => self.description().to_owned(),
         }
     }
 }
@@ -96,6 +214,9 @@ impl Display for PreprocessorTokenizerErrorType {
 pub(crate) struct PreprocessorTokenizerError {
     source_vector: SourceVector,
     error_type:    PreprocessorTokenizerErrorType,
+    /// For an unknown token, the character after phases 1 and 2 that no
+    /// token starts with; its raw spelling may be a trigraph.
+    character:     Option<char>,
 }
 
 impl std::error::Error for PreprocessorTokenizerError {}
@@ -127,8 +248,7 @@ impl GetSeverity for PreprocessorTokenizerError {
             | PreprocessorTokenizerErrorType::UnterminatedIncludeString
             | PreprocessorTokenizerErrorType::NewlineInCharacter
             | PreprocessorTokenizerErrorType::NewlineInString
-            | PreprocessorTokenizerErrorType::NewlineInIncludeString
-            | PreprocessorTokenizerErrorType::MissingSignInExponent => ErrorSeverity::Error,
+            | PreprocessorTokenizerErrorType::NewlineInIncludeString => ErrorSeverity::Error,
         }
     }
 }
@@ -136,6 +256,19 @@ impl GetSeverity for PreprocessorTokenizerError {
 impl Display for PreprocessorTokenizerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.error_type)
+    }
+}
+
+impl ToDiagnostic for PreprocessorTokenizerError {
+    fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic {
+        let mut buffer = [0; 4];
+        let spelling = match self.character {
+            | Some(character) => Some(&*character.encode_utf8(&mut buffer)),
+            | None => context.source_spelling(source),
+        };
+        self.error_type
+            .explain(spelling)
+            .at(self.severity(), source)
     }
 }
 
@@ -171,7 +304,7 @@ impl TranslationPhase for PreprocessorTokenizer {
                     },
                 | '\'' => self.tokenize_char(context),
                 | '#' => self.tokenize_hash(context),
-                | ' ' => self.tokenize_whitespace(context),
+                | ' ' | '\t' | '\x0b' | '\x0c' => self.tokenize_whitespace(context),
                 | '/' => self.tokenize_forward_slash(context),
                 | '%' => self.tokenize_percent(context),
                 | '<' =>
@@ -202,8 +335,8 @@ impl TranslationPhase for PreprocessorTokenizer {
                 | '|' => self.tokenize_pipe(context),
                 | '!' => self.tokenize_exclamation_mark(context),
                 | '=' => self.tokenize_equals(context),
-                | _ => {
-                    self.generate_error(context, PreprocessorTokenizerErrorType::UnknownToken);
+                | unknown => {
+                    self.generate_unknown_character_error(context, unknown);
                     continue;
                 },
             });
@@ -230,6 +363,26 @@ impl PreprocessorTokenizer {
                 length:            self.index(context) - position.index,
             },
             error_type,
+            character: None,
+        });
+    }
+
+    /// Reports `character` at its own location rather than at the token
+    /// start, which precedes any line splice deleted before it.
+    #[inline(never)]
+    #[cold]
+    fn generate_unknown_character_error(&mut self, context: &mut Context, character: char) {
+        let (position, length) = self.initial_processor.last_char_start(character);
+        context.preprocessor_tokenizer_error(PreprocessorTokenizerError {
+            source_vector: SourceVector {
+                index: position.index,
+                column: position.column,
+                line: position.line,
+                source_file_index: self.source_file_index(),
+                length,
+            },
+            error_type:    PreprocessorTokenizerErrorType::UnknownToken,
+            character:     Some(character),
         });
     }
 
@@ -336,11 +489,19 @@ impl PreprocessorTokenizer {
         let last_position = self.position(context);
         let current = self.initial_processor.next_item(context);
         match current {
-            | Some('"') => self.tokenize_string(context),
-            | Some('\'') => self.tokenize_char(context),
+            // The spelling keeps its opening quote so stringification and
+            // literal evaluation see exactly `L"..."` or `L'...'`.
+            | Some(quote @ '"') => {
+                context.string_cache.push(quote);
+                self.tokenize_string(context)
+            },
+            | Some(quote @ '\'') => {
+                context.string_cache.push(quote);
+                self.tokenize_char(context)
+            },
             | None | Some(_) => {
                 self.set_position(context, last_position);
-                self.generate_token(context, PreprocessorTokenType::Identifier)
+                self.tokenize_keyword_or_identifier(context)
             },
         }
     }
@@ -361,15 +522,14 @@ impl PreprocessorTokenizer {
                 self.generate_error(context, unterminated_error_type);
                 break;
             };
-            if !ignore_escapes {
-                let last_position = self.position(context);
-                let next = self.initial_processor.next_item(context);
-                if current == '\\' && next == Some(end_char) {
-                    context.string_cache.push('\\');
-                    context.string_cache.push(end_char);
-                    continue;
+            if !ignore_escapes && current == '\\' {
+                context.string_cache.push(current);
+                let escape_position = self.position(context);
+                match self.initial_processor.next_item(context) {
+                    | Some('\n') | None => self.set_position(context, escape_position),
+                    | Some(escaped) => context.string_cache.push(escaped),
                 }
-                self.set_position(context, last_position);
+                continue;
             }
             if current == end_char {
                 context.string_cache.push(end_char);
@@ -477,26 +637,18 @@ impl PreprocessorTokenizer {
             let Some(current) = self.initial_processor.next_item(context) else {
                 break;
             };
-            if matches!(current, 'e' | 'E' | 'p' | 'P') {
-                match self.initial_processor.next_item(context) {
-                    | Some('+' | '-') => {
-                        context.string_cache.push(current);
-                        context.string_cache.push('+');
-                        continue;
-                    },
-                    | None | Some(_) => {
-                        self.generate_error(
-                            context,
-                            PreprocessorTokenizerErrorType::MissingSignInExponent,
-                        );
-                        self.set_position(context, last_position);
-                        break;
-                    },
-                }
-            }
-
-            if current.is_alphanumeric() || current == '.' {
+            // A preprocessing number is a spelling, not yet a floating-point
+            // value. Keep optional signs after e/E/p/P. Those letters may
+            // also be digits in a hexadecimal integer.
+            if current.is_alphanumeric() || matches!(current, '.' | '_') {
                 context.string_cache.push(current);
+                if matches!(current, 'e' | 'E' | 'p' | 'P') {
+                    let sign_position = self.position(context);
+                    match self.initial_processor.next_item(context) {
+                        | Some(sign @ ('+' | '-')) => context.string_cache.push(sign),
+                        | None | Some(_) => self.set_position(context, sign_position),
+                    }
+                }
                 continue;
             }
             self.set_position(context, last_position);

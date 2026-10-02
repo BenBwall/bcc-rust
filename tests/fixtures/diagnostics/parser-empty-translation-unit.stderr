@@ -1,0 +1,9 @@
+error: translation unit is empty
+ --> parser-empty-translation-unit.c:2:1
+  |
+2 | 
+  | ^ expected a declaration or function definition
+  |
+  = note: C99 §6.9: a translation unit contains at least one external declaration
+
+1 error generated.

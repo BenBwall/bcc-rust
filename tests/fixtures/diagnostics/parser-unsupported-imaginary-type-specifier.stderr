@@ -1,0 +1,9 @@
+error: `_Imaginary` is not supported
+ --> parser-unsupported-imaginary-type-specifier.c:1:1
+  |
+1 | _Imaginary float value;
+  | ^^^^^^^^^^ imaginary types are not implemented
+  |
+  = note: C99 §6.7.2 reserves `_Imaginary`; imaginary types are only defined by the optional Annex G
+
+1 error generated.

@@ -1,0 +1,7 @@
+error: expected `)` to close the parameter list, found end of file
+ --> parser-unexpected-end-of-function-declarator-parameter-list.c:2:1
+  |
+2 | 
+  | ^ expected `)`
+
+1 error generated.

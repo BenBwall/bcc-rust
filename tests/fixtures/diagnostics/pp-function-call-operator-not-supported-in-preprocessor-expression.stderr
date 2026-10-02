@@ -1,0 +1,19 @@
+warning: `F` is not defined; it evaluates to 0
+ --> pp-function-call-operator-not-supported-in-preprocessor-expression.c:1:5
+  |
+1 | #if F(1)
+  |     ^ not a macro
+  |
+  = note: C99 §6.10.1p3: identifiers that are not macro names are replaced with `0` in `#if`
+  = help: use `defined(F)` to test whether it is defined
+
+error: function call in `#if` expression
+ --> pp-function-call-operator-not-supported-in-preprocessor-expression.c:1:6
+  |
+1 | #if F(1)
+  |      ^ functions cannot be called during preprocessing
+  |
+  = note: C99 §6.10.1p3: identifiers that are not macros evaluate to `0`, so this looks like a call of an undefined function-like macro
+  = help: define the function-like macro before this directive
+
+1 error and 1 warning generated.

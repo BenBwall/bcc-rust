@@ -1,0 +1,7 @@
+error: expected `,` or `)` after the parameter name, found identifier `b`
+ --> parser-expected-comma-or-closing-parenthesis-in-k-and-r-function-declarator-parameter-list.c:1:9
+  |
+1 | int f(a b);
+  |         ^ expected `,` or `)`
+
+1 error generated.

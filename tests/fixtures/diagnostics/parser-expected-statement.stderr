@@ -1,0 +1,7 @@
+error: expected a statement, found keyword `else`
+ --> parser-expected-statement.c:1:22
+  |
+1 | int f(void) { if (1) else return 0; }
+  |                      ^^^^ expected a statement
+
+1 error generated.

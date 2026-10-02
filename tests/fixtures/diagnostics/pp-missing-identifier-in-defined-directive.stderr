@@ -1,0 +1,17 @@
+error: expected a macro name inside `defined(`, found number `1`
+ --> pp-missing-identifier-in-defined-directive.c:1:13
+  |
+1 | #if defined(1)
+  |             ^ expected a macro name
+  |
+  = note: C99 §6.10.1p1: write `defined NAME` or `defined(NAME)`
+
+error: expected an expression inside `()`
+ --> pp-missing-identifier-in-defined-directive.c:1:14
+  |
+1 | #if defined(1)
+  |              ^ empty parentheses
+  |
+  = note: C99 §6.10.1p1: the condition must be an integer constant expression
+
+2 errors generated.

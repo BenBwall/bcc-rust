@@ -1,0 +1,9 @@
+error: invalid left-hand side of assignment
+ --> parser-expected-statement-expression-assignment.c:1:21
+  |
+1 | int f(void) { a + b = 1; }
+  |                     ^ cannot assign to this expression
+  |
+  = note: C99 §6.5.16: the left operand of an assignment operator is a unary expression, such as a name, `*p`, `a[i]`, or `s.m`
+
+1 error generated.

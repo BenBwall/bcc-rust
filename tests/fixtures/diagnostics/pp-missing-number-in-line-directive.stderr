@@ -1,0 +1,7 @@
+error: expected a line number after `#line`, found string literal `"file.c"`
+ --> pp-missing-number-in-line-directive.c:1:7
+  |
+1 | #line "file.c"
+  |       ^^^^^^^^ expected a line number
+
+1 error generated.

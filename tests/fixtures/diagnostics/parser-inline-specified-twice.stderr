@@ -1,0 +1,10 @@
+warning: duplicate `inline`
+ --> parser-inline-specified-twice.c:1:8
+  |
+1 | inline inline int f(void);
+  |        ^^^^^^ `inline` was already specified
+  |
+  = note: repeating `inline` has no effect
+  = note: `repeated-specifiers` warnings are on by default; pass `--no-repeated-specifier-warnings` to silence them
+
+1 warning generated.

@@ -23,6 +23,7 @@ _Avoid_: Preprocessing token
 
 **Source vector**:
 A segment of original-source provenance attached to generated characters, preprocessing tokens, tokens, and diagnostics. A value may carry multiple source vectors when preprocessing combines or transforms input.
+A value refers to its ordered source vectors as one contiguous range in a context-owned arena. The parser copies each fetched token's source vectors once into a parser arena in fetch order, so merging the provenance of consecutive syntax extends a range instead of copying it; any merge yields exactly the first value's source vectors followed by the second's.
 _Avoid_: Source span
 
 **Context**:
@@ -140,7 +141,7 @@ _Avoid_: Grammar call
 The parse frame that owns the Double-E operator and operand stacks for a language expression and returns an expression result to its parent frame.
 
 **ParseAction** *(implemented)*:
-A small owned instruction returned by a frame to the driver: consume input, push a child frame, reduce a value, reprocess lookahead, or recover at a synchronization set.
+A small owned instruction returned by a frame to the driver: consume input, push a child frame, reduce a value, reprocess lookahead, or recover at a synchronization set. After a forward phase change that needs no driver work, a frame may instead continue: frame dispatch runs it again at once with the same lookahead.
 
 **ParseValue** *(implemented)*:
 The typed result passed from a completed child frame to its parent. Variants cover declarations, function definitions, compound statements, statements, expressions, constant expressions, type names, and initializers.
@@ -172,8 +173,17 @@ recovered syntax instead.
 
 **Structured parser diagnostic**:
 A parser diagnostic with a symbolic code, severity, active frame, expected and
-found syntax categories, primary provenance, optional ranges and related
-locations, and recovery summary. Diagnostics are delivered in emission FIFO.
+found syntax categories, the found token's source spelling, primary provenance,
+optional ranges and related locations, an optional `;` insertion point, and
+recovery summary. Diagnostics are delivered in emission FIFO. The code, frame,
+and recovery owner are machine-facing; rendering shows only source spellings
+and fixed wording.
+
+**Rendered diagnostic**:
+The user-facing form of any phase's error: a message, a primary source range
+with an optional label, secondary labelled ranges, notes (typically the C99
+rule), and help. Rendering never exposes internal representation.
+_Avoid_: Debug-formatted error
 
 **Parser resource limit**:
 A configured ceiling for external roots, syntax nodes, or active frame depth.

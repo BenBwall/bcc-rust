@@ -1,0 +1,7 @@
+error: expected `,` or `)` in macro parameter list, found identifier `b`
+ --> pp-expected-comma-or-closing-parenthesis-in-macro-definition.c:1:13
+  |
+1 | #define F(a b) a
+  |             ^ expected `,` or `)`
+
+1 error generated.

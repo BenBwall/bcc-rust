@@ -1,0 +1,9 @@
+error: floating constant in `#if` expression
+ --> pp-float-instead-of-integer-in-preprocessor-expression.c:1:5
+  |
+1 | #if 1.5L
+  |     ^^^^ not an integer
+  |
+  = note: C99 §6.10.1p1: the condition must be an integer constant expression
+
+1 error generated.

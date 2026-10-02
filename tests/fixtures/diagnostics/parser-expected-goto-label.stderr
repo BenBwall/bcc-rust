@@ -1,0 +1,7 @@
+error: expected a label name after `goto`, found integer constant `123`
+ --> parser-expected-goto-label.c:1:20
+  |
+1 | int f(void) { goto 123; }
+  |                    ^^^ expected an identifier
+
+1 error generated.

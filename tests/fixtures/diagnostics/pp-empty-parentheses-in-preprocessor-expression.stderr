@@ -1,0 +1,15 @@
+error: expected an expression inside `()`
+ --> pp-empty-parentheses-in-preprocessor-expression.c:1:6
+  |
+1 | #if ()
+  |      ^ empty parentheses
+  |
+  = note: C99 §6.10.1p1: the condition must be an integer constant expression
+
+error: unclosed `(` in `#if` expression
+ --> pp-empty-parentheses-in-preprocessor-expression.c:2:1
+  |
+2 | #endif
+  | ^ expected `)`
+
+2 errors generated.

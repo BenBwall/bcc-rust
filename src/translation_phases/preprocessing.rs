@@ -33,6 +33,7 @@ use super::{
     SetPosition,
     SetSourceFileIndex,
     SourcePosition,
+    SourceVector,
     SourceVectors,
     StrExt,
     TokenString,
@@ -49,10 +50,18 @@ use crate::{
         CStandard,
         ExtensionPolicy,
     },
+    diagnostics::{
+        Diagnostic,
+        Explanation,
+        ToDiagnostic,
+        closest_match,
+        count_of,
+        quote_spelling,
+    },
     float_parsing::{
+        FloatRangeError,
         LongDouble,
         ParseFloatError,
-        long_double_to_operand,
         string_to_double,
         string_to_float,
         string_to_long_double,
@@ -76,8 +85,11 @@ const PREDEFINED_MACRO_NAMES: [&str; 5] =
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenizerFrameType {
     SourceFile,
-    ObjectLikeMacroInvocation,
+    ObjectLikeMacroInvocation {
+        name: StringCacheId,
+    },
     FunctionLikeMacroInvocation {
+        name:        StringCacheId,
         arguments:   Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
         is_variadic: bool,
     },
@@ -453,6 +465,196 @@ mod tests {
         assert!(identifiers.is_empty());
         assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
     }
+
+    /// Preprocesses `source` as the file `path`, returning every token.
+    fn tokens_of(source: &str, path: &str) -> (Vec<Token>, Context) {
+        let mut context = Context::new();
+        let mut preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from(path).into_boxed_path(),
+            source.to_owned().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let mut tokens = Vec::new();
+        while let Some(token) = preprocessor.next_item(&mut context) {
+            tokens.push(token);
+        }
+        (tokens, context)
+    }
+
+    fn string_value(context: &Context, token: Token) -> (bool, String) {
+        match token.kind {
+            | TokenType::String(StringTokenType::String(contents)) =>
+                (false, context.string_cache.at(contents).to_owned()),
+            | TokenType::String(StringTokenType::WideString(contents)) =>
+                (true, context.string_cache.at(contents).to_owned()),
+            | other => panic!("expected a string literal, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wide_literal_spellings_keep_their_opening_quote() {
+        // C99 §6.10.3.2p2: `#` produces each argument token's spelling.
+        let (tokens, context) = tokens_of("#define S(x) #x\nS(L'b') S(L\"w\")\n", "<test>");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            string_value(&context, tokens[0]),
+            (false, "L'b'L\"w\"".to_owned())
+        );
+
+        let (tokens, mut context) = tokens_of("L'\"'\n", "<test>");
+        assert!(matches!(
+            tokens[0].kind,
+            TokenType::Character(CharacterTokenType::WideChar('"'))
+        ));
+        assert!(context.take_pending_errors().is_empty());
+
+        // C99 §6.10.3.3p3: `L ## "ab"` pastes into the wide literal `L"ab"`.
+        let (tokens, mut context) = tokens_of("#define W(x) L ## x\nW(\"ab\")\n", "<test>");
+        assert_eq!(string_value(&context, tokens[0]), (true, "ab".to_owned()));
+        assert!(context.take_pending_errors().is_empty());
+    }
+
+    #[test]
+    fn wide_string_contents_may_start_with_a_quote() {
+        let (tokens, mut context) = tokens_of("L\"'x\"\n", "<test>");
+        assert_eq!(string_value(&context, tokens[0]), (true, "'x".to_owned()));
+        assert!(context.take_pending_errors().is_empty());
+    }
+
+    #[test]
+    fn file_and_line_are_spelled_as_c_tokens_at_their_use() {
+        let path = r"C:\dir\Lab.c";
+        let (tokens, mut context) = tokens_of("\n__FILE__ __LINE__\n", path);
+
+        assert_eq!(string_value(&context, tokens[0]), (false, path.to_owned()));
+        assert!(matches!(
+            tokens[1].kind,
+            TokenType::Integer(IntegerTokenType::Int(2))
+        ));
+        let line_vectors = context.get_source_vectors(tokens[1].source_vectors);
+        assert_eq!((line_vectors[0].line, line_vectors[0].column), (2, 10));
+        assert!(context.take_pending_errors().is_empty());
+    }
+
+    #[test]
+    fn conditional_groups_select_exactly_one_group() {
+        for (source, expected) in [
+            ("#ifndef NOPE\nyes\n#endif\n", &["yes"][..]),
+            ("#define D\n#ifndef D\nno\n#endif\nafter\n", &["after"]),
+            ("#define D\n#ifdef D\nyes\n#endif\n", &["yes"]),
+            ("#if 1\nyes\n#else\nno\n#endif\n", &["yes"]),
+            ("#if 1\nyes\n#elif 1\nno\n#endif\n", &["yes"]),
+            ("#if 0\n#endif\nafter\n", &["after"]),
+            ("#if 0\n#else\nyes\n#endif\n", &["yes"]),
+            ("#if 0\nno\n#elif 1\nyes\n#else\nno2\n#endif\n", &["yes"]),
+            (
+                "#if 0\n#if 1\nno\n#else\nno2\n#endif\n#elif 0\nno3\n#else\nyes\n#endif\n",
+                &["yes"],
+            ),
+        ] {
+            let (identifiers, errors) = preprocess(source);
+            assert_eq!(identifiers, expected, "{source:?}");
+            assert!(errors.is_empty(), "{source:?}: {errors:#?}");
+        }
+    }
+
+    #[test]
+    fn malformed_conditions_still_find_their_endif() {
+        for source in ["#if 1.5\n#endif\nafter\n", "#if defined 1\n#endif\nafter\n"] {
+            let (identifiers, errors) = preprocess(source);
+            assert_eq!(identifiers, ["after"], "{source:?}");
+            assert_eq!(errors.len(), 1, "{source:?}: {errors:#?}");
+        }
+        let (_, errors) = preprocess("#if defined +\n#endif\n");
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+    }
+
+    #[test]
+    fn unterminated_conditionals_point_at_their_directive() {
+        let (tokens, mut context) = tokens_of("#if 1\nx\n", "<test>");
+        assert_eq!(tokens.len(), 1);
+        let errors = context.take_pending_errors();
+        let [
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
+                source_vectors,
+            }),
+        ] = errors.as_slice()
+        else {
+            panic!("expected one unterminated-conditional error: {errors:#?}");
+        };
+        assert_eq!(context.source_spelling(*source_vectors), Some("if"));
+    }
+
+    #[test]
+    fn identical_redefinitions_and_empty_definitions_are_accepted() {
+        let (identifiers, errors) = preprocess(
+            "#define A 1\n#define A  1\n#define F(a) a\n#define F(a) a\n#define E\n#define \
+             E\nafter\n",
+        );
+        assert_eq!(identifiers, ["after"]);
+        assert!(errors.is_empty(), "{errors:#?}");
+
+        for source in [
+            "#define A 1\n#define A 2\n",
+            "#define F(a) a\n#define F(b) b\n",
+        ] {
+            let (identifiers, errors) = preprocess(&format!("{source}after\n"));
+            assert_eq!(identifiers, ["after"], "{source:?}");
+            assert!(matches!(
+                errors.as_slice(),
+                [TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_),
+                    ..
+                })]
+            ));
+        }
+    }
+
+    #[test]
+    fn function_like_macro_names_without_parentheses_are_not_invocations() {
+        let (identifiers, errors) = preprocess("#define f(x) x\nf ;\n");
+        assert_eq!(identifiers, ["f"]);
+        assert!(errors.is_empty(), "{errors:#?}");
+    }
+
+    #[test]
+    fn quoted_includes_search_beside_the_including_file_not_the_working_directory() {
+        let directory =
+            std::env::temp_dir().join(format!("bcc-include-search-{}", std::process::id()));
+        let nested = directory.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("sibling.h"), "from_sibling\n").unwrap();
+        let main = nested.join("main.c");
+
+        let (tokens, mut context) = tokens_of(
+            "#include \"sibling.h\"\n#include <sibling.h>\n",
+            main.to_str().unwrap(),
+        );
+        let identifiers: Vec<&str> = tokens
+            .iter()
+            .filter(|token| token.kind == TokenType::Identifier)
+            .map(|token| context.string_cache.at(token.contents))
+            .collect();
+        assert_eq!(identifiers, ["from_sibling"]);
+        let errors = context.take_pending_errors();
+        assert!(
+            matches!(
+                errors.as_slice(),
+                [TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::HeaderNotFound {
+                        is_system_header: true,
+                        ..
+                    },
+                    ..
+                })]
+            ),
+            "{errors:#?}"
+        );
+        drop(std::fs::remove_dir_all(&directory));
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -490,7 +692,11 @@ pub(crate) struct Preprocessor {
     macro_definitions:          HashMap<StringCacheId, MacroDefinition>,
     current_is_newline:         bool,
     last_was_newline:           bool,
-    if_directive_balance:       isize,
+    /// Provenance of the `if`, `ifdef`, or `ifndef` name of each conditional
+    /// directive still waiting for its `#endif`, outermost first. It is owned
+    /// rather than an arena range because token iteration compacts the
+    /// preprocessor arena while a conditional remains open.
+    open_conditionals:          Vec<Box<[SourceVector]>>,
 
     generate_placeholders:      bool,
     quote_include_directories:  SharedVec<PathBuf>,
@@ -498,6 +704,84 @@ pub(crate) struct Preprocessor {
     expression_parser:          PreprocessorExpressionParser,
     pending_parser_token:       Option<Token>,
     pending_parser_errors:      Vec<TranslationError>,
+    /// Fixed on first use so every `__DATE__` and `__TIME__` in one
+    /// translation unit agrees (C99 §6.10.8p1).
+    translation_timestamp:      Option<TranslationTimestamp>,
+}
+
+/// Compares one position of two macro definitions under C99 §6.10.3p2: the
+/// tokens must be spelled identically, while any two whitespace separations
+/// are equivalent and a line end matches the end of input.
+fn same_replacement_token(
+    context: &Context,
+    old: Option<&PreprocessorToken>,
+    new: Option<&PreprocessorToken>,
+) -> bool {
+    let ends = |token: Option<&PreprocessorToken>| {
+        token.is_none_or(|token| token.kind == PreprocessorTokenType::Newline)
+    };
+    match (old, new) {
+        | _ if ends(old) && ends(new) => true,
+        | (Some(old), Some(new)) =>
+            old.kind == new.kind
+                && (old.kind == PreprocessorTokenType::Whitespace
+                    || context.string_cache.at(old.contents)
+                        == context.string_cache.at(new.contents)),
+        | _ => false,
+    }
+}
+
+/// How far [`Preprocessor::skip_over_dead_code`] skips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkipMode {
+    /// A group whose condition was false: stop at the matching `#elif` whose
+    /// condition holds, at `#else`, or at `#endif`.
+    FalseGroup,
+    /// The groups after a translated one: skip through the matching `#endif`.
+    ToEndif,
+}
+
+/// The date and time of translation, spelled as C99 §6.10.8p1 requires.
+#[derive(Debug)]
+struct TranslationTimestamp {
+    date: String,
+    time: String,
+}
+
+impl TranslationTimestamp {
+    /// Honors `SOURCE_DATE_EPOCH` (reproducible-builds.org, also used by GCC
+    /// and Clang) so builds can pin the expansion; otherwise uses local time.
+    fn now() -> Self {
+        let pinned = std::env::var("SOURCE_DATE_EPOCH")
+            .ok()
+            .and_then(|seconds| seconds.trim().parse::<i64>().ok())
+            .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+            .map(|time| time.naive_utc());
+        let time = pinned.unwrap_or_else(|| Local::now().naive_local());
+        Self {
+            date: time.format("%b %e %Y").to_string(),
+            time: time.format("%H:%M:%S").to_string(),
+        }
+    }
+}
+
+/// Spells `value` as a narrow C string literal whose evaluated contents are
+/// exactly `value`.
+fn string_literal_spelling(value: &str) -> String {
+    let mut spelling = String::with_capacity(value.len() + 2);
+    spelling.push('"');
+    for c in value.chars() {
+        match c {
+            | '\\' | '"' => {
+                spelling.push('\\');
+                spelling.push(c);
+            },
+            | '\n' => spelling.push_str("\\n"),
+            | _ => spelling.push(c),
+        }
+    }
+    spelling.push('"');
+    spelling
 }
 
 impl GetPosition for Preprocessor {
@@ -888,6 +1172,17 @@ pub(crate) enum FloatTokenType {
     LongDouble(LongDouble),
 }
 
+impl FloatTokenType {
+    /// The C type named by this constant's suffix.
+    pub(crate) fn type_name(&self) -> &'static str {
+        match self {
+            | Self::Float(_) => "float",
+            | Self::Double(_) => "double",
+            | Self::LongDouble(_) => "long double",
+        }
+    }
+}
+
 impl Display for FloatTokenType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -999,12 +1294,16 @@ pub(crate) enum StringTokenType {
 pub(crate) enum CharacterTokenType {
     Char(char),
     WideChar(char),
+    /// Packed integer value of an ordinary multi-character constant.
+    MultiChar(i32),
 }
 
-impl From<CharacterTokenType> for char {
+impl From<CharacterTokenType> for i64 {
     fn from(v: CharacterTokenType) -> Self {
         match v {
-            | CharacterTokenType::Char(c) | CharacterTokenType::WideChar(c) => c,
+            | CharacterTokenType::Char(c) | CharacterTokenType::WideChar(c) =>
+                i64::from(u32::from(c)),
+            | CharacterTokenType::MultiChar(value) => i64::from(value),
         }
     }
 }
@@ -1020,6 +1319,126 @@ pub(crate) enum TokenType {
     Character(CharacterTokenType),
 }
 
+impl KeywordTokenType {
+    /// The keyword as written in C source.
+    pub(crate) fn spelling(self) -> &'static str {
+        match self {
+            | Self::Auto => "auto",
+            | Self::Break => "break",
+            | Self::Case => "case",
+            | Self::Char => "char",
+            | Self::Const => "const",
+            | Self::Continue => "continue",
+            | Self::Default => "default",
+            | Self::Do => "do",
+            | Self::Double => "double",
+            | Self::Else => "else",
+            | Self::Enum => "enum",
+            | Self::Extern => "extern",
+            | Self::Float => "float",
+            | Self::For => "for",
+            | Self::Goto => "goto",
+            | Self::If => "if",
+            | Self::Inline => "inline",
+            | Self::Int => "int",
+            | Self::Long => "long",
+            | Self::Register => "register",
+            | Self::Restrict => "restrict",
+            | Self::Return => "return",
+            | Self::Short => "short",
+            | Self::Signed => "signed",
+            | Self::Sizeof => "sizeof",
+            | Self::Static => "static",
+            | Self::Struct => "struct",
+            | Self::Switch => "switch",
+            | Self::Typedef => "typedef",
+            | Self::Union => "union",
+            | Self::Unsigned => "unsigned",
+            | Self::Void => "void",
+            | Self::Volatile => "volatile",
+            | Self::While => "while",
+            | Self::Bool => "_Bool",
+            | Self::Complex => "_Complex",
+            | Self::Imaginary => "_Imaginary",
+        }
+    }
+}
+
+impl OperatorTokenType {
+    /// The punctuator as written in C source (never a digraph).
+    pub(crate) fn spelling(self) -> &'static str {
+        match self {
+            | Self::Plus => "+",
+            | Self::Minus => "-",
+            | Self::Asterisk => "*",
+            | Self::ForwardSlash => "/",
+            | Self::Percent => "%",
+            | Self::LessThanLessThan => "<<",
+            | Self::GreaterThanGreaterThan => ">>",
+            | Self::LessThan => "<",
+            | Self::LessThanEquals => "<=",
+            | Self::GreaterThan => ">",
+            | Self::GreaterThanEquals => ">=",
+            | Self::EqualsEquals => "==",
+            | Self::ExclamationMarkEquals => "!=",
+            | Self::Ampersand => "&",
+            | Self::Caret => "^",
+            | Self::Pipe => "|",
+            | Self::AmpersandAmpersand => "&&",
+            | Self::PipePipe => "||",
+            | Self::QuestionMark => "?",
+            | Self::Colon => ":",
+            | Self::Semicolon => ";",
+            | Self::OpeningParenthesis => "(",
+            | Self::ClosingParenthesis => ")",
+            | Self::OpeningSquareBracket => "[",
+            | Self::ClosingSquareBracket => "]",
+            | Self::OpeningCurlyBrace => "{",
+            | Self::ClosingCurlyBrace => "}",
+            | Self::Period => ".",
+            | Self::Arrow => "->",
+            | Self::PlusPlus => "++",
+            | Self::MinusMinus => "--",
+            | Self::Comma => ",",
+            | Self::Tilde => "~",
+            | Self::ExclamationMark => "!",
+            | Self::Equals => "=",
+            | Self::PlusEquals => "+=",
+            | Self::MinusEquals => "-=",
+            | Self::AsteriskEquals => "*=",
+            | Self::ForwardSlashEquals => "/=",
+            | Self::PercentEquals => "%=",
+            | Self::LessThanLessThanEquals => "<<=",
+            | Self::GreaterThanGreaterThanEquals => ">>=",
+            | Self::AmpersandEquals => "&=",
+            | Self::CaretEquals => "^=",
+            | Self::PipeEquals => "|=",
+            | Self::Ellipsis => "...",
+        }
+    }
+}
+
+impl TokenType {
+    /// Describes a found token for a message, such as "keyword `int`",
+    /// "`;`", or "identifier `count`". `spelling` is the token's source text
+    /// when known.
+    pub(crate) fn found(self, spelling: Option<&str>) -> String {
+        let with_spelling = |kind: &str| match spelling.filter(|spelling| !spelling.is_empty()) {
+            | Some(spelling) => format!("{kind} {}", quote_spelling(spelling)),
+            | None => kind.to_owned(),
+        };
+        match self {
+            | Self::Keyword(keyword) => format!("keyword `{}`", keyword.spelling()),
+            | Self::Operator(operator) => format!("`{}`", operator.spelling()),
+            | Self::Identifier => with_spelling("identifier"),
+            | Self::Integer(_) => with_spelling("integer constant"),
+            | Self::Float(_) => with_spelling("floating constant"),
+            | Self::Character(_) => with_spelling("character constant"),
+            | Self::String(_) => with_spelling("string literal"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PreprocessorError {
     pub(crate) error_type:     PreprocessorErrorType,
@@ -1029,6 +1448,14 @@ pub(crate) struct PreprocessorError {
 impl Display for PreprocessorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.error_type)
+    }
+}
+
+impl ToDiagnostic for PreprocessorError {
+    fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic {
+        self.error_type
+            .explain(context.source_spelling(source))
+            .at(self.severity(), source)
     }
 }
 
@@ -1050,7 +1477,6 @@ impl GetSeverity for PreprocessorError {
     fn severity(&self) -> ErrorSeverity {
         match self.error_type {
             | PreprocessorErrorType::UnexpectedEndOfInput(_)
-            | PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation
             | PreprocessorErrorType::InvalidHexadecimalFloatLiteral
             | PreprocessorErrorType::InvalidDecimalFloatLiteral
             | PreprocessorErrorType::InvalidHexadecimalIntegerLiteral
@@ -1069,7 +1495,6 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(..)
             | PreprocessorErrorType::NoConditionInIfDirective
             | PreprocessorErrorType::NoConditionInElifDirective
-            | PreprocessorErrorType::ExpectedIdentifierInPreprocessorDirective(..)
             | PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives
             | PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
             | PreprocessorErrorType::ElifDirectiveWithoutIfDirective
@@ -1078,8 +1503,7 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..)
             | PreprocessorErrorType::ExpectedIdentifierInDefineDirective(..)
             | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
-            | PreprocessorErrorType::HeaderNotFound
-            | PreprocessorErrorType::CurrentWorkingDirectoryInaccessible(..)
+            | PreprocessorErrorType::HeaderNotFound { .. }
             | PreprocessorErrorType::HeaderFileInaccessible(..)
             | PreprocessorErrorType::HashHashUsedOutsideOfMacro
             | PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
@@ -1179,7 +1603,7 @@ impl GetSeverity for PreprocessorError {
                 },
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
-            | PreprocessorErrorType::FloatLiteralOverflow(..)
+            | PreprocessorErrorType::FloatConstantOutOfRange { .. }
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
             | PreprocessorErrorType::ForcedUnsignedPromotion { .. }
             | PreprocessorErrorType::ForcedSignedPromotion { .. }
@@ -1194,9 +1618,6 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::ExtraTokensAfterIncludeDirective
             | PreprocessorErrorType::ExtraTokensAfterIfdefDirective
             | PreprocessorErrorType::ExtraTokensAfterIfndefDirective
-            | PreprocessorErrorType::FloatCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(..)
-            | PreprocessorErrorType::DoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(..)
-            | PreprocessorErrorType::LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(..)
             | PreprocessorErrorType::PragmaOnceInNonHeader => ErrorSeverity::Warning,
         }
     }
@@ -1206,7 +1627,10 @@ impl GetSeverity for PreprocessorError {
 pub(crate) enum PreprocessorErrorType {
     InvalidHexadecimalFloatLiteral,
     InvalidDecimalFloatLiteral,
-    FloatLiteralOverflow(FloatTokenType),
+    FloatConstantOutOfRange {
+        type_name: &'static str,
+        error:     FloatRangeError,
+    },
     InvalidHexadecimalIntegerLiteral,
     InvalidBinaryIntegerLiteral,
     InvalidOctalIntegerLiteral,
@@ -1224,13 +1648,9 @@ pub(crate) enum PreprocessorErrorType {
         from: SignedIntegerLiteralType,
         to:   SignedIntegerLiteralType,
     },
-    FloatCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(f32),
-    DoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(f64),
-    LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(LongDouble),
     HashMustBeFirstCharacterOnLine,
     HashMustBeFollowedByIdentifier,
     UnknownDirective,
-    MissingOpeningParenthesisInFunctionLikeMacroInvocation,
     EmptyParenthesesInPreprocessorExpression,
     UnaryPlusWithoutOperand,
     UnaryMinusWithoutOperand,
@@ -1289,7 +1709,6 @@ pub(crate) enum PreprocessorErrorType {
     MissingClosingParenthesisInDefinedDirective(PreprocessorTokenType),
     NoConditionInIfDirective,
     NoConditionInElifDirective,
-    ExpectedIdentifierInPreprocessorDirective(PreprocessorTokenType),
     MoreIfDirectivesThanEndifDirectives,
     MoreEndifDirectivesThanIfDirectives,
     ElifDirectiveWithoutIfDirective,
@@ -1305,8 +1724,11 @@ pub(crate) enum PreprocessorErrorType {
         expected: usize,
         found:    usize,
     },
-    HeaderNotFound,
-    CurrentWorkingDirectoryInaccessible(IoError),
+    HeaderNotFound {
+        name:             String,
+        is_system_header: bool,
+        searched:         Vec<PathBuf>,
+    },
     HeaderFileInaccessible(IoError),
     HashHashUsedOutsideOfMacro,
     CannotUseHashHashAfterFunctionLikeMacroCall,
@@ -1355,969 +1777,662 @@ pub(crate) enum PreprocessorErrorType {
     ErrorDirective(String),
 }
 
-impl Display for PreprocessorErrorType {
+impl SignedIntegerLiteralType {
+    fn spelling(self) -> &'static str {
+        match self {
+            | Self::Int => "int",
+            | Self::Long => "long",
+            | Self::LongLong => "long long",
+        }
+    }
+}
+
+impl UnsignedIntegerLiteralType {
+    fn spelling(self) -> &'static str {
+        match self {
+            | Self::UnsignedInt => "unsigned int",
+            | Self::UnsignedLong => "unsigned long",
+            | Self::UnsignedLongLong => "unsigned long long",
+        }
+    }
+}
+
+impl PreprocessorExpressionOperator {
+    /// The operator as written in C source.
+    fn spelling(self) -> &'static str {
+        match self {
+            | Self::UnaryPlus | Self::BinaryPlus => "+",
+            | Self::UnaryMinus | Self::BinaryMinus => "-",
+            | Self::BitwiseNot => "~",
+            | Self::LogicalNot => "!",
+            | Self::Multiply => "*",
+            | Self::Divide => "/",
+            | Self::Modulo => "%",
+            | Self::LessThan => "<",
+            | Self::LessThanEquals => "<=",
+            | Self::GreaterThan => ">",
+            | Self::GreaterThanEquals => ">=",
+            | Self::Equals => "==",
+            | Self::NotEquals => "!=",
+            | Self::LeftShift => "<<",
+            | Self::RightShift => ">>",
+            | Self::BitwiseAnd => "&",
+            | Self::BitwiseXor => "^",
+            | Self::BitwiseOr => "|",
+            | Self::LogicalAnd => "&&",
+            | Self::LogicalOr => "||",
+            | Self::QuestionMark => "?",
+            | Self::Conditional => ":",
+            | Self::Comma => ",",
+            | Self::OpeningParenthesis => "(",
+        }
+    }
+}
+
+/// The directives of C99 §6.10, for suggestions.
+const DIRECTIVE_NAMES: [&str; 12] = [
+    "if", "ifdef", "ifndef", "elif", "else", "endif", "include", "define", "undef", "line",
+    "error", "pragma",
+];
+
+const DIRECTIVE_LIST_NOTE: &str = "C99 §6.10: the directives are `#if`, `#ifdef`, `#ifndef`, \
+                                   `#elif`, `#else`, `#endif`, `#include`, `#define`, `#undef`, \
+                                   `#line`, `#error`, and `#pragma`";
+
+const IF_EXPRESSION_NOTE: &str =
+    "C99 §6.10.1p1: the condition must be an integer constant expression";
+
+const ESCAPE_LIST_NOTE: &str = "C99 §6.4.4.4: the escapes are `\\'`, `\\\"`, `\\?`, `\\\\`, \
+                                `\\a`, `\\b`, `\\f`, `\\n`, `\\r`, `\\t`, `\\v`, octal `\\ooo`, \
+                                hexadecimal `\\xhh`, and universal `\\uXXXX` or `\\UXXXXXXXX`";
+
+impl PreprocessorErrorType {
+    /// Describes the error; `spelling` is the source text it points at, used
+    /// to name what was actually written.
     #[expect(
         clippy::too_many_lines,
-        reason = "This function is longer than our maximum function length, but I thinks that's \
-                  better than arbitrarily splitting it up."
+        reason = "One exhaustive table keeps every preprocessor message reviewable in one place."
     )]
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+    pub(crate) fn explain(&self, spelling: Option<&str>) -> Explanation {
+        let quoted = || spelling.map(quote_spelling);
+        let titled = |title: &str| match quoted() {
+            | Some(quoted) => format!("{title} {quoted}"),
+            | None => title.to_owned(),
+        };
+        let missing_operand = |operator: &str, side: &str| {
+            Explanation::new(format!("expected an expression {side} `{operator}`"))
+                .label(format!("`{operator}` needs an operand here"))
+        };
+        let overflow = |operation: &str| {
+            Explanation::new(format!("{operation} overflows in `#if` expression"))
+                .label("the result is out of range")
+                .note(
+                    "C99 §6.10.1p3: `#if` arithmetic uses `intmax_t` and `uintmax_t`, and §6.6p4 \
+                     requires constant expressions to stay in range",
+                )
+        };
+        let instead_of_operator = |found: &str| {
+            Explanation::new(format!("expected an operator, found {found}"))
+                .label("expected a binary operator before this")
+                .note("operands in an `#if` expression must be joined by operators")
+        };
         match self {
-            | Self::WrongNumberOfArgumentsInFunctionLikeMacroInvocation { expected, found } => {
-                write!(
-                    f,
-                    "Wrong number of arguments in function-like macro invocation! Expected \
-                     {expected} arguments, found {found} arguments",
-                )
+            | Self::InvalidHexadecimalFloatLiteral =>
+                Explanation::new(titled("invalid hexadecimal floating constant"))
+                    .label("not a valid hexadecimal floating constant")
+                    .note(
+                        "C99 §6.4.4.2: a hexadecimal floating constant needs hexadecimal digits \
+                         and a binary exponent, as in `0x1.8p3`",
+                    ),
+            | Self::InvalidDecimalFloatLiteral =>
+                Explanation::new(titled("invalid floating constant"))
+                    .label("not a valid floating constant")
+                    .note(
+                        "C99 §6.4.4.2: a floating constant is digits with a `.` or an exponent \
+                         and an optional `f`, `F`, `l`, or `L` suffix, as in `1.5`, `2e10`, or \
+                         `.5f`",
+                    ),
+            | Self::FloatConstantOutOfRange { type_name, error } => match error {
+                | FloatRangeError::Overflow =>
+                    Explanation::new(format!("floating constant is too large for `{type_name}`"))
+                        .label("this value becomes infinity")
+                        .note(
+                            "C99 §6.4.4p2: the value of a constant must be representable in its \
+                             type",
+                        ),
+                | FloatRangeError::Underflow =>
+                    Explanation::new(format!("floating constant is too small for `{type_name}`"))
+                        .label("this nonzero value becomes zero")
+                        .note(
+                            "C99 §6.4.4p2: the value of a constant must be representable in its \
+                             type",
+                        ),
             },
-            | Self::MissingOpeningParenthesisInFunctionLikeMacroInvocation => {
-                write!(
-                    f,
-                    "Missing opening parenthesis in function-like macro invocation!"
-                )
+            | Self::InvalidHexadecimalIntegerLiteral =>
+                Explanation::new(titled("invalid hexadecimal integer constant"))
+                    .label("not a valid hexadecimal constant")
+                    .note(
+                        "C99 §6.4.4.1: hexadecimal digits are `0`-`9`, `a`-`f`, and `A`-`F`, \
+                         optionally followed by an integer suffix such as `u`, `l`, or `ull`",
+                    ),
+            | Self::InvalidBinaryIntegerLiteral =>
+                Explanation::new(titled("invalid binary integer constant"))
+                    .label("not a valid binary constant")
+                    .note("binary digits are `0` and `1`"),
+            | Self::InvalidOctalIntegerLiteral =>
+                Explanation::new(titled("invalid octal integer constant"))
+                    .label("not a valid octal constant")
+                    .note(
+                        "C99 §6.4.4.1: a constant starting with `0` is octal, and octal digits \
+                         are `0`-`7`",
+                    ),
+            | Self::InvalidDecimalIntegerLiteral =>
+                Explanation::new(titled("invalid integer constant"))
+                    .label("not a valid integer constant")
+                    .note(
+                        "C99 §6.4.4.1: an integer constant is digits followed by an optional \
+                         suffix such as `u`, `l`, `ll`, or `ull`",
+                    ),
+            | Self::IntegerLiteralOverflow => Explanation::new("integer constant is too large")
+                .label("does not fit in `unsigned long long`")
+                .note("the largest integer type, `unsigned long long`, has 64 bits"),
+            | Self::ForcedSignedToUnsignedConversion { from, to } => match from {
+                | SignedIntegerLiteralType::Int =>
+                    Explanation::new("integer constant is so large that it is unsigned")
+                        .label(format!("this constant has type `{}`", to.spelling()))
+                        .note("C99 §6.4.4.1p5: no signed type can represent this decimal constant")
+                        .help("add a `u` suffix to make the unsigned type explicit"),
+                | SignedIntegerLiteralType::Long | SignedIntegerLiteralType::LongLong =>
+                    Explanation::new(format!(
+                        "integer constant is too large for `{}`",
+                        from.spelling()
+                    ))
+                    .label(format!("this constant has type `{}`", to.spelling()))
+                    .help("add a `u` suffix to make the unsigned type explicit"),
             },
-            | Self::InvalidHexadecimalFloatLiteral => {
-                write!(f, "Invalid hexadecimal floating point literal")
-            },
-            | Self::InvalidDecimalFloatLiteral => {
-                write!(f, "Invalid decimal floating point literal")
-            },
-            | Self::FloatLiteralOverflow(float_token_type) => {
-                write!(
-                    f,
-                    "Overflow while parsing floating point literal. Value of {float_token_type} \
-                     literal was too big to be accurately represented. Some precision may have \
-                     been lost.",
-                )
-            },
-            | Self::FloatCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(v) => {
-                write!(
-                    f,
-                    "Floating point literal {v} could not be losslessly converted to an integer \
-                     in preprocessor expression",
-                )
-            },
-            | Self::DoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(v) => {
-                write!(
-                    f,
-                    "Double literal {v} could not be losslessly converted to an integer in \
-                     preprocessor expression",
-                )
-            },
-            | Self::LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(v) => {
-                write!(
-                    f,
-                    "Long double literal {v} could not be losslessly converted to an integer in \
-                     preprocessor expression",
-                )
-            },
-            | Self::InvalidHexadecimalIntegerLiteral => {
-                write!(f, "Invalid hexadecimal integer literal")
-            },
-            | Self::InvalidBinaryIntegerLiteral => {
-                write!(f, "Invalid binary integer literal")
-            },
-            | Self::InvalidOctalIntegerLiteral => {
-                write!(f, "Invalid octal integer literal")
-            },
-            | Self::InvalidDecimalIntegerLiteral => {
-                write!(f, "Invalid decimal integer literal")
-            },
-            | Self::IntegerLiteralOverflow => {
-                write!(
-                    f,
-                    "Overflow while parsing integer literal. Must be smaller than UINT64_MAX"
-                )
-            },
-            | Self::ForcedSignedToUnsignedConversion { from, to } => {
-                write!(
-                    f,
-                    "Integer literal was too big to fit into a signed value. Forced conversion \
-                     from {} to {}",
-                    match from {
-                        | SignedIntegerLiteralType::Int => "int",
-                        | SignedIntegerLiteralType::Long => "long",
-                        | SignedIntegerLiteralType::LongLong => "long long",
-                    },
-                    match to {
-                        | UnsignedIntegerLiteralType::UnsignedInt => "unsigned int",
-                        | UnsignedIntegerLiteralType::UnsignedLong => "unsigned long",
-                        | UnsignedIntegerLiteralType::UnsignedLongLong => "unsigned long long",
-                    },
-                )
-            },
-            | Self::ForcedUnsignedPromotion { from, to } => {
-                write!(
-                    f,
-                    "Integer literal was too big to fit into an {0}. Forced conversion from {0} \
-                     to {1}",
-                    match from {
-                        | UnsignedIntegerLiteralType::UnsignedInt => "unsigned int",
-                        | UnsignedIntegerLiteralType::UnsignedLong => "unsigned long",
-                        | UnsignedIntegerLiteralType::UnsignedLongLong => "unsigned long long",
-                    },
-                    match to {
-                        | UnsignedIntegerLiteralType::UnsignedInt => "unsigned int",
-                        | UnsignedIntegerLiteralType::UnsignedLong => "unsigned long",
-                        | UnsignedIntegerLiteralType::UnsignedLongLong => "unsigned long long",
-                    },
-                )
-            },
-            | Self::ForcedSignedPromotion { from, to } => {
-                write!(
-                    f,
-                    "Integer literal was too big to fit into an {0}. Forced conversion from {0} \
-                     to {1}",
-                    match from {
-                        | SignedIntegerLiteralType::Int => "int",
-                        | SignedIntegerLiteralType::Long => "long",
-                        | SignedIntegerLiteralType::LongLong => "long long",
-                    },
-                    match to {
-                        | SignedIntegerLiteralType::Int => "int",
-                        | SignedIntegerLiteralType::Long => "long",
-                        | SignedIntegerLiteralType::LongLong => "long long",
-                    },
-                )
-            },
-            | Self::HashMustBeFirstCharacterOnLine => {
-                write!(
-                    f,
-                    "'#' operator used outside macro! If you were trying to define a preprocessor \
-                     directive, it must the first token on the current line."
-                )
-            },
+            | Self::ForcedUnsignedPromotion { from, to } => Explanation::new(format!(
+                "integer constant does not fit in `{}`",
+                from.spelling()
+            ))
+            .label(format!("this constant has type `{}`", to.spelling())),
+            | Self::ForcedSignedPromotion { from, to } => Explanation::new(format!(
+                "integer constant does not fit in `{}`",
+                from.spelling()
+            ))
+            .label(format!("this constant has type `{}`", to.spelling())),
+            | Self::HashMustBeFirstCharacterOnLine => Explanation::new("stray `#` in program")
+                .label("a directive must start a line")
+                .note(
+                    "C99 §6.10p2: `#` begins a directive only as the first token on a line; \
+                     elsewhere it is valid only inside a function-like macro definition",
+                ),
             | Self::HashMustBeFollowedByIdentifier => {
-                write!(
-                    f,
-                    "'#' operator at the start of a line must be followed by an identifier! If \
-                     you were trying to define a preprocessor directive, you probably forgot the \
-                     directive name."
-                )
+                let found = spelling.map_or_else(|| "a token".to_owned(), quote_spelling);
+                Explanation::new(format!(
+                    "expected a directive name after `#`, found {found}"
+                ))
+                .label("expected a directive name")
+                .note(DIRECTIVE_LIST_NOTE)
             },
             | Self::UnknownDirective => {
-                write!(
-                    f,
-                    "Unknown preprocessor directive. Must be one of: 'if' | 'ifdef' | 'ifndef' | \
-                     'elif' | 'else' | 'endif' | 'include' | 'define' | 'undef' | 'line' | \
-                     'error' | 'pragma'"
-                )
+                let name = spelling.unwrap_or_default();
+                let explanation =
+                    Explanation::new(format!("unknown preprocessing directive `#{name}`"))
+                        .label("not a C99 directive")
+                        .note(DIRECTIVE_LIST_NOTE);
+                match closest_match(name, &DIRECTIVE_NAMES) {
+                    | Some(suggestion) =>
+                        explanation.help(format!("did you mean `#{suggestion}`?")),
+                    | None => explanation,
+                }
             },
-            | Self::EmptyParenthesesInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Parentheses containing no expression that are not part of a macro invocation \
-                     are not allowed in preprocessor constant expressions!"
-                )
-            },
-            | Self::MissingOpeningParenthesisOrIdentifierInDefinedDirective(tt) => {
-                write!(
-                    f,
-                    "Missing opening parenthesis or identifier in 'defined' directive! Found \
-                     instead {tt:#?}"
-                )
-            },
-            | Self::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(operator) => {
-                write!(
-                    f,
-                    "Expected right-hand side of binary operator '{}' in preprocessor constant \
-                     expression!",
-                    match operator {
-                        | PreprocessorExpressionOperator::BinaryPlus => "+",
-                        | PreprocessorExpressionOperator::BinaryMinus => "-",
-                        | PreprocessorExpressionOperator::Multiply => "*",
-                        | PreprocessorExpressionOperator::Divide => "/",
-                        | PreprocessorExpressionOperator::Modulo => "%",
-                        | PreprocessorExpressionOperator::LeftShift => "<<",
-                        | PreprocessorExpressionOperator::RightShift => ">>",
-                        | PreprocessorExpressionOperator::LessThan => "<",
-                        | PreprocessorExpressionOperator::LessThanEquals => "<=",
-                        | PreprocessorExpressionOperator::GreaterThan => ">",
-                        | PreprocessorExpressionOperator::GreaterThanEquals => ">=",
-                        | PreprocessorExpressionOperator::Equals => "==",
-                        | PreprocessorExpressionOperator::NotEquals => "!=",
-                        | PreprocessorExpressionOperator::BitwiseAnd => "&",
-                        | PreprocessorExpressionOperator::BitwiseXor => "^",
-                        | PreprocessorExpressionOperator::BitwiseOr => "|",
-                        | PreprocessorExpressionOperator::LogicalAnd => "&&",
-                        | PreprocessorExpressionOperator::LogicalOr => "||",
-                        | PreprocessorExpressionOperator::QuestionMark => "?",
-                        | PreprocessorExpressionOperator::Conditional => "?:",
-                        | PreprocessorExpressionOperator::Comma => ",",
-                        | _ => unreachable!(),
-                    }
-                )
-            },
-            | Self::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Exclamation mark '!' instead of binary operator in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::TildeInsteadOfBinaryOperatorInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Tilde '~' instead of binary operator in preprocessor constant expression!"
-                )
-            },
-            | Self::NumberInsteadOfBinaryOperatorInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Number instead of binary operator in preprocessor constant expression!"
-                )
-            },
-            | Self::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Identifier instead of binary operator in preprocessor constant expression!"
-                )
-            },
-            | Self::CharacterInsteadOfBinaryOperatorInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Character instead of binary operator in preprocessor constant expression!"
-                )
-            },
-            | Self::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression => {
-                write!(
-                    f,
-                    "'defined' operator instead of binary operator in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::ExpectedBinaryOperatorInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Expected binary operator in preprocessor constant expression!"
-                )
-            },
-            | Self::UnterminatedOpeningParenthesisInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Unterminated opening parenthesis in preprocessor constant expression!"
-                )
-            },
-            | Self::AddressOfOperatorNotSupportedInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Address-of operator '&' is not supported in preprocessor constant \
-                     expressions!"
-                )
-            },
-            | Self::DereferenceOperatorNotSupportedInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Dereference operator '*' is not supported in preprocessor constant \
-                     expressions!"
-                )
-            },
-            | Self::FunctionCallOperatorNotSupportedInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Function call operator '()' is not supported in preprocessor constant \
-                     expressions!"
-                )
-            },
-            | Self::BinaryPlusOverflow => {
-                write!(
-                    f,
-                    "Overflow while trying to add two operands in preprocessor constant \
-                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
-                     expressions."
-                )
-            },
-            | Self::BinaryMinusOverflow => {
-                write!(
-                    f,
-                    "Overflow while trying to subtract two operands in preprocessor constant \
-                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
-                     expressions."
-                )
-            },
-            | Self::DivideOverflow => {
-                write!(
-                    f,
-                    "Overflow while trying to divide two operands in preprocessor constant \
-                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
-                     expressions."
-                )
-            },
-            | Self::DivideByZero => {
-                write!(
-                    f,
-                    "Division by zero in preprocessor constant expression! Division by zero is \
-                     not allowed in preprocessor constant expressions."
-                )
-            },
-            | Self::ModuloOverflow => {
-                write!(
-                    f,
-                    "Overflow while trying to calculate the remainder of two operands in \
-                     preprocessor constant expression! BCC uses 128-bit integers for evaluating \
-                     preprocessor expressions."
-                )
-            },
-            | Self::ModuloByZero => {
-                write!(
-                    f,
-                    "Modulo by zero in preprocessor constant expression! Modulo by zero is not \
-                     allowed in preprocessor constant expressions."
-                )
-            },
-            | Self::MultiplyOverflow => {
-                write!(
-                    f,
-                    "Overflow while trying to multiply two operands in preprocessor constant \
-                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
-                     expressions."
-                )
-            },
-            | Self::UnaryMinusOverflow => {
-                write!(
-                    f,
-                    "Overflow while trying to negate an operand in preprocessor constant \
-                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
-                     expressions."
-                )
-            },
-            | Self::LeftShiftOverflow => {
-                write!(
-                    f,
-                    "Overflow while trying to left shift an operand in preprocessor constant \
-                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
-                     expressions."
-                )
-            },
-            | Self::RightShiftOverflow => {
-                write!(
-                    f,
-                    "Overflow while trying to right shift an operand in preprocessor constant \
-                     expression! BCC uses 128-bit integers for evaluating preprocessor constant \
-                     expressions."
-                )
-            },
-            | Self::BitwiseNotWithoutOperand => {
-                write!(
-                    f,
-                    "Bitwise NOT operator '~' without operand in preprocessor constant expression!"
-                )
-            },
-            | Self::LogicalNotWithoutOperand => {
-                write!(
-                    f,
-                    "Logical NOT operator '!' without operand in preprocessor constant expression!"
-                )
-            },
-            | Self::UnaryMinusWithoutOperand => {
-                write!(
-                    f,
-                    "Unary minus operator '-' without operand in preprocessor constant expression!"
-                )
-            },
-            | Self::UnaryPlusWithoutOperand => {
-                write!(
-                    f,
-                    "Unary plus operator '+' without operand in preprocessor constant expression!"
-                )
-            },
-            | Self::BinaryPlusWithoutRhs => {
-                write!(
-                    f,
-                    "Binary plus operator '+' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::BinaryMinusWithoutRhs => {
-                write!(
-                    f,
-                    "Binary minus operator '-' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::MultiplyWithoutRhs => {
-                write!(
-                    f,
-                    "Multiply operator '*' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::DivideWithoutRhs => {
-                write!(
-                    f,
-                    "Divide operator '/' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::ModuloWithoutRhs => {
-                write!(
-                    f,
-                    "Modulo operator '%' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::LessThanWithoutRhs => {
-                write!(
-                    f,
-                    "Less-than operator '<' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::LessThanEqualsWithoutRhs => {
-                write!(
-                    f,
-                    "Less-than-or-equals operator '<=' without right-hand side in preprocessor \
-                     constant expression!"
-                )
-            },
-            | Self::GreaterThanWithoutRhs => {
-                write!(
-                    f,
-                    "Greater-than operator '>' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::GreaterThanEqualsWithoutRhs => {
-                write!(
-                    f,
-                    "Greater-than-or-equals operator '>=' without right-hand side in preprocessor \
-                     constant expression!"
-                )
-            },
-            | Self::EqualsWithoutRhs => {
-                write!(
-                    f,
-                    "Equals operator '==' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::NotEqualsWithoutRhs => {
-                write!(
-                    f,
-                    "Not-equals operator '!=' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::LeftShiftWithoutRhs => {
-                write!(
-                    f,
-                    "Left-shift operator '<<' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::RightShiftWithoutRhs => {
-                write!(
-                    f,
-                    "Right-shift operator '>>' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::BitwiseAndWithoutRhs => {
-                write!(
-                    f,
-                    "Bitwise AND operator '&' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::BitwiseXorWithoutRhs => {
-                write!(
-                    f,
-                    "Bitwise XOR operator '^' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::BitwiseOrWithoutRhs => {
-                write!(
-                    f,
-                    "Bitwise OR operator '|' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::LogicalAndWithoutRhs => {
-                write!(
-                    f,
-                    "Logical AND operator '&&' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::LogicalOrWithoutRhs => {
-                write!(
-                    f,
-                    "Logical OR operator '||' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::TernaryOperatorWithoutMhs => {
-                write!(
-                    f,
-                    "Ternary operator '?' without middle-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::TernaryOperatorWithoutRhs => {
-                write!(
-                    f,
-                    "Ternary operator ':' without right-hand side in preprocessor constant \
-                     expression!"
-                )
-            },
-            | Self::ColonWithoutMatchingQuestionMark => {
-                write!(
-                    f,
-                    "Colon without a matching question mark in the current parenthesis group in \
-                     preprocessor constant expression!"
-                )
-            },
-            | Self::CommaOperatorInPreprocessorExpression(_) => {
-                write!(
-                    f,
-                    "Comma operator is not permitted in an evaluated strict-C99 preprocessor \
-                     constant expression!"
-                )
-            },
-            | Self::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(operator) => {
-                write!(
-                    f,
-                    "Binary operator '{}' instead of unary expression in preprocessor constant \
-                     expression!",
-                    match operator {
-                        | PreprocessorExpressionOperator::Multiply => "*",
-                        | PreprocessorExpressionOperator::Divide => "/",
-                        | PreprocessorExpressionOperator::Modulo => "%",
-                        | PreprocessorExpressionOperator::LessThan => "<",
-                        | PreprocessorExpressionOperator::LessThanEquals => "<=",
-                        | PreprocessorExpressionOperator::GreaterThan => ">",
-                        | PreprocessorExpressionOperator::GreaterThanEquals => ">=",
-                        | PreprocessorExpressionOperator::Equals => "==",
-                        | PreprocessorExpressionOperator::NotEquals => "!=",
-                        | PreprocessorExpressionOperator::LeftShift => "<<",
-                        | PreprocessorExpressionOperator::RightShift => ">>",
-                        | PreprocessorExpressionOperator::BitwiseAnd => "&",
-                        | PreprocessorExpressionOperator::BitwiseXor => "^",
-                        | PreprocessorExpressionOperator::BitwiseOr => "|",
-                        | PreprocessorExpressionOperator::LogicalAnd => "&&",
-                        | PreprocessorExpressionOperator::LogicalOr => "||",
-                        | PreprocessorExpressionOperator::QuestionMark => "?",
-                        | PreprocessorExpressionOperator::Conditional => "?:",
-                        | PreprocessorExpressionOperator::Comma => ",",
-                        | _ => unreachable!(),
-                    }
-                )
-            },
-            | Self::FloatInsteadOfIntegerInPreprocessorExpression => {
-                write!(
-                    f,
-                    "Floating point literal instead of integer literal in preprocessor constant \
-                     expression! Floating point literals are not allowed in preprocessor constant \
-                     expressions."
-                )
-            },
-            | Self::UnexpectedTokenInPreprocessorExpression(tt) => {
-                write!(
-                    f,
-                    "Unexpected token {tt:#?} in preprocessor constant expression!",
-                )
-            },
-            | Self::UnexpectedTokenAtPhase7(tt) => write!(
-                f,
-                "Preprocessing token {tt:#?} cannot reach C syntax parsing."
+            | Self::EmptyParenthesesInPreprocessorExpression =>
+                Explanation::new("expected an expression inside `()`")
+                    .label("empty parentheses")
+                    .note(IF_EXPRESSION_NOTE),
+            | Self::UnaryPlusWithoutOperand | Self::BinaryPlusWithoutRhs =>
+                missing_operand("+", "after"),
+            | Self::UnaryMinusWithoutOperand | Self::BinaryMinusWithoutRhs =>
+                missing_operand("-", "after"),
+            | Self::BitwiseNotWithoutOperand => missing_operand("~", "after"),
+            | Self::LogicalNotWithoutOperand => missing_operand("!", "after"),
+            | Self::MultiplyWithoutRhs => missing_operand("*", "after"),
+            | Self::DivideWithoutRhs => missing_operand("/", "after"),
+            | Self::ModuloWithoutRhs => missing_operand("%", "after"),
+            | Self::LessThanWithoutRhs => missing_operand("<", "after"),
+            | Self::LessThanEqualsWithoutRhs => missing_operand("<=", "after"),
+            | Self::GreaterThanWithoutRhs => missing_operand(">", "after"),
+            | Self::GreaterThanEqualsWithoutRhs => missing_operand(">=", "after"),
+            | Self::EqualsWithoutRhs => missing_operand("==", "after"),
+            | Self::NotEqualsWithoutRhs => missing_operand("!=", "after"),
+            | Self::LeftShiftWithoutRhs => missing_operand("<<", "after"),
+            | Self::RightShiftWithoutRhs => missing_operand(">>", "after"),
+            | Self::BitwiseAndWithoutRhs => missing_operand("&", "after"),
+            | Self::BitwiseXorWithoutRhs => missing_operand("^", "after"),
+            | Self::BitwiseOrWithoutRhs => missing_operand("|", "after"),
+            | Self::LogicalAndWithoutRhs => missing_operand("&&", "after"),
+            | Self::LogicalOrWithoutRhs => missing_operand("||", "after"),
+            | Self::TernaryOperatorWithoutMhs => missing_operand("?", "after"),
+            | Self::TernaryOperatorWithoutRhs => missing_operand(":", "after"),
+            | Self::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(operator) =>
+                missing_operand(operator.spelling(), "after"),
+            | Self::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(operator) =>
+                missing_operand(operator.spelling(), "before"),
+            | Self::ColonWithoutMatchingQuestionMark =>
+                Explanation::new("`:` without a matching `?`")
+                    .label("no `?` precedes this `:` in the same parentheses"),
+            | Self::CommaOperatorInPreprocessorExpression(_) =>
+                Explanation::new("comma operator in `#if` expression")
+                    .label("evaluated comma operator")
+                    .note(
+                        "C99 §6.6p3: constant expressions shall not contain comma operators, \
+                         except within an operand that is not evaluated",
+                    ),
+            | Self::DivideByZero => Explanation::new("division by zero in `#if` expression")
+                .label("the divisor is zero")
+                .note("C99 §6.5.5p5: the result of `/` by zero is undefined"),
+            | Self::ModuloByZero => Explanation::new("remainder by zero in `#if` expression")
+                .label("the divisor is zero")
+                .note("C99 §6.5.5p5: the result of `%` by zero is undefined"),
+            | Self::UnaryMinusOverflow => overflow("negation"),
+            | Self::BinaryPlusOverflow => overflow("addition"),
+            | Self::BinaryMinusOverflow => overflow("subtraction"),
+            | Self::MultiplyOverflow => overflow("multiplication"),
+            | Self::DivideOverflow => overflow("division"),
+            | Self::ModuloOverflow => overflow("remainder"),
+            | Self::LeftShiftOverflow => overflow("left shift"),
+            | Self::RightShiftOverflow => overflow("right shift"),
+            | Self::UnterminatedOpeningParenthesisInPreprocessorExpression =>
+                Explanation::new("unclosed `(` in `#if` expression").label("expected `)`"),
+            | Self::TildeInsteadOfBinaryOperatorInPreprocessorExpression =>
+                instead_of_operator("`~`"),
+            | Self::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression =>
+                instead_of_operator("`!`"),
+            | Self::NumberInsteadOfBinaryOperatorInPreprocessorExpression =>
+                instead_of_operator(&PreprocessorTokenType::Number.found(spelling)),
+            | Self::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression =>
+                instead_of_operator(&PreprocessorTokenType::Identifier.found(spelling)),
+            | Self::CharacterInsteadOfBinaryOperatorInPreprocessorExpression =>
+                instead_of_operator(&PreprocessorTokenType::Character.found(spelling)),
+            | Self::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression =>
+                instead_of_operator("`defined`"),
+            | Self::ExpectedBinaryOperatorInPreprocessorExpression =>
+                Explanation::new("expected an operator between the operands of `#if`")
+                    .label("the expression ends with an operand still unjoined")
+                    .note(IF_EXPRESSION_NOTE),
+            | Self::AddressOfOperatorNotSupportedInPreprocessorExpression =>
+                Explanation::new("`&` cannot take an address in `#if` expression")
+                    .label("addresses do not exist during preprocessing")
+                    .note(IF_EXPRESSION_NOTE),
+            | Self::DereferenceOperatorNotSupportedInPreprocessorExpression =>
+                Explanation::new("`*` cannot dereference in `#if` expression")
+                    .label("pointers do not exist during preprocessing")
+                    .note(IF_EXPRESSION_NOTE),
+            | Self::FunctionCallOperatorNotSupportedInPreprocessorExpression =>
+                Explanation::new("function call in `#if` expression")
+                    .label("functions cannot be called during preprocessing")
+                    .note(
+                        "C99 §6.10.1p3: identifiers that are not macros evaluate to `0`, so this \
+                         looks like a call of an undefined function-like macro",
+                    )
+                    .help("define the function-like macro before this directive"),
+            | Self::FloatInsteadOfIntegerInPreprocessorExpression =>
+                Explanation::new("floating constant in `#if` expression")
+                    .label("not an integer")
+                    .note(IF_EXPRESSION_NOTE),
+            | Self::UnexpectedTokenInPreprocessorExpression(kind) => Explanation::new(format!(
+                "unexpected {} in `#if` expression",
+                kind.found(spelling)
+            ))
+            .label("not valid in an integer constant expression")
+            .note(IF_EXPRESSION_NOTE),
+            | Self::UnexpectedTokenAtPhase7(kind) =>
+                Explanation::new(format!("stray {} in program", kind.found(spelling)))
+                    .label("only meaningful inside a preprocessing directive"),
+            | Self::MissingOpeningParenthesisOrIdentifierInDefinedDirective(kind) =>
+                Explanation::new(format!(
+                    "expected a macro name after `defined`, found {}",
+                    kind.found(spelling)
+                ))
+                .label("expected a macro name")
+                .note("C99 §6.10.1p1: write `defined NAME` or `defined(NAME)`"),
+            | Self::MissingIdentifierInDefinedDirective(kind) => Explanation::new(format!(
+                "expected a macro name inside `defined(`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected a macro name")
+            .note("C99 §6.10.1p1: write `defined NAME` or `defined(NAME)`"),
+            | Self::MissingClosingParenthesisInDefinedDirective(kind) => Explanation::new(format!(
+                "expected `)` to close `defined(`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected `)`"),
+            | Self::NoConditionInIfDirective => Explanation::new("`#if` with no condition")
+                .label("expected an expression")
+                .help("write the condition to test, as in `#if VERSION >= 2`"),
+            | Self::NoConditionInElifDirective => Explanation::new("`#elif` with no condition")
+                .label("expected an expression")
+                .help("write the condition to test, or use `#else`"),
+            | Self::MoreIfDirectivesThanEndifDirectives =>
+                Explanation::new(format!("unterminated `#{}`", spelling.unwrap_or("if")))
+                    .label("this conditional has no matching `#endif`")
+                    .help("add `#endif` where the conditional section should end"),
+            | Self::MoreEndifDirectivesThanIfDirectives =>
+                Explanation::new("`#endif` without `#if`")
+                    .label("no conditional directive is open here"),
+            | Self::ElifDirectiveWithoutIfDirective => Explanation::new("`#elif` without `#if`")
+                .label("no conditional directive is open here"),
+            | Self::ElseDirectiveWithoutIfDirective => Explanation::new("`#else` without `#if`")
+                .label("no conditional directive is open here"),
+            | Self::ExpectedIdentifierInIfdefDirective(kind) => Explanation::new(format!(
+                "expected a macro name after `#ifdef`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected a macro name"),
+            | Self::ExpectedIdentifierInIfndefDirective(kind) => Explanation::new(format!(
+                "expected a macro name after `#ifndef`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected a macro name"),
+            | Self::ExpectedIdentifierInDefineDirective(kind) => Explanation::new(format!(
+                "expected a macro name after `#define`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected a macro name")
+            .note("C99 §6.10.3: a macro name is an identifier"),
+            | Self::RedefinitionOfBuiltInMacro(name) =>
+                Explanation::new(format!("cannot redefine predefined macro `{name}`"))
+                    .label("predefined by the implementation")
+                    .note("C99 §6.10.8p4: predefined macro names shall not be redefined"),
+            | Self::UndefinedIdentifierInPreprocessorExpression(name) =>
+                Explanation::new(format!("`{name}` is not defined; it evaluates to 0"))
+                    .label("not a macro")
+                    .note(
+                        "C99 §6.10.1p3: identifiers that are not macro names are replaced with \
+                         `0` in `#if`",
+                    )
+                    .help(format!(
+                        "use `defined({name})` to test whether it is defined"
+                    )),
+            | Self::ExpectedIncludeStringOrAngleBracketString(kind) => Explanation::new(format!(
+                "expected a header name after `#include`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected `\"file.h\"` or `<file.h>`")
+            .note(
+                "C99 §6.10.2: `#include` takes `\"name\"`, `<name>`, or macros that expand to one \
+                 of them",
             ),
-            | Self::MissingIdentifierInDefinedDirective(tt) => {
-                write!(
-                    f,
-                    "Missing identifier in 'defined' directive! Found instead {tt:#?}"
-                )
+            | Self::UnexpectedEndOfInput(activity) => Explanation::new(format!(
+                "unexpected end of file while {}",
+                activity.trim_end_matches('.')
+            ))
+            .label("the file ends here"),
+            | Self::WrongNumberOfArgumentsInFunctionLikeMacroInvocation { expected, found } =>
+                Explanation::new(format!(
+                    "this macro takes {} but {} {} supplied",
+                    count_of(*expected, "argument"),
+                    count_of(*found, "argument"),
+                    if *found == 1 { "was" } else { "were" }
+                ))
+                .label(format!("expected {}", count_of(*expected, "argument")))
+                .note(
+                    "C99 §6.10.3p4: an invocation must supply one argument per parameter, plus \
+                     any for `...`",
+                ),
+            | Self::HeaderNotFound {
+                name,
+                is_system_header,
+                searched,
+            } => {
+                let mut explanation = Explanation::new(format!("cannot find header `{name}`"))
+                    .label("not found in any search directory");
+                if searched.is_empty() {
+                    explanation =
+                        explanation.note("the path is absolute; no directory was searched");
+                } else {
+                    let list: Vec<String> = searched
+                        .iter()
+                        .map(|directory| {
+                            if directory.as_os_str().is_empty() {
+                                "  . (the working directory)".to_owned()
+                            } else {
+                                format!("  {}", directory.display())
+                            }
+                        })
+                        .collect();
+                    explanation = explanation
+                        .note(format!("searched these directories:\n{}", list.join("\n")));
+                }
+                explanation.help(if *is_system_header {
+                    "add the directory containing it with `--isystem <dir>`"
+                } else {
+                    "add the directory containing it with `--iquote <dir>` or `--isystem <dir>`"
+                })
             },
-            | Self::MissingClosingParenthesisInDefinedDirective(tt) => {
-                write!(
-                    f,
-                    "Missing closing parenthesis in 'defined' directive! Found instead {tt:#?}"
-                )
-            },
-
-            | Self::NoConditionInIfDirective => {
-                write!(
-                    f,
-                    "No condition in 'if' directive! If preprocessor directives must contain a \
-                     condition."
-                )
-            },
-            | Self::NoConditionInElifDirective => {
-                write!(
-                    f,
-                    "No condition in 'elif' directive! Elif preprocessor directives must contain \
-                     a condition."
-                )
-            },
-            | Self::ExpectedIdentifierInPreprocessorDirective(tt) => {
-                write!(
-                    f,
-                    "Expected identifier in preprocessor directive! Found instead {tt:#?}"
-                )
-            },
-            | Self::MoreIfDirectivesThanEndifDirectives => {
-                write!(
-                    f,
-                    "More 'if', 'ifdef' and 'ifndef' directives than 'endif' directives! Every \
-                     'if', 'ifdef' and 'ifndef' directive must be followed by an 'endif' \
-                     directive."
-                )
-            },
-            | Self::MoreEndifDirectivesThanIfDirectives => {
-                write!(
-                    f,
-                    "More 'endif' directives than 'if', 'ifdef' and 'ifndef' directives! Every \
-                     'endif' directive must be preceded by an 'if', 'ifdef' or 'ifndef' directive."
-                )
-            },
-            | Self::ElifDirectiveWithoutIfDirective => {
-                write!(
-                    f,
-                    "'elif' directive without preceding 'if', 'ifdef' or 'ifndef' directive!"
-                )
-            },
-            | Self::ElseDirectiveWithoutIfDirective => {
-                write!(
-                    f,
-                    "'else' directive without preceding 'if', 'ifdef' or 'ifndef' directive!"
-                )
-            },
-            | Self::ExpectedIdentifierInIfdefDirective(tt) => {
-                write!(
-                    f,
-                    "Expected identifier in 'ifdef' directive! Found instead {tt:#?}"
-                )
-            },
-            | Self::ExpectedIdentifierInIfndefDirective(tt) => {
-                write!(
-                    f,
-                    "Expected identifier in 'ifndef' directive! Found instead {tt:#?}"
-                )
-            },
-            | Self::ExpectedIdentifierInDefineDirective(tt) => {
-                write!(
-                    f,
-                    "Expected identifier in 'define' directive! Found instead {tt:#?}"
-                )
-            },
-            | Self::RedefinitionOfBuiltInMacro(name) => {
-                write!(
-                    f,
-                    "Redefinition of built-in macro '{name}'! Built-in macros cannot be redefined."
-                )
-            },
-            | Self::ExpectedIncludeStringOrAngleBracketString(tt) => {
-                write!(
-                    f,
-                    "Expected include string or angle bracket string in 'include' directive! \
-                     Found instead {tt:#?}"
-                )
-            },
-            | Self::UnexpectedEndOfInput(message) => {
-                write!(f, "Unexpected end of input while {message}!")
-            },
-            | Self::UndefinedIdentifierInPreprocessorExpression(ident) => {
-                write!(
-                    f,
-                    "Undefined identifier '{ident}' in preprocessor constant expression! Will be \
-                     treated as if it had a value of 0."
-                )
-            },
-            | Self::HeaderNotFound => {
-                write!(f, "Header not found!")
-            },
-            | Self::CurrentWorkingDirectoryInaccessible(error) => {
-                write!(
-                    f,
-                    "Current working directory inaccessible! The operating system returned an \
-                     error when trying to get the current working directory. IO error: {error:?}"
-                )
-            },
-            | Self::HeaderFileInaccessible(error) => {
-                write!(
-                    f,
-                    "Header file inaccessible! The header file was deleted or moved while the \
-                     preprocessor was trying to read it. IO error: {error:?}"
-                )
-            },
-            | Self::HashHashUsedOutsideOfMacro => {
-                write!(
-                    f,
-                    "'##' operator used outside of macro! The '##' operator can only be used \
-                     inside a macro definition."
-                )
-            },
-            | Self::CannotUseHashHashAfterFunctionLikeMacroCall => {
-                write!(
-                    f,
-                    "Cannot use '##' operator after a function-like macro call!"
-                )
-            },
-            | Self::InvalidEscapeSequence => {
-                write!(
-                    f,
-                    "Invalid escape sequence! Expected one of 0..7, x, u or U"
-                )
-            },
-            | Self::UnterminatedEscapeSequence => {
-                write!(
-                    f,
-                    "Lonely backslash detected! Backslash must be followed by an escape sequence"
-                )
-            },
-            | Self::InvalidHexEscapeSequence => {
-                write!(f, "Hexadecimal escape sequence was not a valid codepoint!")
-            },
-            | Self::HexEscapeSequenceTooLarge => {
-                write!(
-                    f,
-                    "Overflow while trying to parse hexadecimal escape sequence!"
-                )
-            },
-            | Self::InvalidOctalEscapeSequence => {
-                write!(f, "Octal escape sequence was not a valid codepoint!")
-            },
-            | Self::OctalEscapeSequenceTooLarge => {
-                write!(f, "Overflow while trying to parse octal escape sequence!")
-            },
-            | Self::InvalidSmallUnicodeEscapeSequence => {
-                write!(
-                    f,
-                    "Small unicode escape sequence was not a valid codepoint!"
-                )
-            },
-            | Self::SmallUnicodeEscapeSequenceTooShort => {
-                write!(
-                    f,
-                    "Overflow while trying to parse small unicode escape sequence!"
-                )
-            },
-            | Self::InvalidLargeUnicodeEscapeSequence => {
-                write!(
-                    f,
-                    "Large unicode escape sequence was not a valid codepoint!"
-                )
-            },
-            | Self::LargeUnicodeEscapeSequenceTooSmall => {
-                write!(
-                    f,
-                    "Overflow while trying to parse large unicode escape sequence!"
-                )
-            },
+            | Self::HeaderFileInaccessible(error) =>
+                Explanation::new(format!("cannot read included file: {error}"))
+                    .label("included here"),
+            | Self::HashHashUsedOutsideOfMacro =>
+                Explanation::new("`##` outside a macro definition")
+                    .label("token pasting only happens in replacement lists")
+                    .note("C99 §6.10.3.3: `##` is an operator of macro replacement lists"),
+            | Self::CannotUseHashHashAfterFunctionLikeMacroCall =>
+                Explanation::new("`##` cannot follow a function-like macro invocation")
+                    .label("pasting onto an invocation is not supported"),
+            | Self::InvalidEscapeSequence => Explanation::new("unknown escape sequence")
+                .label("contains an escape C99 does not define")
+                .note(ESCAPE_LIST_NOTE),
+            | Self::UnterminatedEscapeSequence => Explanation::new("incomplete escape sequence")
+                .label("`\\` ends the literal")
+                .help("write `\\\\` for a backslash character"),
+            | Self::InvalidHexEscapeSequence =>
+                Explanation::new("hexadecimal escape sequence is not a valid character")
+                    .label("contains an invalid `\\x` escape"),
+            | Self::HexEscapeSequenceTooLarge =>
+                Explanation::new("hexadecimal escape sequence is out of range")
+                    .label("contains an oversized `\\x` escape"),
+            | Self::InvalidOctalEscapeSequence =>
+                Explanation::new("octal escape sequence is not a valid character")
+                    .label("contains an invalid octal escape"),
+            | Self::OctalEscapeSequenceTooLarge =>
+                Explanation::new("octal escape sequence is out of range")
+                    .label("contains an oversized octal escape"),
+            | Self::InvalidSmallUnicodeEscapeSequence =>
+                Explanation::new("`\\u` escape does not name a valid character")
+                    .label("contains an invalid universal character name")
+                    .note("C99 §6.4.3: a universal character name must be a valid code point"),
+            | Self::SmallUnicodeEscapeSequenceTooShort =>
+                Explanation::new("`\\u` escape needs exactly four hexadecimal digits")
+                    .label("contains a short `\\u` escape"),
+            | Self::InvalidLargeUnicodeEscapeSequence =>
+                Explanation::new("`\\U` escape does not name a valid character")
+                    .label("contains an invalid universal character name")
+                    .note("C99 §6.4.3: a universal character name must be a valid code point"),
+            | Self::LargeUnicodeEscapeSequenceTooSmall =>
+                Explanation::new("`\\U` escape needs exactly eight hexadecimal digits")
+                    .label("contains a short `\\U` escape"),
             | Self::MultiCharacterLiteralsUnsupported => {
-                write!(f, "Multi-character literals are not supported by BCC!")
+                if spelling.is_some_and(|spelling| spelling.ends_with("''")) {
+                    Explanation::new("empty character constant")
+                        .label("contains no character")
+                        .note("C99 §6.4.4.4: a character constant contains at least one character")
+                } else {
+                    Explanation::new("wide character constant with more than one character")
+                        .label("its value is implementation-defined")
+                        .note(
+                            "C99 §6.4.4.4p11: bcc does not assign a value to multi-character wide \
+                             constants",
+                        )
+                }
             },
-            | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(name) => {
-                write!(
-                    f,
-                    "Redefinition of function-like macro '{name}' as object-like macro! \
-                     Function-like macros cannot be redefined as object-like macros without \
-                     undefining them first."
-                )
-            },
-            | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(name) => {
-                write!(
-                    f,
-                    "Redefinition of object-like macro '{name}' as function-like macro! \
-                     Object-like macros cannot be redefined as function-like macros without \
-                     undefining them first."
-                )
-            },
-            | Self::ExpectedIdentifierInMacroDefinition(tt) => {
-                write!(
-                    f,
-                    "Expected identifier in macro definition! Found instead {tt:#?}"
-                )
-            },
-            | Self::VariadicMacroMustBeLastParameter(name) => {
-                write!(
-                    f,
-                    "Variadic macro '{name}' must be the last parameter in the macro definition!"
-                )
-            },
-            | Self::ExpectedCommaOrClosingParenthesisInMacroDefinition(tt) => {
-                write!(
-                    f,
-                    "Expected ',' or ')' in macro definition! Found instead {tt:#?}"
-                )
-            },
-            | Self::MacroRedefinedWithDifferentDefinition(name) => {
-                write!(
-                    f,
-                    "Macro '{name}' redefined with different definition! All definitions of a \
-                     macro must be identical. If you want to change the definition of a macro, \
-                     you must first undefine it first."
-                )
-            },
-            | Self::ExpectedIdentifierInUndefDirective(tt) => {
-                write!(
-                    f,
-                    "Expected identifier in 'undef' directive! Found instead {tt:#?}"
-                )
-            },
-            | Self::ExpectedNewlineAfterUndefDirective(tt) => {
-                write!(
-                    f,
-                    "Expected newline after 'undef' directive! Found instead {tt:#?}"
-                )
-            },
-            | Self::HashOperatorMustBeFollowedByAMacroArgument(tt) => {
-                write!(
-                    f,
-                    "'#' operator, when used in a function-like macro body, must be followed by a \
-                     macro argument! Found instead {tt:#?}"
-                )
-            },
-            | Self::IdentifierNotMacroArgumentAfterHashOperator(name) => {
-                write!(
-                    f,
-                    "Identifier '{name}' not a macro argument after '#' operator! The '#' \
-                     operator, when used in a function-like macro body, must be followed by a \
-                     macro argument."
-                )
-            },
-            | Self::MissingRightHandSideOfHashHashOperator => {
-                write!(
-                    f,
-                    "Missing right hand side of '##' operator! The '##' operator must be followed \
-                     by a macro argument or a token inside of the macro body."
-                )
-            },
-            | Self::MissingLeftHandSideOfHashHashOperator => {
-                write!(
-                    f,
-                    "Missing left hand side of '##' operator! The '##' operator must be preceded \
-                     by a macro argument or a token inside of the macro body."
-                )
-            },
-            | Self::TokenMergingError(lhs, rhs) => {
-                write!(
-                    f,
-                    "Error while merging tokens! Could not merge '{lhs}' and '{rhs}'"
-                )
-            },
-            | Self::MissingNumberInLineDirective(tt) => {
-                write!(
-                    f,
-                    "Missing number in 'line' directive! Found instead {tt:#?}"
-                )
-            },
-            | Self::MissingNewlineAfterLineDirective(tt) => {
-                write!(
-                    f,
-                    "Expected newline after 'line' directive! Found instead {tt:#?}"
-                )
-            },
-            | Self::LineDirectiveIsNotASimpleDigitSequence => {
-                write!(
-                    f,
-                    "The 'line' directive must be followed by a simple digit sequence according \
-                     to the C standard!"
-                )
-            },
-            | Self::LineDirectiveNumberTooLarge(i) => {
-                write!(
-                    f,
-                    "Number in 'line' directive was larger than INT_MAX! The C standard only \
-                     supports line numbers up to INT_MAX. Value was '{i}'"
-                )
-            },
-            | Self::MissingOpeningParenthesisInPragmaOperator(tt) => {
-                write!(
-                    f,
-                    "Missing opening parenthesis in 'pragma' operator! Found instead {tt:#?}"
-                )
-            },
-            | Self::MissingClosingParenthesisInPragmaOperator(tt) => {
-                write!(
-                    f,
-                    "Missing closing parenthesis in 'pragma' operator! Found instead {tt:#?}"
-                )
-            },
-            | Self::MissingStringLiteralInPragmaOperator(tt) => {
-                write!(
-                    f,
-                    "Missing string literal in 'pragma' operator! Found instead {tt:#?}"
-                )
-            },
-            | Self::UnknownPragmaDirective => {
-                write!(
-                    f,
-                    "Unknown 'pragma' directive! BCC only supports the 'once' and 'STDC' \
-                     directives."
-                )
-            },
-            | Self::UnknownPragmaSTDCArgument(arg) => {
-                write!(
-                    f,
-                    "Unknown argument to 'STDC' 'pragma' directive! BCC only supports the \
-                     'FP_CONTRACT', 'FENV_ACCESS' and 'CX_LIMITED_RANGE' arguments. Found instead \
-                     '{arg}'"
-                )
-            },
-            | Self::ExtraTokensAfterPragmaOnce(tt) => {
-                write!(
-                    f,
-                    "Extra tokens after 'once' 'pragma' directive! A once directive should \
-                     consist of only the identifier 'once' and nothing else. Found {tt:#?}"
-                )
-            },
-            | Self::ExtraTokensAfterPragmaOperator => {
-                write!(
-                    f,
-                    "Extra tokens after 'pragma' operator! Not all tokens were consumed within \
-                     the 'pragma' operator."
-                )
-            },
-            | Self::ExtraTokensAfterIncludeDirective => {
-                write!(f, "Extra tokens after 'include' operator!")
-            },
-            | Self::ExtraTokensAfterIfdefDirective => {
-                write!(f, "Extra tokens after 'ifdef' operator!")
-            },
-            | Self::ExtraTokensAfterIfndefDirective => {
-                write!(f, "Extra tokens after 'ifndef' operator!")
-            },
-            | Self::STDCPragmaDirectiveWithoutArgument => {
-                write!(
-                    f,
-                    "STDC 'pragma' directive without argument! The 'STDC' directive must be \
-                     followed by an argument."
-                )
-            },
-            | Self::STDCPragmaDirectiveWithoutOnOffSwitch => {
-                write!(
-                    f,
-                    "STDC 'pragma' directive without on-off switch! Pragma directive ended before \
-                     the on-off switch was found."
-                )
-            },
-            | Self::MissingOnOffSwitchInSTDCPragma(arg) => {
-                write!(
-                    f,
-                    "Missing on-off switch in STDC 'pragma' directive! 'FP_CONTRACT', \
-                     'FENV_ACCESS' and 'CX_LIMITED_RANGE' must be followed by an on-off switch. \
-                     Found instead '{arg}'"
-                )
-            },
-            | Self::PragmaOnceInNonHeader => {
-                write!(
-                    f,
-                    "Pragma 'once' directive used in non-header file! The 'once' directive can \
-                     only be used in header files."
-                )
-            },
-            | Self::ErrorDirective(s) => {
-                write!(f, "Error directive: {s}")
+            | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(name) => Explanation::new(
+                format!("function-like macro `{name}` redefined as an object-like macro"),
+            )
+            .label("redefined here")
+            .note("C99 §6.10.3p2: a macro may only be redefined identically")
+            .help(format!("add `#undef {name}` before this definition")),
+            | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(name) => Explanation::new(
+                format!("object-like macro `{name}` redefined as a function-like macro"),
+            )
+            .label("redefined here")
+            .note("C99 §6.10.3p2: a macro may only be redefined identically")
+            .help(format!("add `#undef {name}` before this definition")),
+            | Self::ExpectedIdentifierInMacroDefinition(kind) => Explanation::new(format!(
+                "expected a parameter name, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected an identifier or `...`"),
+            | Self::VariadicMacroMustBeLastParameter(name) =>
+                Explanation::new(format!("`...` must be the last parameter of `{name}`"))
+                    .label("parameter after `...`")
+                    .note("C99 §6.10.3p12: `...` ends the parameter list"),
+            | Self::ExpectedCommaOrClosingParenthesisInMacroDefinition(kind) =>
+                Explanation::new(format!(
+                    "expected `,` or `)` in macro parameter list, found {}",
+                    kind.found(spelling)
+                ))
+                .label("expected `,` or `)`"),
+            | Self::MacroRedefinedWithDifferentDefinition(name) =>
+                Explanation::new(format!("macro `{name}` redefined differently"))
+                    .label("this definition differs from the previous one")
+                    .note(
+                        "C99 §6.10.3p2: a redefinition must have the same parameters and an \
+                         identical replacement list",
+                    )
+                    .help(format!("add `#undef {name}` before this definition")),
+            | Self::ExpectedIdentifierInUndefDirective(kind) => Explanation::new(format!(
+                "expected a macro name after `#undef`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected a macro name"),
+            | Self::ExpectedNewlineAfterUndefDirective(kind) => Explanation::new(format!(
+                "unexpected {} after the macro name in `#undef`",
+                kind.found(spelling)
+            ))
+            .label("`#undef` takes one name"),
+            | Self::HashOperatorMustBeFollowedByAMacroArgument(kind) => Explanation::new(format!(
+                "expected a macro parameter after `#`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected a parameter name")
+            .note("C99 §6.10.3.2p1: in a function-like macro, `#` must be followed by a parameter"),
+            | Self::IdentifierNotMacroArgumentAfterHashOperator(name) =>
+                Explanation::new(format!("`{name}` is not a parameter of this macro"))
+                    .label("`#` can only stringify a parameter")
+                    .note(
+                        "C99 §6.10.3.2p1: in a function-like macro, `#` must be followed by a \
+                         parameter",
+                    ),
+            | Self::MissingRightHandSideOfHashHashOperator =>
+                Explanation::new("`##` cannot end a replacement list")
+                    .label("nothing follows this `##`")
+                    .note("C99 §6.10.3.3p1: `##` needs a token on each side"),
+            | Self::MissingLeftHandSideOfHashHashOperator =>
+                Explanation::new("`##` cannot start a replacement list")
+                    .label("nothing precedes this `##`")
+                    .note("C99 §6.10.3.3p1: `##` needs a token on each side"),
+            | Self::TokenMergingError(lhs, rhs) => Explanation::new(format!(
+                "pasting `{lhs}` and `{rhs}` does not give a valid token"
+            ))
+            .label("invalid token paste")
+            .note("C99 §6.10.3.3p3: the result of `##` must be a single valid preprocessing token"),
+            | Self::MissingNumberInLineDirective(kind) => Explanation::new(format!(
+                "expected a line number after `#line`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected a line number"),
+            | Self::MissingNewlineAfterLineDirective(kind) =>
+                Explanation::new(format!("unexpected {} after `#line`", kind.found(spelling)))
+                    .label("`#line` takes a number and an optional file name"),
+            | Self::LineDirectiveIsNotASimpleDigitSequence =>
+                Explanation::new("`#line` needs a plain decimal line number")
+                    .label("not a digit sequence")
+                    .note("C99 §6.10.4p3: the line number is a digit sequence, not any constant"),
+            | Self::LineDirectiveNumberTooLarge(number) =>
+                Explanation::new(format!("line number {number} is out of range"))
+                    .label("too large")
+                    .note("C99 §6.10.4p3: the line number must be at most 2147483647"),
+            | Self::MissingOpeningParenthesisInPragmaOperator(kind) => Explanation::new(format!(
+                "expected `(` after `_Pragma`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected `(`")
+            .note("C99 §6.10.9: write `_Pragma(\"...\")`"),
+            | Self::MissingClosingParenthesisInPragmaOperator(kind) => Explanation::new(format!(
+                "expected `)` to close `_Pragma(`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected `)`"),
+            | Self::MissingStringLiteralInPragmaOperator(kind) => Explanation::new(format!(
+                "expected a string literal in `_Pragma`, found {}",
+                kind.found(spelling)
+            ))
+            .label("expected a string literal")
+            .note("C99 §6.10.9: write `_Pragma(\"...\")`"),
+            | Self::UnknownPragmaDirective => Explanation::new("unknown pragma ignored")
+                .label("not recognized")
+                .note("bcc recognizes `#pragma once` and the `#pragma STDC` pragmas"),
+            | Self::UnknownPragmaSTDCArgument(argument) =>
+                Explanation::new(format!("unknown `STDC` pragma `{argument}`"))
+                    .label("not a standard pragma")
+                    .note(
+                        "C99 §6.10.6: the standard pragmas are `FP_CONTRACT`, `FENV_ACCESS`, and \
+                         `CX_LIMITED_RANGE`",
+                    ),
+            | Self::ExtraTokensAfterPragmaOnce(kind) => Explanation::new(format!(
+                "unexpected {} after `#pragma once`",
+                kind.found(spelling)
+            ))
+            .label("`#pragma once` takes no arguments"),
+            | Self::ExtraTokensAfterPragmaOperator =>
+                Explanation::new("extra tokens after the pragma in `_Pragma`")
+                    .label("not part of the pragma"),
+            | Self::ExtraTokensAfterIncludeDirective =>
+                Explanation::new("extra tokens at end of `#include` directive").label("ignored"),
+            | Self::ExtraTokensAfterIfdefDirective =>
+                Explanation::new("extra tokens at end of `#ifdef` directive").label("ignored"),
+            | Self::ExtraTokensAfterIfndefDirective =>
+                Explanation::new("extra tokens at end of `#ifndef` directive").label("ignored"),
+            | Self::STDCPragmaDirectiveWithoutArgument =>
+                Explanation::new("expected a pragma name after `#pragma STDC`")
+                    .label("expected `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE`"),
+            | Self::STDCPragmaDirectiveWithoutOnOffSwitch =>
+                Explanation::new("expected `ON`, `OFF`, or `DEFAULT` in `#pragma STDC`")
+                    .label("the pragma ends here")
+                    .note("C99 §6.10.6p2: each standard pragma takes an on-off switch"),
+            | Self::MissingOnOffSwitchInSTDCPragma(argument) => Explanation::new(format!(
+                "expected `ON`, `OFF`, or `DEFAULT` after `{argument}`"
+            ))
+            .label("expected an on-off switch")
+            .note("C99 §6.10.6p2: each standard pragma takes an on-off switch"),
+            | Self::PragmaOnceInNonHeader => Explanation::new("`#pragma once` in main file")
+                .label("only affects files that are included"),
+            | Self::ErrorDirective(message) => {
+                let message = message.trim();
+                Explanation::new(if message.is_empty() {
+                    "#error".to_owned()
+                } else {
+                    format!("#error {message}")
+                })
+                .label("`#error` directive")
             },
         }
     }
 }
 
+impl Display for PreprocessorErrorType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.write_str(&self.explain(None).message)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct FunctionLikeMacroArgument {
-    name:      StringCacheId,
-    tokenizer: PreprocessorTokenizer,
+    name:                StringCacheId,
+    tokenizer:           PreprocessorTokenizer,
+    enclosing_arguments: Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>>,
+    disabled_macros:     Rc<[StringCacheId]>,
 }
 
 #[expect(
@@ -2326,8 +2441,7 @@ pub(crate) struct FunctionLikeMacroArgument {
 )]
 #[expect(
     clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    reason = "Preprocessor-expression conversion reports out-of-range values before conversion."
+    reason = "Integer literal values are range-checked before narrowing."
 )]
 #[expect(
     clippy::while_let_loop,
@@ -2348,6 +2462,7 @@ impl Preprocessor {
             })
             .collect();
         let source_file_index = context.intern_source_file(source_name);
+        context.record_source_text(source_file_index, source.clone());
         let tokenizer = PreprocessorTokenizer::new(source_file_index, source);
         Self {
             tokenizer_stack: vec![TokenizerFrame {
@@ -2360,13 +2475,14 @@ impl Preprocessor {
             macro_definitions,
             last_was_newline: true,
             current_is_newline: true,
-            if_directive_balance: 0,
+            open_conditionals: Vec::new(),
             generate_placeholders: false,
             quote_include_directories,
             system_include_directories,
             expression_parser: PreprocessorExpressionParser::new(),
             pending_parser_token: None,
             pending_parser_errors: Vec::new(),
+            translation_timestamp: None,
         }
     }
 
@@ -2377,13 +2493,8 @@ impl Preprocessor {
         }
         loop {
             let Some(token) = self.next_preprocessor_token::<true>(context) else {
-                if self.if_directive_balance != 0 {
-                    self.if_directive_balance = 0;
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    );
+                for vectors in take(&mut self.open_conditionals) {
+                    let source_vectors = context.push_source_vectors(&vectors);
                     context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
                         source_vectors,
@@ -2404,10 +2515,17 @@ impl Preprocessor {
     /// EOF diagnostic. Source-vector compaction therefore belongs to the
     /// producer that owns that buffered work, not to each iterator consumer.
     pub(crate) fn next_iterator_item(&mut self, context: &mut Context) -> Option<Token> {
-        if self.pending_parser_token.is_none() && self.pending_parser_errors.is_empty() {
+        if self.next_iterator_item_compacts() {
             context.source_vectors.0.clear();
         }
         self.next_item(context)
+    }
+
+    /// Whether the next [`Self::next_iterator_item`] call discards the
+    /// preprocessor provenance arena. Consumers retaining provenance across
+    /// calls, such as a deferred diagnostic, must resolve it first.
+    pub(crate) fn next_iterator_item_compacts(&self) -> bool {
+        self.pending_parser_token.is_none() && self.pending_parser_errors.is_empty()
     }
 
     fn concatenate_adjacent_strings(&mut self, context: &mut Context, first: Token) -> Token {
@@ -2419,7 +2537,7 @@ impl Preprocessor {
             | StringTokenType::String(contents) | StringTokenType::WideString(contents) => contents,
         };
         let mut contents = context.string_cache.at(first_contents).to_string();
-        let mut source_vectors = first.source_vectors;
+        let mut sources = vec![first.source_vectors];
 
         loop {
             let existing_errors = context.take_pending_errors();
@@ -2447,7 +2565,7 @@ impl Preprocessor {
                 },
             };
             contents.push_str(context.string_cache.at(next_contents));
-            source_vectors = context.merge_vectors(source_vectors, next.source_vectors);
+            sources.push(next.source_vectors);
         }
 
         let contents = context.string_cache.intern(&contents);
@@ -2458,7 +2576,7 @@ impl Preprocessor {
                 TokenType::String(StringTokenType::String(contents))
             },
             contents,
-            source_vectors,
+            source_vectors: context.merge_vector_list(&sources),
         }
     }
 
@@ -2749,8 +2867,10 @@ impl Preprocessor {
                 | PreprocessorTokenType::Character
                 | PreprocessorTokenType::GeneratedString,
             ) => {
+                // C99 §6.10.3.3p3: `L ## "x"` forms the wide literal `L"x"`,
+                // so the right-hand side must still be a narrow literal.
                 if context.string_cache.at(lhs.contents) == "L"
-                    && context.string_cache.at(rhs.contents).starts_with('L')
+                    && !context.string_cache.at(rhs.contents).starts_with('L')
                 {
                     Some(self.merge_token_contents(
                         context,
@@ -2777,8 +2897,9 @@ impl Preprocessor {
                 } else {
                     0..lhs_contents.len()
                 };
-                // We don't remove the trailing null byte from the right-hand side because we're
-                // generating a new number token, and number tokens should always have a
+                // We don't remove the trailing null byte from the right-hand
+                // side because we're generating a new number
+                // token, and number tokens should always have a
                 // trailing null byte.
                 Some(self.merge_token_contents_with_ranges(
                     context,
@@ -2909,7 +3030,7 @@ impl Preprocessor {
                         | TokenizerFrame {
                             frame_type:
                                 TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                                | TokenizerFrameType::ObjectLikeMacroInvocation,
+                                | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
                             ..
                         } =>
                             if token.kind == PreprocessorTokenType::Newline {
@@ -3036,6 +3157,7 @@ impl Preprocessor {
                     TokenizerFrameType::FunctionLikeMacroInvocation {
                         arguments,
                         is_variadic,
+                        ..
                     },
                 tokenizer,
             }) => Some((
@@ -3092,13 +3214,17 @@ impl Preprocessor {
     ) -> Option<PreprocessorToken> {
         'base: loop {
             let lhs = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context)?;
-            let hash_hash = if let Some(TokenizerFrame {
-                frame_type:
-                    TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                    | TokenizerFrameType::ObjectLikeMacroInvocation,
-                ..
-            }) = self.tokenizer_stack.last()
+            let replacement_list = match self.tokenizer_stack.last().map(|frame| &frame.frame_type)
             {
+                | Some(
+                    TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                    | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                ) => true,
+                | Some(TokenizerFrameType::FunctionLikeMacroArgument { argument, .. }) =>
+                    argument.enclosing_arguments.is_some(),
+                | _ => false,
+            };
+            let hash_hash = if replacement_list {
                 let save = self.position(context);
                 context.set_ignore_tokenizer_errors(true);
                 let hash_hash = Self::next_ignore_whitespace(&mut self.tokenizer, context);
@@ -3152,6 +3278,14 @@ impl Preprocessor {
             self.generate_placeholders = false;
             if !self.hash_hash_stack.is_empty() {
                 'merge: loop {
+                    let next_is_end = self.macro_argument_is_at_end(context);
+                    let argument_continues = matches!(
+                        self.tokenizer_stack.last(),
+                        Some(TokenizerFrame {
+                            frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
+                            ..
+                        })
+                    ) && !next_is_end;
                     let new = match self.hash_hash_stack.last() {
                         | None | Some(HashHash::Empty) => None,
                         | Some(HashHash::Lhs(lhs)) => {
@@ -3160,39 +3294,14 @@ impl Preprocessor {
                             self.merge_tokens(context, lhs, token)
                         },
                         | Some(HashHash::Rhs(rhs)) => {
+                            // Paste the last token of the left argument.
+                            if argument_continues {
+                                break 'merge;
+                            }
                             let rhs = *rhs;
                             _ = self.hash_hash_stack.pop();
                             self.merge_tokens(context, token, rhs)
                         },
-                    };
-                    let next_is_end = if let Some(TokenizerFrame {
-                        frame_type:
-                            TokenizerFrameType::FunctionLikeMacroArgument {
-                                argument,
-                                paren_depth,
-                                has_generated_token: _,
-                            },
-                        ..
-                    }) = self.tokenizer_stack.last()
-                    {
-                        let paren_depth = *paren_depth;
-                        let argument = argument.clone();
-                        let position = self.position(context);
-                        let next_is_end = match self.tokenizer.next_item(context) {
-                            | Some(token) => self
-                                .update_macro_argument_paren_depth(
-                                    context,
-                                    token,
-                                    argument.name,
-                                    paren_depth,
-                                )
-                                .is_none(),
-                            | None => true,
-                        };
-                        self.set_position(context, position);
-                        next_is_end
-                    } else {
-                        false
                     };
                     if (next_is_end || token.kind == PreprocessorTokenType::Placeholder)
                         && let Some(x @ HashHash::Empty) = self.hash_hash_stack.last_mut()
@@ -3214,11 +3323,16 @@ impl Preprocessor {
                 break 'base Some(token);
             }
 
+            if self.macro_is_disabled(token.contents) {
+                break 'base Some(token);
+            }
             if let Some(md) = self.macro_definitions.get(&token.contents).cloned() {
                 match md {
                     | MacroDefinition::ObjectLike { tokenizer } => {
                         let frame = TokenizerFrame {
-                            frame_type: TokenizerFrameType::ObjectLikeMacroInvocation,
+                            frame_type: TokenizerFrameType::ObjectLikeMacroInvocation {
+                                name: token.contents,
+                            },
                             tokenizer,
                         };
                         self.push_tokenizer_frame(context, frame);
@@ -3230,7 +3344,6 @@ impl Preprocessor {
                         is_variadic,
                     } => {
                         let position = self.position(context);
-                        let file = self.source_file_index();
                         loop {
                             match self.tokenizer.next_item(context) {
                                 | Some(brace) if brace.kind == PreprocessorTokenType::Whitespace =>
@@ -3238,27 +3351,17 @@ impl Preprocessor {
                                 | Some(brace)
                                     if brace.kind == PreprocessorTokenType::OpeningParenthesis =>
                                     break,
-                                | Some(_) => {
-                                    context.preprocessor_error(PreprocessorError {
-                                        error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
-                                        source_vectors: token.source_vectors,
-                                    });
-                                    self.set_position(context, position);
-                                    break 'base Some(token);
-                                },
-                                | None => {
-                                    let source_vectors =
-                                        context.create_source_vectors(position, file, 1);
-                                    context.preprocessor_error(PreprocessorError {
-                                        error_type:     PreprocessorErrorType::MissingOpeningParenthesisInFunctionLikeMacroInvocation,
-                                        source_vectors,
-                                    });
+                                // C99 §6.10.3p10: without a following `(` the
+                                // name is not an invocation and stays as is.
+                                | Some(_) | None => {
                                     self.set_position(context, position);
                                     break 'base Some(token);
                                 },
                             }
                         }
                         let mut i = 0;
+                        let enclosing_arguments = self.get_arguments(context);
+                        let disabled_macros = self.disabled_macros();
                         let mut arguments = HashMap::default();
                         let mut paren_depth = 1isize;
                         macro_rules! at {
@@ -3286,6 +3389,9 @@ impl Preprocessor {
                                                 FunctionLikeMacroArgument {
                                                     name: at!(),
                                                     tokenizer,
+                                                    enclosing_arguments:
+                                                        enclosing_arguments.clone(),
+                                                    disabled_macros: disabled_macros.clone(),
                                                 },
                                             ));
                                             break 'outer;
@@ -3298,6 +3404,8 @@ impl Preprocessor {
                                             FunctionLikeMacroArgument {
                                                 name: at!(),
                                                 tokenizer,
+                                                enclosing_arguments: enclosing_arguments.clone(),
+                                                disabled_macros: disabled_macros.clone(),
                                             },
                                         ));
                                         i += 1;
@@ -3342,8 +3450,10 @@ impl Preprocessor {
                             drop(arguments.insert(
                                 context.string_cache.intern("__VA_ARGS__"),
                                 FunctionLikeMacroArgument {
-                                    name:      context.string_cache.intern("__VA_ARGS__"),
-                                    tokenizer: self.tokenizer.clone(),
+                                    name:                context.string_cache.intern("__VA_ARGS__"),
+                                    tokenizer:           self.tokenizer.clone(),
+                                    enclosing_arguments: enclosing_arguments.clone(),
+                                    disabled_macros:     disabled_macros.clone(),
                                 },
                             ));
                             let mut paren_depth = 1isize;
@@ -3385,6 +3495,7 @@ impl Preprocessor {
                         }
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
+                                name: token.contents,
                                 arguments: Rc::new(arguments),
                                 is_variadic,
                             },
@@ -3394,85 +3505,42 @@ impl Preprocessor {
                         continue;
                     },
                     | MacroDefinition::BuiltIn => match context.string_cache.at(token.contents) {
+                        // C99 §6.10.8p1: each built-in expands to an ordinary
+                        // token spelled as C source, located at the invocation.
                         | "__FILE__" => {
-                            let builtin_macros = context.intern_source_file(
-                                PathBuf::from("__builtin__macros").into_boxed_path(),
+                            let spelling = string_literal_spelling(
+                                &context.source_files[self.source_file_index()].to_string_lossy(),
                             );
-                            let source_file = &context.source_files[self.source_file_index()];
-                            let length = source_file.as_os_str().len();
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
-                                contents:       context
-                                    .string_cache
-                                    .intern(source_file.to_string_lossy()),
-                                source_vectors: context.create_source_vectors(
-                                    SourcePosition {
-                                        index:  0,
-                                        line:   1,
-                                        column: 1,
-                                    },
-                                    builtin_macros,
-                                    length,
-                                ),
+                                contents:       context.string_cache.intern(&spelling),
+                                source_vectors: token.source_vectors,
                             });
                         },
                         | "__LINE__" => {
-                            let string = self.line(context).to_string();
-                            let builtin_macros = context.intern_source_file(
-                                PathBuf::from("__builtin__macros").into_boxed_path(),
-                            );
+                            // Number spellings carry the trailing NUL that
+                            // numeric conversion expects.
+                            let spelling = format!("{}\0", self.line(context));
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::Number,
-                                contents:       context.string_cache.intern(&string),
-                                source_vectors: context.create_source_vectors(
-                                    SourcePosition {
-                                        index:  0,
-                                        line:   1,
-                                        column: 1,
-                                    },
-                                    builtin_macros,
-                                    string.len(),
-                                ),
+                                contents:       context.string_cache.intern(&spelling),
+                                source_vectors: token.source_vectors,
                             });
                         },
-                        | "__TIME__" => {
-                            let now = Local::now();
-                            let string = now.format("%H:%M:%S").to_string();
-                            let builtin_macros = context.intern_source_file(
-                                PathBuf::from("__builtin__macros").into_boxed_path(),
-                            );
-                            break 'base Some(PreprocessorToken {
-                                kind:           PreprocessorTokenType::String,
-                                contents:       context.string_cache.intern(&string),
-                                source_vectors: context.create_source_vectors(
-                                    SourcePosition {
-                                        index:  0,
-                                        line:   1,
-                                        column: 1,
-                                    },
-                                    builtin_macros,
-                                    string.len(),
-                                ),
+                        | name @ ("__DATE__" | "__TIME__") => {
+                            let is_date = name == "__DATE__";
+                            let timestamp = self
+                                .translation_timestamp
+                                .get_or_insert_with(TranslationTimestamp::now);
+                            let spelling = string_literal_spelling(if is_date {
+                                &timestamp.date
+                            } else {
+                                &timestamp.time
                             });
-                        },
-                        | "__DATE__" => {
-                            let now = Local::now();
-                            let string = now.format("%b %e %Y").to_string();
-                            let builtin_macros = context.intern_source_file(
-                                PathBuf::from("__builtin__macros").into_boxed_path(),
-                            );
                             break 'base Some(PreprocessorToken {
                                 kind:           PreprocessorTokenType::String,
-                                contents:       context.string_cache.intern(&string),
-                                source_vectors: context.create_source_vectors(
-                                    SourcePosition {
-                                        index:  0,
-                                        line:   1,
-                                        column: 1,
-                                    },
-                                    builtin_macros,
-                                    string.len(),
-                                ),
+                                contents:       context.string_cache.intern(&spelling),
+                                source_vectors: token.source_vectors,
                             });
                         },
                         | "_Pragma" => {
@@ -3506,8 +3574,12 @@ impl Preprocessor {
                                 self.prepare_pragma_operator_string(context, string_token.contents);
 
                             let tokenizer = take(&mut self.tokenizer);
-                            let pragma_string = context.intern_source_file(
+                            // Each operator gets its own identity: diagnostics
+                            // rendered later must quote this payload, not the
+                            // most recent one.
+                            let pragma_string = context.add_synthetic_source_file(
                                 PathBuf::from("<pragma string>").into_boxed_path(),
+                                input.clone(),
                             );
                             self.tokenizer = PreprocessorTokenizer::new(pragma_string, input);
                             self.parse_pragma_directive(context, string_token);
@@ -3646,20 +3718,82 @@ impl Preprocessor {
         &self,
         _context: &Context,
     ) -> Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>> {
-        for frame in self.tokenizer_stack.iter().rev() {
-            return match frame {
-                | TokenizerFrame {
-                    frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
-                    ..
-                } => continue,
-                | TokenizerFrame {
-                    frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. },
-                    ..
-                } => Some(arguments.clone()),
-                | _ => break,
-            };
+        match self.tokenizer_stack.last().map(|frame| &frame.frame_type) {
+            // Argument tokens belong to the invocation's caller. Looking them
+            // up in the callee's map can make a same-named parameter expand itself.
+            | Some(TokenizerFrameType::FunctionLikeMacroArgument { argument, .. }) =>
+                argument.enclosing_arguments.clone(),
+            | Some(TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. }) =>
+                Some(arguments.clone()),
+            | _ => None,
         }
-        None
+    }
+
+    fn macro_argument_is_at_end(&mut self, context: &mut Context) -> bool {
+        let Some(TokenizerFrame {
+            frame_type:
+                TokenizerFrameType::FunctionLikeMacroArgument {
+                    argument,
+                    paren_depth,
+                    ..
+                },
+            ..
+        }) = self.tokenizer_stack.last()
+        else {
+            return false;
+        };
+        let name = argument.name;
+        let depth = *paren_depth;
+        let position = self.position(context);
+        let next_is_end = loop {
+            match self.tokenizer.next_item(context) {
+                | Some(token)
+                    if matches!(
+                        token.kind,
+                        PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
+                    ) =>
+                    continue,
+                | Some(token) =>
+                    break self
+                        .update_macro_argument_paren_depth(context, token, name, depth)
+                        .is_none(),
+                | None => break true,
+            }
+        };
+        self.set_position(context, position);
+        next_is_end
+    }
+
+    fn macro_is_disabled(&self, name: StringCacheId) -> bool {
+        for frame in self.tokenizer_stack.iter().rev() {
+            match &frame.frame_type {
+                | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } => {
+                    return argument.disabled_macros.contains(&name);
+                },
+                | TokenizerFrameType::ObjectLikeMacroInvocation { name: active }
+                | TokenizerFrameType::FunctionLikeMacroInvocation { name: active, .. }
+                    if *active == name =>
+                    return true,
+                | _ => (),
+            }
+        }
+        false
+    }
+
+    fn disabled_macros(&self) -> Rc<[StringCacheId]> {
+        let mut names = Vec::new();
+        for frame in self.tokenizer_stack.iter().rev() {
+            match &frame.frame_type {
+                | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } => {
+                    names.extend_from_slice(&argument.disabled_macros);
+                    break;
+                },
+                | TokenizerFrameType::ObjectLikeMacroInvocation { name }
+                | TokenizerFrameType::FunctionLikeMacroInvocation { name, .. } => names.push(*name),
+                | _ => (),
+            }
+        }
+        Rc::from(names)
     }
 
     fn handle_macro_argument(
@@ -3914,14 +4048,24 @@ impl Preprocessor {
         token: PreprocessorToken,
     ) -> CharacterTokenType {
         let contents = self.eval_escape_sequences(context, token);
+        let wide = context.string_cache.at(token.contents).starts_with('L');
         if contents.chars().take(2).count() != 1 {
+            if !wide && !contents.is_empty() {
+                // C99 6.4.4.4 leaves this value implementation-defined. Pack
+                // UTF-8 execution bytes most-significant first into an int,
+                // keeping the final four bytes when the spelling is longer.
+                let value = contents
+                    .bytes()
+                    .fold(0_i32, |value, byte| value.wrapping_shl(8) | i32::from(byte));
+                return CharacterTokenType::MultiChar(value);
+            }
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
                 source_vectors: token.source_vectors,
             });
         }
         let char = contents.chars().next().unwrap_or('\0');
-        if context.string_cache.at(token.contents).starts_with('L') {
+        if wide {
             CharacterTokenType::WideChar(char)
         } else {
             CharacterTokenType::Char(char)
@@ -4117,7 +4261,7 @@ impl Preprocessor {
                     Some(TokenizerFrame {
                         frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. }
                             | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                            | TokenizerFrameType::ObjectLikeMacroInvocation,
+                            | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
                         ..
                     })
                 ) {
@@ -4152,15 +4296,17 @@ impl Preprocessor {
         _hash_hash: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
+        let lhs_frame = self.handle_macro_argument(context, lhs);
+        let rhs_frame = self.handle_macro_argument(context, rhs);
         self.hash_hash_stack.push(HashHash::Empty);
-        let rhs_is_macro_argument = if let Some(frame) = self.handle_macro_argument(context, rhs) {
+        let rhs_is_macro_argument = if let Some(frame) = rhs_frame {
             self.push_tokenizer_frame(context, frame);
             true
         } else {
             *self.hash_hash_stack.last_mut().unwrap() = HashHash::Rhs(rhs);
             false
         };
-        if let Some(frame) = self.handle_macro_argument(context, lhs) {
+        if let Some(frame) = lhs_frame {
             self.push_tokenizer_frame(context, frame);
         } else if rhs_is_macro_argument {
             *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs);
@@ -5168,7 +5314,11 @@ impl Preprocessor {
             ,
             "parsing defined operator",
         ) else {
+            // The malformed operator still stands for one operand, so the
+            // expression continues in the binary state without cascading.
+            self.skip_token_unless_line_end(context);
             self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+            self.expression_parser.state = PreprocessorExpressionParserState::Binary;
             return;
         };
         if ident_or_opening_paren.kind == PreprocessorTokenType::Identifier {
@@ -5199,9 +5349,11 @@ impl Preprocessor {
             },
             "parsing defined operator",
         ) else {
+            self.skip_token_unless_line_end(context);
             self.expression_parser
                 .operand_stack
                 .push(PreprocessorExpressionOperand::Signed(0));
+            self.expression_parser.state = PreprocessorExpressionParserState::Binary;
             return;
         };
 
@@ -5224,20 +5376,28 @@ impl Preprocessor {
         self.expression_parser.state = PreprocessorExpressionParserState::Binary;
     }
 
-    fn last_binary_operator(&mut self) -> PreprocessorExpressionOperator {
+    /// Consumes the next token of a directive after it was diagnosed, unless
+    /// it ends the line.
+    fn skip_token_unless_line_end(&mut self, context: &mut Context) {
+        let position = self.position(context);
+        match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
+            | Some(token) if token.kind != PreprocessorTokenType::Newline => {},
+            | _ => self.set_position(context, position),
+        }
+    }
+
+    /// Pops to the innermost pending binary operator, if any. A missing one
+    /// means the dangling operand was already diagnosed (for example a unary
+    /// operator with no operand).
+    fn last_binary_operator(&mut self) -> Option<PreprocessorExpressionOperator> {
         loop {
-            match self
-                .expression_parser
-                .operator_stack
-                .pop()
-                .expect("Compiler bug: No binary operator in expression stack")
-            {
+            match self.expression_parser.operator_stack.pop()? {
                 | PreprocessorExpressionOperator::OpeningParenthesis
                 | PreprocessorExpressionOperator::UnaryMinus
                 | PreprocessorExpressionOperator::UnaryPlus
                 | PreprocessorExpressionOperator::BitwiseNot
                 | PreprocessorExpressionOperator::LogicalNot => continue,
-                | op => return op,
+                | op => return Some(op),
             }
         }
     }
@@ -5419,54 +5579,15 @@ impl Preprocessor {
                     },
                     (PreprocessorTokenType::Number, UNARY) => {
                         match self.parse_number(context, token,).kind {
-                            | TokenType::Float(f) => {
+                            | TokenType::Float(_) => {
+                                // C99 §6.10.1p1 admits only integer constant
+                                // expressions. Recover with a zero operand
+                                // so evaluation continues without cascading.
                                 context.preprocessor_error(PreprocessorError {
                                     error_type: PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression,
                                     source_vectors: token.source_vectors,
                                 });
-                                match f {
-                                    FloatTokenType::Float(f) => {
-                                        if f.fract() != 0.0 || !f.is_finite() || f < i32::MIN as f32 || f > u32::MIN as f32 {
-                                            context.preprocessor_error(PreprocessorError {
-                                                error_type: PreprocessorErrorType::FloatCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(f),
-                                                source_vectors: token.source_vectors,
-                                            });
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
-                                        } else if f.is_sign_negative() {
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(f as i64));
-                                        } else {
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(f as u64));
-                                        }
-                                    }
-                                    FloatTokenType::Double(d) => {
-                                        if d.fract() != 0.0 || !d.is_finite() || d < i64::MIN as f64 || d > u64::MIN as f64 {
-                                            context.preprocessor_error(PreprocessorError {
-                                                error_type: PreprocessorErrorType::DoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(d),
-                                                source_vectors: token.source_vectors,
-                                            });
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
-                                        } else if d.is_sign_negative() {
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(d as i64));
-                                        } else {
-                                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(d as u64));
-                                        }
-                                    }
-                                    FloatTokenType::LongDouble(ld) => {
-                                        match long_double_to_operand(ld) {
-                                            Err(e) => {
-                                                match e.get() {
-                                                    1 => context.preprocessor_error(PreprocessorError {
-                                                        error_type: PreprocessorErrorType::LongDoubleCouldNotBeLosslesslyConvertedToIntegerInPreprocessorExpression(ld),
-                                                        source_vectors: token.source_vectors,
-                                                    }),
-                                                    _ => unreachable!("Compiler bug: long_double_to_operand should only return 1 or 0."),
-                                                }
-                                                self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
-                                            }
-                                            Ok(o) => self.expression_parser.operand_stack.push(o),
-                                        }
-                                    }
-                                }
+                                self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
                             },
                             | TokenType::Integer(v) => match v {
                                 | IntegerTokenType::Int(i) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(i64::from(i))),
@@ -5500,7 +5621,7 @@ impl Preprocessor {
                         },
                     ),
                     (PreprocessorTokenType::Character, UNARY) => {
-                        let value = i64::from(u32::from(char::from(self.parse_character(context, token))));
+                        let value = i64::from(self.parse_character(context, token));
                         self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(value));
                         self.expression_parser.state = BINARY;
                     },
@@ -5517,12 +5638,14 @@ impl Preprocessor {
                 },
             }
         }
-        if self.expression_parser.state == UNARY {
+        if self.expression_parser.state == UNARY
+            && let Some(operator) = self.last_binary_operator()
+        {
             let source_vectors =
                 context.create_source_vectors(self.position(context), self.source_file_index(), 0);
             context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(
-                        self.last_binary_operator(),
+                        operator,
                     ),
                     source_vectors
                 }
@@ -5580,126 +5703,138 @@ impl Preprocessor {
         }
     }
 
-    fn skip_over_dead_code(&mut self, context: &mut Context) {
-        let start_balance = self.if_directive_balance;
+    /// Skips the lines of a conditional group that is not being translated
+    /// (C99 §6.10.1p6). Only conditional directives are recognized inside
+    /// skipped lines; every other line, including malformed directives, is
+    /// ignored.
+    ///
+    /// `at_line_start` says whether the directive that started the skip has
+    /// already consumed its terminating newline.
+    fn skip_over_dead_code(
+        &mut self,
+        context: &mut Context,
+        mut at_line_start: bool,
+        mode: SkipMode,
+    ) {
+        let depth = self.open_conditionals.len();
         context.set_ignore_tokenizer_errors(true);
-        'outer: while start_balance <= self.if_directive_balance {
-            match self.tokenizer.next_item(context) {
-                | Some(token) => match token.kind {
-                    | PreprocessorTokenType::Newline => {
-                        'newline: loop {
-                            match self.tokenizer.next_item(context) {
-                                | Some(token) if token.kind != PreprocessorTokenType::Hash =>
-                                    if token.kind == PreprocessorTokenType::Newline {
-                                        continue 'newline;
-                                    } else {
-                                        continue 'outer;
-                                    },
-                                | Some(_) => break 'newline,
-                                | None => {
-                                    context.preprocessor_error(PreprocessorError {
-                                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                            "parsing dead code. Expected #endif instead",
-                                        ),
-                                        source_vectors: token.source_vectors,
-                                    });
-                                    return;
-                                },
-                            }
-                        }
-                        let directive_name = match Self::next_ignore_whitespace(
-                            &mut self.tokenizer,
-                            context,
-                        ) {
-                            | Some(token) if token.kind == PreprocessorTokenType::Identifier =>
-                                token,
-                            | Some(token) => {
-                                context.preprocessor_error(PreprocessorError {
-                                            error_type: PreprocessorErrorType::ExpectedIdentifierInPreprocessorDirective(token.kind),
-                                            source_vectors: token.source_vectors,
-                                        },
-                                    );
-                                return;
-                            },
-                            | None => {
-                                context.preprocessor_error(PreprocessorError {
-                                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                        "parsing dead code. Expected #endif instead.",
-                                    ),
-                                    source_vectors: token.source_vectors,
-                                });
-                                return;
-                            },
-                        };
-                        match context.string_cache.at(directive_name.contents) {
-                            | "endif" => {
-                                self.if_directive_balance -= 1;
-                            },
-                            | "if" | "ifndef" | "ifdef" => {
-                                self.if_directive_balance += 1;
-                            },
-                            | "elif" if self.if_directive_balance == start_balance => {
-                                if self.eval_preprocessor_expression(
-                                    context,
-                                    PreprocessorErrorType::NoConditionInElifDirective,
-                                ) {
-                                    break;
-                                }
-                            },
-                            | "else" if self.if_directive_balance == start_balance => break,
-                            | _ => (),
-                        }
-                    },
-                    | _ => continue,
+        'lines: while depth > 0 && self.open_conditionals.len() >= depth {
+            if !at_line_start {
+                loop {
+                    match self.tokenizer.next_item(context) {
+                        | Some(token) if token.kind == PreprocessorTokenType::Newline => break,
+                        | Some(_) => {},
+                        | None => break 'lines,
+                    }
+                }
+            }
+            at_line_start = false;
+            let Some(first) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
+                break 'lines;
+            };
+            match first.kind {
+                | PreprocessorTokenType::Newline => {
+                    at_line_start = true;
+                    continue 'lines;
                 },
-                | None => {
+                | PreprocessorTokenType::Hash => {},
+                | _ => continue 'lines,
+            }
+            let Some(name) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
+                break 'lines;
+            };
+            match name.kind {
+                | PreprocessorTokenType::Newline => {
+                    at_line_start = true;
+                    continue 'lines;
+                },
+                | PreprocessorTokenType::Identifier => {},
+                | _ => continue 'lines,
+            }
+            let innermost = self.open_conditionals.len() == depth;
+            match context.string_cache.at(name.contents) {
+                | "if" | "ifdef" | "ifndef" => self
+                    .open_conditionals
+                    .push(context.get_source_vectors(name.source_vectors).into()),
+                | "endif" => {
+                    drop(self.open_conditionals.pop());
+                },
+                | "elif" if innermost && mode == SkipMode::FalseGroup => {
                     context.set_ignore_tokenizer_errors(false);
-                    return;
+                    let taken = self.eval_preprocessor_expression(
+                        context,
+                        PreprocessorErrorType::NoConditionInElifDirective,
+                    );
+                    if taken {
+                        self.last_was_newline = true;
+                        self.current_is_newline = true;
+                        return;
+                    }
+                    context.set_ignore_tokenizer_errors(true);
+                    at_line_start = true;
                 },
+                | "else" if innermost && mode == SkipMode::FalseGroup => break 'lines,
+                | _ => {},
             }
         }
         context.set_ignore_tokenizer_errors(false);
+        if !at_line_start {
+            self.skip_until_newline(context);
+        }
+        self.last_was_newline = true;
+        self.current_is_newline = true;
     }
 
-    fn parse_if_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        self.if_directive_balance += 1;
+    fn parse_if_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
+        self.open_conditionals
+            .push(context.get_source_vectors(directive.source_vectors).into());
         if self
             .eval_preprocessor_expression(context, PreprocessorErrorType::NoConditionInIfDirective)
         {
             self.last_was_newline = true;
             self.current_is_newline = true;
         } else {
-            self.skip_over_dead_code(context);
+            self.skip_over_dead_code(context, true, SkipMode::FalseGroup);
         }
     }
 
+    /// `#elif` and `#else` reached while translating a group end that group:
+    /// the rest of the conditional is skipped through its `#endif`.
     fn parse_elif_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
-        if self.if_directive_balance <= 0 {
-            context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
-                source_vectors: directive.source_vectors,
-            });
-        }
-        self.skip_until_newline(context);
-        // Elif directives only matter if we are currently skipping over dead
-        // code.
+        self.skip_remaining_groups(
+            context,
+            directive,
+            PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
+        );
     }
 
     fn parse_else_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
-        if self.if_directive_balance <= 0 {
+        self.skip_remaining_groups(
+            context,
+            directive,
+            PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
+        );
+    }
+
+    fn skip_remaining_groups(
+        &mut self,
+        context: &mut Context,
+        directive: PreprocessorToken,
+        unmatched_error: PreprocessorErrorType,
+    ) {
+        if self.open_conditionals.is_empty() {
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
+                error_type:     unmatched_error,
                 source_vectors: directive.source_vectors,
             });
+            self.skip_until_newline(context);
+            return;
         }
-        self.skip_until_newline(context);
-        // Else directives only matter if we are currently skipping over dead
-        // code.
+        self.skip_over_dead_code(context, false, SkipMode::ToEndif);
     }
 
     fn parse_endif_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
-        self.if_directive_balance -= 1;
-        if self.if_directive_balance < 0 {
+        if self.open_conditionals.pop().is_none() {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
                 source_vectors: directive.source_vectors,
@@ -5708,135 +5843,130 @@ impl Preprocessor {
         self.skip_until_newline(context);
     }
 
-    fn parse_ifdef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        self.if_directive_balance += 1;
-        if let Some(name) = self.expect_token_from_previous_phase::<true>(
+    fn parse_ifdef_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
+        self.parse_macro_test_directive(context, directive, true);
+    }
+
+    fn parse_ifndef_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
+        self.parse_macro_test_directive(context, directive, false);
+    }
+
+    /// Handles `#ifdef` (`wants_defined`) and `#ifndef`. A missing macro name
+    /// is diagnosed and the group is skipped, as GCC and Clang do.
+    fn parse_macro_test_directive(
+        &mut self,
+        context: &mut Context,
+        directive: PreprocessorToken,
+        wants_defined: bool,
+    ) {
+        self.open_conditionals
+            .push(context.get_source_vectors(directive.source_vectors).into());
+        let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Identifier,
             |_, _, token| {
                 ControlFlow::Break(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(
-                        token.kind,
-                    ),
+                    error_type:     if wants_defined {
+                        PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(token.kind)
+                    } else {
+                        PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(token.kind)
+                    },
                     source_vectors: token.source_vectors,
                 })
             },
-            "parsing ifdef directive",
-        ) && !self.macro_definitions.contains_key(&name.contents)
-        {
-            self.skip_over_dead_code(context);
+            if wants_defined {
+                "parsing ifdef directive"
+            } else {
+                "parsing ifndef directive"
+            },
+        ) else {
+            self.skip_over_dead_code(context, false, SkipMode::FalseGroup);
             return;
-        }
+        };
         if self
             .expect_token_from_previous_phase::<true>(
                 context,
                 |_, _, t| t.kind == PreprocessorTokenType::Newline,
                 |_, _, t| {
                     ControlFlow::Break(PreprocessorError {
-                        error_type:     PreprocessorErrorType::ExtraTokensAfterIfdefDirective,
+                        error_type:     if wants_defined {
+                            PreprocessorErrorType::ExtraTokensAfterIfdefDirective
+                        } else {
+                            PreprocessorErrorType::ExtraTokensAfterIfndefDirective
+                        },
                         source_vectors: t.source_vectors,
                     })
                 },
-                "parsing ifdef directive.",
+                "parsing conditional directive",
             )
             .is_none()
         {
             self.skip_until_newline(context);
         }
-    }
-
-    fn parse_ifndef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        self.if_directive_balance += 1;
-        if let Some(name) = self.expect_token_from_previous_phase::<true>(
-            context,
-            |_, _, t| t.kind == PreprocessorTokenType::Identifier,
-            |_, _, token| {
-                ControlFlow::Break(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(
-                        token.kind,
-                    ),
-                    source_vectors: token.source_vectors,
-                })
-            },
-            "parsing ifndef directive",
-        ) && !self.macro_definitions.contains_key(&name.contents)
-        {
-            self.skip_over_dead_code(context);
-            return;
-        }
-        if self
-            .expect_token_from_previous_phase::<true>(
-                context,
-                |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                |_, _, t| {
-                    ControlFlow::Break(PreprocessorError {
-                        error_type:     PreprocessorErrorType::ExtraTokensAfterIfndefDirective,
-                        source_vectors: t.source_vectors,
-                    })
-                },
-                "parsing ifndef directive.",
-            )
-            .is_none()
-        {
-            self.skip_until_newline(context);
+        if self.macro_definitions.contains_key(&name.contents) == wants_defined {
+            self.last_was_newline = true;
+            self.current_is_newline = true;
+        } else {
+            self.skip_over_dead_code(context, true, SkipMode::FalseGroup);
         }
     }
 
-    fn search_for_header_in(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
-        for dir in dirs {
-            let mut header_path = dir.clone();
-            header_path.push(path);
-            if header_path.exists() {
-                return Some(header_path);
-            }
-        }
-        None
-    }
-
+    /// Resolves an include name the way GCC and Clang do (C99 §6.10.2p2-3
+    /// leave the places implementation-defined):
+    ///
+    /// 1. `"name"` first looks beside the file containing the directive (for
+    ///    `--input`, whose name has no directory, that is the working
+    ///    directory), then in each `--iquote` directory.
+    /// 2. Both forms then search each `--isystem` directory, `CPATH`, and
+    ///    `C_INCLUDE_PATH`.
+    ///
+    /// The process working directory is never searched implicitly, so the
+    /// result depends on the source tree rather than where the compiler runs.
+    ///
+    /// `including_file` is the file containing the directive, captured before
+    /// a macro-expanded operand can switch to its definition's tokenizer.
     fn find_header_from_path(
         &mut self,
         context: &mut Context,
+        including_file: u32,
         include_token: PreprocessorToken,
         path: &Path,
         is_system_header: bool,
     ) -> Option<u32> {
-        let header = 'ret: {
-            if path.is_absolute() {
-                if path.exists() {
-                    break 'ret path.to_owned();
+        let mut searched = Vec::new();
+        let header = if path.is_absolute() {
+            path.is_file().then(|| path.to_owned())
+        } else {
+            let mut candidates = Vec::new();
+            if !is_system_header {
+                let including_file = context.get_source_file(including_file);
+                candidates.push(
+                    including_file
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default(),
+                );
+                candidates.extend(self.quote_include_directories.iter().cloned());
+            }
+            candidates.extend(self.system_include_directories.iter().cloned());
+            let mut found = None;
+            for directory in candidates {
+                let candidate = directory.join(path);
+                if candidate.is_file() {
+                    found = Some(candidate);
+                    break;
                 }
-                context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::HeaderNotFound,
-                    source_vectors: include_token.source_vectors,
-                });
-                return None;
+                searched.push(directory);
             }
-
-            if is_system_header
-                && let Some(header) =
-                    Self::search_for_header_in(path, &self.system_include_directories)
-            {
-                break 'ret header;
-            }
-            if let Some(header) = Self::search_for_header_in(path, &self.quote_include_directories)
-            {
-                break 'ret header;
-            }
-
-            let Ok(cwd) = std::env::current_dir().map_err(|e| {
-                context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::CurrentWorkingDirectoryInaccessible(e),
-                    source_vectors: include_token.source_vectors,
-                });
-            }) else {
-                return None;
-            };
-            if let Some(header) = Self::search_for_header_in(path, &[cwd]) {
-                break 'ret header;
-            }
-
+            found
+        };
+        let Some(header) = header else {
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::HeaderNotFound,
+                error_type:     PreprocessorErrorType::HeaderNotFound {
+                    name: path.to_string_lossy().into_owned(),
+                    is_system_header,
+                    searched,
+                },
                 source_vectors: include_token.source_vectors,
             });
             return None;
@@ -5850,6 +5980,7 @@ impl Preprocessor {
     }
 
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
+        let including_file = self.source_file_index();
         context.set_is_tokenizing_include_string(true);
         let include_string =
             self.expect_token_without_rewind::<true>(
@@ -5905,7 +6036,7 @@ impl Preprocessor {
                     self.skip_until_newline(context);
                 }
 
-                self.find_header_from_path(context, include_string, path, false)
+                self.find_header_from_path(context, including_file, include_string, path, false)
             },
             | PreprocessorTokenType::AngleBracketString => {
                 let contents = context
@@ -5932,7 +6063,7 @@ impl Preprocessor {
                 {
                     self.skip_until_newline(context);
                 }
-                self.find_header_from_path(context, include_string, path, true)
+                self.find_header_from_path(context, including_file, include_string, path, true)
             },
             | _ => {
                 let mut contents = TokenString::new();
@@ -5978,7 +6109,7 @@ impl Preprocessor {
                     contents:       context.string_cache.intern(&contents),
                     kind:           PreprocessorTokenType::AngleBracketString,
                 };
-                self.find_header_from_path(context, synthetic_token, path, true)
+                self.find_header_from_path(context, including_file, synthetic_token, path, true)
             },
         };
         let Some(header_source_index) = header_source_index else {
@@ -5993,14 +6124,13 @@ impl Preprocessor {
         }) else {
             return;
         };
+        let header_string = SharedString::from(header_string);
+        context.record_source_text(header_source_index, header_string.clone());
         self.push_tokenizer_frame(
             context,
             TokenizerFrame {
                 frame_type: TokenizerFrameType::SourceFile,
-                tokenizer:  PreprocessorTokenizer::new(
-                    header_source_index,
-                    SharedString::from(header_string),
-                ),
+                tokenizer:  PreprocessorTokenizer::new(header_source_index, header_string),
             },
         );
         self.last_was_newline = true;
@@ -6032,25 +6162,36 @@ impl Preprocessor {
                 | MacroDefinition::FunctionLike { tokenizer, .. }
                 | MacroDefinition::ObjectLike { tokenizer, .. } => Some(tokenizer.clone()),
                 | MacroDefinition::BuiltIn => {
+                    // C99 §6.10.8p4: predefined macro names cannot be
+                    // redefined, so the built-in definition stays in effect.
                     context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::RedefinitionOfBuiltInMacro(
                             context.string_cache.at(name.contents).to_owned(),
                         ),
                         source_vectors: name.source_vectors,
                     });
-                    None
+                    self.skip_until_newline(context);
+                    return;
                 },
             },
         };
-        let opening_paren = match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
+        // A function-like definition requires '(' immediately after its name.
+        // The probe may consume the directive's newline when the replacement
+        // list is empty; remember that so the next line is not skipped too.
+        let mut line_ended = false;
+        let opening_paren = match self.tokenizer.next_item(context) {
             | Some(
                 token @ PreprocessorToken {
                     kind: PreprocessorTokenType::OpeningParenthesis,
                     ..
                 },
             ) => Some(token),
-            | Some(_) => None,
+            | Some(token) => {
+                line_ended = token.kind == PreprocessorTokenType::Newline;
+                None
+            },
             | None => {
+                line_ended = true;
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing macro definition",
@@ -6061,7 +6202,7 @@ impl Preprocessor {
             },
         };
         if opening_paren.is_some() {
-            if old_definition.is_some_and(|d| match d {
+            if old_definition.as_ref().is_some_and(|d| match d {
                 | MacroDefinition::ObjectLike { .. } => true,
                 | MacroDefinition::FunctionLike { .. } => false,
                 | MacroDefinition::BuiltIn => {
@@ -6141,7 +6282,7 @@ impl Preprocessor {
                 },
             ));
         } else {
-            if old_definition.is_some_and(|d| match d {
+            if old_definition.as_ref().is_some_and(|d| match d {
                 | MacroDefinition::ObjectLike { .. } => false,
                 | MacroDefinition::FunctionLike { .. } => true,
                 | MacroDefinition::BuiltIn => {
@@ -6165,8 +6306,44 @@ impl Preprocessor {
         }
         let mut last = Option::<PreprocessorToken>::None;
         if let Some(mut old_tokenizer) = old_tokenizer {
+            // Compare replacement lists body to body, and parameter lists
+            // separately (C99 §6.10.3p2).
+            let (mut new_tokenizer, parameters_match) =
+                match (self.macro_definitions.get(&name.contents), &old_definition) {
+                    | (
+                        Some(MacroDefinition::FunctionLike {
+                            tokenizer,
+                            argument_names,
+                            is_variadic,
+                        }),
+                        Some(MacroDefinition::FunctionLike {
+                            argument_names: old_argument_names,
+                            is_variadic: old_is_variadic,
+                            ..
+                        }),
+                    ) => (
+                        tokenizer.clone(),
+                        argument_names == old_argument_names && is_variadic == old_is_variadic,
+                    ),
+                    | (
+                        Some(
+                            MacroDefinition::FunctionLike { tokenizer, .. }
+                            | MacroDefinition::ObjectLike { tokenizer },
+                        ),
+                        _,
+                    ) => (tokenizer.clone(), true),
+                    | _ => (tokenizer, true),
+                };
             let mut error_has_been_generated = false;
-            let mut new_tokenizer = tokenizer;
+            if !parameters_match {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
+                        context.string_cache.at(name.contents).to_owned(),
+                    ),
+                    source_vectors: name.source_vectors,
+                });
+                error_has_been_generated = true;
+            }
             loop {
                 let old_next = old_tokenizer.next_item(context);
                 let new_next = new_tokenizer.next_item(context);
@@ -6180,7 +6357,9 @@ impl Preprocessor {
                         source_vectors: t.source_vectors,
                     });
                 }
-                if old_next != new_next && !error_has_been_generated {
+                if !same_replacement_token(context, old_next.as_ref(), new_next.as_ref())
+                    && !error_has_been_generated
+                {
                     context.preprocessor_error(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
@@ -6208,7 +6387,8 @@ impl Preprocessor {
                 }
                 last = new_next;
             }
-        } else {
+        }
+        if !line_ended {
             loop {
                 match self.tokenizer.next_item(context) {
                     | Some(token) if token.kind == PreprocessorTokenType::Newline => break,
@@ -6269,23 +6449,22 @@ impl Preprocessor {
             self.skip_and_expand_until_newline(context);
             return;
         };
+        let digits = context
+            .string_cache
+            .at(token.contents)
+            .trim_end_matches('\0');
+        if !digits.bytes().all(|b| b.is_ascii_digit()) {
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence,
+                source_vectors: token.source_vectors,
+            });
+            self.skip_and_expand_until_newline(context);
+            return;
+        }
         let (value, did_overflow) = {
             let mut value = 0i128;
-            let mut did_generate_error = false;
             let mut did_overflow = false;
-            for b in context.string_cache.at(token.contents).bytes() {
-                if !b.is_ascii_digit() && !did_generate_error {
-                    did_generate_error = true;
-                    Context::raw_preprocessor_error(
-                        &mut context.pending_errors,
-                        PreprocessorError {
-                            error_type:
-                                PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence,
-                            source_vectors: token.source_vectors,
-                        },
-                    );
-                    continue;
-                }
+            for b in digits.bytes() {
                 value *= 10;
                 if value > i128::from(i32::MAX) {
                     did_overflow = true;
@@ -6347,40 +6526,24 @@ impl Preprocessor {
         }
     }
 
-    fn parse_error_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
+    fn parse_error_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         let mut contents = String::new();
-        loop {
-            match self.tokenizer.next_item(context) {
-                | Some(token) if token.kind == PreprocessorTokenType::Newline => break,
-                | Some(token) => {
-                    let mut s = context.string_cache.at(token.contents);
-                    if token.kind == PreprocessorTokenType::Number {
-                        // Remove trailing null byte.
-                        s = &s[..s.len() - 1];
-                    }
-                    contents.push_str(s);
-                },
-                | None => {
-                    let source_vectors = context.create_source_vectors(
-                        self.position(context),
-                        self.source_file_index(),
-                        0,
-                    );
-                    context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
-                            "parsing error directive",
-                        ),
-                        source_vectors,
-                    });
-                    break;
-                },
+        // A directive ending at end of file is complete; the missing final
+        // newline is diagnosed on its own.
+        while let Some(token) = self.tokenizer.next_item(context) {
+            if token.kind == PreprocessorTokenType::Newline {
+                break;
             }
+            contents.push_str(
+                context
+                    .string_cache
+                    .at(token.contents)
+                    .trim_end_matches('\0'),
+            );
         }
-        let source_vectors =
-            context.create_source_vectors(self.position(context), self.source_file_index(), 0);
         context.preprocessor_error(PreprocessorError {
-            error_type: PreprocessorErrorType::ErrorDirective(contents),
-            source_vectors,
+            error_type:     PreprocessorErrorType::ErrorDirective(contents),
+            source_vectors: directive.source_vectors,
         });
     }
 
@@ -6690,7 +6853,7 @@ impl Preprocessor {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
                         from: SignedIntegerLiteralType::Int,
-                        to:   UnsignedIntegerLiteralType::UnsignedLong,
+                        to:   UnsignedIntegerLiteralType::UnsignedLongLong,
                     },
                     source_vectors: token.source_vectors,
                 });
@@ -6802,9 +6965,12 @@ impl Preprocessor {
                     contents:       token.contents,
                 }
             },
-            | Err(ParseFloatError::Overflow(kind)) => {
+            | Err(ParseFloatError::OutOfRange(kind, error)) => {
                 context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::FloatLiteralOverflow(kind),
+                    error_type:     PreprocessorErrorType::FloatConstantOutOfRange {
+                        type_name: kind.type_name(),
+                        error,
+                    },
                     source_vectors: token.source_vectors,
                 });
                 Token {

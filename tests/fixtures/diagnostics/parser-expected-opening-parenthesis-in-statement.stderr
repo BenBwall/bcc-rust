@@ -1,0 +1,7 @@
+error: expected `(` in `if` statement, found integer constant `1`
+ --> parser-expected-opening-parenthesis-in-statement.c:1:18
+  |
+1 | int f(void) { if 1) return 0; }
+  |                  ^ expected `(`
+
+1 error generated.

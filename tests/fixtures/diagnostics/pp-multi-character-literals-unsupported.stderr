@@ -1,0 +1,9 @@
+error: wide character constant with more than one character
+ --> pp-multi-character-literals-unsupported.c:1:13
+  |
+1 | int value = L'ab';
+  |             ^^^^^ its value is implementation-defined
+  |
+  = note: C99 §6.4.4.4p11: bcc does not assign a value to multi-character wide constants
+
+1 error generated.

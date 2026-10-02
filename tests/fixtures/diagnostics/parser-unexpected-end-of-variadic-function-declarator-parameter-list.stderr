@@ -1,0 +1,7 @@
+error: expected `)` after `...`, found end of file
+ --> parser-unexpected-end-of-variadic-function-declarator-parameter-list.c:2:1
+  |
+2 | 
+  | ^ expected `)`
+
+1 error generated.

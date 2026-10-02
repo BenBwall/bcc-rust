@@ -1,0 +1,9 @@
+error: expected an operator, found identifier `b`
+ --> parser-expected-statement-expression-operator.c:1:17
+  |
+1 | int f(void) { a b; }
+  |                 ^ expected an operator or the end of the expression
+  |
+  = help: if this starts a new declaration, add `;` before it
+
+1 error generated.

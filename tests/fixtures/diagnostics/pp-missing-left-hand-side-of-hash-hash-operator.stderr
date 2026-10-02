@@ -1,0 +1,9 @@
+error: `##` cannot start a replacement list
+ --> pp-missing-left-hand-side-of-hash-hash-operator.c:2:13
+  |
+2 | #define F(a)##a
+  |             ^^ nothing precedes this `##`
+  |
+  = note: C99 §6.10.3.3p1: `##` needs a token on each side
+
+1 error generated.

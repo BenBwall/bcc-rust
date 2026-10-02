@@ -1,0 +1,12 @@
+error: expected a function body, found end of file
+ --> parser-expected-declaration-continuation-after-declarator-missing-semicolon.c:3:1
+  |
+1 | int value
+  |     ------ help: add `;` here
+  |     |
+  |     not a function, so later declarations were read as its parameters
+2 | int other;
+3 | 
+  | ^ expected `{`
+
+1 error generated.

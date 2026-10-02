@@ -1,0 +1,10 @@
+error: macro `F` redefined differently
+ --> pp-macro-redefined-with-different-definition.c:2:9
+  |
+2 | #define F 2
+  |         ^ this definition differs from the previous one
+  |
+  = note: C99 §6.10.3p2: a redefinition must have the same parameters and an identical replacement list
+  = help: add `#undef F` before this definition
+
+1 error generated.

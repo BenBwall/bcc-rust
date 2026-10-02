@@ -1,0 +1,7 @@
+error: expected `}`, found end of file
+ --> parser-expected-closing-curly-brace-in-compound-statement.c:2:1
+  |
+2 | 
+  | ^ expected `}`
+
+1 error generated.

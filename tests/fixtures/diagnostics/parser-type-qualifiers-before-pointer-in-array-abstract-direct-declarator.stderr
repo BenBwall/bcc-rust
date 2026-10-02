@@ -1,0 +1,9 @@
+error: type qualifiers before `*` in an abstract array declarator
+ --> parser-type-qualifiers-before-pointer-in-array-abstract-direct-declarator.c:1:33
+  |
+1 | int f(void) { sizeof(int [const *]); }
+  |                                 ^ not allowed in a type name
+  |
+  = note: C99 §6.7.6: an abstract array declarator allows only `[*]` here
+
+1 error generated.

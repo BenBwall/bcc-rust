@@ -1,0 +1,9 @@
+error: parameter declarations after a prototype
+ --> parser-declaration-list-after-parameter-type-list.c:1:14
+  |
+1 | int f(int a) int a; { return a; }
+  |              ^^^ old-style parameter declarations need an identifier list
+  |
+  = note: C99 §6.9.1p5-6: declarations between `)` and `{` are only allowed when the declarator lists bare parameter names
+
+1 error generated.

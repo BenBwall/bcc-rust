@@ -1,0 +1,9 @@
+error: remainder by zero in `#if` expression
+ --> pp-modulo-by-zero.c:2:1
+  |
+2 | #endif
+  | ^ the divisor is zero
+  |
+  = note: C99 §6.5.5p5: the result of `%` by zero is undefined
+
+1 error generated.

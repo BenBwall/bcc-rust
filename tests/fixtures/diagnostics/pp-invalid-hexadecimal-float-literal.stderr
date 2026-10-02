@@ -1,0 +1,9 @@
+error: invalid hexadecimal floating constant `0x1.p`
+ --> pp-invalid-hexadecimal-float-literal.c:1:16
+  |
+1 | double value = 0x1.p;
+  |                ^^^^^ not a valid hexadecimal floating constant
+  |
+  = note: C99 §6.4.4.2: a hexadecimal floating constant needs hexadecimal digits and a binary exponent, as in `0x1.8p3`
+
+1 error generated.

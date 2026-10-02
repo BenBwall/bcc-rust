@@ -1,0 +1,7 @@
+error: expected `,` or `}` after the enumerator, found identifier `B`
+ --> parser-expected-comma-or-closing-curly-in-enumerator-list.c:1:12
+  |
+1 | enum E { A B };
+  |            ^ expected `,` or `}`
+
+1 error generated.

@@ -1,0 +1,7 @@
+error: expected `}` to close the member list, found end of file
+ --> parser-expected-closing-curly-brace-in-struct-declaration-list.c:2:1
+  |
+2 | 
+  | ^ expected `}`
+
+1 error generated.

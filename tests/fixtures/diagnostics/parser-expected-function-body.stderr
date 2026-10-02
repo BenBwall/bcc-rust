@@ -1,0 +1,7 @@
+error: expected a function body, found end of file
+ --> parser-expected-function-body.c:2:1
+  |
+2 | 
+  | ^ expected `{`
+
+1 error generated.

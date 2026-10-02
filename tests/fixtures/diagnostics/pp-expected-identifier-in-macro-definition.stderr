@@ -1,0 +1,7 @@
+error: expected a parameter name, found number `1`
+ --> pp-expected-identifier-in-macro-definition.c:1:11
+  |
+1 | #define F(1) 1
+  |           ^ expected an identifier or `...`
+
+1 error generated.

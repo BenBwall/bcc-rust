@@ -1,0 +1,7 @@
+error: expected an identifier or `(` in the declarator, found `;`
+ --> parser-expected-declarator-in-declaration.c:1:8
+  |
+1 | int a, ;
+  |        ^ expected a name
+
+1 error generated.

@@ -1,0 +1,9 @@
+warning: cannot redefine predefined macro `__LINE__`
+ --> pp-redefinition-of-built-in-macro.c:1:9
+  |
+1 | #define __LINE__ 5
+  |         ^^^^^^^^ predefined by the implementation
+  |
+  = note: C99 §6.10.8p4: predefined macro names shall not be redefined
+
+1 warning generated.

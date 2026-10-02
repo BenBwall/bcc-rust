@@ -1,0 +1,7 @@
+error: unexpected identifier after `#line`
+ --> "file.c":5:18
+
+error: expected `;`, found keyword `int`
+ --> "file.c":6:1
+
+2 errors generated.

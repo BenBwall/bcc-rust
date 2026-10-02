@@ -22,6 +22,49 @@ mod tests {
     }
 
     #[test]
+    fn cli_help_prints_usage_to_stdout_and_succeeds_without_input() {
+        for flag in ["--help", "-h"] {
+            let output = run(&[flag]);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            assert!(output.status.success(), "{flag}: {output:?}");
+            assert!(output.stderr.is_empty(), "{flag}: {output:?}");
+            for expected in ["Usage:", "INPUT_FILE", "--input", "--syntax-tree"] {
+                assert!(stdout.contains(expected), "{flag}: {stdout}");
+            }
+        }
+    }
+
+    #[test]
+    fn cli_version_prints_to_stdout_and_succeeds_without_input() {
+        for flag in ["--version", "-V"] {
+            let output = run(&[flag]);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            assert!(output.status.success(), "{flag}: {output:?}");
+            assert!(output.stderr.is_empty(), "{flag}: {output:?}");
+            assert_eq!(
+                stdout.trim(),
+                concat!("bcc-rust ", env!("CARGO_PKG_VERSION")),
+                "{flag}: {stdout}"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_argument_errors_print_to_stderr_and_use_the_usage_exit_code() {
+        for arguments in [&[][..], &["--unknown-option"][..]] {
+            let output = run(arguments);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+            assert!(output.stdout.is_empty(), "{arguments:?}: {output:?}");
+            assert!(stderr.contains("Usage:"), "{arguments:?}: {stderr}");
+            assert!(stderr.contains("--help"), "{arguments:?}: {stderr}");
+        }
+    }
+
+    #[test]
     fn parser_output_modes_are_wired_through_the_cli() {
         let default = run(&["--input", "int value;\n"]);
         assert!(default.status.success());
@@ -77,8 +120,16 @@ mod tests {
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         assert!(output.status.success(), "{output:?}");
-        assert!(stderr.contains("at 1:"), "{stderr}");
-        assert!(!stderr.contains("at 0:[SourceVector"), "{stderr}");
+        let header = std::path::Path::new("test-programs").join("once.h");
+        assert!(
+            stderr.contains(&format!(
+                "--> {}:3:1",
+                source.with_file_name("once.h").display()
+            )) || stderr.contains(&format!("{}:3:1", header.display())),
+            "{stderr}"
+        );
+        assert!(stderr.contains("3 | 123"), "{stderr}");
+        assert!(!stderr.contains("SourceVector"), "{stderr}");
     }
 
     #[test]
@@ -92,18 +143,111 @@ mod tests {
 
         assert!(output.status.success(), "{output:?}");
         assert!(
-            stderr.contains(
-                "context: code=Syntax frame=Declaration expected=DeclarationContinuation"
-            ),
+            stderr
+                .contains("error: expected `,`, `=`, `;`, or a function body after the declarator"),
             "{stderr}"
         );
-        assert!(stderr.contains("discarded input:"), "{stderr}");
-        assert!(
-            stderr.contains("recovery: owner=Declaration discarded-tokens=2"),
-            "{stderr}"
-        );
-        assert!(stderr.contains("note: parsing resumes here"), "{stderr}");
+        assert!(stderr.contains("^^^^^ ---- skipped to recover"), "{stderr}");
         assert!(stderr.contains("declarator after"), "{stderr}");
+        for internal in ["context:", "frame=", "owner=", "SourceVector"] {
+            assert!(!stderr.contains(internal), "{stderr}");
+        }
+    }
+
+    #[test]
+    fn diagnostics_quote_source_instead_of_internal_representation() {
+        for (source, expected) in [
+            ("int x \"abc\";\n", "found string literal `\"abc\"`"),
+            ("int x 1.5L;\n", "found floating constant `1.5L`"),
+            (
+                "static extern int x;\n",
+                "cannot combine storage classes `static` and `extern`",
+            ),
+            ("int int x;\n", "duplicate `int`"),
+            (
+                "#if defined 1\n#endif\n",
+                "expected a macro name after `defined`, found number `1`",
+            ),
+        ] {
+            let output = run(&["--input", source]);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains(expected), "{source:?}: {stderr}");
+            for internal in [
+                "StringCacheId",
+                "LongDouble",
+                "Keyword(",
+                "Operator(",
+                "Number\n",
+            ] {
+                assert!(!stderr.contains(internal), "{source:?}: {stderr}");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_semicolons_point_at_the_insertion_point() {
+        let output = run(&["--input", "struct S { int a\nint b; };\n"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            stderr.contains("error: expected `;`, found keyword `int`"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("1 | struct S { int a\n"), "{stderr}");
+        assert!(stderr.contains("- help: add `;` here"), "{stderr}");
+    }
+
+    #[test]
+    fn floating_constants_in_if_are_diagnosed_without_panicking() {
+        let output = run(&["--input", "#if 1.5L\n#endif\nint x;\n"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            stderr.contains("error: floating constant in `#if` expression"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("1 error generated."), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    }
+
+    #[test]
+    fn token_dump_shows_spellings_values_and_locations_only() {
+        let output = run(&["--tokens", "--input", "L'b' 1.5L 7u \"s\"\n"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            stderr,
+            "<input>:1:1: character constant `L'b'` = 98 (wchar_t)\n<input>:1:6: floating \
+             constant `1.5L` = 0x1.8p+0 (long double)\n<input>:1:11: integer constant `7u` = 7 \
+             (unsigned int)\n<input>:1:14: string literal \"s\"\n"
+        );
+    }
+
+    #[test]
+    fn missing_input_files_name_the_path() {
+        let output = run(&["does-not-exist.c"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(!output.status.success());
+        assert!(
+            stderr.starts_with("error: cannot read `does-not-exist.c`: "),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn conflicting_type_specifier_diagnostics_render_source_spellings() {
+        let output = run(&["--input", "typedef int T; T long value;\n"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            stderr.contains("error: cannot combine `long` with `T`"),
+            "{stderr}"
+        );
+        for internal in ["VectorSlice", "StringCacheId", "TypedefName"] {
+            assert!(!stderr.contains(internal), "{stderr}");
+        }
     }
 
     #[test]
@@ -121,16 +265,119 @@ mod tests {
         assert!(default.status.success(), "{default:?}");
         assert!(suppressed.status.success(), "{suppressed:?}");
         assert!(
-            default_stderr.contains("`const` keyword specified twice"),
+            default_stderr.contains("warning: duplicate `const`")
+                && default_stderr.contains("--no-repeated-specifier-warnings"),
             "{default_stderr}"
         );
         assert!(
-            !suppressed_stderr.contains("`const` keyword specified twice"),
+            !suppressed_stderr.contains("duplicate `const`"),
             "{suppressed_stderr}"
         );
         assert!(
             suppressed_stderr.contains("declarator value"),
             "{suppressed_stderr}"
         );
+    }
+
+    fn stderr_of(arguments: &[&str]) -> String {
+        let output = run(arguments);
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        assert!(!stderr.contains("panicked"), "{arguments:?}: {stderr}");
+        stderr
+    }
+
+    #[test]
+    fn token_dump_renders_a_trailing_preprocessing_error() {
+        let stderr = stderr_of(&["--tokens", "--input", "int x;\n#error boom\n"]);
+
+        assert!(stderr.contains("error: #error boom"), "{stderr}");
+        assert!(stderr.contains("2 | #error boom"), "{stderr}");
+    }
+
+    #[test]
+    fn token_dump_reports_conditionals_left_open_across_tokens() {
+        let stderr = stderr_of(&["--tokens", "--input", "#if 1\nint x;\n#if 1\nint y;\n"]);
+
+        assert_eq!(
+            stderr.matches("error: unterminated `#if`").count(),
+            2,
+            "{stderr}"
+        );
+        assert!(stderr.contains(" --> <input>:1:2"), "{stderr}");
+        assert!(stderr.contains(" --> <input>:3:2"), "{stderr}");
+    }
+
+    #[test]
+    fn pragma_operator_diagnostics_quote_their_own_payload() {
+        let stderr = stderr_of(&[
+            "--input",
+            "_Pragma(\"aaaaaaaa(\")\n_Pragma(\"b(\")\n_Pragma(\"\u{e9}\u{20ac}(\")\nint x;\n",
+        ]);
+
+        assert!(stderr.contains("1 | aaaaaaaa(\n"), "{stderr}");
+        assert!(stderr.contains("1 | b(\n"), "{stderr}");
+        assert!(stderr.contains("1 | \u{e9}\u{20ac}(\n"), "{stderr}");
+    }
+
+    #[test]
+    fn macro_expanded_quoted_includes_search_beside_the_directive() {
+        let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("macro-include");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("def.h"), "#define H \"sib.h\"\n").unwrap();
+        std::fs::write(sub.join("sib.h"), "int from_definition_directory;\n").unwrap();
+        std::fs::write(root.join("sib.h"), "int from_directive_directory;\n").unwrap();
+        let main = root.join("main.c");
+        std::fs::write(&main, "#include \"sub/def.h\"\n#include H\n").unwrap();
+
+        let stderr = stderr_of(&["--tokens", main.to_str().unwrap()]);
+
+        assert!(
+            stderr.contains("identifier `from_directive_directory`"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn suffixed_exact_zero_floating_constants_do_not_underflow() {
+        for constant in ["0.0f", "0.0F", "0.e0f", "0x0.0p0f"] {
+            let source = format!("float x = {constant};\n");
+            let stderr = stderr_of(&["--input", &source]);
+            assert!(stderr.is_empty(), "{constant}: {stderr}");
+        }
+        let stderr = stderr_of(&["--input", "float x = 1e-999f;\n"]);
+        assert!(stderr.contains("too small for `float`"), "{stderr}");
+    }
+
+    #[test]
+    fn unknown_characters_after_a_line_splice_are_reported_at_themselves() {
+        let stderr = stderr_of(&["--input", "int x = 1 \\\n@;\n"]);
+
+        assert!(stderr.contains("unexpected character `@`"), "{stderr}");
+        assert!(stderr.contains(" --> <input>:2:1"), "{stderr}");
+        assert!(stderr.contains("2 | @;"), "{stderr}");
+    }
+
+    #[test]
+    fn snippets_index_lone_carriage_returns_as_lines() {
+        let stderr = stderr_of(&["--input", "int a;\rint b;\rint c = ;\r"]);
+
+        assert!(stderr.contains(" --> <input>:3:9"), "{stderr}");
+        assert!(stderr.contains("3 | int c = ;\n"), "{stderr}");
+    }
+
+    #[test]
+    fn token_dump_keeps_nul_escapes_apart_from_following_digits() {
+        let stderr = stderr_of(&["--tokens", "--input", "\"\\0\" \"1\"\n"]);
+
+        assert!(stderr.contains("string literal \"\\0001\""), "{stderr}");
+    }
+
+    #[test]
+    fn plain_line_directives_are_accepted_without_a_diagnostic() {
+        let stderr = stderr_of(&["--input", "#line 12\nint x;\n"]);
+
+        assert!(stderr.is_empty(), "{stderr}");
     }
 }

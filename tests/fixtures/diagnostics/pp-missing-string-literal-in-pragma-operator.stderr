@@ -1,0 +1,13 @@
+error: expected a string literal in `_Pragma`, found number `1`
+ --> pp-missing-string-literal-in-pragma-operator.c:1:9
+  |
+1 | _Pragma(1)
+  |         ^- skipped to recover
+  |         |
+  |         expected a string literal
+2 | int value;
+  | --- parsing resumes here
+  |
+  = note: C99 §6.10.9: write `_Pragma("...")`
+
+1 error generated.

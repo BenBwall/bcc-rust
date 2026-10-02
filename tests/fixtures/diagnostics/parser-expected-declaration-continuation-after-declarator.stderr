@@ -1,0 +1,9 @@
+error: expected `,`, `=`, `;`, or a function body after the declarator, found identifier `extra`
+ --> parser-expected-declaration-continuation-after-declarator.c:1:7
+  |
+1 | int a extra;
+  |       ^^^^^ expected one of `,`, `=`, `;`, or `{`
+  |
+  = help: if this starts a new declaration, add `;` before it
+
+1 error generated.
