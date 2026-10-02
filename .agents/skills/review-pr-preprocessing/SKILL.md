@@ -1,11 +1,11 @@
 ---
 name: review-pr-preprocessing
-description: Review bcc-rust preprocessing changes for C99 directive, include, conditional-group, macro-expansion, preprocessing-expression, and token-conversion correctness. Use for changes to preprocessing.rs or shared types and phase interfaces that affect preprocessor behavior.
+description: Review bcc-rust preprocessing changes for C99 directive, include, conditional-group, macro-expansion, preprocessing-expression, and token-conversion correctness. Use for changes to the preprocessing module or shared types and phase interfaces that affect preprocessor behavior.
 ---
 
 # Review PR Preprocessing
 
-Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `GLOSSARY.md`, `README.md`, `src/translation_phases.rs`, and `src/translation_phases/preprocessing.rs` as applicable. Verify disputed language rules against WG14 N1256 §5.1.1.2, §6.4, and §6.10.
+Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `GLOSSARY.md`, `README.md`, `src/translation_phases.rs`, and `src/translation_phases/preprocessing.rs` with the `preprocessing/` submodules the change touches, as applicable. Verify disputed language rules against WG14 N1256 §5.1.1.2, §6.4, and §6.10.
 
 Review the full preprocessing lifecycle:
 

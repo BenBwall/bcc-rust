@@ -228,12 +228,12 @@ before a real cleanup; only local branches are deleted. Run its tests with
 | --- | --- |
 | [`src/translation_phases/initial_processing.rs`](src/translation_phases/initial_processing.rs) | Normalizes source characters, line endings, trigraphs, escaped newlines, and comments. |
 | [`src/translation_phases/preprocessor_tokenizer.rs`](src/translation_phases/preprocessor_tokenizer.rs) | Produces preprocessing tokens while retaining source provenance. |
-| [`src/translation_phases/preprocessing.rs`](src/translation_phases/preprocessing.rs) | Handles macros, directives, includes, conditional preprocessing, literals, and conversion to parser-facing tokens. It owns the preprocessor-expression evaluator and its values and diagnostics. |
-| [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) | Contains the explicit parser driver; declaration, function-definition, statement, expression, type-name, initializer, declarator, and tag frames; syntax stores and scopes; and parser diagnostics. |
-| [`src/translation_phases.rs`](src/translation_phases.rs) | Defines the shared translation-phase interface, compilation context, source provenance, and diagnostic plumbing. |
-| [`src/util/`](src/util/) | Provides project-specific arenas, interned strings, shared storage, queues, stacks, and vector slices. |
+| [`src/translation_phases/preprocessing.rs`](src/translation_phases/preprocessing.rs) and [`preprocessing/`](src/translation_phases/preprocessing/) | Handles macros, directives, includes, conditional preprocessing, literals, and conversion to parser-facing tokens. It owns the preprocessor-expression evaluator and its values and diagnostics; each concern has its own submodule. |
+| [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) and [`parsing/`](src/translation_phases/parsing/) | Contains the explicit parser driver; declaration, function-definition, statement, expression, type-name, initializer, declarator, and tag frames (one submodule per frame); syntax stores and scopes; and parser diagnostics. |
+| [`src/translation_phases.rs`](src/translation_phases.rs) | Defines the shared translation-phase interface and diagnostic plumbing; [`context.rs`](src/translation_phases/context.rs) and [`provenance.rs`](src/translation_phases/provenance.rs) hold the compilation context and source provenance. |
+| [`src/util/`](src/util/) | Provides project-specific arenas, interned strings, shared storage, and vector slices. |
 | [`src/diagnostics.rs`](src/diagnostics.rs) | Builds diagnostics (message, labelled source ranges, notes, help) and renders them as annotated source snippets. Each phase's error type explains itself through a `ToDiagnostic` implementation. |
-| [`src/lib.rs`](src/lib.rs) | Wires the inspection CLI to the parser by default and to the token dump with `--tokens`, and reports diagnostics. |
+| [`src/lib.rs`](src/lib.rs), [`src/cli.rs`](src/cli.rs), and [`src/pipeline.rs`](src/pipeline.rs) | Wire the inspection CLI to the parser by default and to the token dump with `--tokens`, and report diagnostics. |
 
 ## Parser direction
 

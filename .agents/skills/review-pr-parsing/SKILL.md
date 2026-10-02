@@ -1,11 +1,11 @@
 ---
 name: review-pr-parsing
-description: Review bcc-rust C language parser changes for C99 grammar, AST shape, typedef ambiguity, scope, explicit frame-machine control, synchronization, diagnostics, and provenance. Use for changes to parsing.rs or shared types and phase interfaces that affect syntax parsing.
+description: Review bcc-rust C language parser changes for C99 grammar, AST shape, typedef ambiguity, scope, explicit frame-machine control, synchronization, diagnostics, and provenance. Use for changes to the parsing module or shared types and phase interfaces that affect syntax parsing.
 ---
 
 # Review PR Parsing
 
-Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `GLOSSARY.md`, `parser-roadmap.md`, the applicable phase plan or compliance checklist, `src/translation_phases.rs`, and `src/translation_phases/parsing.rs`. Treat the roadmap as authoritative for current phase boundaries. Verify disputed language rules against WG14 N1256 §6.1-§6.9.
+Read [the shared review contract](../review-pr/references/review-contract.md) completely. Read `.agents/AGENTS.md`, `GLOSSARY.md`, `parser-roadmap.md`, the applicable phase plan or compliance checklist, `src/translation_phases.rs`, and `src/translation_phases/parsing.rs` with the `parsing/` submodules the change touches. Treat the roadmap as authoritative for current phase boundaries. Verify disputed language rules against WG14 N1256 §6.1-§6.9.
 
 Review syntax parsing as an explicit, non-recursive control machine:
 
