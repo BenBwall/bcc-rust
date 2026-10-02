@@ -197,6 +197,30 @@ See the [compiler corpus research](compiler-test-corpus-research.md) and
 [recorded parser results](gcc-torture-parser-results.md) for comparison profiles,
 known discrepancies, and interpretation limits.
 
+### Branch cleanup
+
+[`scripts/branch-cleanup.rs`](scripts/branch-cleanup.rs) is a nightly Cargo
+script that deletes finished local branches. It needs an authenticated GitHub
+CLI (`gh`):
+
+```sh
+cargo +nightly -Zscript scripts/branch-cleanup.rs                   # Update main and delete the latest merged PR's local branch.
+cargo +nightly -Zscript scripts/branch-cleanup.rs --all             # Also delete other clearly finished local branches.
+cargo +nightly -Zscript scripts/branch-cleanup.rs --all --dry-run   # Preview without switching, pulling, or deleting.
+```
+
+Cleanup reads every PR to find the most recent merge into `main`, fetches and
+prunes `origin`, switches to `main`, and runs `git pull --ff-only origin main`
+before deleting anything. The `--all` mode also removes merged PR branches,
+closed PR branches whose local tip still matches the PR head, and branches
+contained in `origin/main` whose upstream is missing or unset. Branches with open
+PRs, extra local commits, protected names (`main`, `master`, `develop`, `dev`,
+`production`, `staging`), or another worktree checkout are kept, and fork PRs
+never authorize deleting a same-named local branch. Comparing the local tip with
+the merged PR's head commit recognizes squash merges. Commit or stash changes
+before a real cleanup; only local branches are deleted. Run its tests with
+`cargo +nightly -Zscript test --manifest-path scripts/branch-cleanup.rs`.
+
 ## Pipeline and code map
 
 | Area | Role |
