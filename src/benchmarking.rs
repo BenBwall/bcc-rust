@@ -12,6 +12,7 @@ use crate::{
 };
 
 #[doc(hidden)]
+#[must_use]
 pub fn preprocess_one_million() -> usize {
     let million_lines = one_million_lines();
     let iterator = PreprocessorIterator::new(
@@ -24,10 +25,15 @@ pub fn preprocess_one_million() -> usize {
 }
 
 #[doc(hidden)]
+#[must_use]
 pub fn one_million_input_bytes() -> u64 {
     u64::try_from(one_million_lines().len()).expect("benchmark input length must fit in u64")
 }
 
+#[expect(
+    clippy::large_include_file,
+    reason = "The generated preprocessor benchmark input is intentionally large."
+)]
 fn one_million_lines() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c"))
 }

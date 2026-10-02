@@ -7,11 +7,6 @@
     unused_crate_dependencies,
     reason = "We have a bunch of dependencies that are not used in our benchmarking module."
 )]
-#![expect(
-    clippy::cargo_common_metadata,
-    reason = "We don't have any metadata in our benchmarking module, because it's not getting \
-              published."
-)]
 
 use criterion::{
     Criterion,
