@@ -3,6 +3,7 @@
 /llvm/
 /clang/
 /lld/
+/libc/
 /third-party/
 /libunwind/include/mach-o/compact_unwind_encoding.h
 !/llvm/test/
@@ -14,6 +15,12 @@
 !/llvm/unittests/
 !/clang/unittests/
 !/lld/unittests/
+!/libc/test/
+!/libc/docs/
+!/libc/benchmarks/
+!/libc/fuzzing/
+!/libc/utils/
+!/libc/examples/
 !/llvm/benchmarks/
 !/llvm/examples/
 !/clang/examples/

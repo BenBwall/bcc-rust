@@ -229,11 +229,9 @@ mod pipeline_iterator_tests {
             })
         ));
         let error_source_vectors = error.source_vectors(&mut iterator.context);
-        assert!(
-            !iterator
-                .context
-                .get_source_vectors(error_source_vectors)
-                .is_empty()
+        assert_ne!(
+            iterator.context.get_source_vectors(error_source_vectors),
+            []
         );
 
         let token = iterator.next().unwrap().unwrap();
@@ -262,11 +260,11 @@ mod pipeline_iterator_tests {
             iterator.context.string_cache.at(identifier.contents),
             "identifier"
         );
-        assert!(
-            !iterator
+        assert_ne!(
+            iterator
                 .context
-                .get_source_vectors(identifier.source_vectors)
-                .is_empty()
+                .get_source_vectors(identifier.source_vectors),
+            []
         );
         assert!(iterator.next().is_none());
     }
@@ -355,12 +353,7 @@ mod pipeline_iterator_tests {
             }) if message.trim() == "boom"
         ));
         let source_vectors = error.source_vectors(&mut iterator.context);
-        assert!(
-            !iterator
-                .context
-                .get_source_vectors(source_vectors)
-                .is_empty()
-        );
+        assert_ne!(iterator.context.get_source_vectors(source_vectors), []);
         assert!(iterator.next().is_none());
     }
 

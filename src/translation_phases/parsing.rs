@@ -185,7 +185,7 @@ impl SyntaxTreeId {
     fn fresh() -> Self {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
         let id = NEXT_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .expect("syntax-tree identity space exhausted");
@@ -14462,19 +14462,15 @@ mod tests {
                 | _ => true,
             }));
             let definition = function_definition(&parsed, 0);
-            assert!(
-                !parsed
-                    .context
-                    .get_source_vectors(definition.source_vectors)
-                    .is_empty()
+            assert_ne!(
+                parsed.context.get_source_vectors(definition.source_vectors),
+                []
             );
-            assert!(
-                !parsed
-                    .context
-                    .get_source_vectors(
-                        parsed.parser.syntax.statements[definition.body.0 as usize].source_vectors
-                    )
-                    .is_empty()
+            assert_ne!(
+                parsed.context.get_source_vectors(
+                    parsed.parser.syntax.statements[definition.body.0 as usize].source_vectors
+                ),
+                []
             );
             assert!(parsed.parser.scopes.nested_scopes.is_empty(), "{source:?}");
             assert!(parsed.parser.label_scopes.is_empty(), "{source:?}");
@@ -14635,7 +14631,7 @@ mod tests {
     fn empty_translation_unit_emits_one_dedicated_diagnostic() {
         let mut parsed = parse("");
 
-        assert!(parsed.items.is_empty());
+        assert_eq!(parsed.items, []);
         assert_eq!(
             parser_errors(&parsed).collect::<Vec<_>>(),
             [&ParserErrorType::EmptyTranslationUnit]
@@ -18963,7 +18959,7 @@ mod tests {
                 identifiers.push(identifier);
             }
         }
-        assert!(!identifiers.is_empty());
+        assert_ne!(identifiers, []);
         for identifier in identifiers {
             assert!(identifier.source_vectors.length > 0, "{identifier:?}");
             assert_eq!(
@@ -19467,7 +19463,7 @@ mod tests {
             "included_name"
         );
         let include_vectors = context.get_source_vectors(identifiers[1].source_vectors);
-        assert!(!include_vectors.is_empty());
+        assert_ne!(include_vectors, []);
         assert!(
             include_vectors
                 .iter()

@@ -49,13 +49,14 @@ impl<T> LastEntry<'_, T> {
 
     pub(crate) fn remove(self) -> T {
         let Self { vector, last } = self;
-        // SAFETY: `last` uniquely references the final initialized element. Move
-        // the value through that reference's provenance, then shorten the vector
-        // so it no longer treats the moved-out slot as initialized.
+        // SAFETY: `last` uniquely references the final initialized element.
+        // Move the value through that reference's provenance, then
+        // shorten the vector so it no longer treats the moved-out slot
+        // as initialized.
         let value = unsafe { std::ptr::read(last) };
-        // SAFETY: We check that the vector is non-empty when constructing the entry,
-        // and no entry operation can change its length, so `Vec::len` is guaranteed to
-        // return a non-zero value here.
+        // SAFETY: We check that the vector is non-empty when constructing the
+        // entry, and no entry operation can change its length, so
+        // `Vec::len` is guaranteed to return a non-zero value here.
         let new_length = unsafe { vector.len().unchecked_sub(1) };
         // SAFETY: construction proves the vector is non-empty, and no entry
         // operation can change its length, so `new_length` removes exactly the
@@ -125,7 +126,7 @@ mod tests {
         let mut values: Vec<i32> = Vec::new();
 
         assert!(last_entry(&mut values).is_none());
-        assert!(values.is_empty());
+        assert_eq!(values, Vec::<i32>::new());
     }
 
     #[test]

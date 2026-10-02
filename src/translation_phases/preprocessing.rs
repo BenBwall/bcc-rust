@@ -393,7 +393,7 @@ mod tests {
     fn default_extension_mode_evaluates_comma_to_rhs_without_a_diagnostic() {
         let (identifiers, errors) = preprocess("#if (1, 0)\nUNREACHABLE\n#endif\n");
 
-        assert!(identifiers.is_empty());
+        assert_eq!(identifiers, Vec::<String>::new());
         assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
     }
 
@@ -462,7 +462,7 @@ mod tests {
         let (identifiers, errors) =
             preprocess_with_configuration("#if 0 ? 2, 3 : 0\nUNREACHABLE\n#endif\n", strict_c99());
 
-        assert!(identifiers.is_empty());
+        assert_eq!(identifiers, Vec::<String>::new());
         assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
     }
 
@@ -3616,13 +3616,12 @@ impl Preprocessor {
                         ),
                     },
                 }
-            } else {
-                if let Some(frame) = self.handle_macro_argument(context, token) {
-                    self.push_tokenizer_frame(context, frame);
-                    continue;
-                }
-                break 'base Some(token);
             }
+            if let Some(frame) = self.handle_macro_argument(context, token) {
+                self.push_tokenizer_frame(context, frame);
+                continue;
+            }
+            break 'base Some(token);
         };
         self.generate_placeholders = false;
         self.current_is_newline = ret.is_none_or(|t| t.kind == PreprocessorTokenType::Newline);
@@ -4089,10 +4088,9 @@ impl Preprocessor {
                     })
                 ) {
                     unreachable!("Handled in next_preprocessor_token");
-                } else {
-                    self.parse_directive(context, token);
-                    return None;
                 }
+                self.parse_directive(context, token);
+                return None;
             },
             | PreprocessorTokenType::GeneratedString => Token {
                 kind:           TokenType::String(StringTokenType::String(token.contents)),

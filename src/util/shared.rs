@@ -37,8 +37,9 @@ where
             #[cold]
             #[inline(never)]
             fn drop_slow<T: ?Sized>(this: &mut Shared<T>) {
-                // SAFETY: This is okay because self.ref_count and self.contents point at valid
-                // boxes and we only drop them when the ref count is 0.
+                // SAFETY: This is okay because self.ref_count and self.contents
+                // point at valid boxes and we only drop them
+                // when the ref count is 0.
                 #[expect(
                     clippy::multiple_unsafe_ops_per_block,
                     reason = "The safety comment explains why both operations are okay."
@@ -62,8 +63,8 @@ where
     fn clone(&self) -> Self {
         if self.ref_cnt().get() == usize::MAX {
             // Integer overflow.
-            // This can realistically only happen if someone leaks usize::MAX Shareds. If
-            // this happens, we just abort.
+            // This can realistically only happen if someone leaks usize::MAX
+            // Shareds. If this happens, we just abort.
             abort();
         }
 
@@ -155,9 +156,10 @@ where
     /// count accurately reflects how many references there are to the contents.
     /// This function is not marked unsafe because it's private to this module.
     fn ref_cnt(&self) -> &Cell<usize> {
-        // SAFETY: self.ref_count always points to a valid instance of Cell<usize>.
-        // This function should arguably be unsafe, but it's not marked as such to avoid
-        // unsafe contamination. It's private to this module to our invariants aren't
+        // SAFETY: self.ref_count always points to a valid instance of
+        // Cell<usize>. This function should arguably be unsafe, but
+        // it's not marked as such to avoid unsafe contamination. It's
+        // private to this module to our invariants aren't
         // broken in external code.
         unsafe { self.ref_count.as_ref() }
     }

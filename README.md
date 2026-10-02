@@ -59,7 +59,7 @@ This is not yet a production-ready or conforming C99 compiler.
 
 ## Prerequisites
 
-- Rust 1.98.0, pinned in [`rust-toolchain.toml`](rust-toolchain.toml) and declared
+- Rust 1.99.0, pinned in [`rust-toolchain.toml`](rust-toolchain.toml) and declared
   as the minimum supported version in [`Cargo.toml`](Cargo.toml).
 - Clippy and Rust's `llvm-tools` component, both selected automatically by
   `rust-toolchain.toml`.
@@ -77,8 +77,8 @@ This is not yet a production-ready or conforming C99 compiler.
 ## Source submodules
 
 [`vendor/rust`](vendor/rust) is a shallow, filtered submodule pinned to the
-same commit as Rust 1.98.0 (`88d9e12ae178fab0fb5cc050a94da85685d449ea`). Its
-LLVM submodule pins `52ed14fcd56afc30f9cccd8ca8ce237c2eef7e04` (LLVM 22.1.8).
+same commit as Rust 1.99.0 (`b940084d7eb6a299eb4bfeb8e34901bc051e7ac4`). Its
+LLVM submodule pins `1b9c0d5ff9bbe7634aead059efe6b11a7eeba145` (LLVM 23.1.1).
 Git pins both source revisions; the native build checks that Clang, libclang,
 and the archiver report the same LLVM version as rustc.
 Upgrading Rust requires updating the Rust submodule to the new compiler's
@@ -87,14 +87,15 @@ commit and checking out the LLVM revision that it pins.
 Sparse patterns in [`build_support/rust.sparse`](build_support/rust.sparse)
 retain Rust's LLVM gitlink, submodule metadata, and license files.
 [`build_support/llvm.sparse`](build_support/llvm.sparse) retains the LLVM,
-Clang, LLD, supporting build sources, and LLD's required libunwind header;
-tests, documentation, and examples are excluded except for small CMake
+Clang, LLD, supporting build sources, the LLVM libc sources that LLVM's
+configuration requires for its shared utilities, and LLD's required libunwind
+header; tests, documentation, and examples are excluded except for small CMake
 entrypoints required by configuration.
 Git stores sparse-checkout settings locally, so prepare a fresh checkout with
 these PowerShell commands:
 
 ```powershell
-git clone --filter=blob:none --no-checkout --depth 1 --branch 1.98.0 https://github.com/rust-lang/rust.git vendor/rust
+git clone --filter=blob:none --no-checkout --depth 1 --branch 1.99.0 https://github.com/rust-lang/rust.git vendor/rust
 Get-Content build_support/rust.sparse | git -C vendor/rust sparse-checkout set --no-cone --stdin
 git submodule update --init --checkout vendor/rust
 git -C vendor/rust submodule init src/llvm-project

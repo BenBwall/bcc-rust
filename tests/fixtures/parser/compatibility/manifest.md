@@ -7,7 +7,7 @@ Pinned observations:
 
 - GCC 13.2.0 (MinGW-W64 x86_64-ucrt-posix-seh)
 - Clang 19.1.5, target `x86_64-pc-windows-msvc`
-- bcc-rust Rust toolchain 1.98.0
+- bcc-rust Rust toolchain 1.99.0
 
 Normalized profiles:
 

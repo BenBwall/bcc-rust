@@ -15,7 +15,7 @@ cargo clippy --all-targets -- -D warnings
 git diff --check
 ```
 
-`rust-toolchain.toml` pins Rust 1.98.0, which is also the minimum version in
+`rust-toolchain.toml` pins Rust 1.99.0, which is also the minimum version in
 `Cargo.toml`. `build.rs` additionally requires a native C compiler and
 `libclang`; set `LIBCLANG_PATH` when discovery fails.
 
