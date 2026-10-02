@@ -226,11 +226,6 @@ impl PreprocessorExpressionOperand {
         }
     }
 
-    #[expect(dead_code, reason = "This is currently unused")]
-    fn set_unsigned(self, value: u64) -> Self {
-        self.set_signed(value as i64)
-    }
-
     fn map_signed(self, f: impl FnOnce(i64) -> i64) -> Self {
         match self {
             | Self::Signed(v) => Self::Signed(f(v)),

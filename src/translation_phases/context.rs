@@ -317,19 +317,6 @@ impl Context {
 
     #[cold]
     #[inline(never)]
-    #[expect(
-        dead_code,
-        reason = "We aren't using this yet, but we will be when the parser is implemented."
-    )]
-    pub(crate) fn raw_parser_error(
-        self_pending_errors: &mut impl Extend<TranslationError>,
-        error: ParserError,
-    ) {
-        self_pending_errors.extend([TranslationError::Parsing(error)]);
-    }
-
-    #[cold]
-    #[inline(never)]
     pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError> {
         self.pending_errors.pop_front()
     }

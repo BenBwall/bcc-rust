@@ -110,16 +110,6 @@ trait StrExt {
     /// character.
     fn char_at(&self, index: usize) -> Option<char>;
 
-    /// Returns the character at the given index but in lowercase,
-    /// See [`StrExt::char_at`] for more information.
-    #[expect(
-        dead_code,
-        reason = "We're not currently using this method, it's here for potential future use."
-    )]
-    fn char_at_case_insensitive(&self, index: usize) -> Option<char> {
-        self.char_at(index).map(|c| c.to_ascii_lowercase())
-    }
-
     /// Returns the string cloned into a [`TokenString`].
     fn to_token_string(&self) -> TokenString
     where
