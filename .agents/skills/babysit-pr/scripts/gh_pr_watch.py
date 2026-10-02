@@ -60,7 +60,9 @@ def parse_args():
     )
     parser.add_argument("--pr", default="auto", help="auto, PR number, or PR URL")
     parser.add_argument("--repo", help="Optional OWNER/REPO override")
-    parser.add_argument("--poll-seconds", type=int, default=30, help="Watch poll interval")
+    parser.add_argument(
+        "--poll-seconds", type=int, default=30, help="Watch poll interval"
+    )
     parser.add_argument(
         "--max-flaky-retries",
         type=int,
@@ -68,8 +70,12 @@ def parse_args():
         help="Max rerun cycles per head SHA before stop recommendation",
     )
     parser.add_argument("--state-file", help="Path to state JSON file")
-    parser.add_argument("--once", action="store_true", help="Emit one snapshot and exit")
-    parser.add_argument("--watch", action="store_true", help="Continuously emit JSONL snapshots")
+    parser.add_argument(
+        "--once", action="store_true", help="Emit one snapshot and exit"
+    )
+    parser.add_argument(
+        "--watch", action="store_true", help="Continuously emit JSONL snapshots"
+    )
     parser.add_argument(
         "--retry-failed-now",
         action="store_true",
@@ -128,7 +134,9 @@ def gh_json(args, repo=None):
     try:
         return json.loads(raw)
     except json.JSONDecodeError as err:
-        raise GhCommandError(f"Failed to parse JSON from gh output for {' '.join(args)}") from err
+        raise GhCommandError(
+            f"Failed to parse JSON from gh output for {' '.join(args)}"
+        ) from err
 
 
 def parse_pr_spec(pr_spec):
@@ -210,6 +218,8 @@ def extract_repo_from_pr_view(data):
     if owner and name:
         return f"{owner}/{name}"
     return None
+
+
 def extract_repo_from_pr_url(pr_url):
     parsed = urlparse(pr_url)
     parts = [p for p in parsed.path.split("/") if p]
@@ -242,7 +252,9 @@ def load_state(path):
 def save_state(path, state):
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(state, indent=2, sort_keys=True) + "\n"
-    fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=path.parent)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f"{path.name}.", suffix=".tmp", dir=path.parent
+    )
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
@@ -263,13 +275,35 @@ def default_state_file_for(pr):
 
 def get_pr_checks(pr_spec, repo):
     parsed = parse_pr_spec(pr_spec)
-    cmd = ["pr", "checks"]
+    cmd = ["gh"]
+    if repo:
+        cmd.extend(["-R", repo])
+    cmd.extend(["pr", "checks"])
     if parsed["value"] is not None:
         cmd.append(parsed["value"])
     cmd.extend(["--json", checks_fields()])
-    data = gh_json(cmd, repo=repo)
-    if data is None:
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError as err:
+        raise GhCommandError("`gh` command not found") from err
+
+    # `gh pr checks` exits 8 while checks are pending but still prints the
+    # JSON payload, and exits 1 when a branch has no checks configured.
+    if proc.returncode not in (0, 8):
+        if "no checks reported" in proc.stderr.lower():
+            return []
+        err = subprocess.CalledProcessError(
+            proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr
+        )
+        raise GhCommandError(_format_gh_error(cmd, err)) from err
+
+    raw = proc.stdout.strip()
+    if not raw:
         return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as err:
+        raise GhCommandError("Failed to parse JSON from `gh pr checks`") from err
     if not isinstance(data, list):
         raise GhCommandError("Unexpected payload from `gh pr checks`")
     return data
@@ -304,7 +338,16 @@ def summarize_checks(checks):
 def get_workflow_runs_for_sha(repo, head_sha):
     endpoint = f"repos/{repo}/actions/runs"
     data = gh_json(
-        ["api", endpoint, "-X", "GET", "-f", f"head_sha={head_sha}", "-f", "per_page=100"],
+        [
+            "api",
+            endpoint,
+            "-X",
+            "GET",
+            "-f",
+            f"head_sha={head_sha}",
+            "-f",
+            "per_page=100",
+        ],
         repo=repo,
     )
     if not isinstance(data, dict):
@@ -334,7 +377,12 @@ def failed_runs_from_workflow_runs(runs, head_sha):
                 "html_url": str(run.get("html_url") or ""),
             }
         )
-    failed_runs.sort(key=lambda item: (str(item.get("workflow_name") or ""), str(item.get("run_id") or "")))
+    failed_runs.sort(
+        key=lambda item: (
+            str(item.get("workflow_name") or ""),
+            str(item.get("run_id") or ""),
+        )
+    )
     return failed_runs
 
 
@@ -361,7 +409,10 @@ def failed_jobs_from_workflow_runs(repo, runs, head_sha):
             continue
         run_status = str(run.get("status") or "")
         run_conclusion = str(run.get("conclusion") or "")
-        if run_status.lower() == "completed" and run_conclusion not in FAILED_RUN_CONCLUSIONS:
+        if (
+            run_status.lower() == "completed"
+            and run_conclusion not in FAILED_RUN_CONCLUSIONS
+        ):
             continue
         jobs = get_jobs_for_run(repo, run_id)
         for job in jobs:
@@ -401,7 +452,9 @@ def failed_jobs_from_workflow_runs(repo, runs, head_sha):
 def get_authenticated_login():
     data = gh_json(["api", "user"])
     if not isinstance(data, dict) or not data.get("login"):
-        raise GhCommandError("Unable to determine authenticated GitHub login from `gh api user`")
+        raise GhCommandError(
+            "Unable to determine authenticated GitHub login from `gh api user`"
+        )
     return str(data["login"])
 
 
@@ -431,6 +484,101 @@ def gh_api_list_paginated(endpoint, repo=None, per_page=100):
     return items
 
 
+def graphql(query, variables):
+    args = ["api", "graphql", "-f", f"query={query}"]
+    for name, value in variables.items():
+        if value is not None:
+            args.extend(["-F", f"{name}={value}"])
+    return gh_json(args)
+
+
+def graphql_connection(payload, *path):
+    value = payload
+    try:
+        for component in path:
+            value = value[component]
+    except (KeyError, TypeError) as err:
+        joined = ".".join(path)
+        raise GhCommandError(f"Unexpected GraphQL connection at {joined}") from err
+    if not isinstance(value, dict):
+        joined = ".".join(path)
+        raise GhCommandError(f"Unexpected GraphQL connection at {joined}")
+    return value
+
+
+def graphql_paginated_nodes(query, variables, *path, initial_cursor=None):
+    cursor = initial_cursor
+    while True:
+        payload = graphql(query, {**variables, "cursor": cursor})
+        current = graphql_connection(payload, *path)
+        yield from current.get("nodes") or []
+        page_info = current.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            return
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            raise GhCommandError("GraphQL pagination omitted endCursor")
+
+
+def fetch_resolved_review_comment_ids(repo, pr_number):
+    """Return the REST ids of every inline comment in a resolved review thread.
+
+    The REST review-comment endpoint does not expose thread resolution, so
+    resolved feedback would otherwise resurface on a fresh state file.
+    """
+    parts = repo.split("/")
+    if len(parts) != 2 or not all(parts):
+        raise GhCommandError(f"Invalid repository slug: {repo}")
+    owner, name = parts
+    thread_query = (
+        "query($owner:String!,$name:String!,$number:Int!,$cursor:String){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){"
+        "reviewThreads(first:100,after:$cursor){nodes{id isResolved "
+        "comments(first:100){nodes{databaseId} pageInfo{hasNextPage endCursor}}}"
+        "pageInfo{hasNextPage endCursor}}}}}"
+    )
+    comment_query = (
+        "query($threadId:ID!,$cursor:String){node(id:$threadId){"
+        "... on PullRequestReviewThread{comments(first:100,after:$cursor){"
+        "nodes{databaseId} pageInfo{hasNextPage endCursor}}}}}"
+    )
+
+    resolved_comment_ids = set()
+    remaining_comment_pages = []
+    for thread in graphql_paginated_nodes(
+        thread_query,
+        {"owner": owner, "name": name, "number": pr_number},
+        "data",
+        "repository",
+        "pullRequest",
+        "reviewThreads",
+    ):
+        if isinstance(thread, dict) and thread.get("isResolved") and thread.get("id"):
+            comments = thread.get("comments") or {}
+            for comment in comments.get("nodes") or []:
+                if isinstance(comment, dict) and comment.get("databaseId") not in (None, ""):
+                    resolved_comment_ids.add(str(comment["databaseId"]))
+            page_info = comments.get("pageInfo") or {}
+            if page_info.get("hasNextPage"):
+                cursor = page_info.get("endCursor")
+                if not cursor:
+                    raise GhCommandError("GraphQL pagination omitted endCursor")
+                remaining_comment_pages.append((str(thread["id"]), cursor))
+
+    for thread_id, cursor in remaining_comment_pages:
+        for comment in graphql_paginated_nodes(
+            comment_query,
+            {"threadId": thread_id},
+            "data",
+            "node",
+            "comments",
+            initial_cursor=cursor,
+        ):
+            if isinstance(comment, dict) and comment.get("databaseId") not in (None, ""):
+                resolved_comment_ids.add(str(comment["databaseId"]))
+    return resolved_comment_ids
+
+
 def normalize_issue_comments(items):
     out = []
     for item in items:
@@ -452,13 +600,15 @@ def normalize_issue_comments(items):
     return out
 
 
-def normalize_review_comments(items, review_states):
+def normalize_review_comments(items, review_states, resolved_comment_ids=frozenset()):
     out = []
     for item in items:
         if not isinstance(item, dict):
             continue
         review_id = str(item.get("pull_request_review_id") or "")
         if review_states.get(review_id) == "PENDING":
+            continue
+        if str(item.get("id") or "") in resolved_comment_ids:
             continue
         line = item.get("line")
         if line is None:
@@ -492,7 +642,9 @@ def normalize_reviews(items):
                 "id": str(item.get("id") or ""),
                 "author": extract_login(item.get("user")),
                 "author_association": str(item.get("author_association") or ""),
-                "created_at": str(item.get("submitted_at") or item.get("created_at") or ""),
+                "created_at": str(
+                    item.get("submitted_at") or item.get("created_at") or ""
+                ),
                 "body": str(item.get("body") or ""),
                 "path": None,
                 "line": None,
@@ -535,7 +687,9 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
     endpoints = comment_endpoints(repo, pr_number)
 
     issue_payload = gh_api_list_paginated(endpoints["issue_comment"], repo=repo)
-    review_comment_payload = gh_api_list_paginated(endpoints["review_comment"], repo=repo)
+    review_comment_payload = gh_api_list_paginated(
+        endpoints["review_comment"], repo=repo
+    )
     review_payload = gh_api_list_paginated(endpoints["review"], repo=repo)
 
     issue_items = normalize_issue_comments(issue_payload)
@@ -545,7 +699,9 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
         if isinstance(item, dict) and item.get("id") not in (None, "")
     }
     pending_review_ids = {
-        review_id for review_id, review_state in review_states.items() if review_state == "PENDING"
+        review_id
+        for review_id, review_state in review_states.items()
+        if review_state == "PENDING"
     }
     pending_review_comment_ids = {
         str(item.get("id"))
@@ -554,7 +710,11 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
         and item.get("id") not in (None, "")
         and str(item.get("pull_request_review_id") or "") in pending_review_ids
     }
-    review_comment_items = normalize_review_comments(review_comment_payload, review_states)
+    review_comment_items = normalize_review_comments(
+        review_comment_payload,
+        review_states,
+        fetch_resolved_review_comment_ids(repo, pr_number),
+    )
     review_items = normalize_reviews(review_payload)
     all_items = issue_items + review_comment_items + review_items
 
@@ -598,7 +758,13 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
         elif kind == "review":
             seen_review.add(item_id)
 
-    new_items.sort(key=lambda item: (item.get("created_at") or "", item.get("kind") or "", item.get("id") or ""))
+    new_items.sort(
+        key=lambda item: (
+            item.get("created_at") or "",
+            item.get("kind") or "",
+            item.get("id") or "",
+        )
+    )
     state["seen_issue_comment_ids"] = sorted(seen_issue)
     state["seen_review_comment_ids"] = sorted(seen_review_comment)
     state["seen_review_ids"] = sorted(seen_review)
@@ -650,7 +816,15 @@ def is_pr_ready_to_merge(pr, checks_summary, new_review_items):
     return True
 
 
-def recommend_actions(pr, checks_summary, failed_runs, failed_jobs, new_review_items, retries_used, max_retries):
+def recommend_actions(
+    pr,
+    checks_summary,
+    failed_runs,
+    failed_jobs,
+    new_review_items,
+    retries_used,
+    max_retries,
+):
     actions = []
     if pr["closed"] or pr["merged"]:
         if new_review_items:
@@ -671,7 +845,11 @@ def recommend_actions(pr, checks_summary, failed_runs, failed_jobs, new_review_i
             actions.append("stop_exhausted_retries")
         else:
             actions.append("diagnose_ci_failure")
-            if checks_summary["all_terminal"] and failed_runs and retries_used < max_retries:
+            if (
+                checks_summary["all_terminal"]
+                and failed_runs
+                and retries_used < max_retries
+            ):
                 actions.append("retry_failed_checks")
 
     if not actions:
@@ -681,7 +859,9 @@ def recommend_actions(pr, checks_summary, failed_runs, failed_jobs, new_review_i
 
 def collect_snapshot(args):
     pr = resolve_pr(args.pr, repo_override=args.repo)
-    state_path = Path(args.state_file) if args.state_file else default_state_file_for(pr)
+    state_path = (
+        Path(args.state_file) if args.state_file else default_state_file_for(pr)
+    )
     state, fresh_state = load_state(state_path)
 
     if not state.get("started_at"):
@@ -703,7 +883,9 @@ def collect_snapshot(args):
     checks_summary = summarize_checks(checks)
     workflow_runs = get_workflow_runs_for_sha(pr["repo"], pr["head_sha"])
     failed_runs = failed_runs_from_workflow_runs(workflow_runs, pr["head_sha"])
-    failed_jobs = failed_jobs_from_workflow_runs(pr["repo"], workflow_runs, pr["head_sha"])
+    failed_jobs = failed_jobs_from_workflow_runs(
+        pr["repo"], workflow_runs, pr["head_sha"]
+    )
 
     retries_used = current_retry_count(state, pr["head_sha"])
     actions = recommend_actions(
@@ -845,11 +1027,10 @@ def run_watch(args):
             },
         )
         actions = set(snapshot.get("actions") or [])
-        if (
-            "stop_pr_closed" in actions
-            or "stop_exhausted_retries" in actions
-        ):
-            print_event("stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")})
+        if "stop_pr_closed" in actions or "stop_exhausted_retries" in actions:
+            print_event(
+                "stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")}
+            )
             return 0
 
         current_change_key = snapshot_change_key(snapshot)
@@ -868,6 +1049,14 @@ def run_watch(args):
 
 
 def main():
+    # Windows consoles otherwise default to a legacy code page that cannot
+    # encode arbitrary review text.
+    if not sys.flags.utf8_mode:
+        proc = subprocess.run(
+            [sys.executable, "-X", "utf8", str(Path(__file__).resolve()), *sys.argv[1:]],
+            check=False,
+        )
+        return proc.returncode
     args = parse_args()
     try:
         if args.retry_failed_now:

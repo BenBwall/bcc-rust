@@ -1,1 +1,0 @@
-../../../../.agents/scripts/test_babysit_pr_watch.py

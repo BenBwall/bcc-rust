@@ -48,19 +48,17 @@ The completed Phase 05 parser implements this architecture through whole transla
 
 ## First-party skills
 
-Repository-specific skills live as real directories under `.agents/skills/<name>` and are exposed to Claude through matching tracked symlinks under `.claude/skills/<name>`. Keep shared instructions in one authoritative reference and point sibling skills to it instead of copying the contract.
+Repository-specific skills live as real directories under `.agents/skills/<name>` and are exposed to Claude through matching tracked symlinks under `.claude/skills/<name>`. Keep shared instructions in one authoritative reference and point sibling skills to it instead of copying the contract. `babysit-pr` is first-party code derived from OpenAI Codex, which no longer publishes it; keep its `LICENSE` and `NOTICE` with the skill and record further modifications in `NOTICE`.
 
 ## Vendored skills
 
-`vendor/mattpocock-skills/` is a squashed Git subtree from `https://github.com/mattpocock/skills.git` `main` and the source of truth for those upstream skills. `vendor/openai-codex-skills/babysit-pr/` is a narrow snapshot of `.codex/skills/babysit-pr/` from `https://github.com/openai/codex.git`; its adjacent `.source.json` records the pinned revision. Every vendored directory containing `SKILL.md` is exposed through matching tracked symlinks under both `.agents/skills/<name>` and `.claude/skills/<name>`. The PR babysitter additionally has a thin overlay at `.codex/skills/babysit-pr`: its skill metadata and references link to the pristine snapshot, while the documented `scripts/gh_pr_watch.py` entrypoint links to the repository-local compatibility adapter.
+`vendor/mattpocock-skills/` is a squashed Git subtree from `https://github.com/mattpocock/skills.git` `main` and the source of truth for those upstream skills. Every vendored directory containing `SKILL.md` is exposed through matching tracked symlinks under both `.agents/skills/<name>` and `.claude/skills/<name>`.
 
 Pull upstream with:
 
 ```sh
 git subtree pull --prefix=vendor/mattpocock-skills https://github.com/mattpocock/skills.git main --squash
 ```
-
-Refresh the OpenAI snapshot from the repository and path recorded in `vendor/openai-codex-skills/.source.json`, replace only the `babysit-pr/` directory, and update the recorded revision in the same change. Preserve the `.codex/skills/babysit-pr` overlay and verify that its watcher entrypoint still resolves to `.agents/scripts/babysit_pr_watch.py`. The adapter imports the pinned snapshot at runtime and owns repository-specific compatibility behavior without patching the vendored files.
 
 After an update, expose every vendored skill in both client directories, remove links to skills that upstream deleted, and verify that the name sets match and all links resolve. Keep upstream customization outside the vendored directories. `.claude/CLAUDE.md` imports `../.agents/AGENTS.md` with Claude's `@` syntax; edit this file as the single agent-guide source.
 

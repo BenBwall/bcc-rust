@@ -1,0 +1,8 @@
+This skill is derived from `.codex/skills/babysit-pr/` in
+https://github.com/openai/codex at revision
+5e96aabd68dc6194f5ad928cb7f5d0bc71b72df9, the last revision before upstream
+removed it. It is distributed under the Apache License 2.0 in `LICENSE`.
+
+bcc-rust modifications: the watcher filters resolved review threads, tolerates
+pending and absent `gh pr checks` results, re-executes itself in Python UTF-8
+mode, and the skill text uses this repository's paths and commit policy.
