@@ -1,0 +1,615 @@
+//! Translation limits, resource limits, and linear source storage.
+
+use std::fmt::Write as _;
+
+use super::{
+    block_items,
+    declaration,
+    function_definition,
+    parse,
+    parse_unit,
+    parse_with_limits,
+    parser_errors,
+};
+use crate::translation_phases::parsing::{
+    ParserLimits,
+    declaration_syntax::{
+        Declarator,
+        DirectDeclarator,
+        TypeSpecifiers,
+    },
+    errors::{
+        ParserErrorType,
+        ParserResource,
+    },
+    syntax::{
+        ExternalDeclaration,
+        StatementType,
+    },
+    syntax_store::SyntaxTree,
+};
+
+#[test]
+fn parenthesized_declarators_meet_the_c99_floor_and_stress_the_heap_stack() {
+    for depth in [63, 4_096] {
+        let source = format!("int {}deep{};\n", "(".repeat(depth), ")".repeat(depth));
+        let parsed = parse(&source);
+
+        assert_eq!(parsed.items.len(), 1);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        assert!(
+            parsed
+                .parser
+                .trace
+                .iter()
+                .map(|event| event.depth)
+                .max()
+                .expect("nonempty trace")
+                > depth,
+            "grammar depth must be represented by heap-backed frames"
+        );
+        assert!(
+            parsed.context.source_segment_count() <= depth * 8 + 32,
+            "source provenance must grow linearly with grammar depth"
+        );
+    }
+}
+
+#[test]
+fn long_statement_lists_keep_source_storage_linear() {
+    let count = 1_024;
+    let parsed = parse(&format!("void f(void) {{ {} }}\n", "0; ".repeat(count)));
+    assert_eq!(
+        block_items(&parsed, function_definition(&parsed, 0).body).len(),
+        count
+    );
+    assert!(
+        parser_errors(&parsed).next().is_none(),
+        "{:#?}",
+        parsed.errors
+    );
+    assert!(
+        parsed.context.source_segment_count() < count * 64,
+        "block provenance copied each growing prefix: {} segments",
+        parsed.context.source_segment_count()
+    );
+}
+
+#[test]
+fn source_storage_exhaustion_reports_one_resource_diagnostic() {
+    let parsed = parse_with_limits(
+        "int a; int b; int c;\n",
+        ParserLimits {
+            source_segments: 10,
+            ..ParserLimits::default()
+        },
+    );
+    assert_eq!(
+        parser_errors(&parsed)
+            .filter(|error| matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::SourceSegments,
+                    limit:    10,
+                }
+            ))
+            .count(),
+        1
+    );
+    assert!(
+        parsed.parser.frames.is_empty(),
+        "resource exit retained frames"
+    );
+    assert_eq!(parsed.parser.scopes.depth(), 0);
+}
+
+#[test]
+fn source_storage_exhaustion_stops_fetching_the_remaining_input() {
+    let parsed = parse_with_limits(
+        &"int a;\n".repeat(1_000),
+        ParserLimits {
+            source_segments: 10,
+            ..ParserLimits::default()
+        },
+    );
+    assert!(
+        parsed.context.source_segment_count() < 100,
+        "provenance kept growing after the limit: {} segments",
+        parsed.context.source_segment_count()
+    );
+}
+
+#[test]
+fn long_declaration_lists_keep_source_storage_linear() {
+    let count = 1_024;
+    let names = (0..count).map(|i| format!("p{i}")).collect::<Vec<_>>();
+    for source in [
+        format!("int {};\n", names.join(",")),
+        format!("void f(void) {{ g({}); }}\n", vec!["0"; count].join(",")),
+        format!("int values[] = {{ {} }};\n", vec!["0"; count].join(",")),
+        format!("const char *text = {};\n", "\"a\" ".repeat(count)),
+        format!(
+            "void f({});\n",
+            names
+                .iter()
+                .map(|name| format!("int {name}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        format!("struct S {{ int {}; }};\n", names.join("; int ")),
+        format!("enum E {{ {} }};\n", names.join(",")),
+    ] {
+        let parsed = parse(&source);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        assert!(
+            parsed.context.source_segment_count() < count * 64,
+            "list provenance copied each growing prefix: {} segments",
+            parsed.context.source_segment_count()
+        );
+    }
+}
+
+#[test]
+fn source_storage_is_linear_in_token_count() {
+    // Frames merge provenance one token or child at a time; each fetched
+    // token must be stored once rather than re-copied for every enclosing
+    // construct.
+    let source_segments = |count: usize| {
+        let source = format!(
+            "struct S {{ int a : 3; int (*f)(int); }};\nint f(int x) {{ int t[2] = {{ [1] = {}x{} \
+             }}; {} return t[0]; }}\n",
+            "(".repeat(count),
+            ")".repeat(count),
+            "if (x) { x = (x + 1) * (x - 2) / 3; } ".repeat(count),
+        );
+        let parsed = parse(&source);
+        assert!(
+            parser_errors(&parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        parsed.context.source_segment_count()
+    };
+    let small = source_segments(256);
+    let large = source_segments(1_024);
+    assert!(
+        large <= small * 5,
+        "source storage grew superlinearly: {small} -> {large} segments"
+    );
+}
+
+#[test]
+fn configured_external_declaration_limit_has_boundary_evidence() {
+    let limits = ParserLimits {
+        external_declarations: 2,
+        ..ParserLimits::default()
+    };
+    for source in ["int a;\n", "int a; int b;\n"] {
+        let parsed = parse_with_limits(source, limits);
+        assert!(
+            parser_errors(&parsed)
+                .all(|error| !matches!(error, ParserErrorType::ResourceLimitExceeded { .. }))
+        );
+    }
+
+    let parsed = parse_with_limits("int a; int b; int c;\n", limits);
+    assert!(matches!(
+        parsed.items.last(),
+        Some(ExternalDeclaration::Error(_))
+    ));
+    assert!(parser_errors(&parsed).any(|error| matches!(
+        error,
+        ParserErrorType::ResourceLimitExceeded {
+            resource: ParserResource::ExternalDeclarations,
+            limit:    2,
+        }
+    )));
+    assert!(parsed.parser.frames.is_empty());
+    assert!(parsed.parser.returned.is_none());
+    assert_eq!(parsed.parser.scopes.depth(), 0);
+}
+
+#[test]
+fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
+    let node_limited = parse_with_limits(
+        "int value = 1;\n",
+        ParserLimits {
+            syntax_nodes: 0,
+            ..ParserLimits::default()
+        },
+    );
+    assert!(parser_errors(&node_limited).any(|error| matches!(
+        error,
+        ParserErrorType::ResourceLimitExceeded {
+            resource: ParserResource::SyntaxNodes,
+            limit:    0,
+        }
+    )));
+    assert!(matches!(
+        node_limited.items.last(),
+        Some(ExternalDeclaration::Error(_))
+    ));
+
+    let frame_limited = parse_with_limits(
+        "int value;\n",
+        ParserLimits {
+            frame_depth: 1,
+            ..ParserLimits::default()
+        },
+    );
+    assert!(parser_errors(&frame_limited).any(|error| matches!(
+        error,
+        ParserErrorType::ResourceLimitExceeded {
+            resource: ParserResource::FrameDepth,
+            limit:    1,
+        }
+    )));
+    assert!(matches!(
+        frame_limited.items.last(),
+        Some(ExternalDeclaration::Error(_))
+    ));
+
+    for parsed in [&node_limited, &frame_limited] {
+        assert!(parsed.parser.frames.is_empty());
+        assert!(parsed.parser.returned.is_none());
+        assert!(parsed.parser.recovery.active.is_none());
+        assert_eq!(parsed.parser.scopes.depth(), 0);
+        assert_eq!(
+            parser_errors(parsed)
+                .filter(|error| matches!(error, ParserErrorType::ResourceLimitExceeded { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            parser_errors(parsed)
+                .all(|error| !matches!(error, ParserErrorType::EmptyTranslationUnit))
+        );
+    }
+
+    let defaults = ParserLimits::default();
+    assert!(defaults.external_declarations < u32::MAX as usize);
+    assert!(defaults.syntax_nodes < u32::MAX as usize);
+    assert!(defaults.frame_depth < u32::MAX as usize);
+}
+
+#[test]
+fn mixed_declarator_translation_floor_uses_the_typed_tree() {
+    fn count_derivations(tree: &SyntaxTree, declarator: Declarator) -> (usize, usize, usize) {
+        let mut counts = (
+            tree.pointer_qualifiers(declarator.pointer.type_qualifiers_list)
+                .len(),
+            0,
+            0,
+        );
+        for direct in tree.direct_declarators(declarator.kind) {
+            match *direct {
+                | DirectDeclarator::Parenthesized(nested) => {
+                    let nested = count_derivations(tree, nested);
+                    counts.0 += nested.0;
+                    counts.1 += nested.1;
+                    counts.2 += nested.2;
+                },
+                | DirectDeclarator::Array { .. } => counts.1 += 1,
+                | DirectDeclarator::Function { .. }
+                | DirectDeclarator::KAndRStyleFunction { .. } => counts.2 += 1,
+                | DirectDeclarator::Identifier(_) => {},
+            }
+        }
+        counts
+    }
+
+    let (unit, mut context) =
+        parse_unit("struct Incomplete (*(*(*(*(*(*value)[1])(void))(void))(void))(void))(void);\n");
+    assert!(context.take_pending_errors().is_empty());
+    let ExternalDeclaration::Declaration(root) = unit.external_declarations()[0] else {
+        panic!("expected a declaration root")
+    };
+    let declaration = unit.syntax().declaration(root);
+    let TypeSpecifiers::StructOrUnion(specifier) =
+        declaration.syntax().declaration_specifiers.type_specifiers
+    else {
+        panic!("expected an incomplete structure base type")
+    };
+    assert!(
+        unit.syntax()
+            .struct_or_union_specifier(specifier)
+            .struct_declaration_list
+            .is_none()
+    );
+    let declarator = declaration.init_declarators()[0].declarator;
+
+    assert_eq!(count_derivations(unit.syntax(), declarator), (6, 1, 5));
+}
+
+fn assert_syntax_node_limit_boundary(source: &str) {
+    let baseline = parse(source);
+    assert!(
+        parser_errors(&baseline).next().is_none(),
+        "baseline failed for {source:?}: {:?}",
+        baseline.errors
+    );
+    let exact_limit = baseline.parser.syntax.node_count();
+    assert!(exact_limit > 0, "fixture must retain syntax nodes");
+
+    let exact = parse_with_limits(
+        source,
+        ParserLimits {
+            syntax_nodes: exact_limit,
+            ..ParserLimits::default()
+        },
+    );
+    assert!(parser_errors(&exact).all(|error| !matches!(
+        error,
+        ParserErrorType::ResourceLimitExceeded {
+            resource: ParserResource::SyntaxNodes,
+            ..
+        }
+    )));
+    assert_eq!(exact.parser.syntax.node_count(), exact_limit);
+
+    let below_limit = exact_limit - 1;
+    let below = parse_with_limits(
+        source,
+        ParserLimits {
+            syntax_nodes: below_limit,
+            ..ParserLimits::default()
+        },
+    );
+    assert!(parser_errors(&below).any(|error| matches!(
+        error,
+        ParserErrorType::ResourceLimitExceeded {
+            resource: ParserResource::SyntaxNodes,
+            limit,
+        } if *limit == below_limit
+    )));
+    assert!(
+        below.parser.syntax.node_count() <= below_limit,
+        "syntax limit retained too many nodes for {source:?}: limit={below_limit}, actual={}",
+        below.parser.syntax.node_count()
+    );
+    assert!(matches!(
+        below.items.last(),
+        Some(ExternalDeclaration::Error(_))
+    ));
+}
+
+#[test]
+fn every_frame_retained_list_respects_the_exact_syntax_node_limit() {
+    for source in [
+        "int *const value[2];\n",
+        "int function(int first, int second);\n",
+        "struct S { int first, second; };\n",
+        "enum E { A, B };\n",
+        "int f(void) { g(1, 2); }\n",
+        "int values[2] = { [0] = 1, [1] = 2 };\n",
+        "int old(first, second) int first; int second; { return first; }\n",
+        "int block(void) { int value; value = 1; return value; }\n",
+    ] {
+        assert_syntax_node_limit_boundary(source);
+    }
+}
+
+#[test]
+fn configured_frame_depth_accepts_exact_limit_and_rejects_limit_plus_one() {
+    let source = "int f(void) { return sizeof(int (*)[2]) + ((1 + 2) * 3); }\n";
+    let baseline = parse(source);
+    let exact_limit = baseline
+        .parser
+        .trace
+        .iter()
+        .map(|event| event.depth)
+        .max()
+        .expect("fixture must execute parser frames");
+
+    let exact = parse_with_limits(
+        source,
+        ParserLimits {
+            frame_depth: exact_limit,
+            ..ParserLimits::default()
+        },
+    );
+    assert!(parser_errors(&exact).all(|error| !matches!(
+        error,
+        ParserErrorType::ResourceLimitExceeded {
+            resource: ParserResource::FrameDepth,
+            ..
+        }
+    )));
+
+    let below = parse_with_limits(
+        source,
+        ParserLimits {
+            frame_depth: exact_limit - 1,
+            ..ParserLimits::default()
+        },
+    );
+    assert!(parser_errors(&below).any(|error| matches!(
+        error,
+        ParserErrorType::ResourceLimitExceeded {
+            resource: ParserResource::FrameDepth,
+            limit,
+        } if *limit == exact_limit - 1
+    )));
+}
+
+#[test]
+fn syntax_limit_counts_nodes_retained_by_active_frames() {
+    let limit = 2;
+    let parsed = parse_with_limits(
+        "enum E { A, B, C };\n",
+        ParserLimits {
+            syntax_nodes: limit,
+            ..ParserLimits::default()
+        },
+    );
+
+    assert!(parser_errors(&parsed).any(|error| matches!(
+        error,
+        ParserErrorType::ResourceLimitExceeded {
+            resource: ParserResource::SyntaxNodes,
+            limit: actual,
+        } if *actual == limit
+    )));
+    assert!(parsed.parser.syntax.node_count() <= limit);
+    assert!(matches!(
+        parsed.items.as_slice(),
+        [ExternalDeclaration::Error(_)]
+    ));
+}
+
+#[test]
+fn remaining_c99_parser_translation_floors_are_supported() {
+    let derived = format!("int value{};\n", "[1]".repeat(12));
+    let derived = parse(&derived);
+    assert!(parser_errors(&derived).next().is_none());
+    let derived_declarator = &derived.parser.syntax.init_declarators[0].declarator;
+    assert_eq!(
+        derived
+            .parser
+            .syntax
+            .direct_declarators
+            .iter()
+            .skip(derived_declarator.kind.start_index() as usize)
+            .take(derived_declarator.kind.length() as usize)
+            .filter(|direct| matches!(direct, DirectDeclarator::Array { .. }))
+            .count(),
+        12
+    );
+
+    let block_identifiers = (0..511)
+        .map(|index| format!("b{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let block = format!("int f(void) {{ int {block_identifiers}; return 0; }}\n");
+    let block = parse(&block);
+    assert!(parser_errors(&block).next().is_none());
+    let block_declaration = block
+        .parser
+        .syntax
+        .declarations
+        .iter()
+        .max_by_key(|declaration| declaration.init_declarators.length())
+        .expect("block fixture must contain declarations");
+    assert_eq!(block_declaration.init_declarators.length(), 511);
+    let last_block_init =
+        &block.parser.syntax.init_declarators[(block_declaration.init_declarators.start_index()
+            + block_declaration.init_declarators.length()
+            - 1) as usize];
+    assert_eq!(
+        block
+            .parser
+            .declarator_identifier(last_block_init.declarator)
+            .map(|identifier| block.context.string_cache.at(identifier.name)),
+        Some("b510")
+    );
+
+    let external_identifiers = (0..4095)
+        .map(|index| format!("e{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let external = format!("int {external_identifiers};\n");
+    let external = parse(&external);
+    assert!(parser_errors(&external).next().is_none());
+    let declaration = declaration(&external, 0);
+    assert_eq!(declaration.init_declarators.length(), 4_095);
+    let last_external_init =
+        &external.parser.syntax.init_declarators[(declaration.init_declarators.start_index()
+            + declaration.init_declarators.length()
+            - 1) as usize];
+    assert_eq!(
+        external
+            .parser
+            .declarator_identifier(last_external_init.declarator)
+            .map(|identifier| external.context.string_cache.at(identifier.name)),
+        Some("e4094")
+    );
+
+    let cases = (0..1023).fold(String::new(), |mut cases, index| {
+        write!(cases, "case {index}: ;").expect("writing to a String cannot fail");
+        cases
+    });
+    let switch = format!("int f(int x) {{ switch (x) {{ {cases} }} return 0; }}\n");
+    let switch = parse(&switch);
+    assert!(parser_errors(&switch).next().is_none());
+    assert_eq!(
+        switch
+            .parser
+            .syntax
+            .statements
+            .iter()
+            .filter(|statement| matches!(statement.kind, StatementType::Case(..)))
+            .count(),
+        1_023
+    );
+
+    let members = (0..1023).fold(String::new(), |mut members, index| {
+        write!(members, "int m{index};").expect("writing to a String cannot fail");
+        members
+    });
+    let structure = format!("struct S {{ {members} }};\n");
+    let structure = parse(&structure);
+    assert!(parser_errors(&structure).next().is_none());
+    let member_list = structure.parser.syntax.struct_or_union_specifiers[0]
+        .struct_declaration_list
+        .expect("struct definition must retain members");
+    assert_eq!(member_list.length(), 1_023);
+    let last_member = &structure.parser.syntax.struct_declarations
+        [(member_list.start_index() + member_list.length() - 1) as usize];
+    let last_member_declarator = &structure.parser.syntax.struct_declarators
+        [last_member.struct_declarator_list.start_index() as usize];
+    assert_eq!(
+        last_member_declarator
+            .declarator
+            .and_then(|declarator| structure.parser.declarator_identifier(declarator))
+            .map(|identifier| structure.context.string_cache.at(identifier.name)),
+        Some("m1022")
+    );
+
+    let enumerators = (0..1023)
+        .map(|index| format!("E{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let enumeration = format!("enum E {{ {enumerators} }};\n");
+    let enumeration = parse(&enumeration);
+    assert!(parser_errors(&enumeration).next().is_none());
+    let enumeration_list = enumeration.parser.syntax.enum_specifiers[0]
+        .enumeration_list
+        .expect("enum definition must retain enumerators");
+    assert_eq!(enumeration_list.length(), 1_023);
+    let last_enumerator = &enumeration.parser.syntax.enumerators
+        [(enumeration_list.start_index() + enumeration_list.length() - 1) as usize];
+    assert_eq!(
+        enumeration
+            .context
+            .string_cache
+            .at(last_enumerator.name.name),
+        "E1022"
+    );
+
+    let mut nested = "int leaf;".to_owned();
+    for index in (0..63).rev() {
+        nested = format!("struct S{index} {{ {nested} }} member{index};");
+    }
+    let nested = format!("struct Outer {{ {nested} }};\n");
+    let nested = parse(&nested);
+    assert!(parser_errors(&nested).next().is_none());
+    assert_eq!(nested.parser.syntax.struct_or_union_specifiers.len(), 64);
+    assert_eq!(
+        nested
+            .parser
+            .syntax
+            .struct_or_union_specifiers
+            .last()
+            .and_then(|specifier| specifier.identifier)
+            .map(|identifier| nested.context.string_cache.at(identifier.name)),
+        Some("Outer")
+    );
+}

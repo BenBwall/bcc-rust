@@ -1,0 +1,198 @@
+//! Parser regression tests and the helpers they share.
+
+mod declaration_recovery;
+mod declarations;
+mod diagnostics;
+mod expression_recovery;
+mod expressions;
+mod limits;
+mod statements;
+mod translation_unit;
+
+use std::path::PathBuf;
+
+use super::{
+    ParsedTranslationUnit,
+    Parser,
+    ParserLimits,
+    declaration_syntax::{
+        Declaration,
+        Declarator,
+        InitDeclarator,
+    },
+    errors::ParserErrorType,
+    syntax::{
+        BlockItem,
+        ConstantExpressionIndex,
+        ExpressionIndex,
+        ExpressionSlot,
+        ExternalDeclaration,
+        FunctionDefinition,
+        StatementIndex,
+        StatementType,
+    },
+};
+use crate::{
+    configuration::CompilerConfiguration,
+    translation_phases::{
+        Context,
+        SourceVectors,
+        TranslationError,
+        TranslationPhase,
+        preprocessing::Preprocessor,
+    },
+    util::shared::SharedVec,
+};
+
+struct Parsed {
+    parser:  Parser,
+    context: Context,
+    items:   Vec<ExternalDeclaration>,
+    errors:  Vec<TranslationError>,
+    source:  String,
+}
+
+fn parse(source: &str) -> Parsed {
+    parse_with(source, CompilerConfiguration::default(), None)
+}
+
+fn parse_with_configuration(source: &str, configuration: CompilerConfiguration) -> Parsed {
+    parse_with(source, configuration, None)
+}
+
+fn parse_with_limits(source: &str, limits: ParserLimits) -> Parsed {
+    parse_with(source, CompilerConfiguration::default(), Some(limits))
+}
+
+fn parse_unit(source: &str) -> (ParsedTranslationUnit, Context) {
+    let mut context = Context::new();
+    let preprocessor = Preprocessor::new(
+        &mut context,
+        PathBuf::from("<syntax-tree-test>").into_boxed_path(),
+        source.to_owned().into(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+    (unit, context)
+}
+
+fn parse_with(
+    source: &str,
+    configuration: CompilerConfiguration,
+    limits: Option<ParserLimits>,
+) -> Parsed {
+    let source = source.to_owned();
+    let mut context = Context::with_configuration(configuration);
+    let preprocessor = Preprocessor::new(
+        &mut context,
+        PathBuf::from("<parser-test>").into_boxed_path(),
+        source.clone().into(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let mut parser = Parser::new(preprocessor)
+        .with_action_budget(source.len().saturating_mul(256).saturating_add(4_096));
+    if let Some(limits) = limits {
+        parser = parser.with_limits(limits);
+    }
+    let mut items = Vec::new();
+    while let Some(item) = parser.next_item(&mut context) {
+        items.push(item);
+        assert!(
+            items.len() < 10_000,
+            "parser failed to make item-level progress"
+        );
+    }
+    let mut errors = Vec::new();
+    while let Some(error) = context.pop_pending_error() {
+        errors.push(error);
+    }
+    Parsed {
+        parser,
+        context,
+        items,
+        errors,
+        source,
+    }
+}
+
+fn declaration(parsed: &Parsed, item: usize) -> &Declaration {
+    let index = match parsed.items[item] {
+        | ExternalDeclaration::Declaration(index)
+        | ExternalDeclaration::RecoveredDeclaration(index) => index,
+        | ExternalDeclaration::FunctionDefinition(_)
+        | ExternalDeclaration::RecoveredFunctionDefinition(_)
+        | ExternalDeclaration::Error(_) => panic!("expected a declaration item"),
+    };
+    &parsed.parser.syntax.declarations[index.0 as usize]
+}
+
+fn function_definition(parsed: &Parsed, item: usize) -> &FunctionDefinition {
+    let (ExternalDeclaration::FunctionDefinition(index)
+    | ExternalDeclaration::RecoveredFunctionDefinition(index)) = parsed.items[item]
+    else {
+        panic!("expected a function-definition item")
+    };
+    &parsed.parser.syntax.function_definitions[index.0 as usize]
+}
+
+fn return_expression(parsed: &Parsed, statement: StatementIndex) -> ExpressionIndex {
+    let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
+        parsed.parser.syntax.statements[statement.0 as usize].kind
+    else {
+        panic!("expected a parsed return expression")
+    };
+    expression
+}
+
+fn block_items(parsed: &Parsed, statement: StatementIndex) -> &[BlockItem] {
+    let StatementType::Compound { items } =
+        parsed.parser.syntax.statements[statement.0 as usize].kind
+    else {
+        panic!("expected a compound statement")
+    };
+    let start = items.start_index as usize;
+    let end = start + items.length as usize;
+    &parsed.parser.syntax.block_items[start..end]
+}
+
+fn init_declarators<'a>(parsed: &'a Parsed, declaration: &Declaration) -> &'a [InitDeclarator] {
+    let start = declaration.init_declarators.start_index as usize;
+    let end = start + declaration.init_declarators.length as usize;
+    &parsed.parser.syntax.init_declarators[start..end]
+}
+
+fn identifier_name(parsed: &Parsed, declarator: Declarator) -> Option<String> {
+    parsed
+        .parser
+        .declarator_identifier(declarator)
+        .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
+}
+
+fn parser_errors(parsed: &Parsed) -> impl Iterator<Item = &ParserErrorType> {
+    parsed.errors.iter().filter_map(|error| match error {
+        | TranslationError::Parsing(error) => Some(&error.error_type),
+        | _ => None,
+    })
+}
+
+fn sourced_text(parsed: &Parsed, source_vectors: SourceVectors) -> String {
+    parsed
+        .context
+        .get_source_vectors(source_vectors)
+        .iter()
+        .map(|vector| &parsed.source[vector.index..vector.index.saturating_add(vector.length)])
+        .collect()
+}
+
+fn expression_text(parsed: &Parsed, expression: ExpressionIndex) -> String {
+    sourced_text(
+        parsed,
+        parsed.parser.syntax.expressions[expression.0 as usize].source_vectors,
+    )
+}
+
+fn constant_expression_text(parsed: &Parsed, expression: ConstantExpressionIndex) -> String {
+    expression_text(parsed, expression.into())
+}
