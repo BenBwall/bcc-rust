@@ -380,4 +380,22 @@ mod tests {
 
         assert!(stderr.is_empty(), "{stderr}");
     }
+
+    #[test]
+    fn a_label_spanning_many_lines_renders_in_linear_time() {
+        // Too long for a command line, so it goes through a file.
+        let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("long-skipped-range.c");
+        let input = format!("int a = 1 2\n{}{}", "x\n".repeat(60_000), ";\nint b;\n");
+        std::fs::write(&path, input).expect("the test input must be writable");
+        let started = std::time::Instant::now();
+        let stderr = stderr_of(&[path.to_str().expect("the temporary path is UTF-8")]);
+
+        assert!(stderr.contains("1 error generated."), "{stderr}");
+        // Rescanning every mark for each rendered line took about 15 s here.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "rendering took {:?}",
+            started.elapsed()
+        );
+    }
 }

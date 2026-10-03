@@ -520,13 +520,10 @@ impl Renderer {
     ) {
         let pad = " ".repeat(gutter_width);
         let bar = self.paint("|", Self::gutter_style());
-        let mut lines: Vec<usize> = marks
-            .iter()
-            .filter(|mark| mark.file == file)
-            .map(|mark| mark.line)
-            .collect();
-        lines.sort_unstable();
-        lines.dedup();
+        // Sort once and walk the marks line by line: rescanning every mark
+        // for each line made a label spanning many lines quadratic.
+        let mut file_marks: Vec<&Mark> = marks.iter().filter(|mark| mark.file == file).collect();
+        file_marks.sort_by_key(|mark| (mark.line, mark.start, !mark.primary));
         let line_text = |line: usize| -> &str {
             let start = starts.get(line - 1).copied().unwrap_or(text.len());
             let end = starts
@@ -536,7 +533,8 @@ impl Renderer {
             text[start..end].trim_end_matches('\r')
         };
         let mut previous: Option<usize> = None;
-        for &line in &lines {
+        for on_line in file_marks.chunk_by(|left, right| left.line == right.line) {
+            let line = on_line[0].line;
             if let Some(previous) = previous {
                 if line == previous + 2 {
                     self.write_source_line(
@@ -553,11 +551,6 @@ impl Renderer {
             let source = line_text(line);
             self.write_source_line(out, line, source, gutter_width);
             let line_start = starts[line - 1];
-            let mut on_line: Vec<&Mark> = marks
-                .iter()
-                .filter(|mark| mark.file == file && mark.line == line)
-                .collect();
-            on_line.sort_by_key(|mark| (mark.start, !mark.primary));
 
             // Underline row: secondary marks first so primary ones win.
             let column_of = |offset: usize| {
