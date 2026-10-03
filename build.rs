@@ -32,6 +32,52 @@ fn main() {
     {
         gen_one_million();
         gen_parser_mix();
+        gen_macro_mix();
+    }
+}
+
+/// Number of repeated units in the generated macro-heavy workload.
+#[cfg(feature = "benchmarking-internals")]
+const MACRO_MIX_UNITS: usize = 20_000;
+
+/// Generates a C99 translation unit whose declarations and statements are
+/// mostly produced by nested function-like macros, token pasting,
+/// stringification, and conditional groups, so phase 4 dominates.
+#[cfg(feature = "benchmarking-internals")]
+fn gen_macro_mix() {
+    let out_dir = &*OUT_DIR;
+    let mut f = BufWriter::new(std::fs::File::create(format!("{out_dir}/macro-mix.c")).unwrap());
+    writeln!(
+        f,
+        "#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define SQUARE(x) ((x) * (x))
+#define SCALE(x) ((x) * WIDTH + OFFSET)
+#define FIELD(type, name) type name;
+#define RECORD(i) record_ ## i
+#define VALUE(i) value_ ## i
+#define STR(x) #x
+#define WIDTH 64
+#define OFFSET (WIDTH / 2)
+#define FEATURE 1"
+    )
+    .unwrap();
+    for i in 0..MACRO_MIX_UNITS {
+        writeln!(
+            f,
+            "struct RECORD({i}) {{ FIELD(int, id) FIELD(long, count) FIELD(char *, label) }};
+static int VALUE({i})(int x, int y)
+{{
+    int scaled = SQUARE(SCALE(x)) - MAX(x, y);
+#if FEATURE && WIDTH > 32
+    scaled += MAX(SQUARE(x), y) - MIN(x, SQUARE(y));
+#else
+    scaled -= 1;
+#endif
+    return scaled + (int)sizeof(STR(record {i}));
+}}"
+        )
+        .unwrap();
     }
 }
 

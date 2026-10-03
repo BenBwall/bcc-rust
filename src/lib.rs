@@ -25,12 +25,14 @@ pub(crate) mod util;
 
 #[cfg(feature = "benchmarking-internals")]
 pub use benchmarking::{
+    BenchmarkInput,
     ParseBenchmarkSummary,
-    one_million_input_bytes,
-    parse_mix,
-    parse_one_million,
-    parser_mix_input_bytes,
-    parser_mix_input_lines,
+    PreparedParse,
+    PreprocessingStrategy,
+    lex,
+    parse,
+    prepare_parse,
+    preprocess,
     preprocess_one_million,
 };
 pub use cli::{

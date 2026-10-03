@@ -94,7 +94,7 @@ pub(crate) struct PreprocessorIterator {
 }
 
 impl PreprocessorIterator {
-    #[cfg(any(test, feature = "benchmarking-internals"))]
+    #[cfg(test)]
     pub(crate) fn new(
         source_filename: Box<Path>,
         input_string: SharedString,

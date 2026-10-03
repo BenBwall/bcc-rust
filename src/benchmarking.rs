@@ -1,49 +1,248 @@
 //! Entry points for the Criterion and coz benchmarks.
 
+use std::{
+    fmt::Write,
+    sync::OnceLock,
+};
+
+pub use crate::pipeline::PreprocessingStrategy;
 use crate::{
     pipeline::PreprocessorIterator,
     translation_phases::{
         Context,
+        TranslationPhase,
         box_path_from_str,
-        parsing::Parser as LanguageParser,
-        preprocessing::Preprocessor,
+        parsing::Parser,
+        preprocessor_tokenizer::TokenSource,
     },
-    util::shared::SharedVec,
+    util::shared::{
+        SharedString,
+        SharedVec,
+    },
 };
 
 #[doc(hidden)]
 #[must_use]
 pub fn preprocess_one_million() -> usize {
-    let million_lines = one_million_lines();
-    let iterator = PreprocessorIterator::new(
-        box_path_from_str("<input>"),
-        million_lines.to_owned().into(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    iterator.count()
+    preprocess(
+        BenchmarkInput::OneMillionLines,
+        PreprocessingStrategy::Streaming,
+    )
 }
 
+/// A generated benchmark translation unit.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BenchmarkInput {
+    /// One million `int iN = N;` lines.
+    OneMillionLines,
+    /// Typedef-heavy declarations, aggregates, and function bodies.
+    ParserMix,
+    /// Function-like macros, token pasting, stringification, and
+    /// conditional groups expanding into ordinary C.
+    MacroMix,
+    /// Function bodies of deeply nested expressions: every precedence level,
+    /// casts, calls, subscripts, member access, and compound literals.
+    ExpressionHeavy,
+    /// File-scope declarations with nested declarators, prototypes, K&R
+    /// definitions, aggregates, bit-fields, and designated initializers.
+    DeclarationHeavy,
+    /// Isolated string literals, stressing phase-6 lookahead without
+    /// concatenation.
+    SingleStrings,
+    /// Empty function-like macro invocations.
+    EmptyMacros,
+    /// Reused parameters and nested argument prescans.
+    NestedArguments,
+}
+
+impl BenchmarkInput {
+    /// Inputs measured for every translation phase.
+    pub const ALL: [Self; 3] = [Self::OneMillionLines, Self::ParserMix, Self::MacroMix];
+    /// Parser production stress inputs.
+    pub const PARSER_STRESS: [Self; 2] = [Self::ExpressionHeavy, Self::DeclarationHeavy];
+    /// Extra inputs that isolate preprocessing allocation costs.
+    pub const PREPROCESSOR_STRESS: [Self; 3] = [
+        Self::SingleStrings,
+        Self::EmptyMacros,
+        Self::NestedArguments,
+    ];
+
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            | Self::OneMillionLines => "one million lines",
+            | Self::ParserMix => "mixed C99 workload",
+            | Self::MacroMix => "macro-heavy workload",
+            | Self::ExpressionHeavy => "expression-heavy workload",
+            | Self::DeclarationHeavy => "declaration-heavy workload",
+            | Self::SingleStrings => "single string literals",
+            | Self::EmptyMacros => "empty macro calls",
+            | Self::NestedArguments => "nested reused arguments",
+        }
+    }
+
+    /// # Panics
+    ///
+    /// Never for the generated inputs, whose sizes fit in `u64`.
+    #[must_use]
+    pub fn bytes(self) -> u64 {
+        u64::try_from(self.source().len()).expect("benchmark input length must fit in u64")
+    }
+
+    /// # Panics
+    ///
+    /// Never for the generated inputs, whose line counts fit in `u64`.
+    #[must_use]
+    pub fn lines(self) -> u64 {
+        u64::try_from(self.source().lines().count()).expect("benchmark line count must fit in u64")
+    }
+
+    #[expect(
+        clippy::large_include_file,
+        reason = "The generated benchmark inputs are intentionally large."
+    )]
+    fn source(self) -> &'static str {
+        match self {
+            | Self::OneMillionLines =>
+                include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c")),
+            | Self::ParserMix => include_str!(concat!(env!("OUT_DIR"), "/parser-mix.c")),
+            | Self::MacroMix => include_str!(concat!(env!("OUT_DIR"), "/macro-mix.c")),
+            | Self::SingleStrings => {
+                static SOURCE: OnceLock<String> = OnceLock::new();
+                SOURCE.get_or_init(|| "\"text\";\n".repeat(20_000))
+            },
+            | Self::EmptyMacros => {
+                static SOURCE: OnceLock<String> = OnceLock::new();
+                SOURCE.get_or_init(|| format!("#define EMPTY()\n{}", "EMPTY() ;\n".repeat(20_000)))
+            },
+            | Self::NestedArguments => {
+                static SOURCE: OnceLock<String> = OnceLock::new();
+                SOURCE.get_or_init(|| {
+                    format!(
+                        "#define ID(x) x\n#define TWICE(x) x + x\n{}",
+                        "TWICE(ID(7));\n".repeat(20_000)
+                    )
+                })
+            },
+            | Self::ExpressionHeavy => {
+                static SOURCE: OnceLock<String> = OnceLock::new();
+                SOURCE.get_or_init(|| expression_heavy_source(4_000))
+            },
+            | Self::DeclarationHeavy => {
+                static SOURCE: OnceLock<String> = OnceLock::new();
+                SOURCE.get_or_init(|| declaration_heavy_source(6_000))
+            },
+        }
+    }
+
+    fn shared_source(self) -> SharedString {
+        self.source().to_owned().into()
+    }
+}
+
+/// `count` functions whose statements nest expressions of every precedence
+/// level.
+fn expression_heavy_source(count: usize) -> String {
+    let mut source = String::from(
+        "typedef struct point { int x, y; } point;
+         int table[64];
+         int combine(int a, int b, int c) { return a + b * c; }
+",
+    );
+    for index in 0..count {
+        let _ = write!(
+            source,
+            "int expressions{index}(int a, int b, int c, point *p)
+             {{
+                 int r = (a + b * c - (a << 2) / (b | 1)) % 7 ^ ~c & (a >= b || b != c);
+                 r += a ? b ? c : -a : (int)sizeof(point) + (int)sizeof r;
+                 r = combine(table[(a + {index}) & 63], p->x * p[0].y, combine(a, b, c))              << (r > 3 && r < 9);
+                 r = ((point){{ .x = a, .y = b }}).x + (r *= 2, r -= c, r);
+                 p->y = !r ? -(a - (b - (c - (a - (b - c))))) : ++r + r-- * (unsigned char)a;
+                 return (((r + a) * (b + c)) / ((a - b) | 1)) + table[r & 63];
+             }}
+"
+        );
+    }
+    source
+}
+
+/// `count` groups of file-scope declarations with nested declarators,
+/// aggregates, and initializers.
+fn declaration_heavy_source(count: usize) -> String {
+    let mut source = String::new();
+    for index in 0..count {
+        let _ = write!(
+            source,
+            "typedef unsigned long size{index};
+             typedef int (*handler{index})(int, char *restrict, ...);
+             struct node{index} {{ size{index} length : 12; unsigned flags : 4;              struct node{index} *next, *(*links[2])(void); union {{ int i; float f; }} u; }};
+             enum state{index} {{ IDLE{index}, BUSY{index} = 4, DONE{index}, }};
+             static const int (*const lookup{index}[4])(size{index} *, const char *) = {{ 0 }};
+             extern void (*signal{index}(int, void (*)(int)))(int);
+             struct node{index} root{index} = {{ .length = {index} % 4096, .flags = 3,              .next = 0, .u = {{ .f = 1.5f }} }};
+             int matrix{index}[2][3] = {{ [1] = {{ 1, 2 }}, [0][2] = 7 }};
+             char *names{index}[] = {{ \"a\", \"b\" \"c\", 0 }};
+             int old_style{index}(a, b, c) int a; char *b; double c; {{ return a; }}
+             handler{index} callbacks{index}[3], (*selected{index})(int, char *restrict, ...);
+"
+        );
+    }
+    source
+}
+
+/// Runs translation phases 1 through 3 only and returns the number of
+/// preprocessing tokens. Every strategy but streaming lexes the whole file
+/// first.
 #[doc(hidden)]
 #[must_use]
-pub fn one_million_input_bytes() -> u64 {
-    u64::try_from(one_million_lines().len()).expect("benchmark input length must fit in u64")
+pub fn lex(input: BenchmarkInput, strategy: PreprocessingStrategy) -> usize {
+    let mut context = Context::new();
+    context.set_lexing_strategy(strategy.lexing());
+    let file = context.intern_source_file(box_path_from_str("<input>"));
+    let mut tokens = TokenSource::new(&mut context, file, input.shared_source());
+    let mut count = 0;
+    while tokens.next_item(&mut context).is_some() {
+        count += 1;
+        // Lexing alone never compacts provenance, so keep the arena from
+        // dominating the measurement.
+        context.source_vectors.0.clear();
+    }
+    count
 }
 
-#[expect(
-    clippy::large_include_file,
-    reason = "The generated preprocessor benchmark input is intentionally large."
-)]
-fn one_million_lines() -> &'static str {
-    include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c"))
-}
-
-#[expect(
-    clippy::large_include_file,
-    reason = "The generated parser benchmark input is intentionally large."
-)]
-fn parser_mix() -> &'static str {
-    include_str!(concat!(env!("OUT_DIR"), "/parser-mix.c"))
+/// Runs translation phases 1 through 6 and returns the number of parser-facing
+/// tokens. Streaming strategies discard provenance as they go; the batch
+/// strategy keeps the whole translation unit, as a parser reading it later
+/// would need.
+#[doc(hidden)]
+#[must_use]
+pub fn preprocess(input: BenchmarkInput, strategy: PreprocessingStrategy) -> usize {
+    match strategy {
+        | PreprocessingStrategy::Streaming | PreprocessingStrategy::BatchLexing =>
+            PreprocessorIterator::with_lexing(
+                strategy.lexing(),
+                box_path_from_str("<input>"),
+                input.shared_source(),
+                SharedVec::default(),
+                SharedVec::default(),
+            )
+            .count(),
+        | PreprocessingStrategy::Batch => {
+            let mut context = Context::new();
+            strategy
+                .preprocessor(
+                    &mut context,
+                    box_path_from_str("<input>"),
+                    input.shared_source(),
+                    SharedVec::default(),
+                    SharedVec::default(),
+                )
+                .preprocess_all(&mut context)
+                .len()
+        },
+    }
 }
 
 /// Summary of one benchmarked parse, returned so the work cannot be elided
@@ -55,42 +254,66 @@ pub struct ParseBenchmarkSummary {
     pub diagnostics:           usize,
 }
 
-fn parse_benchmark_input(input: &'static str) -> ParseBenchmarkSummary {
+/// Runs translation phases 1 through 7 and summarizes the parse.
+#[doc(hidden)]
+#[must_use]
+pub fn parse(input: BenchmarkInput, strategy: PreprocessingStrategy) -> ParseBenchmarkSummary {
     let mut context = Context::new();
-    let preprocessor = Preprocessor::new(
+    let preprocessor = strategy.preprocessor(
         &mut context,
         box_path_from_str("<input>"),
-        input.to_owned().into(),
+        input.shared_source(),
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = strategy
+        .parser(preprocessor, &mut context)
+        .parse_translation_unit(&mut context);
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
         diagnostics:           context.take_pending_errors().len(),
     }
 }
 
+/// A translation unit preprocessed through phase 6 and ready to parse, so a
+/// benchmark can time phase 7 alone.
 #[doc(hidden)]
-#[must_use]
-pub fn parse_one_million() -> ParseBenchmarkSummary {
-    parse_benchmark_input(one_million_lines())
+pub struct PreparedParse {
+    context: Context,
+    parser:  Parser,
 }
 
-#[doc(hidden)]
-#[must_use]
-pub fn parse_mix() -> ParseBenchmarkSummary {
-    parse_benchmark_input(parser_mix())
+impl std::fmt::Debug for PreparedParse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedParse").finish_non_exhaustive()
+    }
 }
 
+/// Runs translation phases 1 through 6 under the batch strategy, leaving
+/// only parsing to [`PreparedParse::parse`].
 #[doc(hidden)]
 #[must_use]
-pub fn parser_mix_input_bytes() -> u64 {
-    u64::try_from(parser_mix().len()).expect("benchmark input length must fit in u64")
+pub fn prepare_parse(input: BenchmarkInput) -> PreparedParse {
+    let mut context = Context::new();
+    let preprocessor = PreprocessingStrategy::Batch.preprocessor(
+        &mut context,
+        box_path_from_str("<input>"),
+        input.shared_source(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let parser = PreprocessingStrategy::Batch.parser(preprocessor, &mut context);
+    PreparedParse { context, parser }
 }
 
-#[doc(hidden)]
-#[must_use]
-pub fn parser_mix_input_lines() -> u64 {
-    u64::try_from(parser_mix().lines().count()).expect("benchmark line count must fit in u64")
+impl PreparedParse {
+    /// Runs translation phase 7 and summarizes the parse.
+    #[must_use]
+    pub fn parse(mut self) -> ParseBenchmarkSummary {
+        let unit = self.parser.parse_translation_unit(&mut self.context);
+        ParseBenchmarkSummary {
+            external_declarations: unit.external_declarations().len(),
+            diagnostics:           self.context.take_pending_errors().len(),
+        }
+    }
 }
