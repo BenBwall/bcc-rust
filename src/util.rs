@@ -5,8 +5,12 @@ use std::{
 
 use rustc_hash::FxBuildHasher;
 
+pub(crate) mod arena;
+pub(crate) mod byte_scan;
+pub(crate) mod chunked_queue;
 pub(crate) mod dedup_arena;
 pub(crate) mod last_entry;
+pub(crate) mod packed;
 pub(crate) mod shared;
 pub(crate) mod string_cache;
 pub(crate) mod vector_slice;

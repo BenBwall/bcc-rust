@@ -58,6 +58,21 @@ pub(crate) enum TranslationError {
     Parsing(ParserError),
 }
 
+impl TranslationError {
+    /// Visits every provenance range this diagnostic reads from a context
+    /// arena. Owned source vectors are not visited.
+    pub(crate) fn for_each_source_vectors_mut(
+        &mut self,
+        visit: &mut impl FnMut(&mut SourceVectors),
+    ) {
+        match self {
+            | Self::InitialProcessing(_) | Self::PreprocessorTokenizining(_) => {},
+            | Self::Preprocessing(error) => visit(&mut error.source_vectors),
+            | Self::Parsing(error) => error.for_each_source_vectors_mut(visit),
+        }
+    }
+}
+
 impl GetSeverity for TranslationError {
     fn severity(&self) -> ErrorSeverity {
         match self {

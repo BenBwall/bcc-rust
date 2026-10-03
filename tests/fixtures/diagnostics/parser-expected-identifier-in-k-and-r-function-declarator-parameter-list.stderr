@@ -4,6 +4,6 @@ error: expected a parameter name in the identifier list, found integer constant 
 1 | int f(a, 1);
   |          ^ expected an identifier
   |
-  = note: C99 §6.7.5.3p11: a typedef name here starts a prototype parameter instead
+  = note: C99 §6.7.5: an old-style identifier list contains only parameter names separated by commas
 
 1 error generated.

@@ -4,10 +4,4 @@ error: expected an expression after `?`
 1 | #if 1 ? : 2
   |         ^ `?` needs an operand here
 
-error: expected an expression after `:`
- --> pp-ternary-operator-without-mhs.c:2:1
-  |
-2 | #endif
-  | ^ `:` needs an operand here
-
-2 errors generated.
+1 error generated.

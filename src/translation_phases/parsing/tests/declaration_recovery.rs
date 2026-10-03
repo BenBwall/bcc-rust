@@ -17,6 +17,11 @@ use crate::translation_phases::{
     parsing::{
         declaration_syntax::{
             DirectDeclarator,
+            Enumerator,
+            InitDeclarator,
+            ParameterDeclaration,
+            StructDeclaration,
+            StructDeclarator,
             TypeSpecifiers,
         },
         errors::ParserErrorType,
@@ -26,6 +31,7 @@ use crate::translation_phases::{
             ExpressionSlot,
             ExpressionType,
             ExternalDeclaration,
+            Identifier,
             StatementType,
             UnaryOperator,
         },
@@ -67,7 +73,7 @@ fn missing_declarators_skip_post_declarator_diagnostics() {
         );
         assert!(!parser_errors(&parsed).any(|error| matches!(
             error,
-            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(_)
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
         )));
     }
 
@@ -95,25 +101,30 @@ fn malformed_parameter_recovery_stops_at_comma_and_keeps_the_next_parameter() {
         parsed.items.get(1),
         Some(ExternalDeclaration::Declaration(_))
     ));
-    assert_eq!(parsed.parser.syntax.parameter_declarations.len(), 2);
+    assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 2);
     assert_eq!(
         parsed
             .parser
             .syntax
-            .parameter_declarations
-            .iter()
+            .iter::<ParameterDeclaration>()
             .map(|parameter| sourced_text(&parsed, parameter.source_vectors))
             .collect::<Vec<_>>(),
         ["intx", "chary"]
     );
     assert_eq!(
-        parsed.parser.syntax.parameter_declarations[1]
+        parsed
+            .parser
+            .syntax
+            .nth::<ParameterDeclaration>(1)
             .declaration_specifiers
             .type_specifiers,
         TypeSpecifiers::Char
     );
     assert_eq!(
-        parsed.parser.syntax.parameter_declarations[1]
+        parsed
+            .parser
+            .syntax
+            .nth::<ParameterDeclaration>(1)
             .declarator
             .and_then(|declarator| identifier_name(&parsed, declarator))
             .as_deref(),
@@ -131,13 +142,12 @@ fn omitted_parameter_comma_reprocesses_the_next_declaration_starter() {
             TokenType::Keyword(KeywordTokenType::Int)
         ))
     )));
-    assert_eq!(parsed.parser.syntax.parameter_declarations.len(), 2);
+    assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 2);
     assert_eq!(
         parsed
             .parser
             .syntax
-            .parameter_declarations
-            .iter()
+            .iter::<ParameterDeclaration>()
             .filter_map(|parameter| parameter
                 .declarator
                 .and_then(|declarator| identifier_name(&parsed, declarator)))
@@ -160,8 +170,7 @@ fn omitted_struct_member_semicolon_reprocesses_the_next_declaration_starter() {
         parsed
             .parser
             .syntax
-            .struct_declarators
-            .iter()
+            .iter::<StructDeclarator>()
             .filter_map(|declarator| declarator
                 .declarator
                 .and_then(|declarator| identifier_name(&parsed, declarator)))
@@ -182,8 +191,7 @@ fn omitted_enumerator_comma_reprocesses_the_next_identifier() {
         parsed
             .parser
             .syntax
-            .enumerators
-            .iter()
+            .iter::<Enumerator>()
             .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
             .collect::<Vec<_>>(),
         ["A", "B", "C"]
@@ -199,12 +207,13 @@ fn named_parameter_declarators_retain_nested_k_and_r_identifier_lists() {
         "{:#?}",
         parsed.errors
     );
-    let callback = parsed.parser.syntax.parameter_declarations[0]
+    let callback = parsed
+        .parser
+        .syntax
+        .nth::<ParameterDeclaration>(0)
         .declarator
         .expect("named callback declarator");
-    let start = callback.kind.start_index as usize;
-    let end = start + callback.kind.length as usize;
-    let parameters = parsed.parser.syntax.direct_declarators[start..end]
+    let parameters = parsed.parser.syntax[callback.kind]
         .iter()
         .find_map(|direct| match direct {
             | DirectDeclarator::KAndRStyleFunction { parameters } => Some(*parameters),
@@ -216,7 +225,7 @@ fn named_parameter_declarators_retain_nested_k_and_r_identifier_lists() {
         parsed
             .context
             .string_cache
-            .at(parsed.parser.syntax.identifiers[parameters.start_index as usize].name),
+            .at(parsed.parser.syntax[parameters][0].name),
         "arg"
     );
 }
@@ -228,8 +237,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         parsed
             .parser
             .syntax
-            .parameter_declarations
-            .iter()
+            .iter::<ParameterDeclaration>()
             .filter_map(|parameter| parameter
                 .declarator
                 .and_then(|declarator| identifier_name(&parsed, declarator)))
@@ -242,8 +250,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         parsed
             .parser
             .syntax
-            .struct_declarators
-            .iter()
+            .iter::<StructDeclarator>()
             .filter_map(|declarator| declarator
                 .declarator
                 .and_then(|declarator| identifier_name(&parsed, declarator)))
@@ -256,8 +263,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         parsed
             .parser
             .syntax
-            .struct_declarators
-            .iter()
+            .iter::<StructDeclarator>()
             .filter_map(|declarator| declarator
                 .declarator
                 .and_then(|declarator| identifier_name(&parsed, declarator)))
@@ -270,8 +276,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         parsed
             .parser
             .syntax
-            .enumerators
-            .iter()
+            .iter::<Enumerator>()
             .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
             .collect::<Vec<_>>(),
         ["A", "B", "C"]
@@ -282,8 +287,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         parsed
             .parser
             .syntax
-            .identifiers
-            .iter()
+            .iter::<Identifier>()
             .map(|identifier| parsed.context.string_cache.at(identifier.name))
             .collect::<Vec<_>>(),
         ["a", "b", "c"]
@@ -305,8 +309,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         parsed
             .parser
             .syntax
-            .enumerators
-            .iter()
+            .iter::<Enumerator>()
             .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
             .collect::<Vec<_>>(),
         ["A", "B"]
@@ -317,8 +320,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         parsed
             .parser
             .syntax
-            .enumerators
-            .iter()
+            .iter::<Enumerator>()
             .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
             .collect::<Vec<_>>(),
         ["A", "B"]
@@ -420,8 +422,7 @@ fn omitted_k_and_r_comma_reprocesses_the_next_identifier() {
         parsed
             .parser
             .syntax
-            .identifiers
-            .iter()
+            .iter::<Identifier>()
             .map(|identifier| parsed.context.string_cache.at(identifier.name))
             .collect::<Vec<_>>(),
         ["a", "b", "c"]
@@ -551,8 +552,7 @@ fn expression_recovery_keeps_semicolons_inside_nested_braces() {
             parsed
                 .parser
                 .syntax
-                .init_declarators
-                .iter()
+                .iter::<InitDeclarator>()
                 .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
                 .collect::<Vec<_>>(),
             if source.starts_with("int array") {
@@ -569,8 +569,7 @@ fn expression_recovery_keeps_semicolons_inside_nested_braces() {
         parsed
             .parser
             .syntax
-            .enumerators
-            .iter()
+            .iter::<Enumerator>()
             .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
             .collect::<Vec<_>>(),
         ["A", "B"]
@@ -583,8 +582,7 @@ fn expression_recovery_keeps_semicolons_inside_nested_braces() {
         parsed
             .parser
             .syntax
-            .struct_declarators
-            .iter()
+            .iter::<StructDeclarator>()
             .filter_map(|declarator| {
                 declarator
                     .declarator
@@ -625,9 +623,10 @@ fn initializer_recovery_unwinds_at_a_top_level_closing_brace() {
     ));
     assert!(parser_errors(&parsed).any(|error| matches!(
         error,
-        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(TokenType::Operator(
-            OperatorTokenType::ClosingCurlyBrace
-        )))
+        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+            Some(TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)),
+            _
+        )
     )));
     assert_eq!(
         identifier_name(
@@ -691,8 +690,7 @@ fn array_recovery_unwinds_at_a_top_level_declarator_comma() {
         parsed
             .parser
             .syntax
-            .init_declarators
-            .iter()
+            .iter::<InitDeclarator>()
             .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
             .collect::<Vec<_>>(),
         ["a", "b"]
@@ -717,8 +715,7 @@ fn array_recovery_preserves_an_enclosing_closing_brace() {
         parsed
             .parser
             .syntax
-            .init_declarators
-            .iter()
+            .iter::<InitDeclarator>()
             .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
             .collect::<Vec<_>>(),
         ["after"]
@@ -914,8 +911,7 @@ fn malformed_declaration_recovery_stops_at_comma_and_keeps_next_declarator() {
         parsed
             .parser
             .syntax
-            .init_declarators
-            .iter()
+            .iter::<InitDeclarator>()
             .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
             .collect::<Vec<_>>(),
         ["x", "y", "after"]
@@ -932,7 +928,7 @@ fn direct_recovery_sources_are_retained_by_the_recovered_declaration() {
         let parsed = parse(source);
         let source_vectors = match parsed.items.first() {
             | Some(ExternalDeclaration::RecoveredDeclaration(index)) =>
-                parsed.parser.syntax.declarations[index.0 as usize].source_vectors,
+                parsed.parser.syntax[index].source_vectors,
             | Some(ExternalDeclaration::Error(source_vectors)) => *source_vectors,
             | root => panic!("expected recovered syntax or an error root: {root:?}"),
         };
@@ -978,9 +974,12 @@ fn unnamed_bit_field_after_member_comma_does_not_require_a_declarator() {
         error,
         ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
     )));
-    assert_eq!(parsed.parser.syntax.struct_declarators.len(), 2);
+    assert_eq!(parsed.parser.syntax.count::<StructDeclarator>(), 2);
     assert!(
-        parsed.parser.syntax.struct_declarators[1]
+        parsed
+            .parser
+            .syntax
+            .nth::<StructDeclarator>(1)
             .declarator
             .is_none()
     );
@@ -988,8 +987,7 @@ fn unnamed_bit_field_after_member_comma_does_not_require_a_declarator() {
         parsed
             .parser
             .syntax
-            .struct_declarators
-            .iter()
+            .iter::<StructDeclarator>()
             .map(|declarator| sourced_text(&parsed, declarator.source_vectors))
             .collect::<Vec<_>>(),
         ["named", ":3"]
@@ -1038,11 +1036,11 @@ fn definition_parameter_enumerators_are_visible_in_the_function_body() {
 
     assert_eq!(items.len(), 2);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Expression(ExpressionSlot::Parsed(_))
     )));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(Some(ExpressionSlot::Parsed(_)))
     )));
 }
@@ -1054,11 +1052,11 @@ fn nested_definition_parameter_enumerators_are_visible_in_the_function_body() {
 
     assert_eq!(items.len(), 2);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Expression(ExpressionSlot::Parsed(_))
     )));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(Some(ExpressionSlot::Parsed(_)))
     )));
 }
@@ -1067,13 +1065,15 @@ fn nested_definition_parameter_enumerators_are_visible_in_the_function_body() {
 fn named_parameters_hide_typedefs_for_later_prototype_parameters() {
     let parsed = parse("typedef int T; int f(int T, T x);\n");
 
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(TokenType::Identifier)
-    )));
-    assert_eq!(parsed.parser.syntax.parameter_declarations.len(), 2);
+    // The parameter name `T` hides the typedef, so `T x` names an unknown
+    // type rather than declaring `T` without one.
+    assert!(parser_errors(&parsed).any(|error| matches!(error, ParserErrorType::UnknownTypeName)));
+    assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 2);
     assert_eq!(
-        parsed.parser.syntax.parameter_declarations[1]
+        parsed
+            .parser
+            .syntax
+            .nth::<ParameterDeclaration>(1)
             .declaration_specifiers
             .type_specifiers,
         TypeSpecifiers::Empty
@@ -1083,12 +1083,10 @@ fn named_parameters_hide_typedefs_for_later_prototype_parameters() {
 #[test]
 fn array_recovery_consumes_nested_brackets_before_the_owning_bracket() {
     let parsed = parse("int a[sizeof(int[2])][*];\n");
-    let declarator = parsed.parser.syntax.init_declarators[0].declarator;
-    let start = declarator.kind.start_index as usize;
-    let end = start + declarator.kind.length as usize;
+    let declarator = parsed.parser.syntax.nth::<InitDeclarator>(0).declarator;
 
     assert_eq!(
-        parsed.parser.syntax.direct_declarators[start..end]
+        parsed.parser.syntax[declarator.kind]
             .iter()
             .filter(|direct| matches!(direct, DirectDeclarator::Array { .. }))
             .count(),
@@ -1100,15 +1098,21 @@ fn array_recovery_consumes_nested_brackets_before_the_owning_bracket() {
 fn parameter_recovery_consumes_nested_parentheses_before_the_owning_separator() {
     let parsed = parse("int f(int x + (1), char y);\nint after;\n");
 
-    assert_eq!(parsed.parser.syntax.parameter_declarations.len(), 2);
+    assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 2);
     assert_eq!(
-        parsed.parser.syntax.parameter_declarations[1]
+        parsed
+            .parser
+            .syntax
+            .nth::<ParameterDeclaration>(1)
             .declaration_specifiers
             .type_specifiers,
         TypeSpecifiers::Char
     );
     assert_eq!(
-        parsed.parser.syntax.parameter_declarations[1]
+        parsed
+            .parser
+            .syntax
+            .nth::<ParameterDeclaration>(1)
             .declarator
             .and_then(|declarator| identifier_name(&parsed, declarator))
             .as_deref(),
@@ -1130,7 +1134,7 @@ fn array_star_is_a_vla_marker_only_immediately_before_the_closing_bracket() {
 
     let mut saw_marker = false;
     let mut saw_bound = false;
-    for direct in &parsed.parser.syntax.direct_declarators {
+    for direct in parsed.parser.syntax.iter::<DirectDeclarator>() {
         let DirectDeclarator::Array {
             is_pointer,
             assignment_expression,
@@ -1142,7 +1146,7 @@ fn array_star_is_a_vla_marker_only_immediately_before_the_closing_bracket() {
         saw_marker |= is_pointer && assignment_expression.is_none();
         if let Some(expression) = assignment_expression {
             saw_bound |= matches!(
-                parsed.parser.syntax.expressions[expression.0 as usize].kind,
+                parsed.parser.syntax[expression].kind,
                 ExpressionType::Unary {
                     operator: UnaryOperator::Indirection,
                     ..
@@ -1167,7 +1171,7 @@ fn hard_syntax_errors_retain_an_explicitly_recovered_declaration() {
         panic!("hard syntax errors should retain a recovered declaration");
     };
 
-    let declaration = &parsed.parser.syntax.declarations[index.0 as usize];
+    let declaration = &parsed.parser.syntax[index];
     assert_eq!(declaration.init_declarators.length, 1);
     assert!(parser_errors(&parsed).any(|error| {
         matches!(error, ParserErrorType::ExpectedStatementExpression(..))
@@ -1220,7 +1224,7 @@ fn missing_parameter_after_comma_avoids_specifier_cascade_diagnostics() {
     )));
     assert!(errors.iter().any(|error| matches!(
         error,
-        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(None)
+        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(None, _)
     )));
     assert!(!errors.iter().any(|error| matches!(
         error,
@@ -1318,8 +1322,7 @@ fn migrated_nodes_retain_their_exact_owned_token_provenance() {
     let parameter_text = parsed
         .parser
         .syntax
-        .parameter_declarations
-        .iter()
+        .iter::<ParameterDeclaration>()
         .map(|parameter| sourced_text(&parsed, parameter.source_vectors))
         .collect::<Vec<_>>();
     assert_eq!(parameter_text, ["constchar*name", "unsignedcount"]);
@@ -1327,16 +1330,14 @@ fn migrated_nodes_retain_their_exact_owned_token_provenance() {
     let member_text = parsed
         .parser
         .syntax
-        .struct_declarations
-        .iter()
+        .iter::<StructDeclaration>()
         .map(|declaration| sourced_text(&parsed, declaration.source_vectors))
         .collect::<Vec<_>>();
     assert_eq!(member_text, ["intfirst,*second;", "unsignedbits:3;"]);
     let member_declarator_text = parsed
         .parser
         .syntax
-        .struct_declarators
-        .iter()
+        .iter::<StructDeclarator>()
         .map(|declarator| sourced_text(&parsed, declarator.source_vectors))
         .collect::<Vec<_>>();
     assert_eq!(member_declarator_text, ["first", "*second", "bits:3"]);
@@ -1345,7 +1346,10 @@ fn migrated_nodes_retain_their_exact_owned_token_provenance() {
 #[test]
 fn empty_abstract_function_declarator_owns_both_parentheses() {
     let parsed = parse("int f(int ());\n");
-    let declarator = parsed.parser.syntax.parameter_declarations[0]
+    let declarator = parsed
+        .parser
+        .syntax
+        .nth::<ParameterDeclaration>(0)
         .declarator
         .expect("abstract function declarator");
 

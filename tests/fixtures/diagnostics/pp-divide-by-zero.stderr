@@ -1,8 +1,8 @@
 error: division by zero in `#if` expression
- --> pp-divide-by-zero.c:2:1
+ --> pp-divide-by-zero.c:1:7
   |
-2 | #endif
-  | ^ the divisor is zero
+1 | #if 1 / 0
+  |       ^ the divisor is zero
   |
   = note: C99 §6.5.5p5: the result of `/` by zero is undefined
 

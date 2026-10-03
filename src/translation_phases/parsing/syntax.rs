@@ -8,10 +8,6 @@ use std::{
     },
     hash::Hash,
     marker::PhantomData,
-    sync::atomic::{
-        AtomicUsize,
-        Ordering,
-    },
 };
 
 use super::declaration_syntax::{
@@ -29,34 +25,21 @@ use crate::{
             Token,
         },
     },
-    util::string_cache::StringCacheId,
+    util::{
+        arena::ArenaRun,
+        string_cache::StringCacheId,
+    },
 };
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(super) struct SyntaxTreeId(pub(super) usize);
-
-impl SyntaxTreeId {
-    pub(super) fn fresh() -> Self {
-        static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
-        let id = NEXT_ID
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .expect("syntax-tree identity space exhausted");
-        Self(id)
-    }
-}
 
 /// Opaque parser-issued handle for one contiguous syntax list.
 ///
-/// The underlying arena range stays private to this module so later compiler
+/// The underlying arena run stays private to this module so later compiler
 /// phases can resolve lists through
 /// [`SyntaxTree`](super::syntax_store::SyntaxTree) without manufacturing raw
 /// arena ranges.
 pub(crate) struct SyntaxList<T> {
     pub(super) start_index: u32,
     pub(super) length:      u32,
-    syntax_id:              SyntaxTreeId,
     _marker:                PhantomData<fn() -> T>,
 }
 
@@ -73,7 +56,6 @@ impl<T> Debug for SyntaxList<T> {
         f.debug_struct("SyntaxList")
             .field("start_index", &self.start_index)
             .field("length", &self.length)
-            .field("syntax_id", &self.syntax_id)
             .finish()
     }
 }
@@ -82,37 +64,35 @@ impl<T> Hash for SyntaxList<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.start_index.hash(state);
         self.length.hash(state);
-        self.syntax_id.hash(state);
     }
 }
 
 impl<T> PartialEq for SyntaxList<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.start_index == other.start_index
-            && self.length == other.length
-            && self.syntax_id == other.syntax_id
+        self.start_index == other.start_index && self.length == other.length
     }
 }
 
 impl<T> Eq for SyntaxList<T> {}
 
 impl<T> SyntaxList<T> {
-    pub(super) fn new(syntax_id: SyntaxTreeId, start_index: u32, end_index: u32) -> Self {
+    pub(super) fn new(run: ArenaRun) -> Self {
         Self {
-            start_index,
-            length: end_index - start_index,
-            syntax_id,
-            _marker: PhantomData,
+            start_index: run.start,
+            length:      run.length,
+            _marker:     PhantomData,
         }
     }
 
-    pub(super) fn empty(syntax_id: SyntaxTreeId) -> Self {
-        Self {
-            start_index: u32::MAX,
-            length: 0,
-            syntax_id,
-            _marker: PhantomData,
+    pub(super) fn run(self) -> ArenaRun {
+        ArenaRun {
+            start:  self.start_index,
+            length: self.length,
         }
+    }
+
+    pub(super) fn empty() -> Self {
+        Self::new(ArenaRun::EMPTY)
     }
 
     pub(super) fn start_index(self) -> u32 {
@@ -121,10 +101,6 @@ impl<T> SyntaxList<T> {
 
     pub(super) fn length(self) -> u32 {
         self.length
-    }
-
-    pub(super) fn syntax_id(self) -> SyntaxTreeId {
-        self.syntax_id
     }
 }
 
@@ -156,39 +132,43 @@ pub(crate) enum ExternalDeclaration {
 ///
 /// C99: declaration syntax is §6.7, pp. 97-130; PDF pp. 109-142.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct DeclarationIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct DeclarationIndex(pub(super) u32);
 
 /// Typed handle into the function-definition arena.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct FunctionDefinitionIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct FunctionDefinitionIndex(pub(super) u32);
 
 /// Typed handle into the type-name arena.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct TypeNameIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct TypeNameIndex(pub(super) u32);
+
+/// Typed handle for one parenthesized declarator and its delimiter span.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct ParenthesizedDeclaratorIndex(pub(super) u32);
 
 /// Typed handle into the initializer arena.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct InitializerIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct InitializerIndex(pub(super) u32);
 
 /// Typed handle into the designation arena.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct DesignationIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct DesignationIndex(pub(super) u32);
 
 /// Typed handle into the expression arena.
 ///
 /// C99: expressions are §6.5-§6.5.17, pp. 67-94; PDF pp. 79-106.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct ExpressionIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct ExpressionIndex(pub(super) u32);
 
 /// Expression handle whose grammar guarantees constant-expression syntax.
 ///
 /// C99: constant-expression is §6.6, pp. 95-96; PDF pp. 107-108.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct ConstantExpressionIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct ConstantExpressionIndex(pub(super) u32);
 
 impl From<ConstantExpressionIndex> for ExpressionIndex {
     fn from(index: ConstantExpressionIndex) -> Self {
-        Self(index.0, index.1)
+        Self(index.0)
     }
 }
 
@@ -197,19 +177,19 @@ impl From<ConstantExpressionIndex> for ExpressionIndex {
 /// C99: statements and blocks are §6.8-§6.8.6.4, pp. 131-139;
 /// PDF pp. 143-151.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct StatementIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct StatementIndex(pub(super) u32);
 
 /// Typed handle into the struct/union-specifier arena.
 ///
 /// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct StructOrUnionSpecifierIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct StructOrUnionSpecifierIndex(pub(super) u32);
 
 /// Typed handle into the enum-specifier arena.
 ///
 /// C99: §6.7.2.2, pp. 105-107; PDF pp. 117-119.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct EnumSpecifierIndex(pub(super) u32, pub(super) SyntaxTreeId);
+pub(crate) struct EnumSpecifierIndex(pub(super) u32);
 
 /// Complete function-definition syntax produced at file scope.
 #[derive(Debug, PartialEq, Clone, Copy)]

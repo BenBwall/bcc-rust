@@ -1,15 +1,7 @@
 error: expected an expression after `~`
  --> pp-bitwise-not-without-operand.c:1:7
   |
-1 | #if ~)
+1 | #if (~)
   |       ^ `~` needs an operand here
 
-error: `#if` with no condition
- --> pp-bitwise-not-without-operand.c:2:1
-  |
-2 | #endif
-  | ^ expected an expression
-  |
-  = help: write the condition to test, as in `#if VERSION >= 2`
-
-2 errors generated.
+1 error generated.

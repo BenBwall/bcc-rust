@@ -25,20 +25,16 @@ use super::{
         Statement,
         StatementIndex,
         StatementType,
-        SyntaxList,
     },
 };
-use crate::{
-    translation_phases::{
-        Context,
-        SourceVectors,
-        preprocessing::{
-            OperatorTokenType,
-            Token,
-            TokenType,
-        },
+use crate::translation_phases::{
+    Context,
+    SourceVectors,
+    preprocessing::{
+        OperatorTokenType,
+        Token,
+        TokenType,
     },
-    util::vector_slice::UsizeExt,
 };
 
 #[derive(Debug)]
@@ -133,7 +129,6 @@ impl CompoundStatementFrame {
                     if !is_label && token.is_some_and(|token| parser.declaration_starter(token)) {
                         self.phase = CompoundStatementPhase::AwaitDeclaration;
                         ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
-                            parser.syntax.init_declarators.len().to_u32(),
                             DeclarationContext::Block,
                             parser.hard_error_count,
                         )))
@@ -150,7 +145,7 @@ impl CompoundStatementFrame {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("block declaration returned an unexpected value: {returned:?}");
                 };
-                let source = parser.syntax.declarations[declaration.0 as usize].source_vectors;
+                let source = parser.syntax[declaration].source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Declaration(declaration));
                 self.phase = CompoundStatementPhase::ItemOrClose;
@@ -168,31 +163,17 @@ impl CompoundStatementFrame {
             },
             | CompoundStatementPhase::Finish => {
                 debug_assert!(returned.is_none());
-                let item_start = parser.syntax.block_items.len().to_u32();
-                parser.append_syntax(|syntax| &mut syntax.block_items, &mut self.items);
-                let index = parser.syntax.statements.len().to_u32();
-                parser.push_syntax(
-                    |syntax| &mut syntax.statements,
-                    Statement {
-                        kind:           StatementType::Compound {
-                            items: SyntaxList::new(
-                                parser.syntax_id,
-                                item_start,
-                                parser.syntax.block_items.len().to_u32(),
-                            ),
-                        },
-                        source_vectors: context.merge_vector_list(&self.source_vectors),
-                        recovered:      parser.hard_error_count > self.starting_error_count,
-                    },
-                );
+                let item_start = parser.append_syntax(&mut self.items);
+                let index = parser.push_syntax(Statement {
+                    kind:           StatementType::Compound { items: item_start },
+                    source_vectors: context.merge_vector_list(&self.source_vectors),
+                    recovered:      parser.hard_error_count > self.starting_error_count,
+                });
                 parser.scopes.restore_depth(
                     self.entry_scope_depth
                         .expect("compound statement entered block scope"),
                 );
-                ParseAction::Reduce(ParseValue::CompoundStatement(StatementIndex(
-                    index,
-                    parser.syntax_id,
-                )))
+                ParseAction::Reduce(ParseValue::CompoundStatement(StatementIndex(index)))
             },
         }
     }

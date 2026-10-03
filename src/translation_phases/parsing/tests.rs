@@ -1,11 +1,17 @@
 //! Parser regression tests and the helpers they share.
 
+mod aggregate_regressions;
 mod declaration_recovery;
+mod declaration_regressions;
 mod declarations;
 mod diagnostics;
+mod driver_regressions;
 mod expression_recovery;
+mod expression_regressions;
 mod expressions;
 mod limits;
+mod parameter_regressions;
+mod statement_regressions;
 mod statements;
 mod translation_unit;
 
@@ -125,7 +131,7 @@ fn declaration(parsed: &Parsed, item: usize) -> &Declaration {
         | ExternalDeclaration::RecoveredFunctionDefinition(_)
         | ExternalDeclaration::Error(_) => panic!("expected a declaration item"),
     };
-    &parsed.parser.syntax.declarations[index.0 as usize]
+    &parsed.parser.syntax[index]
 }
 
 fn function_definition(parsed: &Parsed, item: usize) -> &FunctionDefinition {
@@ -134,12 +140,12 @@ fn function_definition(parsed: &Parsed, item: usize) -> &FunctionDefinition {
     else {
         panic!("expected a function-definition item")
     };
-    &parsed.parser.syntax.function_definitions[index.0 as usize]
+    &parsed.parser.syntax[index]
 }
 
 fn return_expression(parsed: &Parsed, statement: StatementIndex) -> ExpressionIndex {
     let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
-        parsed.parser.syntax.statements[statement.0 as usize].kind
+        parsed.parser.syntax[statement].kind
     else {
         panic!("expected a parsed return expression")
     };
@@ -147,20 +153,14 @@ fn return_expression(parsed: &Parsed, statement: StatementIndex) -> ExpressionIn
 }
 
 fn block_items(parsed: &Parsed, statement: StatementIndex) -> &[BlockItem] {
-    let StatementType::Compound { items } =
-        parsed.parser.syntax.statements[statement.0 as usize].kind
-    else {
+    let StatementType::Compound { items } = parsed.parser.syntax[statement].kind else {
         panic!("expected a compound statement")
     };
-    let start = items.start_index as usize;
-    let end = start + items.length as usize;
-    &parsed.parser.syntax.block_items[start..end]
+    &parsed.parser.syntax[items]
 }
 
 fn init_declarators<'a>(parsed: &'a Parsed, declaration: &Declaration) -> &'a [InitDeclarator] {
-    let start = declaration.init_declarators.start_index as usize;
-    let end = start + declaration.init_declarators.length as usize;
-    &parsed.parser.syntax.init_declarators[start..end]
+    &parsed.parser.syntax[declaration.init_declarators]
 }
 
 fn identifier_name(parsed: &Parsed, declarator: Declarator) -> Option<String> {
@@ -182,15 +182,12 @@ fn sourced_text(parsed: &Parsed, source_vectors: SourceVectors) -> String {
         .context
         .get_source_vectors(source_vectors)
         .iter()
-        .map(|vector| &parsed.source[vector.index..vector.index.saturating_add(vector.length)])
+        .map(|vector| &parsed.source[vector.range()])
         .collect()
 }
 
 fn expression_text(parsed: &Parsed, expression: ExpressionIndex) -> String {
-    sourced_text(
-        parsed,
-        parsed.parser.syntax.expressions[expression.0 as usize].source_vectors,
-    )
+    sourced_text(parsed, parsed.parser.syntax[expression].source_vectors)
 }
 
 fn constant_expression_text(parsed: &Parsed, expression: ConstantExpressionIndex) -> String {

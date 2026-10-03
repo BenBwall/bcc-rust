@@ -4,11 +4,11 @@ error: expected `)` to close `defined(`, found number `1`
 1 | #if defined(X 1)
   |               ^ expected `)`
 
-error: expected an expression inside `()`
+error: unexpected `)` in `#if` expression
  --> pp-missing-closing-parenthesis-in-defined-directive.c:1:16
   |
 1 | #if defined(X 1)
-  |                ^ empty parentheses
+  |                ^ not valid in an integer constant expression
   |
   = note: C99 §6.10.1p1: the condition must be an integer constant expression
 

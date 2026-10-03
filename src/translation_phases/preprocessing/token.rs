@@ -17,7 +17,10 @@ use crate::{
         SourcePosition,
         SourceVectors,
     },
-    util::string_cache::StringCacheId,
+    util::{
+        packed::Packed,
+        string_cache::StringCacheId,
+    },
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -69,21 +72,22 @@ impl GetSourceVectors for Token {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+/// 8-byte values are [`Packed`] so tokens and constants stay 4-byte aligned.
 pub(crate) enum IntegerTokenType {
     Int(i32),
-    Long(i64),
-    LongLong(i64),
+    Long(Packed<i64>),
+    LongLong(Packed<i64>),
     UnsignedInt(u32),
-    UnsignedLong(u64),
-    UnsignedLongLong(u64),
+    UnsignedLong(Packed<u64>),
+    UnsignedLongLong(Packed<u64>),
 }
 
 impl From<IntegerTokenType> for i128 {
     fn from(v: IntegerTokenType) -> Self {
         match v {
             | IntegerTokenType::UnsignedLong(v) | IntegerTokenType::UnsignedLongLong(v) =>
-                i128::from(v),
-            | IntegerTokenType::Long(v) | IntegerTokenType::LongLong(v) => i128::from(v),
+                i128::from(v.get()),
+            | IntegerTokenType::Long(v) | IntegerTokenType::LongLong(v) => i128::from(v.get()),
             | IntegerTokenType::UnsignedInt(v) => i128::from(v),
             | IntegerTokenType::Int(v) => i128::from(v),
         }
@@ -93,7 +97,7 @@ impl From<IntegerTokenType> for i128 {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum FloatTokenType {
     Float(f32),
-    Double(f64),
+    Double(Packed<f64>),
     LongDouble(LongDouble),
 }
 
@@ -209,16 +213,28 @@ pub(crate) enum OperatorTokenType {
     Ellipsis,
 }
 
+/// Literal values live outside the UTF-8 source-spelling interner.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) struct LiteralId(pub(crate) u32);
+
+/// Preserve numeric execution codes separately from source characters. This
+/// also retains their meaning when phase 6 concatenates narrow/wide literals.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum LiteralUnit {
+    Character(char),
+    Numeric(u32),
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum StringTokenType {
-    String(StringCacheId),
-    WideString(StringCacheId),
+    String(LiteralId),
+    WideString(LiteralId),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum CharacterTokenType {
     Char(char),
-    WideChar(char),
+    WideChar(u32),
     /// Packed integer value of an ordinary multi-character constant.
     MultiChar(i32),
 }
@@ -226,8 +242,8 @@ pub(crate) enum CharacterTokenType {
 impl From<CharacterTokenType> for i64 {
     fn from(v: CharacterTokenType) -> Self {
         match v {
-            | CharacterTokenType::Char(c) | CharacterTokenType::WideChar(c) =>
-                i64::from(u32::from(c)),
+            | CharacterTokenType::Char(c) => i64::from(u32::from(c)),
+            | CharacterTokenType::WideChar(c) => i64::from(c),
             | CharacterTokenType::MultiChar(value) => i64::from(value),
         }
     }
@@ -245,6 +261,59 @@ pub(crate) enum TokenType {
 }
 
 impl KeywordTokenType {
+    /// Contexts reserve this contiguous prefix before interning source text.
+    /// Keep this in discriminant order; the constructor and regression test
+    /// verify that each spelling has its well-known ID.
+    pub(crate) const ALL: &[Self] = &[
+        Self::Auto,
+        Self::Break,
+        Self::Case,
+        Self::Char,
+        Self::Const,
+        Self::Continue,
+        Self::Default,
+        Self::Do,
+        Self::Double,
+        Self::Else,
+        Self::Enum,
+        Self::Extern,
+        Self::Float,
+        Self::For,
+        Self::Goto,
+        Self::If,
+        Self::Inline,
+        Self::Int,
+        Self::Long,
+        Self::Register,
+        Self::Restrict,
+        Self::Return,
+        Self::Short,
+        Self::Signed,
+        Self::Sizeof,
+        Self::Static,
+        Self::Struct,
+        Self::Switch,
+        Self::Typedef,
+        Self::Union,
+        Self::Unsigned,
+        Self::Void,
+        Self::Volatile,
+        Self::While,
+        Self::Bool,
+        Self::Complex,
+        Self::Imaginary,
+    ];
+
+    pub(crate) const fn cache_id(self) -> StringCacheId {
+        StringCacheId::from_u32(self as u32 + 1)
+    }
+
+    /// Only identifiers are classified here, after preprocessing has finished.
+    /// No cache access or string comparison is needed for ordinary identifiers.
+    pub(crate) fn from_cache_id(id: StringCacheId) -> Option<Self> {
+        Self::ALL.get((id.to_u32() - 1) as usize).copied()
+    }
+
     /// The keyword as written in C source.
     pub(crate) fn spelling(self) -> &'static str {
         match self {

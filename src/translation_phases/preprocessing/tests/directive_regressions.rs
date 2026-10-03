@@ -1,0 +1,538 @@
+use std::{
+    path::{
+        Path,
+        PathBuf,
+    },
+    sync::atomic::{
+        AtomicU64,
+        Ordering,
+    },
+    time::{
+        SystemTime,
+        UNIX_EPOCH,
+    },
+};
+
+use super::{
+    Context,
+    IntegerTokenType,
+    Preprocessor,
+    PreprocessorError,
+    PreprocessorErrorType,
+    SharedVec,
+    StringTokenType,
+    Token,
+    TokenType,
+    TranslationError,
+    TranslationPhase,
+};
+use crate::{
+    pipeline::PreprocessingStrategy,
+    translation_phases::preprocessor_tokenizer::LexingStrategy,
+};
+
+const STRATEGIES: [PreprocessingStrategy; 3] = [
+    PreprocessingStrategy::Streaming,
+    PreprocessingStrategy::BatchLexing,
+    PreprocessingStrategy::Batch,
+];
+
+#[derive(Debug)]
+struct TemporaryHeaders(PathBuf);
+
+impl TemporaryHeaders {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "bcc-directive-{}-{stamp}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        Self(directory)
+    }
+
+    fn write(&self, name: &str, source: &str) {
+        std::fs::write(self.0.join(name), source).unwrap();
+    }
+}
+
+impl Drop for TemporaryHeaders {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.0));
+    }
+}
+
+fn directive_tokens_at_path(
+    source: &str,
+    path: &Path,
+    strategy: PreprocessingStrategy,
+) -> (Vec<Token>, Context) {
+    let mut context = Context::new();
+    let mut preprocessor = strategy.preprocessor(
+        &mut context,
+        path.to_path_buf().into_boxed_path(),
+        source.to_owned().into(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let tokens = if strategy == PreprocessingStrategy::Batch {
+        preprocessor
+            .preprocess_all(&mut context)
+            .collect::<Vec<_>>()
+    } else {
+        let mut tokens = Vec::new();
+        while let Some(token) = preprocessor.next_item(&mut context) {
+            tokens.push(token);
+        }
+        tokens
+    };
+    (tokens, context)
+}
+
+fn directive_tokens(source: &str, strategy: LexingStrategy) -> (Vec<Token>, Context) {
+    let mut context = Context::new();
+    context.set_lexing_strategy(strategy);
+    let mut preprocessor = Preprocessor::new(
+        &mut context,
+        PathBuf::from("<directive-test>").into_boxed_path(),
+        source.to_owned().into(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let mut tokens = Vec::new();
+    while let Some(token) = preprocessor.next_item(&mut context) {
+        tokens.push(token);
+    }
+    (tokens, context)
+}
+
+#[test]
+fn pragma_destringizing_preserves_non_special_escapes() {
+    for (literal, expected) in [
+        (r#""unknown \n""#, "unknown \\n\n"),
+        (r#""unknown \t""#, "unknown \\t\n"),
+        (r#""unknown \"quote\" \\""#, "unknown \"quote\" \\\n"),
+        (r#"L"unknown café""#, "unknown café\n"),
+        (r#""""#, "\n"),
+    ] {
+        let mut context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<pragma-test>").into_boxed_path(),
+            String::new().into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let literal = context.string_cache.intern(literal);
+        assert_eq!(
+            &*preprocessor.prepare_pragma_operator_string(&context, literal),
+            expected
+        );
+    }
+}
+
+#[test]
+fn enormous_line_number_diagnoses_without_panicking_and_retains_its_digits() {
+    let digits = "9".repeat(1000);
+    let source = format!("#line {digits}\nafter\n");
+    for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
+        let (tokens, mut context) = directive_tokens(&source, strategy);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(context.string_cache.at(tokens[0].contents), "after");
+        let errors = context.take_pending_errors();
+        assert!(matches!(
+            errors.as_slice(),
+            [TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::LineDirectiveNumberTooLarge(..),
+                ..
+            })]
+        ));
+        assert_eq!(
+            errors[0].to_string(),
+            format!("line number {digits} is out of range")
+        );
+    }
+}
+
+#[test]
+fn line_directive_applies_to_the_following_line_and_strips_file_delimiters() {
+    for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
+        for source in [
+            "#line 10 \"logical.c\"\n__FILE__; __LINE__\n",
+            "#define NUMBER 10\n#define FILE \"logical.c\"\n#line NUMBER FILE\n__FILE__; \
+             __LINE__\n",
+        ] {
+            let (tokens, mut context) = directive_tokens(source, strategy);
+            assert_eq!(tokens.len(), 3, "{tokens:#?}");
+            let TokenType::String(StringTokenType::String(contents)) = tokens[0].kind else {
+                panic!("expected __FILE__ string: {tokens:#?}");
+            };
+            assert_eq!(
+                context
+                    .literal_text(contents, false)
+                    .as_deref()
+                    .expect("UTF-8 test literal"),
+                "logical.c"
+            );
+            assert_eq!(
+                tokens[2].kind,
+                TokenType::Integer(IntegerTokenType::Int(10))
+            );
+            let vector = context
+                .get_source_vectors(tokens[0].source_vectors)
+                .first()
+                .unwrap();
+            assert_eq!(vector.line, 10);
+            assert_eq!(
+                context.get_source_file(vector.source_file_index),
+                PathBuf::from("logical.c").as_path()
+            );
+            assert!(context.take_pending_errors().is_empty());
+        }
+    }
+}
+
+#[test]
+fn direct_pragmas_consume_the_entire_directive_line() {
+    for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
+        for source in [
+            "#pragma unknown token token2\nafter\n",
+            "#pragma STDC unknown token token2\nafter\n",
+            "#pragma STDC FP_CONTRACT bad token2\nafter\n",
+            "#pragma STDC FP_CONTRACT ON\nafter\n",
+            "_Pragma(\"unknown token token2\")\nafter\n",
+        ] {
+            let (tokens, context) = directive_tokens(source, strategy);
+            assert_eq!(
+                tokens.len(),
+                1,
+                "pragma leaked tokens: {source:?}: {tokens:#?}"
+            );
+            assert_eq!(context.string_cache.at(tokens[0].contents), "after");
+            let source = context
+                .get_source_vectors(tokens[0].source_vectors)
+                .first()
+                .unwrap();
+            assert_eq!(source.line, 2);
+            assert_eq!(source.column, 1);
+        }
+    }
+}
+
+#[test]
+fn repeated_line_directives_replace_the_presumed_line() {
+    for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
+        let (tokens, mut context) =
+            directive_tokens("#line 30\n__LINE__\n#line 70\n__LINE__\n", strategy);
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(
+            tokens[0].kind,
+            TokenType::Integer(IntegerTokenType::Int(30))
+        );
+        assert_eq!(
+            tokens[1].kind,
+            TokenType::Integer(IntegerTokenType::Int(70))
+        );
+        assert!(context.take_pending_errors().is_empty());
+    }
+}
+
+#[test]
+fn line_filename_escapes_follow_string_literal_rules() {
+    for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
+        let (tokens, mut context) =
+            directive_tokens("#line 10 \"dir\\\\file.c\"\n__FILE__\n", strategy);
+        let TokenType::String(StringTokenType::String(contents)) = tokens[0].kind else {
+            panic!("expected file name: {tokens:#?}");
+        };
+        assert_eq!(
+            context
+                .literal_text(contents, false)
+                .as_deref()
+                .expect("UTF-8 test literal"),
+            "dir\\file.c"
+        );
+        assert!(context.take_pending_errors().is_empty());
+    }
+}
+
+#[test]
+fn line_filename_may_be_generated_by_stringification() {
+    for strategy in STRATEGIES {
+        let (tokens, mut context) = directive_tokens_at_path(
+            "#define S(x) #x\n#line 20 S(logical.c)\n__FILE__; __LINE__\n",
+            Path::new("<directive-test>"),
+            strategy,
+        );
+        assert_eq!(tokens.len(), 3);
+        let TokenType::String(StringTokenType::String(contents)) = tokens[0].kind else {
+            panic!("expected __FILE__ string: {tokens:#?}");
+        };
+        assert_eq!(
+            context
+                .literal_text(contents, false)
+                .as_deref()
+                .expect("UTF-8 test literal"),
+            "logical.c"
+        );
+        assert_eq!(
+            tokens[2].kind,
+            TokenType::Integer(IntegerTokenType::Int(20))
+        );
+        assert!(context.take_pending_errors().is_empty());
+    }
+}
+
+#[test]
+fn malformed_undef_tail_is_diagnosed_and_not_emitted_as_code() {
+    for strategy in STRATEGIES {
+        let (tokens, mut context) = directive_tokens_at_path(
+            "#define X 1\n#undef X bad tail\nX after\n",
+            Path::new("<directive-test>"),
+            strategy,
+        );
+        let names: Vec<_> = tokens
+            .iter()
+            .map(|token| context.string_cache.at(token.contents))
+            .collect();
+        assert_eq!(names, ["X", "after"]);
+        let errors = context.take_pending_errors();
+        let [TranslationError::Preprocessing(error)] = errors.as_slice() else {
+            panic!("expected one undef diagnostic: {errors:#?}");
+        };
+        assert!(matches!(
+            error.error_type,
+            PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(..)
+        ));
+        let vector = &context.get_source_vectors(error.source_vectors)[0];
+        assert_eq!((vector.line, vector.column), (2, 10));
+    }
+}
+
+#[test]
+fn malformed_line_tails_do_not_escape_or_remap_the_directive_line() {
+    for strategy in STRATEGIES {
+        for source in [
+            "#line 30 bad tail\nafter\n",
+            "#line 30 \"fake.c\" bad tail\nafter\n",
+        ] {
+            let (tokens, mut context) =
+                directive_tokens_at_path(source, Path::new("<directive-test>"), strategy);
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(context.string_cache.at(tokens[0].contents), "after");
+            let errors = context.take_pending_errors();
+            let [TranslationError::Preprocessing(error)] = errors.as_slice() else {
+                panic!("expected one line directive diagnostic: {errors:#?}");
+            };
+            assert!(matches!(
+                error.error_type,
+                PreprocessorErrorType::MissingNewlineAfterLineDirective(..)
+            ));
+            let vector = &context.get_source_vectors(error.source_vectors)[0];
+            assert_eq!(vector.line, 1);
+            assert_eq!(
+                context.get_source_file(vector.source_file_index),
+                Path::new("<directive-test>")
+            );
+            let after = &context.get_source_vectors(tokens[0].source_vectors)[0];
+            assert_eq!(after.line, 2);
+        }
+    }
+}
+
+#[test]
+fn recursive_include_reports_limit_once_and_preserves_surviving_input() {
+    let headers = TemporaryHeaders::new();
+    headers.write("loop.h", "#include \"loop.h\"\nheader_after\n");
+    for strategy in STRATEGIES {
+        let (tokens, mut context) = directive_tokens_at_path(
+            "#include \"loop.h\"\ncaller_after\n",
+            &headers.0.join("main.c"),
+            strategy,
+        );
+        assert_eq!(
+            tokens.len(),
+            201,
+            "expected 200 included files and the caller: {strategy:?}"
+        );
+        assert!(
+            tokens[..200]
+                .iter()
+                .all(|token| context.string_cache.at(token.contents) == "header_after")
+        );
+        assert_eq!(
+            context.string_cache.at(tokens[200].contents),
+            "caller_after"
+        );
+        let errors = context.take_pending_errors();
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert!(
+            errors[0].to_string().contains("include nesting"),
+            "{}",
+            errors[0]
+        );
+    }
+}
+
+#[test]
+fn include_nesting_supports_at_least_fifteen_header_levels() {
+    let headers = TemporaryHeaders::new();
+    for level in 0..15 {
+        let source = if level == 14 {
+            format!("level_{level}\n")
+        } else {
+            format!("#include \"level{}.h\"\nlevel_{level}\n", level + 1)
+        };
+        headers.write(&format!("level{level}.h"), &source);
+    }
+    for strategy in STRATEGIES {
+        let (tokens, mut context) = directive_tokens_at_path(
+            "#include \"level0.h\"\ncaller_after\n",
+            &headers.0.join("main.c"),
+            strategy,
+        );
+        let actual: Vec<_> = tokens
+            .iter()
+            .map(|token| context.string_cache.at(token.contents).to_owned())
+            .collect();
+        let mut expected: Vec<_> = (0..15)
+            .rev()
+            .map(|level| format!("level_{level}"))
+            .collect();
+        expected.push("caller_after".to_owned());
+        assert_eq!(actual, expected);
+        assert!(context.take_pending_errors().is_empty());
+    }
+}
+
+#[test]
+fn repeated_nonrecursive_includes_do_not_count_toward_nesting_limit() {
+    let headers = TemporaryHeaders::new();
+    headers.write("plain.h", "included\n");
+    let source = format!("{}caller_after\n", "#include \"plain.h\"\n".repeat(250));
+    for strategy in STRATEGIES {
+        let (tokens, mut context) =
+            directive_tokens_at_path(&source, &headers.0.join("main.c"), strategy);
+        assert_eq!(tokens.len(), 251);
+        assert!(
+            tokens[..250]
+                .iter()
+                .all(|token| context.string_cache.at(token.contents) == "included")
+        );
+        assert_eq!(
+            context.string_cache.at(tokens[250].contents),
+            "caller_after"
+        );
+        assert!(context.take_pending_errors().is_empty());
+    }
+}
+
+#[test]
+fn conditional_arms_reject_duplicate_else_and_late_elif() {
+    for (source, expected) in [
+        (
+            "#if 0\n#else\nyes\n#else\nwrong\n#endif\nafter\n",
+            "`#else` after `#else`",
+        ),
+        (
+            "#if 1\nyes\n#else\n#else\nwrong\n#endif\nafter\n",
+            "`#else` after `#else`",
+        ),
+        (
+            "#if 0\n#else\nyes\n#elif 1\nwrong\n#endif\nafter\n",
+            "`#elif` after `#else`",
+        ),
+    ] {
+        super::strategies::assert_strategies_agree(source);
+        let (identifiers, errors) = super::preprocess(source);
+        assert_eq!(identifiers, ["yes", "after"]);
+        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+        assert_eq!(errors[0].to_string(), expected);
+    }
+}
+
+#[test]
+fn conditional_tails_diagnose_without_leaking_tokens() {
+    for source in [
+        "#if 0\n#else extra\nyes\n#endif\nafter\n",
+        "#if 1\nyes\n#endif extra\nafter\n",
+    ] {
+        super::strategies::assert_strategies_agree(source);
+        let (identifiers, errors) = super::preprocess(source);
+        assert_eq!(identifiers, ["yes", "after"]);
+        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+    }
+}
+
+#[test]
+fn null_and_undef_directives_preserve_start_of_line() {
+    let source = "#\n#define A 1\n#undef A\n#ifdef A\nwrong\n#else\nyes\n#endif\nafter\n";
+    super::strategies::assert_strategies_agree(source);
+    let (identifiers, errors) = super::preprocess(source);
+    assert_eq!(identifiers, ["yes", "after"]);
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[test]
+fn line_remapping_preserves_physical_include_lookup_and_pragma_once() {
+    let headers = TemporaryHeaders::new();
+    headers.write(
+        "header.h",
+        "#line 30 \"virtual/header.c\"\n#pragma once\nfirst\n",
+    );
+    let source =
+        "#line 10 \"virtual/main.c\"\n#include \"header.h\"\n#include \"header.h\"\nafter\n";
+    for strategy in STRATEGIES {
+        let (tokens, mut context) =
+            directive_tokens_at_path(source, &headers.0.join("main.c"), strategy);
+        let names = tokens
+            .iter()
+            .filter(|token| token.kind == TokenType::Identifier)
+            .map(|token| context.string_cache.at(token.contents))
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["first", "after"], "{strategy:?}");
+        assert!(context.take_pending_errors().is_empty());
+    }
+}
+
+#[test]
+fn stringified_include_operands_resolve_headers_and_consume_their_tail() {
+    let headers = TemporaryHeaders::new();
+    std::fs::write(headers.0.join("generated.h"), "inside\n").unwrap();
+    for strategy in STRATEGIES {
+        let source = "#define S(x) #x\n#include S(generated.h)\nafter\n";
+        let (tokens, mut context) =
+            directive_tokens_at_path(source, &headers.0.join("main.c"), strategy);
+        assert!(context.take_pending_errors().is_empty());
+        assert_eq!(
+            tokens
+                .iter()
+                .map(|token| context.string_cache.at(token.contents))
+                .collect::<Vec<_>>(),
+            ["inside", "after"]
+        );
+    }
+}
+#[test]
+fn unfinished_include_does_not_consume_the_following_line() {
+    for strategy in STRATEGIES {
+        let (tokens, mut context) = directive_tokens_at_path(
+            "#include <bcc_missing_header\nafter\n",
+            Path::new("test.c"),
+            strategy,
+        );
+        assert_eq!(tokens.len(), 1, "{strategy:?}");
+        assert_eq!(context.string_cache.at(tokens[0].contents), "after");
+        assert!(
+            !context
+                .take_pending_errors()
+                .iter()
+                .any(|error| error.to_string().contains("extra tokens"))
+        );
+    }
+}

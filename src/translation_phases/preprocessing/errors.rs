@@ -100,6 +100,7 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives
             | PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
             | PreprocessorErrorType::ElifDirectiveWithoutIfDirective
+            | PreprocessorErrorType::ConditionalArmAfterElse(_)
             | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
             | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
             | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..)
@@ -107,13 +108,14 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
             | PreprocessorErrorType::HeaderNotFound { .. }
             | PreprocessorErrorType::HeaderFileInaccessible(..)
+            | PreprocessorErrorType::IncludeNestingLimitExceeded(..)
             | PreprocessorErrorType::HashHashUsedOutsideOfMacro
             | PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
+            | PreprocessorErrorType::InvalidLineFilename
             | PreprocessorErrorType::InvalidEscapeSequence
             | PreprocessorErrorType::UnterminatedEscapeSequence
             | PreprocessorErrorType::InvalidHexEscapeSequence
             | PreprocessorErrorType::HexEscapeSequenceTooLarge
-            | PreprocessorErrorType::InvalidOctalEscapeSequence
             | PreprocessorErrorType::OctalEscapeSequenceTooLarge
             | PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence
             | PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort
@@ -178,6 +180,7 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::LeftShiftWithoutRhs
             | PreprocessorErrorType::RightShiftWithoutRhs
             | PreprocessorErrorType::TernaryOperatorWithoutRhs
+            | PreprocessorErrorType::TernaryOperatorWithoutColon
             | PreprocessorErrorType::TernaryOperatorWithoutMhs
             | PreprocessorErrorType::ColonWithoutMatchingQuestionMark
             | PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression
@@ -195,7 +198,8 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
-            | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy) =>
+            | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy)
+            | PreprocessorErrorType::MissingVariadicArgument(policy) =>
                 match policy {
                     | ExtensionPolicy::Allow => unreachable!(
                         "allowed extensions must not produce a comma diagnostic"
@@ -218,6 +222,7 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
             | PreprocessorErrorType::ExtraTokensAfterIncludeDirective
+            | PreprocessorErrorType::ExtraTokensAfterConditionalDirective(_)
             | PreprocessorErrorType::ExtraTokensAfterIfdefDirective
             | PreprocessorErrorType::ExtraTokensAfterIfndefDirective
             | PreprocessorErrorType::PragmaOnceInNonHeader => ErrorSeverity::Warning,
@@ -277,6 +282,7 @@ pub(crate) enum PreprocessorErrorType {
     LogicalAndWithoutRhs,
     LogicalOrWithoutRhs,
     TernaryOperatorWithoutMhs,
+    TernaryOperatorWithoutColon,
     TernaryOperatorWithoutRhs,
     ColonWithoutMatchingQuestionMark,
     CommaOperatorInPreprocessorExpression(ExtensionPolicy),
@@ -315,6 +321,8 @@ pub(crate) enum PreprocessorErrorType {
     MoreEndifDirectivesThanIfDirectives,
     ElifDirectiveWithoutIfDirective,
     ElseDirectiveWithoutIfDirective,
+    ConditionalArmAfterElse(&'static str),
+    ExtraTokensAfterConditionalDirective(&'static str),
     ExpectedIdentifierInIfdefDirective(PreprocessorTokenType),
     ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
     ExpectedIdentifierInDefineDirective(PreprocessorTokenType),
@@ -326,19 +334,22 @@ pub(crate) enum PreprocessorErrorType {
         expected: usize,
         found:    usize,
     },
+    /// A variadic macro invocation that supplies no argument for `...`.
+    MissingVariadicArgument(ExtensionPolicy),
     HeaderNotFound {
         name:             String,
         is_system_header: bool,
         searched:         Vec<PathBuf>,
     },
     HeaderFileInaccessible(IoError),
+    IncludeNestingLimitExceeded(usize),
     HashHashUsedOutsideOfMacro,
     CannotUseHashHashAfterFunctionLikeMacroCall,
     InvalidEscapeSequence,
+    InvalidLineFilename,
     UnterminatedEscapeSequence,
     InvalidHexEscapeSequence,
     HexEscapeSequenceTooLarge,
-    InvalidOctalEscapeSequence,
     OctalEscapeSequenceTooLarge,
     InvalidSmallUnicodeEscapeSequence,
     SmallUnicodeEscapeSequenceTooShort,
@@ -361,7 +372,7 @@ pub(crate) enum PreprocessorErrorType {
     MissingNumberInLineDirective(PreprocessorTokenType),
     MissingNewlineAfterLineDirective(PreprocessorTokenType),
     LineDirectiveIsNotASimpleDigitSequence,
-    LineDirectiveNumberTooLarge(i128),
+    LineDirectiveNumberTooLarge(String),
     MissingOpeningParenthesisInPragmaOperator(PreprocessorTokenType),
     MissingClosingParenthesisInPragmaOperator(PreprocessorTokenType),
     MissingStringLiteralInPragmaOperator(PreprocessorTokenType),
@@ -562,6 +573,9 @@ impl PreprocessorErrorType {
             | Self::BitwiseOrWithoutRhs => missing_operand("|", "after"),
             | Self::LogicalAndWithoutRhs => missing_operand("&&", "after"),
             | Self::LogicalOrWithoutRhs => missing_operand("||", "after"),
+            | Self::TernaryOperatorWithoutColon =>
+                Explanation::new("expected `:` after `?` in preprocessor expression")
+                    .label("this conditional operator has no colon"),
             | Self::TernaryOperatorWithoutMhs => missing_operand("?", "after"),
             | Self::TernaryOperatorWithoutRhs => missing_operand(":", "after"),
             | Self::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(operator) =>
@@ -672,6 +686,13 @@ impl PreprocessorErrorType {
                     .label("no conditional directive is open here"),
             | Self::ElifDirectiveWithoutIfDirective => Explanation::new("`#elif` without `#if`")
                 .label("no conditional directive is open here"),
+            | Self::ConditionalArmAfterElse(name) =>
+                Explanation::new(format!("`#{name}` after `#else`"))
+                    .label("the final arm of this conditional has already begun")
+                    .note("C99 §6.10.1: a conditional group permits one final #else arm"),
+            | Self::ExtraTokensAfterConditionalDirective(name) =>
+                Explanation::new(format!("extra tokens after `#{name}`"))
+                    .label("expected the end of the directive"),
             | Self::ElseDirectiveWithoutIfDirective => Explanation::new("`#else` without `#if`")
                 .label("no conditional directive is open here"),
             | Self::ExpectedIdentifierInIfdefDirective(kind) => Explanation::new(format!(
@@ -730,6 +751,13 @@ impl PreprocessorErrorType {
                     "C99 §6.10.3p4: an invocation must supply one argument per parameter, plus \
                      any for `...`",
                 ),
+            | Self::MissingVariadicArgument(_) =>
+                Explanation::new("this invocation supplies no argument for `...`")
+                    .label("`__VA_ARGS__` is empty here")
+                    .note(
+                        "C99 §6.10.3p4: an invocation of a macro with `...` must supply more \
+                         arguments than the macro has named parameters",
+                    ),
             | Self::HeaderNotFound {
                 name,
                 is_system_header,
@@ -763,6 +791,10 @@ impl PreprocessorErrorType {
             | Self::HeaderFileInaccessible(error) =>
                 Explanation::new(format!("cannot read included file: {error}"))
                     .label("included here"),
+            | Self::IncludeNestingLimitExceeded(limit) =>
+                Explanation::new(format!("include nesting exceeds the maximum of {limit}"))
+                    .label("this include exceeds the implementation limit")
+                    .note("C99 §5.2.4.1: at least 15 nested included files are supported"),
             | Self::HashHashUsedOutsideOfMacro =>
                 Explanation::new("`##` outside a macro definition")
                     .label("token pasting only happens in replacement lists")
@@ -770,6 +802,9 @@ impl PreprocessorErrorType {
             | Self::CannotUseHashHashAfterFunctionLikeMacroCall =>
                 Explanation::new("`##` cannot follow a function-like macro invocation")
                     .label("pasting onto an invocation is not supported"),
+            | Self::InvalidLineFilename =>
+                Explanation::new("line filename is not representable as a path")
+                    .label("use a UTF-8 filename without NUL characters"),
             | Self::InvalidEscapeSequence => Explanation::new("unknown escape sequence")
                 .label("contains an escape C99 does not define")
                 .note(ESCAPE_LIST_NOTE),
@@ -782,23 +817,26 @@ impl PreprocessorErrorType {
             | Self::HexEscapeSequenceTooLarge =>
                 Explanation::new("hexadecimal escape sequence is out of range")
                     .label("contains an oversized `\\x` escape"),
-            | Self::InvalidOctalEscapeSequence =>
-                Explanation::new("octal escape sequence is not a valid character")
-                    .label("contains an invalid octal escape"),
             | Self::OctalEscapeSequenceTooLarge =>
                 Explanation::new("octal escape sequence is out of range")
                     .label("contains an oversized octal escape"),
             | Self::InvalidSmallUnicodeEscapeSequence =>
                 Explanation::new("`\\u` escape does not name a valid character")
                     .label("contains an invalid universal character name")
-                    .note("C99 §6.4.3: a universal character name must be a valid code point"),
+                    .note(
+                        "C99 §6.4.3: values below U+00A0 are forbidden except U+0024, U+0040 and \
+                         U+0060; surrogates are forbidden",
+                    ),
             | Self::SmallUnicodeEscapeSequenceTooShort =>
                 Explanation::new("`\\u` escape needs exactly four hexadecimal digits")
                     .label("contains a short `\\u` escape"),
             | Self::InvalidLargeUnicodeEscapeSequence =>
                 Explanation::new("`\\U` escape does not name a valid character")
                     .label("contains an invalid universal character name")
-                    .note("C99 §6.4.3: a universal character name must be a valid code point"),
+                    .note(
+                        "C99 §6.4.3: values below U+00A0 are forbidden except U+0024, U+0040 and \
+                         U+0060; surrogates are forbidden",
+                    ),
             | Self::LargeUnicodeEscapeSequenceTooSmall =>
                 Explanation::new("`\\U` escape needs exactly eight hexadecimal digits")
                     .label("contains a short `\\U` escape"),

@@ -11,13 +11,18 @@ use super::{
     declaration_syntax::{
         Declaration,
         DeclarationSpecifiers,
+        DirectDeclarator,
         InitDeclarator,
     },
     declarator::{
         DeclaratorFrame,
         DeclaratorMode,
     },
-    errors::ParserErrorType,
+    errors::{
+        DeclarationContinuation,
+        DeclarationPlace,
+        ParserErrorType,
+    },
     expression_operators::is_operator,
     initializer::InitializerFrame,
     machine::{
@@ -36,20 +41,16 @@ use super::{
     syntax::{
         DeclarationIndex,
         StorageClass,
-        SyntaxList,
     },
 };
-use crate::{
-    translation_phases::{
-        Context,
-        SourceVectors,
-        preprocessing::{
-            OperatorTokenType,
-            Token,
-            TokenType,
-        },
+use crate::translation_phases::{
+    Context,
+    SourceVectors,
+    preprocessing::{
+        OperatorTokenType,
+        Token,
+        TokenType,
     },
-    util::vector_slice::UsizeExt,
 };
 
 /// Parses a declaration shell around declaration specifiers, comma-separated
@@ -63,14 +64,13 @@ pub(super) struct DeclarationFrame {
     phase: DeclarationPhase,
     /// Specifiers shared by every init-declarator in this declaration.
     declaration_specifiers: Option<DeclarationSpecifiers>,
-    /// Initial arena length used to build this declaration's final slice.
-    init_declarator_start: u32,
+    /// Init-declarators parsed so far, stored as one list when the
+    /// declaration reduces.
+    pub(super) init_declarators: Vec<InitDeclarator>,
     /// Provenance accumulated across specifiers, declarators, and separators.
     pub(super) source_vectors: Vec<SourceVectors>,
     /// Hard-error count on entry, used to scope recovery to this declaration.
     starting_error_count: usize,
-    /// Most recently stored init-declarator, used to attach an initializer.
-    last_init_index: Option<u32>,
     /// Provenance of `=` retained while the initializer child runs.
     initializer_source: Option<SourceVectors>,
     /// Grammar context controlling function-definition handoff and `}`
@@ -99,8 +99,10 @@ pub(super) enum DeclarationPhase {
     AwaitSpecifiers,
     /// Receive one named declarator.
     AwaitDeclarator,
-    /// Resume at a separator after recovering a missing declarator.
-    AfterMissingDeclarator,
+    /// Resume at a separator after recovering a missing declarator or a
+    /// rejected continuation, without diagnosing the synchronization token
+    /// again.
+    AfterRecovery,
     /// Classify the token following a completed declarator.
     AfterDeclarator,
     /// Push the initializer child after consuming `=`.
@@ -114,21 +116,39 @@ pub(super) enum DeclarationPhase {
 }
 
 impl DeclarationFrame {
-    pub(super) fn new(
-        init_declarator_start: u32,
-        context: DeclarationContext,
-        starting_error_count: usize,
-    ) -> Self {
+    pub(super) fn new(context: DeclarationContext, starting_error_count: usize) -> Self {
         Self {
             phase: DeclarationPhase::Start,
             declaration_specifiers: None,
-            init_declarator_start,
+            init_declarators: Vec::new(),
             source_vectors: Vec::new(),
             starting_error_count,
-            last_init_index: None,
             initializer_source: None,
             context,
             is_function_definition_head: false,
+        }
+    }
+
+    /// Tokens that may still continue this declaration after its latest
+    /// declarator, for the continuation diagnostic.
+    fn continuation(&self) -> DeclarationContinuation {
+        let place = match self.context {
+            | DeclarationContext::External => DeclarationPlace::External,
+            | DeclarationContext::Block => DeclarationPlace::Block,
+            | DeclarationContext::ForInitializer => DeclarationPlace::ForInitializer,
+            | DeclarationContext::OldStyleParameter => DeclarationPlace::OldStyleParameter,
+        };
+        DeclarationContinuation {
+            place,
+            initializer: self
+                .init_declarators
+                .last()
+                .is_some_and(|init| init.initializer.is_none()),
+            function_body: place == DeclarationPlace::External
+                && matches!(
+                    self.init_declarators.as_slice(),
+                    [init] if init.initializer.is_none()
+                ),
         }
     }
 
@@ -206,7 +226,7 @@ impl DeclarationFrame {
                         ),
                         token,
                     );
-                    self.phase = DeclarationPhase::AfterMissingDeclarator;
+                    self.phase = DeclarationPhase::AfterRecovery;
                     return ParseAction::Recover(SynchronizationSet {
                         kind:   self.recovery_kind(),
                         target: ParseFrameKind::Declaration,
@@ -215,16 +235,11 @@ impl DeclarationFrame {
 
                 let source_vectors = declarator.source_vectors;
                 self.source_vectors.push(source_vectors);
-                let init_index = parser.syntax.init_declarators.len().to_u32();
-                parser.push_syntax(
-                    |syntax| &mut syntax.init_declarators,
-                    InitDeclarator {
-                        declarator,
-                        initializer: None,
-                        source_vectors,
-                    },
-                );
-                self.last_init_index = Some(init_index);
+                self.init_declarators.push(InitDeclarator {
+                    declarator,
+                    initializer: None,
+                    source_vectors,
+                });
 
                 // C scope begins immediately after the declarator,
                 // before its initializer or a
@@ -243,7 +258,7 @@ impl DeclarationFrame {
                 self.phase = DeclarationPhase::AfterDeclarator;
                 ParseAction::Continue
             },
-            | DeclarationPhase::AfterMissingDeclarator => {
+            | DeclarationPhase::AfterRecovery => {
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -280,17 +295,49 @@ impl DeclarationFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                let has_sole_uninitialized_declarator =
-                    parser.syntax.init_declarators.len().to_u32() == self.init_declarator_start + 1
-                        && self
-                            .last_init_index
-                            .and_then(|index| parser.syntax.init_declarators.get(index as usize))
-                            .is_some_and(|init| init.initializer.is_none());
+                let has_sole_uninitialized_declarator = matches!(
+                    self.init_declarators.as_slice(),
+                    [init] if init.initializer.is_none()
+                );
+                // An identifier-list head keeps its declaration-list even
+                // after a recovered error in the head: no other declaration
+                // form can continue with a declaration there, while a broken
+                // non-function declarator (`int x[3 int y;`) must still
+                // resynchronize at the next declaration.
+                let old_style_parameters = if has_sole_uninitialized_declarator
+                    && parser.hard_error_count != self.starting_error_count
+                {
+                    self.init_declarators
+                        .first()
+                        .and_then(|init| parser.function_suffix(init.declarator))
+                        .and_then(|suffix| match suffix {
+                            | DirectDeclarator::KAndRStyleFunction { parameters } => Some(
+                                parser.syntax[parameters]
+                                    .iter()
+                                    .map(|parameter| parameter.name)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            | _ => None,
+                        })
+                } else {
+                    None
+                };
+                // After an error in an identifier-list head, a following
+                // declaration still begins the declaration list only when
+                // it declares one of the listed parameters; otherwise the
+                // head most likely lacks its `;`.
+                let continues_old_style_definition = parser.hard_error_count
+                    != self.starting_error_count
+                    && token.is_some_and(|token| parser.declaration_starter(token))
+                    && old_style_parameters.is_some_and(|parameters| {
+                        parser.next_declaration_declares_one_of(context, &parameters)
+                    });
                 let starts_function_definition = self.context == DeclarationContext::External
                     && has_sole_uninitialized_declarator
                     && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                         || parser.hard_error_count == self.starting_error_count
-                            && token.is_some_and(|token| parser.declaration_starter(token)));
+                            && token.is_some_and(|token| parser.declaration_starter(token))
+                        || continues_old_style_definition);
                 // The same prefix can continue as another
                 // init-declarator, an
                 // initializer, a completed declaration, or a function
@@ -336,6 +383,7 @@ impl DeclarationFrame {
                         context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
+                            self.continuation(),
                         ),
                         token,
                     );
@@ -346,6 +394,7 @@ impl DeclarationFrame {
                         context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
+                            self.continuation(),
                         ),
                         token,
                     );
@@ -369,6 +418,7 @@ impl DeclarationFrame {
                         context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
+                            self.continuation(),
                         ),
                         token,
                     );
@@ -385,6 +435,7 @@ impl DeclarationFrame {
                         context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
+                            self.continuation(),
                         ),
                         token,
                     );
@@ -393,7 +444,10 @@ impl DeclarationFrame {
                 } else if token.is_none() {
                     parser.report(
                         context,
-                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(None),
+                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+                            None,
+                            self.continuation(),
+                        ),
                         None,
                     );
                     self.phase = DeclarationPhase::Finish;
@@ -403,10 +457,11 @@ impl DeclarationFrame {
                         context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
+                            self.continuation(),
                         ),
                         token,
                     );
-                    self.phase = DeclarationPhase::AfterDeclarator;
+                    self.phase = DeclarationPhase::AfterRecovery;
                     ParseAction::Recover(SynchronizationSet {
                         kind:   self.recovery_kind(),
                         target: ParseFrameKind::Declaration,
@@ -434,16 +489,14 @@ impl DeclarationFrame {
                     panic!("initializer frame returned an unexpected value: {returned:?}");
                 };
                 let _ = recovered;
-                let source_vectors =
-                    parser.syntax.initializers[initializer_index.0 as usize].source_vectors;
+                let source_vectors = parser.syntax[initializer_index].source_vectors;
                 let initializer_source = self
                     .initializer_source
                     .map_or(source_vectors, |equals_source| {
                         context.merge_vectors(equals_source, source_vectors)
                     });
                 self.source_vectors.push(source_vectors);
-                if let Some(index) = self.last_init_index {
-                    let init_declarator = &mut parser.syntax.init_declarators[index as usize];
+                if let Some(init_declarator) = self.init_declarators.last_mut() {
                     init_declarator.initializer = Some(initializer_index);
                     init_declarator.source_vectors =
                         context.merge_vectors(init_declarator.source_vectors, initializer_source);
@@ -469,28 +522,18 @@ impl DeclarationFrame {
                 // Arena insertion is the reduction boundary: all child
                 // slices and source ranges are
                 // stable before the handle is returned.
-                let index = parser.syntax.declarations.len().to_u32();
                 let source_vectors = context.merge_vector_list(&self.source_vectors);
-                parser.push_syntax(
-                    |syntax| &mut syntax.declarations,
-                    Declaration {
-                        declaration_specifiers: self
-                            .declaration_specifiers
-                            .expect("a declaration cannot finish without specifiers"),
-                        init_declarators: SyntaxList::new(
-                            parser.syntax_id,
-                            self.init_declarator_start,
-                            parser.syntax.init_declarators.len().to_u32(),
-                        ),
-                        source_vectors,
-                        recovered: parser.hard_error_count > self.starting_error_count,
-                        is_function_definition_head: self.is_function_definition_head,
-                    },
-                );
-                ParseAction::Reduce(ParseValue::Declaration(DeclarationIndex(
-                    index,
-                    parser.syntax_id,
-                )))
+                let init_declarators = parser.append_syntax(&mut self.init_declarators);
+                let index = parser.push_syntax(Declaration {
+                    declaration_specifiers: self
+                        .declaration_specifiers
+                        .expect("a declaration cannot finish without specifiers"),
+                    init_declarators,
+                    source_vectors,
+                    recovered: parser.hard_error_count > self.starting_error_count,
+                    is_function_definition_head: self.is_function_definition_head,
+                });
+                ParseAction::Reduce(ParseValue::Declaration(DeclarationIndex(index)))
             },
         }
     }

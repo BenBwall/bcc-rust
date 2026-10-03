@@ -1,8 +1,8 @@
 error: multiple `default` labels in one `switch`
- --> parser-duplicate-default-label.c:1:46
+ --> parser-duplicate-default-label.c:1:39
   |
 1 | int f(void) { switch (1) { default: ; default: ; } }
-  |                                              ^ second `default` label
+  |                                       ^^^^^^^ second `default` label
   |
   = note: C99 §6.8.4.2p3: a `switch` body has at most one `default` label
 

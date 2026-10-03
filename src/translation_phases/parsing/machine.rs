@@ -16,6 +16,7 @@ use super::{
     enum_specifier::EnumSpecifierFrame,
     expression::ExpressionFrame,
     external_declaration::ExternalDeclarationFrame,
+    frame_pool::FramePools,
     function_definition::FunctionDefinitionFrame,
     initializer::InitializerFrame,
     parameter_list::ParameterListFrame,
@@ -219,15 +220,6 @@ pub(super) enum ParseFrame {
     Statement(StatementFrame),
 }
 
-/// One driver response paired with the identity of the frame that produced it.
-///
-/// C99: this is an implementation of the grammar notation in §6.1, p. 29;
-/// PDF p. 41, not a normative C data type.
-pub(super) struct FrameStep {
-    pub(super) frame_kind: ParseFrameKind,
-    pub(super) action:     ParseAction,
-}
-
 #[cfg(test)]
 /// One observable driver action used to prove ownership and progress in tests.
 ///
@@ -281,11 +273,101 @@ impl ParseFrame {
             ),
             | Self::FunctionDefinition(frame) => frame.declaration_list.len(),
             | Self::CompoundStatement(frame) => frame.items.len(),
+            | Self::Declaration(frame) => frame.init_declarators.len(),
             | Self::ExternalDeclaration(_)
-            | Self::Declaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
             | Self::Statement(_) => 0,
+        }
+    }
+
+    /// Gives a newly pushed frame spare vectors for the lists it grows.
+    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools) {
+        match self {
+            | Self::Declaration(frame) => {
+                pools.init_declarators.lend(&mut frame.init_declarators);
+                pools.source_vectors.lend(&mut frame.source_vectors);
+            },
+            | Self::Declarator(frame) => {
+                pools.pointer_qualifiers.lend(&mut frame.pointer_qualifiers);
+                pools.direct_declarators.lend(&mut frame.direct_declarators);
+            },
+            | Self::Expression(frame) => frame.lend_pooled(pools),
+            | Self::Initializer(frame) => {
+                pools.initializers.lend(&mut frame.elements);
+                pools.source_vectors.lend(&mut frame.source_vectors);
+            },
+            | Self::CompoundStatement(frame) => {
+                pools.block_items.lend(&mut frame.items);
+                pools.source_vectors.lend(&mut frame.source_vectors);
+            },
+            | Self::ParameterList(frame) => {
+                pools.parameters.lend(&mut frame.parameters);
+                pools.identifiers.lend(&mut frame.identifiers);
+                pools.source_vectors.lend(&mut frame.source_vectors);
+            },
+            | Self::StructOrUnionSpecifier(frame) => {
+                pools.struct_members.lend(&mut frame.declarations);
+                pools.struct_declarators.lend(&mut frame.member_declarators);
+                pools.source_vectors.lend(&mut frame.source_vectors);
+            },
+            | Self::EnumSpecifier(frame) => {
+                pools.enumerators.lend(&mut frame.enumerators);
+                pools.source_vectors.lend(&mut frame.source_vectors);
+            },
+            | Self::ExternalDeclaration(_)
+            | Self::DeclarationSpecifiers(_)
+            | Self::TypeName(_)
+            | Self::FunctionDefinition(_)
+            | Self::Statement(_) => {},
+        }
+    }
+
+    /// Returns a popped frame's vectors to the pools.
+    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools) {
+        match self {
+            | Self::Declaration(frame) => {
+                pools.init_declarators.reclaim(&mut frame.init_declarators);
+                pools.source_vectors.reclaim(&mut frame.source_vectors);
+            },
+            | Self::Declarator(frame) => {
+                pools
+                    .pointer_qualifiers
+                    .reclaim(&mut frame.pointer_qualifiers);
+                pools
+                    .direct_declarators
+                    .reclaim(&mut frame.direct_declarators);
+            },
+            | Self::Expression(frame) => frame.reclaim_pooled(pools),
+            | Self::Initializer(frame) => {
+                pools.initializers.reclaim(&mut frame.elements);
+                pools.source_vectors.reclaim(&mut frame.source_vectors);
+            },
+            | Self::CompoundStatement(frame) => {
+                pools.block_items.reclaim(&mut frame.items);
+                pools.source_vectors.reclaim(&mut frame.source_vectors);
+            },
+            | Self::ParameterList(frame) => {
+                pools.parameters.reclaim(&mut frame.parameters);
+                pools.identifiers.reclaim(&mut frame.identifiers);
+                pools.source_vectors.reclaim(&mut frame.source_vectors);
+            },
+            | Self::StructOrUnionSpecifier(frame) => {
+                pools.struct_members.reclaim(&mut frame.declarations);
+                pools
+                    .struct_declarators
+                    .reclaim(&mut frame.member_declarators);
+                pools.source_vectors.reclaim(&mut frame.source_vectors);
+            },
+            | Self::EnumSpecifier(frame) => {
+                pools.enumerators.reclaim(&mut frame.enumerators);
+                pools.source_vectors.reclaim(&mut frame.source_vectors);
+            },
+            | Self::ExternalDeclaration(_)
+            | Self::DeclarationSpecifiers(_)
+            | Self::TypeName(_)
+            | Self::FunctionDefinition(_)
+            | Self::Statement(_) => {},
         }
     }
 
@@ -363,78 +445,39 @@ impl ParseFrame {
         context: &mut Context,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> FrameStep {
+    ) -> ParseAction {
         let mut returned = returned;
         loop {
-            let step = self.step_once(parser, context, token, returned.take());
-            if !matches!(step.action, ParseAction::Continue) {
-                return step;
+            let action = self.step_once(parser, context, token, returned.take());
+            if !matches!(action, ParseAction::Continue) {
+                return action;
             }
         }
     }
 
-    /// Dispatches one transition to the concrete active frame and attaches its
-    /// typed identity for tracing, recovery validation, and invariants.
+    /// Dispatches one transition to the concrete active frame. The frame's
+    /// kind cannot change during a step, so the driver reads it beforehand.
     fn step_once(
         &mut self,
         parser: &mut Parser,
         context: &mut Context,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> FrameStep {
+    ) -> ParseAction {
         match self {
-            | Self::ExternalDeclaration(frame) => FrameStep {
-                frame_kind: ParseFrameKind::ExternalDeclaration,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::Declaration(frame) => FrameStep {
-                frame_kind: ParseFrameKind::Declaration,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::DeclarationSpecifiers(frame) => FrameStep {
-                frame_kind: ParseFrameKind::DeclarationSpecifiers,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::Declarator(frame) => FrameStep {
-                frame_kind: ParseFrameKind::Declarator,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::ParameterList(frame) => FrameStep {
-                frame_kind: ParseFrameKind::ParameterList,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::StructOrUnionSpecifier(frame) => FrameStep {
-                frame_kind: ParseFrameKind::StructOrUnionSpecifier,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::EnumSpecifier(frame) => FrameStep {
-                frame_kind: ParseFrameKind::EnumSpecifier,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::TypeName(frame) => FrameStep {
-                frame_kind: ParseFrameKind::TypeName,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::Expression(frame) => FrameStep {
-                frame_kind: ParseFrameKind::Expression,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::Initializer(frame) => FrameStep {
-                frame_kind: ParseFrameKind::Initializer,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::FunctionDefinition(frame) => FrameStep {
-                frame_kind: ParseFrameKind::FunctionDefinition,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::CompoundStatement(frame) => FrameStep {
-                frame_kind: ParseFrameKind::CompoundStatement,
-                action:     frame.step(parser, context, token, returned),
-            },
-            | Self::Statement(frame) => FrameStep {
-                frame_kind: ParseFrameKind::Statement,
-                action:     frame.step(parser, context, token, returned),
-            },
+            | Self::ExternalDeclaration(frame) => frame.step(parser, context, token, returned),
+            | Self::Declaration(frame) => frame.step(parser, context, token, returned),
+            | Self::DeclarationSpecifiers(frame) => frame.step(parser, context, token, returned),
+            | Self::Declarator(frame) => frame.step(parser, context, token, returned),
+            | Self::ParameterList(frame) => frame.step(parser, context, token, returned),
+            | Self::StructOrUnionSpecifier(frame) => frame.step(parser, context, token, returned),
+            | Self::EnumSpecifier(frame) => frame.step(parser, context, token, returned),
+            | Self::TypeName(frame) => frame.step(parser, context, token, returned),
+            | Self::Expression(frame) => frame.step(parser, context, token, returned),
+            | Self::Initializer(frame) => frame.step(parser, context, token, returned),
+            | Self::FunctionDefinition(frame) => frame.step(parser, context, token, returned),
+            | Self::CompoundStatement(frame) => frame.step(parser, context, token, returned),
+            | Self::Statement(frame) => frame.step(parser, context, token, returned),
         }
     }
 }

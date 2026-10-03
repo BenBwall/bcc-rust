@@ -69,6 +69,42 @@ fn diagnostic_is_yielded_before_the_token_produced_alongside_it() {
 }
 
 #[test]
+fn nested_token_pastes_keep_their_operands_while_tokens_are_yielded() {
+    let mut iterator = PreprocessorIterator::new(
+        PathBuf::from("<test>").into_boxed_path(),
+        concat!(
+            "#define LIM1(x) x##0; x##1;\n",
+            "#define LIM2(x) LIM1(x##0) LIM1(x##1)\n",
+            "#define LIM3(x) LIM2(x##0) LIM2(x##1)\n",
+            "LIM3(int value)\n",
+        )
+        .to_owned()
+        .into(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+
+    let mut names = Vec::new();
+    while let Some(token) = iterator.next() {
+        let token = token.unwrap();
+        assert_ne!(
+            iterator.context.get_source_vectors(token.source_vectors),
+            []
+        );
+        if token.kind == TokenType::Identifier {
+            names.push(iterator.context.string_cache.at(token.contents).to_owned());
+        }
+    }
+    assert_eq!(
+        names,
+        [
+            "value000", "value001", "value010", "value011", "value100", "value101", "value110",
+            "value111",
+        ]
+    );
+}
+
+#[test]
 fn adjacent_string_lookahead_keeps_the_buffered_token_provenance() {
     let mut iterator = PreprocessorIterator::new(
         PathBuf::from("<test>").into_boxed_path(),

@@ -21,22 +21,4 @@ error: unexpected end of file while parsing include directive
 1 | #include "abc
   |              ^ the file ends here
 
-error: cannot find header `abc`
- --> tokenizer-quoted-header-eof.c:1:10
-  |
-1 | #include "abc
-  |          ^^^^ not found in any search directory
-  |
-  = note: searched these directories:
-            . (the working directory)
-  = help: add the directory containing it with `--iquote <dir>` or `--isystem <dir>`
-
-error: translation unit is empty
- --> tokenizer-quoted-header-eof.c:1:14
-  |
-1 | #include "abc
-  |              ^ expected a declaration or function definition
-  |
-  = note: C99 §6.9: a translation unit contains at least one external declaration
-
-4 errors and 1 warning generated.
+2 errors and 1 warning generated.

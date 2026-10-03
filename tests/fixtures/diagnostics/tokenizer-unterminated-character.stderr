@@ -13,10 +13,10 @@ error: unterminated character constant
 1 | int value = 'a\
   |             ^^^ the file ends before the closing `'`
 
-error: expected `,`, `=`, `;`, or a function body after the declarator, found end of file
+error: expected `,` or `;` after the declarator, found end of file
  --> tokenizer-unterminated-character.c:1:16
   |
 1 | int value = 'a\
-  |                ^ expected one of `,`, `=`, `;`, or `{`
+  |                ^ expected `,` or `;`
 
 2 errors and 1 warning generated.

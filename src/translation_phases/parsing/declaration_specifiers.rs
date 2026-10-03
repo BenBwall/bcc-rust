@@ -28,6 +28,7 @@ use crate::translation_phases::{
     SourceVectors,
     preprocessing::{
         KeywordTokenType,
+        OperatorTokenType,
         Token,
         TokenType,
     },
@@ -53,6 +54,10 @@ pub(super) enum SpecifierMode {
 ///
 /// C99: §6.7, p. 97; PDF p. 109; §6.7.2.1, p. 101; PDF p. 113.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The booleans record independent facts about the specifier sequence."
+)]
 pub(super) struct DeclarationSpecifiersFrame {
     /// Current collection/child-wait transition.
     phase:                  DeclarationSpecifiersPhase,
@@ -66,8 +71,14 @@ pub(super) struct DeclarationSpecifiersFrame {
     storage_seen:           bool,
     /// Whether an invalid token occupied the mandatory type-specifier slot.
     invalid_type_seen:      bool,
+    /// Whether a type specifier conflicted with the ones before it; the
+    /// list is then already diagnosed once.
+    type_conflict_seen:     bool,
     /// Owning tag keyword retained while its child frame runs.
     pending_type_specifier: Option<Token>,
+    /// The `_Complex` keyword, retained to diagnose a list that never
+    /// supplies its required real floating type.
+    complex_token:          Option<Token>,
     /// Provenance accumulated across the complete specifier sequence.
     source_vectors:         Option<SourceVectors>,
 }
@@ -95,7 +106,9 @@ impl DeclarationSpecifiersFrame {
             consumed: false,
             storage_seen: false,
             invalid_type_seen: false,
+            type_conflict_seen: false,
             pending_type_specifier: None,
+            complex_token: None,
             source_vectors: None,
         }
     }
@@ -123,12 +136,8 @@ impl DeclarationSpecifiersFrame {
                 self.specifiers
                     .type_specifiers
                     .make_struct_or_union(parser, context, index, token);
-                if let Some(source_vectors) = parser
-                    .syntax
-                    .struct_or_union_specifiers
-                    .get(index.0 as usize)
-                    .map(|specifier| specifier.source_vectors)
                 {
+                    let source_vectors = parser.syntax[index].source_vectors;
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
                             context.merge_vectors(existing, source_vectors)
@@ -156,12 +165,8 @@ impl DeclarationSpecifiersFrame {
                 self.specifiers
                     .type_specifiers
                     .make_enum(parser, context, index, token);
-                if let Some(source_vectors) = parser
-                    .syntax
-                    .enum_specifiers
-                    .get(index.0 as usize)
-                    .map(|specifier| specifier.source_vectors)
                 {
+                    let source_vectors = parser.syntax[index].source_vectors;
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
                             context.merge_vectors(existing, source_vectors)
@@ -202,6 +207,7 @@ impl DeclarationSpecifiersFrame {
                     None,
                 );
             }
+            self.report_incomplete_complex(parser, context);
             self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
             return ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers));
         };
@@ -258,7 +264,9 @@ impl DeclarationSpecifiersFrame {
         if let TokenType::Keyword(keyword) = token.kind
             && let Some(specifier) = primitive_type_specifier(keyword)
         {
+            let reported_before = context.pending_errors.len();
             self.apply_type_specifier(parser, context, token, specifier);
+            self.type_conflict_seen |= context.pending_errors.len() != reported_before;
             parser.merge_source(context, &mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
@@ -317,6 +325,30 @@ impl DeclarationSpecifiersFrame {
             return ParseAction::Consume;
         }
 
+        // A non-typedef identifier in the empty type slot that is directly
+        // followed by another declarator start or declaration-specifier
+        // keyword cannot be the declarator itself: no declarator continues
+        // with either. Diagnose it once as an unknown type name and let the
+        // rest of the declaration follow, instead of misreading it as an
+        // implicit-`int` name and then rejecting what comes after it.
+        if token.kind == TokenType::Identifier
+            && self.mode != SpecifierMode::TypeName
+            && self.specifiers.type_specifiers == TypeSpecifiers::Empty
+            && !self.invalid_type_seen
+            && !parser.scopes.is_typedef(token.contents)
+            && parser.cursor.following(context).is_some_and(|following| {
+                following.kind == TokenType::Identifier
+                    || following.kind == TokenType::Operator(OperatorTokenType::Asterisk)
+                    || parser.declaration_starter(following)
+            })
+        {
+            parser.report(context, ParserErrorType::UnknownTypeName, Some(token));
+            self.invalid_type_seen = true;
+            parser.merge_source(context, &mut self.source_vectors, token);
+            self.consumed = true;
+            return ParseAction::Consume;
+        }
+
         // The first non-specifier belongs to the parent. Finalize
         // without consuming it, while reporting any
         // missing mandatory component. One diagnostic per missing piece: a
@@ -337,8 +369,30 @@ impl DeclarationSpecifiersFrame {
                 Some(token),
             );
         }
+        self.report_incomplete_complex(parser, context);
         self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
         ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers))
+    }
+
+    /// Diagnoses a finished list whose `_Complex` never received `float`,
+    /// `double`, or `long double`.
+    ///
+    /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112 lists only
+    /// `float _Complex`, `double _Complex`, and `long double _Complex`.
+    fn report_incomplete_complex(&self, parser: &mut Parser, context: &mut Context) {
+        if !self.invalid_type_seen
+            && !self.type_conflict_seen
+            && matches!(
+                self.specifiers.type_specifiers,
+                TypeSpecifiers::Complex | TypeSpecifiers::ComplexLong
+            )
+        {
+            parser.report(
+                context,
+                ParserErrorType::IncompleteComplexTypeSpecifier,
+                self.complex_token,
+            );
+        }
     }
 
     fn apply_type_specifier(
@@ -402,7 +456,12 @@ impl DeclarationSpecifiersFrame {
             | PrimitiveTypeSpecifier::Double => type_specifiers.make_double(parser, context, token),
             | PrimitiveTypeSpecifier::Void => apply_once!(is_void, make_void),
             | PrimitiveTypeSpecifier::Bool => apply_once!(is_bool, make_bool),
-            | PrimitiveTypeSpecifier::Complex => apply_once!(is_complex, make_complex),
+            | PrimitiveTypeSpecifier::Complex => {
+                if self.complex_token.is_none() {
+                    self.complex_token = Some(token);
+                }
+                apply_once!(is_complex, make_complex);
+            },
             | PrimitiveTypeSpecifier::Imaginary => {
                 self.invalid_type_seen = true;
                 parser.report(

@@ -19,12 +19,14 @@ use super::{
         PreprocessorErrorType,
     },
     macro_expansion::MacroDefinition,
+    token::{
+        StringTokenType,
+        TokenType,
+    },
 };
 use crate::{
     translation_phases::{
         Context,
-        GetPosition,
-        GetSourceFileIndex,
         SetPosition,
         SetSourceFileIndex,
         SourceVectors,
@@ -34,7 +36,7 @@ use crate::{
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,
-            PreprocessorTokenizer,
+            TokenSource,
         },
     },
     util::{
@@ -43,6 +45,10 @@ use crate::{
         string_cache::StringCacheId,
     },
 };
+
+/// Maximum live header depth, excluding the main source file. C99 §5.2.4.1
+/// requires support for at least 15 nested included files.
+const MAX_INCLUDE_NESTING: usize = 200;
 
 /// Compares one position of two macro definitions under C99 §6.10.3p2: the
 /// tokens must be spelled identically, while any two whitespace separations
@@ -91,10 +97,16 @@ impl Preprocessor {
         };
         match directive.kind {
             // Null directive.
-            | PreprocessorTokenType::Newline => return,
+            | PreprocessorTokenType::Newline => {
+                self.last_was_newline = true;
+                self.current_is_newline = true;
+                return;
+            },
             // This is the general case. We handle it in the function body.
             // If token is defined, it'll be handled when we match on contents.
-            | PreprocessorTokenType::Defined | PreprocessorTokenType::Identifier => (),
+            | PreprocessorTokenType::Defined
+            | PreprocessorTokenType::Identifier
+            | PreprocessorTokenType::UniversalIdentifier => (),
             | _ => {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::HashMustBeFollowedByIdentifier,
@@ -116,7 +128,13 @@ impl Preprocessor {
             | "undef" => self.parse_undef_directive(context, directive),
             | "line" => self.parse_line_directive(context, directive),
             | "error" => self.parse_error_directive(context, directive),
-            | "pragma" => self.parse_pragma_directive(context, directive),
+            | "pragma" => {
+                if !self.parse_pragma_directive(context, directive) {
+                    self.skip_until_newline(context);
+                }
+                self.last_was_newline = true;
+                self.current_is_newline = true;
+            },
             | _ => {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnknownDirective,
@@ -151,7 +169,12 @@ impl Preprocessor {
                         ret.push('\\');
                         index += 2;
                     },
-                    | _ => (),
+                    | _ => {
+                        // Only escaped quotes and backslashes are removed by
+                        // C99 §6.10.9p1. Preserve other escapes and progress.
+                        ret.push('\\');
+                        index += 1;
+                    },
                 },
                 | _ => {
                     ret.push(c);
@@ -160,7 +183,7 @@ impl Preprocessor {
             }
         }
         // Pop the trailing quote.
-        if ret.char_at(ret.len() - 1) == Some('"') {
+        if ret.ends_with('"') {
             _ = ret.pop();
         }
         ret.push('\n');
@@ -236,14 +259,15 @@ impl Preprocessor {
     }
 
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
-        let including_file = self.source_file_index();
+        let including_file = self.physical_source_file_index();
         context.set_is_tokenizing_include_string(true);
         let include_string =
             self.expect_token_without_rewind::<true>(
                 context,
                 |_, context, token| match token.kind {
                     | PreprocessorTokenType::AngleBracketString
-                    | PreprocessorTokenType::IncludeString => true,
+                    | PreprocessorTokenType::IncludeString
+                    | PreprocessorTokenType::String => true,
                     | _ if context.string_cache.at(token.contents).starts_with('<') => true,
                     | _ => false,
                 },
@@ -266,7 +290,7 @@ impl Preprocessor {
             return;
         };
         let header_source_index = match include_string.kind {
-            | PreprocessorTokenType::IncludeString => {
+            | PreprocessorTokenType::IncludeString | PreprocessorTokenType::String => {
                 let contents = context
                     .string_cache
                     .at(include_string.contents)
@@ -274,24 +298,6 @@ impl Preprocessor {
                     .expect("Include strings must be enclosed in double quotes.")
                     .to_token_string();
                 let path = Path::new(contents.as_str());
-                if self
-                    .expect_token_from_previous_phase::<true>(
-                        context,
-                        |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                        |_, _, t| {
-                            ControlFlow::Break(PreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
-                                source_vectors: t.source_vectors,
-                            })
-                        },
-                        "parsing include directive.",
-                    )
-                    .is_none()
-                {
-                    self.skip_until_newline(context);
-                }
-
                 self.find_header_from_path(context, including_file, include_string, path, false)
             },
             | PreprocessorTokenType::AngleBracketString => {
@@ -302,23 +308,6 @@ impl Preprocessor {
                     .expect("Angle-bracket strings must be enclosed in angle brackets.")
                     .to_token_string();
                 let path = Path::new(contents.as_str());
-                if self
-                    .expect_token_from_previous_phase::<true>(
-                        context,
-                        |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                        |_, _, t| {
-                            ControlFlow::Break(PreprocessorError {
-                                error_type:
-                                    PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
-                                source_vectors: t.source_vectors,
-                            })
-                        },
-                        "parsing include directive.",
-                    )
-                    .is_none()
-                {
-                    self.skip_until_newline(context);
-                }
                 self.find_header_from_path(context, including_file, include_string, path, true)
             },
             | _ => {
@@ -368,9 +357,42 @@ impl Preprocessor {
                 self.find_header_from_path(context, including_file, synthetic_token, path, true)
             },
         };
+        if !self.current_is_newline
+            && self
+                .expect_token::<true>(
+                    context,
+                    |_, _, token| token.kind == PreprocessorTokenType::Newline,
+                    |_, _, token| {
+                        ControlFlow::Break(PreprocessorError {
+                            error_type:     PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
+                            source_vectors: token.source_vectors,
+                        })
+                    },
+                    "parsing include directive",
+                )
+                .is_none()
+        {
+            self.skip_and_expand_until_newline(context);
+        }
         let Some(header_source_index) = header_source_index else {
             return;
         };
+        // The main source contributes one frame. Macro frames and headers
+        // whose processing has finished do not consume the nesting limit.
+        let source_depth = self
+            .tokenizer_stack
+            .iter()
+            .filter(|frame| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))
+            .count();
+        if source_depth > MAX_INCLUDE_NESTING {
+            context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::IncludeNestingLimitExceeded(
+                    MAX_INCLUDE_NESTING,
+                ),
+                source_vectors: directive.source_vectors,
+            });
+            return;
+        }
         let header_path = context.get_source_file(header_source_index);
         let Ok(header_string) = read_to_string_lossy(header_path).map_err(|e| {
             context.preprocessor_error(PreprocessorError {
@@ -382,11 +404,15 @@ impl Preprocessor {
         };
         let header_string = SharedString::from(header_string);
         context.record_source_text(header_source_index, header_string.clone());
+        let tokenizer = TokenSource::new(context, header_source_index, header_string);
         self.push_tokenizer_frame(
             context,
             TokenizerFrame {
-                frame_type: TokenizerFrameType::SourceFile,
-                tokenizer:  PreprocessorTokenizer::new(header_source_index, header_string),
+                frame_type: TokenizerFrameType::SourceFile {
+                    conditional_base:           self.open_conditionals.len(),
+                    physical_source_file_index: header_source_index,
+                },
+                tokenizer,
             },
         );
         self.last_was_newline = true;
@@ -396,7 +422,7 @@ impl Preprocessor {
     fn parse_define_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
-            |_, _, t| t.kind == PreprocessorTokenType::Identifier,
+            |_, _, t| t.kind.is_identifier(),
             |_, _, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedIdentifierInDefineDirective(
@@ -410,7 +436,10 @@ impl Preprocessor {
             self.skip_until_newline(context);
             return;
         };
-        let old_definition = self.macro_definitions.get(&name.contents).cloned();
+        let old_definition = self
+            .macro_definitions
+            .get(&name.identifier_id(context))
+            .cloned();
         let tokenizer = self.tokenizer.clone();
         let old_tokenizer = match old_definition {
             | None => None,
@@ -479,7 +508,7 @@ impl Preprocessor {
                 let Some(name_or_ellipsis) = self.expect_token_from_previous_phase::<true>(
                     context,
                     |_, _, t| {
-                        t.kind == PreprocessorTokenType::Identifier
+                        t.kind.is_identifier()
                             || t.kind == PreprocessorTokenType::Ellipsis
                             || (t.kind == PreprocessorTokenType::ClosingParenthesis
                                 && argument_names.is_empty())
@@ -507,8 +536,8 @@ impl Preprocessor {
                 }
                 if name_or_ellipsis.kind == PreprocessorTokenType::Ellipsis {
                     is_variadic = true;
-                } else if name_or_ellipsis.kind == PreprocessorTokenType::Identifier {
-                    argument_names.push(name_or_ellipsis.contents);
+                } else if name_or_ellipsis.kind.is_identifier() {
+                    argument_names.push(name_or_ellipsis.identifier_id(context));
                 } else if name_or_ellipsis.kind == PreprocessorTokenType::ClosingParenthesis {
                     break;
                 }
@@ -530,7 +559,7 @@ impl Preprocessor {
             }
             let tokenizer = self.tokenizer.clone();
             drop(self.macro_definitions.insert(
-                name.contents,
+                name.identifier_id(context),
                 MacroDefinition::FunctionLike {
                     tokenizer,
                     argument_names: argument_names.into(),
@@ -554,7 +583,7 @@ impl Preprocessor {
                 });
             }
             drop(self.macro_definitions.insert(
-                name.contents,
+                name.identifier_id(context),
                 MacroDefinition::ObjectLike {
                     tokenizer: tokenizer.clone(),
                 },
@@ -564,32 +593,34 @@ impl Preprocessor {
         if let Some(mut old_tokenizer) = old_tokenizer {
             // Compare replacement lists body to body, and parameter lists
             // separately (C99 §6.10.3p2).
-            let (mut new_tokenizer, parameters_match) =
-                match (self.macro_definitions.get(&name.contents), &old_definition) {
-                    | (
-                        Some(MacroDefinition::FunctionLike {
-                            tokenizer,
-                            argument_names,
-                            is_variadic,
-                        }),
-                        Some(MacroDefinition::FunctionLike {
-                            argument_names: old_argument_names,
-                            is_variadic: old_is_variadic,
-                            ..
-                        }),
-                    ) => (
-                        tokenizer.clone(),
-                        argument_names == old_argument_names && is_variadic == old_is_variadic,
+            let (mut new_tokenizer, parameters_match) = match (
+                self.macro_definitions.get(&name.identifier_id(context)),
+                &old_definition,
+            ) {
+                | (
+                    Some(MacroDefinition::FunctionLike {
+                        tokenizer,
+                        argument_names,
+                        is_variadic,
+                    }),
+                    Some(MacroDefinition::FunctionLike {
+                        argument_names: old_argument_names,
+                        is_variadic: old_is_variadic,
+                        ..
+                    }),
+                ) => (
+                    tokenizer.clone(),
+                    argument_names == old_argument_names && is_variadic == old_is_variadic,
+                ),
+                | (
+                    Some(
+                        MacroDefinition::FunctionLike { tokenizer, .. }
+                        | MacroDefinition::ObjectLike { tokenizer },
                     ),
-                    | (
-                        Some(
-                            MacroDefinition::FunctionLike { tokenizer, .. }
-                            | MacroDefinition::ObjectLike { tokenizer },
-                        ),
-                        _,
-                    ) => (tokenizer.clone(), true),
-                    | _ => (tokenizer, true),
-                };
+                    _,
+                ) => (tokenizer.clone(), true),
+                | _ => (tokenizer, true),
+            };
             let mut error_has_been_generated = false;
             if !parameters_match {
                 context.preprocessor_error(PreprocessorError {
@@ -660,7 +691,7 @@ impl Preprocessor {
     fn parse_undef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
-            |_, _, t| t.kind == PreprocessorTokenType::Identifier,
+            |_, _, t| t.kind.is_identifier(),
             |_, _, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedIdentifierInUndefDirective(
@@ -674,20 +705,27 @@ impl Preprocessor {
             self.skip_until_newline(context);
             return;
         };
-        drop(self.macro_definitions.remove(&name.contents));
-        _ = self.expect_token_from_previous_phase::<true>(
-            context,
-            |_, _, t| t.kind == PreprocessorTokenType::Newline,
-            |_, _, token| {
-                ControlFlow::Break(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(
-                        token.kind,
-                    ),
-                    source_vectors: token.source_vectors,
-                })
-            },
-            "parsing undef directive",
-        );
+        drop(self.macro_definitions.remove(&name.identifier_id(context)));
+        if self
+            .expect_token_from_previous_phase::<true>(
+                context,
+                |_, _, t| t.kind == PreprocessorTokenType::Newline,
+                |_, _, token| {
+                    ControlFlow::Break(PreprocessorError {
+                        error_type:     PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(
+                            token.kind,
+                        ),
+                        source_vectors: token.source_vectors,
+                    })
+                },
+                "parsing undef directive",
+            )
+            .is_none()
+        {
+            self.skip_until_newline(context);
+        }
+        self.last_was_newline = true;
+        self.current_is_newline = true;
     }
 
     fn parse_line_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
@@ -717,35 +755,28 @@ impl Preprocessor {
             self.skip_and_expand_until_newline(context);
             return;
         }
-        let (value, did_overflow) = {
-            let mut value = 0i128;
-            let mut did_overflow = false;
-            for b in digits.bytes() {
-                value *= 10;
-                if value > i128::from(i32::MAX) {
-                    did_overflow = true;
-                }
-                value += i128::from(b - b'0');
-                if value > i128::from(i32::MAX) {
-                    did_overflow = true;
-                }
-            }
-            (value, did_overflow)
-        };
-        if did_overflow {
+        let value = digits.bytes().try_fold(0u32, |value, digit| {
+            value
+                .checked_mul(10)?
+                .checked_add(u32::from(digit - b'0'))
+                .filter(|value| i32::try_from(*value).is_ok())
+        });
+        if value.is_none() {
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(value),
+                error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(
+                    digits.to_owned(),
+                ),
                 source_vectors: token.source_vectors,
             });
-        } else {
-            self.set_line(context, value as u32);
         }
         let name = self.expect_token::<true>(
             context,
             |_, _, t| {
                 matches!(
                     t.kind,
-                    PreprocessorTokenType::String | PreprocessorTokenType::Newline
+                    PreprocessorTokenType::String
+                        | PreprocessorTokenType::GeneratedString
+                        | PreprocessorTokenType::Newline
                 )
             },
             |_, _, t| {
@@ -756,29 +787,66 @@ impl Preprocessor {
             },
             "parsing line directive",
         );
-        if let Some(
-            t @ PreprocessorToken {
-                kind: PreprocessorTokenType::String,
-                ..
-            },
-        ) = name
+        let Some(name) = name else {
+            self.skip_and_expand_until_newline(context);
+            return;
+        };
+        let mut filename = None;
+        if let t @ PreprocessorToken {
+            kind: PreprocessorTokenType::String | PreprocessorTokenType::GeneratedString,
+            ..
+        } = name
         {
-            let path_box = PathBuf::from(context.string_cache.at(t.contents)).into_boxed_path();
-            let source_file_index = context.intern_source_file(path_box);
+            // Unlike include names, #line names use normal string-literal
+            // decoding. Save the result until the directive is complete.
+            if let Some(token) = self.map_preprocessor_token(context, t)
+                && let TokenType::String(
+                    StringTokenType::String(contents) | StringTokenType::WideString(contents),
+                ) = token.kind
+            {
+                let wide = matches!(
+                    token.kind,
+                    TokenType::String(StringTokenType::WideString(_))
+                );
+                filename = context
+                    .literal_text(contents, wide)
+                    .filter(|text| !text.contains('\0'))
+                    .map(|text| PathBuf::from(text).into_boxed_path());
+                if filename.is_none() {
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::InvalidLineFilename,
+                        source_vectors: token.source_vectors,
+                    });
+                }
+            }
+            if self
+                .expect_token::<true>(
+                    context,
+                    |_, _, t| t.kind == PreprocessorTokenType::Newline,
+                    |_, _, t| {
+                        ControlFlow::Break(PreprocessorError {
+                            error_type:     PreprocessorErrorType::MissingNewlineAfterLineDirective(
+                                t.kind,
+                            ),
+                            source_vectors: t.source_vectors,
+                        })
+                    },
+                    "parsing line directive",
+                )
+                .is_none()
+            {
+                self.skip_and_expand_until_newline(context);
+                return;
+            }
+        }
+        // The newline ends any macro operand frames and returns us to the
+        // containing source file. C99 §6.10.4p3 assigns the following line.
+        if let Some(value) = value {
+            self.set_line(context, value);
+        }
+        if let Some(filename) = filename {
+            let source_file_index = context.intern_source_file(filename);
             self.set_source_file_index(context, source_file_index);
-            _ = self.expect_token::<true>(
-                context,
-                |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                |_, _, t| {
-                    ControlFlow::Break(PreprocessorError {
-                        error_type:     PreprocessorErrorType::MissingNewlineAfterLineDirective(
-                            t.kind,
-                        ),
-                        source_vectors: t.source_vectors,
-                    })
-                },
-                "parsing line directive",
-            );
         }
     }
 
@@ -807,14 +875,12 @@ impl Preprocessor {
         &mut self,
         context: &mut Context,
         _directive: PreprocessorToken,
-    ) {
+    ) -> bool {
+        let mut consumed_newline = false;
+        let mut completed_stdc = false;
         'base: loop {
             let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
-                let source_vectors = context.create_source_vectors(
-                    self.position(context),
-                    self.source_file_index(),
-                    0,
-                );
+                let source_vectors = self.current_location(context);
                 context.preprocessor_error(PreprocessorError {
                     error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing pragma directive",
@@ -825,8 +891,12 @@ impl Preprocessor {
             };
             match token.kind {
                 | PreprocessorTokenType::Whitespace => continue 'base,
-                | PreprocessorTokenType::Newline => break 'base,
-                | PreprocessorTokenType::Identifier => {
+                | PreprocessorTokenType::Newline => {
+                    consumed_newline = true;
+                    break 'base;
+                },
+                | PreprocessorTokenType::Identifier
+                | PreprocessorTokenType::UniversalIdentifier => {
                     match context.string_cache.at(token.contents) {
                         | "once" => {
                             if !self.current_is_header(context) {
@@ -835,10 +905,12 @@ impl Preprocessor {
                                     source_vectors: token.source_vectors,
                                 });
                             }
-                            _ = self.once_set.insert(self.source_file_index());
+                            _ = self.once_set.insert(self.physical_source_file_index());
                             match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
-                                | Some(token) if token.kind == PreprocessorTokenType::Newline =>
-                                    break 'base,
+                                | Some(token) if token.kind == PreprocessorTokenType::Newline => {
+                                    consumed_newline = true;
+                                    break 'base;
+                                },
                                 | Some(t) => {
                                     context.preprocessor_error(PreprocessorError {
                                         error_type:
@@ -850,11 +922,7 @@ impl Preprocessor {
                                     break 'base;
                                 },
                                 | None => {
-                                    let source_vectors = context.create_source_vectors(
-                                        self.position(context),
-                                        self.source_file_index(),
-                                        0,
-                                    );
+                                    let source_vectors = self.current_location(context);
                                     context.preprocessor_error(PreprocessorError {
                                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                                             "parsing pragma directive",
@@ -868,6 +936,7 @@ impl Preprocessor {
                         | "STDC" => {
                             match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
+                                    consumed_newline = true;
                                     context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument,
                                                 source_vectors: token.source_vectors,
@@ -877,7 +946,7 @@ impl Preprocessor {
                                 },
                                 | Some(token) => {
                                     let s = context.string_cache.at(token.contents);
-                                    if token.kind != PreprocessorTokenType::Identifier
+                                    if !token.kind.is_identifier()
                                         || !matches!(
                                             s,
                                             "FP_CONTRACT" | "FENV_ACCESS" | "CX_LIMITED_RANGE"
@@ -894,11 +963,7 @@ impl Preprocessor {
                                     }
                                 },
                                 | None => {
-                                    let source_vectors = context.create_source_vectors(
-                                        self.position(context),
-                                        self.source_file_index(),
-                                        0,
-                                    );
+                                    let source_vectors = self.current_location(context);
                                     context.preprocessor_error(PreprocessorError {
                                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                                             "parsing pragma directive",
@@ -911,6 +976,7 @@ impl Preprocessor {
 
                             match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
+                                    consumed_newline = true;
                                     context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch,
                                                 source_vectors: token.source_vectors,
@@ -920,7 +986,7 @@ impl Preprocessor {
                                 },
                                 | Some(token) => {
                                     let s = context.string_cache.at(token.contents);
-                                    if token.kind != PreprocessorTokenType::Identifier
+                                    if !token.kind.is_identifier()
                                         || !matches!(s, "ON" | "OFF" | "DEFAULT")
                                     {
                                         context.preprocessor_error(PreprocessorError {
@@ -932,11 +998,7 @@ impl Preprocessor {
                                     }
                                 },
                                 | None => {
-                                    let source_vectors = context.create_source_vectors(
-                                        self.position(context),
-                                        self.source_file_index(),
-                                        0,
-                                    );
+                                    let source_vectors = self.current_location(context);
                                     context.preprocessor_error(PreprocessorError {
                                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                                             "parsing pragma directive",
@@ -946,8 +1008,20 @@ impl Preprocessor {
                                     break 'base;
                                 },
                             }
+                            completed_stdc = true;
                         },
-                        | _ => break 'base,
+                        | _ => {
+                            if !completed_stdc {
+                                // An unknown pragma is ignored as a whole.
+                                // Preserve the caller's line state for _Pragma,
+                                // whose payload uses a temporary tokenizer.
+                                let line_state = (self.last_was_newline, self.current_is_newline);
+                                self.skip_until_newline(context);
+                                (self.last_was_newline, self.current_is_newline) = line_state;
+                                consumed_newline = true;
+                            }
+                            break 'base;
+                        },
                     }
                 },
                 | _ => {
@@ -959,5 +1033,6 @@ impl Preprocessor {
                 },
             }
         }
+        consumed_newline
     }
 }

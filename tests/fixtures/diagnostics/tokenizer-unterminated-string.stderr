@@ -13,10 +13,10 @@ error: unterminated string literal
 1 | char *value = "abc\
   |               ^^^^^ the file ends before the closing `"`
 
-error: expected `,`, `=`, `;`, or a function body after the declarator, found end of file
+error: expected `,` or `;` after the declarator, found end of file
  --> tokenizer-unterminated-string.c:1:20
   |
 1 | char *value = "abc\
-  |                    ^ expected one of `,`, `=`, `;`, or `{`
+  |                    ^ expected `,` or `;`
 
 2 errors and 1 warning generated.

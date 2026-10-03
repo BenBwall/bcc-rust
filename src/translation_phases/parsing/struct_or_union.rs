@@ -38,25 +38,22 @@ use super::{
         SynchronizationKind,
         SynchronizationSet,
     },
+    statement::is_statement_keyword,
     syntax::{
         ExpressionIndex,
         Identifier,
         StructOrUnionSpecifierIndex,
-        SyntaxList,
     },
 };
-use crate::{
-    translation_phases::{
-        Context,
-        SourceVectors,
-        preprocessing::{
-            KeywordTokenType,
-            OperatorTokenType,
-            Token,
-            TokenType,
-        },
+use crate::translation_phases::{
+    Context,
+    SourceVectors,
+    preprocessing::{
+        KeywordTokenType,
+        OperatorTokenType,
+        Token,
+        TokenType,
     },
-    util::vector_slice::UsizeExt,
 };
 
 /// Parses a struct-or-union specifier, including its optional tag and member
@@ -82,6 +79,14 @@ pub(super) struct StructOrUnionSpecifierFrame {
     member_declarator: Option<Declarator>,
     /// Whether `{` was consumed, distinguishing a reference from a definition.
     body_started: bool,
+    /// Whether member synchronization just ran after a reported malformed
+    /// struct-declarator terminator, so stopping before `}` or a following
+    /// declaration finishes the member without a second diagnostic.
+    resuming_after_member_recovery: bool,
+    /// Whether the bit-field width before the current separator position
+    /// already reported an error, so a stray `)` there is not diagnosed
+    /// again.
+    width_recovered: bool,
     /// Provenance accumulated across the complete tag specifier.
     pub(super) source_vectors: Vec<SourceVectors>,
     /// Provenance accumulated for the member declaration in progress.
@@ -132,6 +137,8 @@ impl StructOrUnionSpecifierFrame {
             member_specifiers: None,
             member_declarator: None,
             body_started: false,
+            resuming_after_member_recovery: false,
+            width_recovered: false,
             source_vectors: Vec::new(),
             member_source: None,
             current_member_declarator_source: None,
@@ -362,14 +369,14 @@ impl StructOrUnionSpecifierFrame {
             },
             | StructOrUnionPhase::AwaitBitFieldWidth => {
                 let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
-                    index, ..
+                    index,
+                    recovered,
                 })) = returned
                 else {
                     panic!("bit-field frame returned an unexpected value: {returned:?}");
                 };
-                let source_vectors = parser.syntax.expressions
-                    [ExpressionIndex::from(index).0 as usize]
-                    .source_vectors;
+                self.width_recovered = recovered;
+                let source_vectors = parser.syntax[ExpressionIndex::from(index)].source_vectors;
                 self.member_source = Some(self.member_source.map_or(source_vectors, |existing| {
                     context.merge_vectors(existing, source_vectors)
                 }));
@@ -399,6 +406,9 @@ impl StructOrUnionSpecifierFrame {
                 // `,` stays inside one struct-declarator-list; `;` commits the
                 // whole struct-declaration. Enclosing delimiters are repaired
                 // and reprocessed rather than swallowed by this frame.
+                let resuming_after_recovery =
+                    std::mem::take(&mut self.resuming_after_member_recovery);
+                let width_recovered = std::mem::take(&mut self.width_recovered);
                 if is_operator(token, OperatorTokenType::Comma) {
                     let token = token.expect("comma token exists");
                     parser.merge_source(context, &mut self.member_source, token);
@@ -411,15 +421,36 @@ impl StructOrUnionSpecifierFrame {
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
-                    parser.report(
-                        context,
-                        ParserErrorType::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList,
-                        token,
-                    );
+                    if !resuming_after_recovery {
+                        parser.report(
+                            context,
+                            ParserErrorType::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList,
+                            token,
+                        );
+                    }
                     self.finish_member(parser);
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
+                    if Self::member_list_continues(parser, context) {
+                        // A stray `)` cannot end the member list; its `}`
+                        // follows, so the member continues after it.
+                        if !(resuming_after_recovery || width_recovered) {
+                            parser.report(
+                                context,
+                                ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(
+                                    token.map(|token| token.kind),
+                                ),
+                                token,
+                            );
+                        }
+                        let token = token.expect("closing-parenthesis token exists");
+                        parser.merge_source(context, &mut self.member_source, token);
+                        // The malformed terminator is diagnosed, so a `}` or
+                        // following member that ends this one is not.
+                        self.resuming_after_member_recovery = true;
+                        return ParseAction::Consume;
+                    }
                     parser.report(
                         context,
                         ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList(
@@ -431,13 +462,15 @@ impl StructOrUnionSpecifierFrame {
                     self.phase = StructOrUnionPhase::FinishBody;
                     ParseAction::Reprocess
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
-                    parser.report(
-                        context,
-                        ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(
-                            token.map(|token| token.kind),
-                        ),
-                        token,
-                    );
+                    if !resuming_after_recovery {
+                        parser.report(
+                            context,
+                            ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(
+                                token.map(|token| token.kind),
+                            ),
+                            token,
+                        );
+                    }
                     self.finish_member(parser);
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Reprocess
@@ -458,6 +491,7 @@ impl StructOrUnionSpecifierFrame {
                         ),
                         token,
                     );
+                    self.resuming_after_member_recovery = true;
                     ParseAction::Recover(SynchronizationSet {
                         kind:   SynchronizationKind::StructMember,
                         target: ParseFrameKind::StructOrUnionSpecifier,
@@ -474,14 +508,105 @@ impl StructOrUnionSpecifierFrame {
         }
     }
 
+    /// Whether the body's `}` follows a stray `)` after a member declarator,
+    /// with only member declarations in between.
+    ///
+    /// C99 §6.7.2.1p1: a struct-declaration-list holds member declarations,
+    /// each starting with a specifier or qualifier, so a `)` is stray when
+    /// the rest of the member and any member declarations lead to the list's
+    /// `}`. Inside an enclosing parenthesis, as in
+    /// `int f(struct S { int x ) int after;`, the `)` closes that
+    /// parenthesis and the body's `}` is missing. The scan is bounded so
+    /// repeated errors stay linear.
+    fn member_list_continues(parser: &mut Parser, context: &mut Context) -> bool {
+        const SCAN_LIMIT: usize = 64;
+        // Parentheses and brackets, which never contain `;`.
+        let mut groups = 0_u32;
+        // Nested struct, union, or enum bodies.
+        let mut braces = 0_u32;
+        // The first tokens finish the current member; each later member
+        // starts with a declaration specifier or qualifier.
+        let mut member_start = false;
+        let mut previous = None;
+        let mut before_previous = None;
+        for index in 0..SCAN_LIMIT {
+            let Some(token) = parser.cursor.lookahead(context, index) else {
+                return false;
+            };
+            let kind = token.kind;
+            if is_statement_keyword(kind) {
+                return false;
+            }
+            let top_level = groups == 0 && braces == 0;
+            if top_level && member_start && !is_operator(Some(token), OperatorTokenType::Semicolon)
+            {
+                if !is_operator(Some(token), OperatorTokenType::ClosingCurlyBrace)
+                    && !parser.declaration_starter(token)
+                {
+                    return false;
+                }
+                member_start = false;
+            }
+            match kind {
+                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
+                    if groups > 0 {
+                        return false;
+                    }
+                    if braces == 0 {
+                        return true;
+                    }
+                    braces -= 1;
+                },
+                | TokenType::Operator(OperatorTokenType::Semicolon) => {
+                    if groups > 0 {
+                        return false;
+                    }
+                    member_start = braces == 0;
+                },
+                | TokenType::Operator(OperatorTokenType::Equals) if groups == 0 => return false,
+                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
+                    let opens_tag_body = |kind: Option<TokenType>| {
+                        matches!(
+                            kind,
+                            Some(TokenType::Keyword(
+                                KeywordTokenType::Struct
+                                    | KeywordTokenType::Union
+                                    | KeywordTokenType::Enum
+                            ))
+                        )
+                    };
+                    if groups == 0
+                        && !(opens_tag_body(previous)
+                            || previous == Some(TokenType::Identifier)
+                                && opens_tag_body(before_previous))
+                    {
+                        return false;
+                    }
+                    braces += 1;
+                },
+                | TokenType::Operator(
+                    OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
+                ) => groups += 1,
+                | TokenType::Operator(
+                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
+                ) => {
+                    if groups == 0 {
+                        return false;
+                    }
+                    groups -= 1;
+                },
+                | _ => {},
+            }
+            before_previous = previous;
+            previous = Some(kind);
+        }
+        false
+    }
+
     fn finish_member(&mut self, parser: &mut Parser) {
         // Commit all declarators for this shared specifier-qualifier-list as a
         // single member declaration with one stable arena slice.
-        let start = parser.syntax.struct_declarators.len().to_u32();
-        parser.append_syntax(
-            |syntax| &mut syntax.struct_declarators,
-            &mut self.member_declarators,
-        );
+        let start = parser.append_syntax(&mut self.member_declarators);
         let specifiers = self
             .member_specifiers
             .take()
@@ -490,41 +615,24 @@ impl StructOrUnionSpecifierFrame {
         self.declarations.push(StructDeclaration {
             type_qualifiers: specifiers.type_qualifiers,
             type_specifiers: specifiers.type_specifiers,
-            struct_declarator_list: SyntaxList::new(
-                parser.syntax_id,
-                start,
-                parser.syntax.struct_declarators.len().to_u32(),
-            ),
+            struct_declarator_list: start,
             source_vectors,
         });
         self.source_vectors.push(source_vectors);
     }
 
     fn finish(&mut self, parser: &mut Parser, context: &mut Context) -> ParseAction {
-        let declaration_list = self.body_started.then(|| {
-            let start = parser.syntax.struct_declarations.len().to_u32();
-            parser.append_syntax(
-                |syntax| &mut syntax.struct_declarations,
-                &mut self.declarations,
-            );
-            SyntaxList::new(
-                parser.syntax_id,
-                start,
-                parser.syntax.struct_declarations.len().to_u32(),
-            )
+        let declaration_list = self
+            .body_started
+            .then(|| parser.append_syntax(&mut self.declarations));
+        let index = parser.push_syntax(StructOrUnionSpecifier {
+            struct_or_union:         self.kind.unwrap_or(StructOrUnion::Struct),
+            identifier:              self.identifier,
+            struct_declaration_list: declaration_list,
+            source_vectors:          context.merge_vector_list(&self.source_vectors),
         });
-        let index = parser.syntax.struct_or_union_specifiers.len().to_u32();
-        parser.push_syntax(
-            |syntax| &mut syntax.struct_or_union_specifiers,
-            StructOrUnionSpecifier {
-                struct_or_union:         self.kind.unwrap_or(StructOrUnion::Struct),
-                identifier:              self.identifier,
-                struct_declaration_list: declaration_list,
-                source_vectors:          context.merge_vector_list(&self.source_vectors),
-            },
-        );
         ParseAction::Reduce(ParseValue::StructOrUnionSpecifier(
-            StructOrUnionSpecifierIndex(index, parser.syntax_id),
+            StructOrUnionSpecifierIndex(index),
         ))
     }
 }

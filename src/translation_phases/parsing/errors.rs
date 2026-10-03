@@ -16,6 +16,7 @@ use crate::{
         Diagnostic,
         Explanation,
         ToDiagnostic,
+        quote_spelling,
     },
     translation_phases::{
         Context,
@@ -73,6 +74,85 @@ pub(crate) enum ExpectedSyntax {
     None,
 }
 
+/// Grammar position of a declaration whose continuation was rejected.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum DeclarationPlace {
+    /// A file-scope external declaration.
+    External,
+    /// A block-item declaration.
+    Block,
+    /// The declaration clause of a `for` statement.
+    ForInitializer,
+    /// A declaration in an old-style function's declaration list.
+    OldStyleParameter,
+}
+
+/// Tokens that could still continue a declaration after its latest
+/// declarator, so a diagnostic never offers the token it rejects.
+///
+/// C99: init-declarator-list is §6.7, p. 97; PDF p. 109; a function body
+/// follows only a sole external declarator under §6.9.1, p. 141; PDF p. 153.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct DeclarationContinuation {
+    pub(crate) place:         DeclarationPlace,
+    /// The latest declarator has no initializer yet, so `=` may follow.
+    pub(crate) initializer:   bool,
+    /// The declaration is a sole uninitialized external declarator, so `{`
+    /// may begin a function body.
+    pub(crate) function_body: bool,
+}
+
+impl DeclarationContinuation {
+    /// Returns the "expected ..." phrase and the primary label.
+    fn expected(self) -> (String, String) {
+        let mut phrases = vec!["`,`"];
+        let mut tokens = vec!["`,`"];
+        if self.initializer {
+            phrases.push("`=`");
+            tokens.push("`=`");
+        }
+        // In a `for` header, `)` only ends recovery: the declaration still
+        // needs its `;` (C99 6.8.5p1), so it is not offered here.
+        phrases.push("`;`");
+        tokens.push("`;`");
+        if self.function_body {
+            phrases.push("a function body");
+            tokens.push("`{`");
+        }
+        let alternatives = |items: &[&str]| match items {
+            | [first, second] => format!("{first} or {second}"),
+            | [rest @ .., last] => format!("{}, or {last}", rest.join(", ")),
+            | [] => String::new(),
+        };
+        let label = if tokens.len() == 2 {
+            format!("expected {}", alternatives(&tokens))
+        } else {
+            format!("expected one of {}", alternatives(&tokens))
+        };
+        (
+            format!("{} after the declarator", alternatives(&phrases)),
+            label,
+        )
+    }
+
+    /// Explains why a found `{` cannot begin a function body here.
+    fn function_body_note(self, found: Option<TokenType>) -> Option<&'static str> {
+        if self.function_body
+            || found != Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace))
+        {
+            return None;
+        }
+        Some(match self.place {
+            | DeclarationPlace::OldStyleParameter =>
+                "C99 §6.9.1: each declaration before an old-style function body ends with `;`",
+            | DeclarationPlace::Block | DeclarationPlace::ForInitializer =>
+                "C99 §6.9.1: functions can only be defined at file scope",
+            | DeclarationPlace::External =>
+                "C99 §6.9.1: a function definition has exactly one declarator and no initializer",
+        })
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct RelatedParserDiagnostic {
     pub(crate) message:        &'static str,
@@ -89,25 +169,68 @@ pub(crate) struct RecoverySummary {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct ParserError {
-    pub(crate) code:            ParserDiagnosticCode,
-    pub(crate) severity:        ErrorSeverity,
-    pub(crate) warning_group:   Option<ParserWarningGroup>,
-    pub(crate) frame:           ParseFrameKind,
-    pub(crate) expected:        ExpectedSyntax,
-    pub(crate) found:           Option<TokenType>,
+    pub(crate) code:              ParserDiagnosticCode,
+    pub(crate) severity:          ErrorSeverity,
+    pub(crate) warning_group:     Option<ParserWarningGroup>,
+    pub(crate) frame:             ParseFrameKind,
+    pub(crate) expected:          ExpectedSyntax,
+    pub(crate) found:             Option<TokenType>,
     /// Source spelling of the found token, captured when the diagnostic is
     /// reported so messages can quote what was written.
-    pub(crate) found_spelling:  Option<Box<str>>,
+    pub(crate) found_spelling:    Option<Box<str>>,
     /// Where a missing `;` most likely belongs, when the found token starts
     /// a new line.
-    pub(crate) insertion_point: Option<SourceVectors>,
+    pub(crate) insertion_point:   Option<SourceVectors>,
     /// Dedicated diagnostic kind and its grammar-specific payload.
-    pub(crate) error_type:      ParserErrorType,
+    pub(crate) error_type:        ParserErrorType,
     /// Source segments to underline when the diagnostic is rendered.
-    pub(crate) source_vectors:  SourceVectors,
-    pub(crate) ranges:          Box<[SourceVectors]>,
-    pub(crate) related:         Box<[RelatedParserDiagnostic]>,
-    pub(crate) recovery:        Option<RecoverySummary>,
+    pub(crate) source_vectors:    SourceVectors,
+    pub(crate) ranges:            Box<[SourceVectors]>,
+    pub(crate) related:           Box<[RelatedParserDiagnostic]>,
+    pub(crate) recovery:          Option<RecoverySummary>,
+    /// Tokens the parser had consumed when it reported this diagnostic. Two
+    /// errors at one place with no input consumed between them come from one
+    /// mistake; equal locations alone can also be two uses of one macro.
+    pub(crate) consumed_tokens:   usize,
+    /// Physical use-site position captured before macro metadata is reclaimed.
+    pub(crate) ordering_location: Option<(u32, u32)>,
+}
+
+impl ParserError {
+    /// Whether a later error at the same place may be folded into this one,
+    /// or this one into an earlier error. A resource limit always shows,
+    /// because it explains why the rest of the input was not parsed.
+    pub(crate) fn may_fold(&self) -> bool {
+        !matches!(
+            self.error_type,
+            ParserErrorType::ResourceLimitExceeded { .. }
+        )
+    }
+
+    /// Visits every provenance range this diagnostic reads from a context
+    /// arena.
+    pub(crate) fn for_each_source_vectors_mut(
+        &mut self,
+        visit: &mut impl FnMut(&mut SourceVectors),
+    ) {
+        visit(&mut self.source_vectors);
+        if let Some(insertion_point) = &mut self.insertion_point {
+            visit(insertion_point);
+        }
+        for range in &mut self.ranges {
+            visit(range);
+        }
+        for related in &mut self.related {
+            visit(&mut related.source_vectors);
+        }
+        if let Some(discarded) = self
+            .recovery
+            .as_mut()
+            .and_then(|recovery| recovery.discarded.as_mut())
+        {
+            visit(discarded);
+        }
+    }
 }
 
 impl Display for ParserError {
@@ -272,7 +395,7 @@ pub(crate) enum ParserErrorType {
     /// Token after a declarator was not a legal declaration continuation.
     /// C99: §6.7, p. 97; PDF p. 109; function-definition continuation is
     /// §6.9.1, p. 141; PDF p. 153.
-    ExpectedDeclarationContinuationAfterDeclarator(Option<TokenType>),
+    ExpectedDeclarationContinuationAfterDeclarator(Option<TokenType>, DeclarationContinuation),
     /// EOF occurred before the first declaration specifier.
     /// C99: §6.7, p. 97; PDF p. 109.
     UnexpectedEndBeforeDeclarationSpecifier,
@@ -408,6 +531,14 @@ pub(crate) enum ParserErrorType {
     /// A specifier sequence ended without a C99 type specifier.
     /// C99: §6.7.2 paragraph 2, p. 99; PDF p. 111.
     NoTypeSpecifiersInDeclarationSpecifiers(TokenType),
+    /// An identifier that is not a visible typedef-name stood in the type
+    /// specifier slot, directly before another declarator.
+    /// C99: typedef-name is §6.7.7, pp. 123-124; PDF pp. 135-136.
+    UnknownTypeName,
+    /// `_Complex` appeared without `float`, `double`, or `long double`.
+    /// C99: the permitted specifier sets are §6.7.2 paragraph 2,
+    /// pp. 99-100; PDF pp. 111-112.
+    IncompleteComplexTypeSpecifier,
     /// An array declarator combined `static` and the `*` form.
     /// C99: the array alternatives are distinct productions in §6.7.5,
     /// p. 114; PDF p. 126.
@@ -505,6 +636,8 @@ impl GetSeverity for ParserErrorType {
             | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(..)
             | Self::EmptyDeclarationSpecifiers(..)
             | Self::NoTypeSpecifiersInDeclarationSpecifiers(..)
+            | Self::UnknownTypeName
+            | Self::IncompleteComplexTypeSpecifier
             | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
             | Self::BothStaticAndPointerInArrayDirectDeclarator
             | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator
@@ -586,6 +719,7 @@ impl ParserErrorType {
             | Self::TypeSpecifierSpecifiedTwice(..)
             | Self::LongSpecifiedThrice
             | Self::LongLongDoubleSpecified
+            | Self::IncompleteComplexTypeSpecifier
             | Self::BothStaticAndPointerInArrayDirectDeclarator
             | Self::PointerSpecifiedTwice
             | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
@@ -600,7 +734,7 @@ impl ParserErrorType {
     pub(super) fn expects_terminating_semicolon(&self) -> bool {
         matches!(
             self,
-            Self::ExpectedDeclarationContinuationAfterDeclarator(Some(_))
+            Self::ExpectedDeclarationContinuationAfterDeclarator(Some(_), _)
                 | Self::ExpectedSemicolonInStatement(_, Some(_))
                 | Self::ExpectedStatementExpression("operator in expression", Some(_))
                 | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(Some(_))
@@ -619,6 +753,7 @@ impl ParserErrorType {
                 | Self::TypeSpecifierSpecifiedTwice(..)
                 | Self::LongSpecifiedThrice
                 | Self::LongLongDoubleSpecified
+                | Self::IncompleteComplexTypeSpecifier
         )
     }
 
@@ -638,7 +773,8 @@ impl ParserErrorType {
             | Self::UnexpectedEndBeforeDeclarationSpecifier
             | Self::EmptyDeclarationSpecifiers(..) => ExpectedSyntax::DeclarationSpecifier,
             | Self::UnexpectedEndBeforeTypeSpecifier
-            | Self::NoTypeSpecifiersInDeclarationSpecifiers(..) => ExpectedSyntax::TypeSpecifier,
+            | Self::NoTypeSpecifiersInDeclarationSpecifiers(..)
+            | Self::UnknownTypeName => ExpectedSyntax::TypeSpecifier,
             | Self::ExpectedDeclaratorInTypedef(..)
             | Self::ExpectedDeclaratorInDeclaration(..)
             | Self::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
@@ -708,6 +844,7 @@ impl ParserErrorType {
             | Self::UnsupportedImaginaryTypeSpecifier
             | Self::LongSpecifiedThrice
             | Self::LongLongDoubleSpecified
+            | Self::IncompleteComplexTypeSpecifier
             | Self::BothStaticAndPointerInArrayDirectDeclarator
             | Self::PointerSpecifiedTwice
             | Self::TypeQualifiersWithoutDeclarator
@@ -782,6 +919,38 @@ impl ParserErrorType {
                 ),
             | Self::ExpectedStatementExpression("expression operand", token) =>
                 expected("an expression", *token),
+            | Self::ExpectedStatementExpression("operator before brace list", token) =>
+                expected_with_label(
+                    "an operator",
+                    "a brace list follows only a parenthesized type name",
+                    *token,
+                )
+                .note("C99 §6.5.2.5: a compound literal is `( type-name ) { initializer-list }`"),
+            | Self::ExpectedStatementExpression("operator in delimited expression", token) =>
+                expected_with_label(
+                    "an operator",
+                    "expected an operator or the closing delimiter",
+                    *token,
+                ),
+            | Self::ExpectedStatementExpression(
+                "postfix operator after a non-postfix expression",
+                token,
+            ) => Explanation::new(format!(
+                "postfix {} cannot follow a cast, `sizeof`, or unary expression",
+                found(*token)
+            ))
+            .label("add parentheses around the expression it applies to")
+            .note("C99 §6.5.2: a postfix operator applies only to a postfix-expression"),
+            | Self::ExpectedStatementExpression("compound literal initializer", token) =>
+                expected_with_label(
+                    "`{` to begin a compound literal after the parenthesized type name",
+                    "expected `{`",
+                    *token,
+                )
+                .note(
+                    "C99 §6.5.3: the operand of a unary operator is a unary-expression, so a cast \
+                     cannot appear there",
+                ),
             | Self::ExpectedStatementExpression(
                 "unary-expression left operand of assignment",
                 _,
@@ -856,15 +1025,15 @@ impl ParserErrorType {
                     .note("a `typedef` declaration must name the type it defines"),
             | Self::ExpectedDeclaratorInDeclaration(token) =>
                 expected_with_label("a declarator", "expected a name to declare", *token),
-            | Self::ExpectedDeclarationContinuationAfterDeclarator(token) =>
-                missing_semicolon_help(
-                    expected_with_label(
-                        "`,`, `=`, `;`, or a function body after the declarator",
-                        "expected one of `,`, `=`, `;`, or `{`",
-                        *token,
-                    ),
-                    *token,
-                ),
+            | Self::ExpectedDeclarationContinuationAfterDeclarator(token, continuation) => {
+                let (what, label) = continuation.expected();
+                let explanation = expected_with_label(&what, &label, *token);
+                let explanation = match continuation.function_body_note(*token) {
+                    | Some(note) => explanation.note(note),
+                    | None => explanation,
+                };
+                missing_semicolon_help(explanation, *token)
+            },
             | Self::UnexpectedEndBeforeDeclarationSpecifier =>
                 expected("declaration specifiers", None),
             | Self::UnexpectedEndBeforeTypeSpecifier => expected("a type specifier", None),
@@ -896,7 +1065,10 @@ impl ParserErrorType {
                     "expected an identifier",
                     *token,
                 )
-                .note("C99 §6.7.5.3p11: a typedef name here starts a prototype parameter instead"),
+                .note(
+                    "C99 §6.7.5: an old-style identifier list contains only parameter names \
+                     separated by commas",
+                ),
             | Self::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
                 token,
             ) => expected_with_label(
@@ -1044,6 +1216,16 @@ impl ParserErrorType {
                         "C99 §6.7.2p2: every declaration needs at least one type specifier; C99 \
                          removed implicit `int`",
                     ),
+            | Self::UnknownTypeName => Explanation::new(spelling.map_or_else(
+                || "unknown type name".to_owned(),
+                |spelling| format!("unknown type name {}", quote_spelling(spelling)),
+            ))
+            .label("not a type name in scope")
+            .note("C99 §6.7.7: an identifier names a type only after a `typedef` declares it"),
+            | Self::IncompleteComplexTypeSpecifier =>
+                Explanation::new("`_Complex` requires `float`, `double`, or `long double`")
+                    .label("incomplete complex type")
+                    .note(SPECIFIER_COMBINATIONS_NOTE),
             | Self::BothStaticAndPointerInArrayDirectDeclarator =>
                 Explanation::new("`static` and `*` in one array declarator")
                     .label("`[*]` cannot be combined with `static`")

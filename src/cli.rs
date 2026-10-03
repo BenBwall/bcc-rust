@@ -25,30 +25,29 @@ use crate::{
         Diagnostic,
         Renderer,
         ToDiagnostic,
-        c_quoted,
         count_of,
     },
-    pipeline::PreprocessorIterator,
+    pipeline::{
+        PreprocessingStrategy,
+        PreprocessorIterator,
+    },
     translation_phases::{
         Context,
         ErrorSeverity,
         GetSourceVectors,
         SourceVector,
         TranslationError,
-        parsing::{
-            InspectionOptions,
-            Parser as LanguageParser,
-        },
+        parsing::InspectionOptions,
         preprocessing::{
             CharacterTokenType,
             IntegerTokenType,
-            Preprocessor,
             StringTokenType,
             Token,
             TokenType,
         },
     },
     util::{
+        HashMap,
         read_to_string_lossy,
         shared::{
             SharedString,
@@ -73,6 +72,10 @@ struct Cli {
     /// Suppress the `repeated-specifiers` quality warning group.
     #[clap(long)]
     no_repeated_specifier_warnings: bool,
+    /// Schedule translation phases for performance experiments. `--tokens`
+    /// uses only the strategy's lexing.
+    #[clap(long, value_enum, default_value_t, hide = true)]
+    preprocessing_strategy: PreprocessingStrategy,
 }
 
 #[derive(Args)]
@@ -169,6 +172,7 @@ pub fn run() -> Result<(), MainError> {
 
     if args.output.tokens {
         print_preprocessor_output(
+            args.preprocessing_strategy,
             source_filename,
             input_string,
             args.quote_include.into(),
@@ -176,6 +180,7 @@ pub fn run() -> Result<(), MainError> {
         );
     } else {
         print_parser_output(
+            args.preprocessing_strategy,
             source_filename,
             input_string,
             args.quote_include.into(),
@@ -188,14 +193,20 @@ pub fn run() -> Result<(), MainError> {
 }
 
 fn print_preprocessor_output(
+    strategy: PreprocessingStrategy,
     source_filename: Box<Path>,
     input_string: SharedString,
     quote_include: SharedVec<PathBuf>,
     system_include: SharedVec<PathBuf>,
 ) {
     let mut reporter = DiagnosticReporter::new();
-    let mut iterator =
-        PreprocessorIterator::new(source_filename, input_string, quote_include, system_include);
+    let mut iterator = PreprocessorIterator::with_lexing(
+        strategy.lexing(),
+        source_filename,
+        input_string,
+        quote_include,
+        system_include,
+    );
     loop {
         // A deferred diagnostic's labels index the preprocessor arena, which
         // the next poll may compact; render it while its provenance is live.
@@ -218,7 +229,7 @@ fn print_preprocessor_output(
 
 /// One line per token: its location, kind, source spelling, and for
 /// constants the value and type the preprocessor assigned.
-fn describe_token(token: Token, context: &Context) -> String {
+pub(crate) fn describe_token(token: Token, context: &Context) -> String {
     let spelling = context
         .string_cache
         .at(token.contents)
@@ -229,16 +240,16 @@ fn describe_token(token: Token, context: &Context) -> String {
         | TokenType::Operator(operator) => format!("punctuator `{}`", operator.spelling()),
         | TokenType::String(StringTokenType::String(contents)) => format!(
             "string literal {}",
-            c_quoted("", '"', context.string_cache.at(contents))
+            context.literal_spelling(contents, false)
         ),
         | TokenType::String(StringTokenType::WideString(contents)) => format!(
             "wide string literal {}",
-            c_quoted("L", '"', context.string_cache.at(contents))
+            context.literal_spelling(contents, true)
         ),
         | TokenType::Character(character) => {
             let (value, type_name) = match character {
                 | CharacterTokenType::Char(c) => (i64::from(u32::from(c)), "int"),
-                | CharacterTokenType::WideChar(c) => (i64::from(u32::from(c)), "wchar_t"),
+                | CharacterTokenType::WideChar(c) => (i64::from(c), "wchar_t"),
                 | CharacterTokenType::MultiChar(value) => (i64::from(value), "int"),
             };
             format!("character constant `{spelling}` = {value} ({type_name})")
@@ -246,12 +257,13 @@ fn describe_token(token: Token, context: &Context) -> String {
         | TokenType::Integer(integer) => {
             let (value, type_name) = match integer {
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),
-                | IntegerTokenType::Long(value) => (i128::from(value), "long"),
-                | IntegerTokenType::LongLong(value) => (i128::from(value), "long long"),
+                | IntegerTokenType::Long(value) => (i128::from(value.get()), "long"),
+                | IntegerTokenType::LongLong(value) => (i128::from(value.get()), "long long"),
                 | IntegerTokenType::UnsignedInt(value) => (i128::from(value), "unsigned int"),
-                | IntegerTokenType::UnsignedLong(value) => (i128::from(value), "unsigned long"),
+                | IntegerTokenType::UnsignedLong(value) =>
+                    (i128::from(value.get()), "unsigned long"),
                 | IntegerTokenType::UnsignedLongLong(value) =>
-                    (i128::from(value), "unsigned long long"),
+                    (i128::from(value.get()), "unsigned long long"),
             };
             format!("integer constant `{spelling}` = {value} ({type_name})")
         },
@@ -272,6 +284,7 @@ fn describe_token(token: Token, context: &Context) -> String {
 }
 
 fn print_parser_output(
+    strategy: PreprocessingStrategy,
     source_filename: Box<Path>,
     input_string: SharedString,
     quote_include: SharedVec<PathBuf>,
@@ -283,18 +296,21 @@ fn print_parser_output(
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
-    let preprocessor = Preprocessor::new(
+    let preprocessor = strategy.preprocessor(
         &mut context,
         source_filename,
         input_string,
         quote_include,
         system_include,
     );
-    let unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = strategy
+        .parser(preprocessor, &mut context)
+        .parse_translation_unit(&mut context);
     let mut reporter = DiagnosticReporter::new();
     while let Some(error) = context.pop_pending_error() {
         reporter.report(&error, &mut context);
     }
+    reporter.order_source_runs();
     reporter.flush(&context);
 
     if output.syntax_tree {
@@ -310,7 +326,8 @@ fn print_parser_output(
         );
     }
     if output.raw_syntax {
-        eprintln!("{:#?}", unit.syntax().raw_debug());
+        let rendered = format!("{:#?}", unit.syntax().raw_debug());
+        eprintln!("{rendered}");
     }
     reporter.finish(&context);
 }
@@ -318,23 +335,54 @@ fn print_parser_output(
 /// Renders diagnostics to stderr and summarizes them at the end, like
 /// `N errors and M warnings generated`.
 ///
-/// An error reported at exactly the same place as the error before it is a
-/// cascade from the same mistake, so it is folded into that error rather
-/// than printed again.
+/// An error reported at exactly the same place as an earlier error from the
+/// same mistake is folded into it rather than printed again: a parser error
+/// into the parser error just before it when no input was consumed between
+/// them, otherwise into a lexing or preprocessing error at that place; a
+/// preprocessing error into the preprocessing error just before it. The
+/// parser and the preprocessor are considered separately, so the result does
+/// not depend on how a preprocessing strategy interleaves their diagnostics.
 struct DiagnosticReporter {
-    renderer: Renderer,
-    pending:  Option<(Diagnostic, Vec<SourceVector>)>,
-    errors:   usize,
-    warnings: usize,
+    renderer:     Renderer,
+    pending:      Vec<PendingDiagnostic>,
+    /// The parser diagnostic reported last: where it was folded or stored,
+    /// and the input the parser had consumed by then.
+    last_parser:  Option<(usize, usize)>,
+    /// Where the preprocessing diagnostic reported last was folded or stored.
+    last_other:   Option<usize>,
+    /// The latest pending preprocessing error at each location.
+    other_errors: HashMap<Vec<SourceVector>, usize>,
+    errors:       usize,
+    warnings:     usize,
+}
+
+/// One diagnostic awaiting rendering, with any later errors folded in.
+struct PendingDiagnostic {
+    diagnostic:        Diagnostic,
+    location:          Vec<SourceVector>,
+    ordering_location: Option<(u32, u32)>,
+    /// Whether errors at the same place may be folded into this one.
+    foldable:          bool,
+}
+
+impl PendingDiagnostic {
+    fn absorbs(&self, location: &[SourceVector]) -> bool {
+        self.foldable
+            && self.diagnostic.severity == ErrorSeverity::Error
+            && self.location == location
+    }
 }
 
 impl DiagnosticReporter {
     fn new() -> Self {
         Self {
-            renderer: Renderer::new(RenderColor::for_stderr()),
-            pending:  None,
-            errors:   0,
-            warnings: 0,
+            renderer:     Renderer::new(RenderColor::for_stderr()),
+            pending:      Vec::new(),
+            last_parser:  None,
+            last_other:   None,
+            other_errors: HashMap::default(),
+            errors:       0,
+            warnings:     0,
         }
     }
 
@@ -342,29 +390,92 @@ impl DiagnosticReporter {
         let source = error.source_vectors(context);
         let diagnostic = error.to_diagnostic(context, source);
         let location = context.get_source_vectors(source).to_vec();
-        if let Some((pending, pending_location)) = &mut self.pending
-            && diagnostic.severity == ErrorSeverity::Error
-            && pending.severity == ErrorSeverity::Error
-            && !location.is_empty()
-            && *pending_location == location
-        {
-            pending.absorb(diagnostic, context);
-            return;
+        let ordering_location = match error {
+            | TranslationError::Parsing(error) => error.ordering_location,
+            // Preprocessing errors may still point into a macro definition.
+            | _ if diagnostic.severity != ErrorSeverity::Warning => None,
+            | _ => location
+                .first()
+                .map(|source| (source.source_file_index, source.index)),
+        };
+        let (parser, consumed, foldable) = match error {
+            | TranslationError::Parsing(error) => (true, error.consumed_tokens, error.may_fold()),
+            | _ => (false, 0, true),
+        };
+        let target =
+            if diagnostic.severity == ErrorSeverity::Error && foldable && !location.is_empty() {
+                if parser {
+                    self.last_parser
+                        .filter(|&(index, last_consumed)| {
+                            last_consumed == consumed && self.pending[index].absorbs(&location)
+                        })
+                        .map(|(index, _)| index)
+                        .or_else(|| {
+                            self.other_errors
+                                .get(&location)
+                                .copied()
+                                .filter(|&index| self.pending[index].absorbs(&location))
+                        })
+                } else {
+                    self.last_other
+                        .filter(|&index| self.pending[index].absorbs(&location))
+                }
+            } else {
+                None
+            };
+        let index = if let Some(index) = target {
+            self.pending[index].diagnostic.absorb(diagnostic, context);
+            index
+        } else {
+            if !parser && diagnostic.severity == ErrorSeverity::Error && !location.is_empty() {
+                _ = self
+                    .other_errors
+                    .insert(location.clone(), self.pending.len());
+            }
+            self.pending.push(PendingDiagnostic {
+                diagnostic,
+                location,
+                ordering_location,
+                foldable,
+            });
+            self.pending.len() - 1
+        };
+        if parser {
+            self.last_parser = Some((index, consumed));
+        } else {
+            self.last_other = Some(index);
         }
-        self.flush(context);
-        self.pending = Some((diagnostic, location));
+    }
+
+    /// Lookahead can fetch a warning beyond the current parser error. Order
+    /// each file run only after folding; preprocessing errors, file transitions
+    /// and unknown locations
+    /// remain barriers, and macro diagnostics use their captured invocation.
+    fn order_source_runs(&mut self) {
+        for run in self.pending.chunk_by_mut(|left, right| {
+            left.ordering_location.is_some()
+                && left.ordering_location.map(|(file, _)| file)
+                    == right.ordering_location.map(|(file, _)| file)
+        }) {
+            run.sort_by_key(|diagnostic| diagnostic.ordering_location);
+        }
+        self.last_parser = None;
+        self.last_other = None;
+        self.other_errors.clear();
     }
 
     fn flush(&mut self, context: &Context) {
-        let Some((diagnostic, _)) = self.pending.take() else {
-            return;
-        };
-        match diagnostic.severity {
-            | ErrorSeverity::Error => self.errors += 1,
-            | ErrorSeverity::Warning => self.warnings += 1,
-            | ErrorSeverity::Note => {},
+        for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
+            match diagnostic.severity {
+                | ErrorSeverity::Error => self.errors += 1,
+                | ErrorSeverity::Warning => self.warnings += 1,
+                | ErrorSeverity::Note => {},
+            }
+            eprint!("{}", self.renderer.render(&diagnostic, context));
         }
-        eprint!("{}", self.renderer.render(&diagnostic, context));
+        self.last_parser = None;
+        self.last_other = None;
+        self.other_errors.clear();
     }
 
     fn finish(&mut self, context: &Context) {

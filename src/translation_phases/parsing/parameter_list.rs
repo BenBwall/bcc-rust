@@ -34,22 +34,16 @@ use super::{
         NameClass,
         ScopeKind,
     },
-    syntax::{
-        Identifier,
-        SyntaxList,
-    },
+    syntax::Identifier,
 };
-use crate::{
-    translation_phases::{
-        Context,
-        SourceVectors,
-        preprocessing::{
-            OperatorTokenType,
-            Token,
-            TokenType,
-        },
+use crate::translation_phases::{
+    Context,
+    SourceVectors,
+    preprocessing::{
+        OperatorTokenType,
+        Token,
+        TokenType,
     },
-    util::vector_slice::UsizeExt,
 };
 
 /// Parses either a prototype parameter list or an allowed K&R identifier list
@@ -59,6 +53,11 @@ use crate::{
 /// identifier-list are §6.7.5, p. 114; PDF p. 126; function declarator rules
 /// are §6.7.5.3, pp. 118-121; PDF pp. 130-133.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The flags are independent recovery facts of one parameter list, not a hidden state \
+              machine."
+)]
 pub(super) struct ParameterListFrame {
     /// Current prototype/K&R transition.
     phase: ParameterListPhase,
@@ -80,6 +79,13 @@ pub(super) struct ParameterListFrame {
     pub(super) source_vectors: Vec<SourceVectors>,
     /// Scope depth restored by every parameter-list exit.
     entry_scope_depth: Option<usize>,
+    /// Prototype-scope bindings introduced by parameter declarator names.
+    /// Any further binding came from an enum specifier somewhere in the
+    /// parameter declarations.
+    parameter_name_bindings: usize,
+    /// Whether a prototype parameter inside this identifier list was already
+    /// diagnosed, so a trailing `...` is part of the same mistake.
+    diagnosed_mixed_parameter: bool,
 }
 
 /// State transitions for prototype and K&R parameter-list forms.
@@ -91,6 +97,11 @@ pub(super) enum ParameterListPhase {
     Start,
     /// Consume one K&R parameter identifier.
     KAndRIdentifier,
+    /// Receive the specifiers of a prototype parameter that was diagnosed
+    /// inside an identifier list and is parsed only to be skipped whole.
+    KAndRMixedSpecifiers,
+    /// Receive the optional declarator of that skipped prototype parameter.
+    KAndRMixedDeclarator,
     /// Require `,` or `)` after a K&R identifier.
     KAndRSeparator,
     /// Push declaration specifiers for one prototype parameter.
@@ -124,6 +135,58 @@ impl ParameterListFrame {
             can_unwind_variadic_recovery: false,
             source_vectors: Vec::new(),
             entry_scope_depth: None,
+            parameter_name_bindings: 0,
+            diagnosed_mixed_parameter: false,
+        }
+    }
+
+    /// Reports whether a parameter list that starts with a non-typedef
+    /// identifier is really a prototype whose first type name is unknown.
+    ///
+    /// An identifier list contains only identifiers and commas (C99 §6.7.5,
+    /// p. 114; PDF p. 126). An identifier followed by `*` or a
+    /// declaration-specifier keyword, as in `(size_t *p)`, can only start a
+    /// parameter declaration. After two adjacent identifiers, as in
+    /// `(size_t n, int m)`, a bounded scan of the rest of the list looks for
+    /// declaration syntax; without it, `(a b, c)` stays an identifier list with
+    /// an omitted comma.
+    fn unknown_type_name_starts_prototype(parser: &mut Parser, context: &mut Context) -> bool {
+        /// Tokens examined after two adjacent identifiers before the list is
+        /// assumed to be an identifier list.
+        const SCAN_LIMIT: usize = 64;
+        let Some(following) = parser.cursor.following(context) else {
+            return false;
+        };
+        match following.kind {
+            | TokenType::Operator(OperatorTokenType::Asterisk) => true,
+            | TokenType::Identifier => {
+                for index in 1..=SCAN_LIMIT {
+                    let Some(token) = parser.cursor.lookahead(context, index) else {
+                        return false;
+                    };
+                    if parser.declaration_starter(token)
+                        || matches!(
+                            token.kind,
+                            TokenType::Operator(
+                                OperatorTokenType::Asterisk
+                                    | OperatorTokenType::OpeningSquareBracket
+                                    | OperatorTokenType::Ellipsis
+                            )
+                        )
+                    {
+                        return true;
+                    }
+                    if !matches!(
+                        token.kind,
+                        TokenType::Identifier | TokenType::Operator(OperatorTokenType::Comma)
+                    ) {
+                        return false;
+                    }
+                }
+                false
+            },
+            | TokenType::Keyword(_) => parser.declaration_starter(following),
+            | _ => false,
         }
     }
 
@@ -152,6 +215,7 @@ impl ParameterListFrame {
                         token.kind == TokenType::Identifier
                             && !parser.scopes.is_typedef(token.contents)
                     })
+                    && !Self::unknown_type_name_starts_prototype(parser, context)
                 {
                     self.phase = ParameterListPhase::KAndRIdentifier;
                 } else {
@@ -176,21 +240,36 @@ impl ParameterListFrame {
                     return ParseAction::Reprocess;
                 };
                 // Once identifier-list syntax is selected, a
-                // declaration starter cannot
-                // silently switch dialects mid-list.
+                // declaration starter cannot silently switch dialects
+                // mid-list. Diagnose the list once, then parse each such
+                // parameter declaration whole and discard it, so its
+                // declarator name is not mistaken for the next identifier.
                 if parser.declaration_starter(token) {
-                    parser.report(
-                        context,
-                        ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator,
-                        Some(token),
-                    );
-                    self.phase = ParameterListPhase::KAndRSeparator;
-                    return ParseAction::Recover(SynchronizationSet {
-                        kind:   SynchronizationKind::KAndRParameter,
-                        target: ParseFrameKind::ParameterList,
-                    });
+                    if !self.diagnosed_mixed_parameter {
+                        parser.report(
+                            context,
+                            ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator,
+                            Some(token),
+                        );
+                    }
+                    self.diagnosed_mixed_parameter = true;
+                    self.phase = ParameterListPhase::KAndRMixedSpecifiers;
+                    return ParseAction::Push(ParseFrame::DeclarationSpecifiers(
+                        DeclarationSpecifiersFrame::new(SpecifierMode::Declaration),
+                    ));
                 }
-                if token.kind != TokenType::Identifier || parser.scopes.is_typedef(token.contents) {
+                // After a diagnosed prototype parameter, a trailing `...`
+                // belongs to the same prototype-style list; reporting it
+                // again would only repeat that diagnosis.
+                if self.diagnosed_mixed_parameter
+                    && is_operator(Some(token), OperatorTokenType::Ellipsis)
+                {
+                    self.source_vectors.push(token.source_vectors);
+                    self.phase = ParameterListPhase::KAndRSeparator;
+                    return ParseAction::Consume;
+                }
+                // Typedef names are declaration starters, handled above.
+                if token.kind != TokenType::Identifier {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
@@ -208,6 +287,33 @@ impl ParameterListFrame {
                 self.source_vectors.push(token.source_vectors);
                 self.phase = ParameterListPhase::KAndRSeparator;
                 ParseAction::Consume
+            },
+            | ParameterListPhase::KAndRMixedSpecifiers => {
+                let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
+                    panic!("parameter specifiers returned an unexpected value: {returned:?}");
+                };
+                self.source_vectors.push(specifiers.source_vectors);
+                if is_operator(token, OperatorTokenType::Comma)
+                    || is_operator(token, OperatorTokenType::ClosingParenthesis)
+                {
+                    self.phase = ParameterListPhase::KAndRSeparator;
+                    ParseAction::Continue
+                } else {
+                    self.phase = ParameterListPhase::KAndRMixedDeclarator;
+                    ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        DeclaratorMode::MaybeAbstract,
+                    )))
+                }
+            },
+            | ParameterListPhase::KAndRMixedDeclarator => {
+                let Some(ParseValue::Declarator(declarator)) = returned else {
+                    panic!("parameter declarator returned an unexpected value: {returned:?}");
+                };
+                if let Some(declarator) = declarator {
+                    self.source_vectors.push(declarator.source_vectors);
+                }
+                self.phase = ParameterListPhase::KAndRSeparator;
+                ParseAction::Continue
             },
             | ParameterListPhase::KAndRSeparator => {
                 debug_assert!(
@@ -270,8 +376,27 @@ impl ParameterListFrame {
                 ),
                 token,
             );
+                    // A declarator punctuator, as in `T *r`, means a
+                    // parameter declaration was written in the identifier
+                    // list: skip the rest of the item instead of stopping at
+                    // its name and reporting that again. Other stray tokens
+                    // keep the next name as a parameter.
+                    let declarator_follows = token.is_some_and(|token| {
+                        matches!(
+                            token.kind,
+                            TokenType::Operator(
+                                OperatorTokenType::Asterisk
+                                    | OperatorTokenType::OpeningSquareBracket
+                                    | OperatorTokenType::OpeningParenthesis
+                            )
+                        )
+                    });
                     ParseAction::Recover(SynchronizationSet {
-                        kind:   SynchronizationKind::KAndRParameter,
+                        kind:   if declarator_follows {
+                            SynchronizationKind::Parameter
+                        } else {
+                            SynchronizationKind::KAndRParameter
+                        },
                         target: ParseFrameKind::ParameterList,
                     })
                 }
@@ -324,8 +449,11 @@ impl ParameterListFrame {
                 // and may hide typedefs in later entries.
                 if let Some(identifier) =
                     declarator.and_then(|declarator| parser.declarator_identifier(declarator))
+                    && parser
+                        .scopes
+                        .publish_reporting_new(identifier.name, NameClass::Ordinary)
                 {
-                    parser.scopes.publish(identifier.name, NameClass::Ordinary);
+                    self.parameter_name_bindings += 1;
                 }
                 let parameter_source = match (self.pending_source.take(), declarator_source) {
                     | (Some(specifiers), Some(declarator)) =>
@@ -538,16 +666,9 @@ impl ParameterListFrame {
                     self.entry_scope_depth
                         .expect("parameter list entered prototype scope"),
                 );
-                let start = parser.syntax.identifiers.len().to_u32();
-                parser.append_syntax(|syntax| &mut syntax.identifiers, &mut self.identifiers);
+                let start = parser.append_syntax(&mut self.identifiers);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {
-                    direct_declarator: DirectDeclarator::KAndRStyleFunction {
-                        parameters: SyntaxList::new(
-                            parser.syntax_id,
-                            start,
-                            parser.syntax.identifiers.len().to_u32(),
-                        ),
-                    },
+                    direct_declarator: DirectDeclarator::KAndRStyleFunction { parameters: start },
                     source_vectors:    context.merge_vector_list(&self.source_vectors),
                 }))
             },
@@ -557,24 +678,27 @@ impl ParameterListFrame {
                     "this frame phase cannot receive a child value"
                 );
                 // Mirror the K&R exit: never leak prototype bindings
-                // into the enclosing file or
-                // parameter scope.
-                parser.scopes.restore_depth(
-                    self.entry_scope_depth
-                        .expect("parameter list entered prototype scope"),
-                );
-                let start = parser.syntax.parameter_declarations.len().to_u32();
-                parser.append_syntax(
-                    |syntax| &mut syntax.parameter_declarations,
-                    &mut self.parameters,
-                );
+                // into the enclosing file or parameter scope. A file-level
+                // list may still belong to a function definition, whose body
+                // must see every name declared in its parameter declarations
+                // (C99 §6.2.1p4). Names a definition can rebuild from its
+                // parameter declarators need no copy; anything else, such as
+                // an enumerator declared in an array bound, is retained.
+                let entry_scope_depth = self
+                    .entry_scope_depth
+                    .expect("parameter list entered prototype scope");
+                let start = parser.append_syntax(&mut self.parameters);
+                if entry_scope_depth == 0
+                    && parser.scopes.innermost_binding_count() > self.parameter_name_bindings
+                {
+                    parser
+                        .scopes
+                        .retain_innermost_bindings((start.start_index, start.length));
+                }
+                parser.scopes.restore_depth(entry_scope_depth);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {
                     direct_declarator: DirectDeclarator::Function {
-                        parameter_list: SyntaxList::new(
-                            parser.syntax_id,
-                            start,
-                            parser.syntax.parameter_declarations.len().to_u32(),
-                        ),
+                        parameter_list: start,
                         is_variadic:    self.is_variadic,
                     },
                     source_vectors:    context.merge_vector_list(&self.source_vectors),

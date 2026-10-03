@@ -110,24 +110,12 @@ impl TypeNameFrame {
                             declarator.source_vectors,
                         )
                     });
-                let index = TypeNameIndex(
-                    parser
-                        .syntax
-                        .type_names
-                        .len()
-                        .try_into()
-                        .expect("type-name arena length must fit in u32"),
-                    parser.syntax_id,
-                );
-                parser.push_syntax(
-                    |syntax| &mut syntax.type_names,
-                    TypeName {
-                        declaration_specifiers,
-                        declarator,
-                        source_vectors,
-                        recovered: parser.hard_error_count > self.starting_error_count,
-                    },
-                );
+                let index = TypeNameIndex(parser.push_syntax(TypeName {
+                    declaration_specifiers,
+                    declarator,
+                    source_vectors,
+                    recovered: parser.hard_error_count > self.starting_error_count,
+                }));
                 ParseAction::Reduce(ParseValue::TypeName(index))
             },
         }

@@ -20,6 +20,7 @@ use super::{
         ExpressionIndex,
         Identifier,
         InitializerIndex,
+        ParenthesizedDeclaratorIndex,
         StorageClass,
         StructOrUnionSpecifierIndex,
         SyntaxList,
@@ -351,6 +352,8 @@ impl TypeSpecifiers {
 
         | TypeSpecifiers::Empty => TypeSpecifiers::Int,
         | TypeSpecifiers::Short => TypeSpecifiers::ShortInt,
+        | TypeSpecifiers::SignedShort => TypeSpecifiers::SignedShortInt,
+        | TypeSpecifiers::UnsignedShort => TypeSpecifiers::UnsignedShortInt,
         | TypeSpecifiers::Signed => TypeSpecifiers::SignedInt,
         | TypeSpecifiers::Unsigned => TypeSpecifiers::UnsignedInt,
         | TypeSpecifiers::Long => TypeSpecifiers::LongInt,
@@ -371,6 +374,8 @@ impl TypeSpecifiers {
 
         | TypeSpecifiers::Empty => TypeSpecifiers::Short,
         | TypeSpecifiers::Int => TypeSpecifiers::ShortInt,
+        | TypeSpecifiers::SignedInt => TypeSpecifiers::SignedShortInt,
+        | TypeSpecifiers::UnsignedInt => TypeSpecifiers::UnsignedShortInt,
         | TypeSpecifiers::Signed => TypeSpecifiers::SignedShort,
         | TypeSpecifiers::Unsigned => TypeSpecifiers::UnsignedShort,
     );
@@ -394,6 +399,8 @@ impl TypeSpecifiers {
 
         | TypeSpecifiers::Empty => TypeSpecifiers::Long,
         | TypeSpecifiers::Int => TypeSpecifiers::LongInt,
+        | TypeSpecifiers::SignedInt => TypeSpecifiers::SignedLongInt,
+        | TypeSpecifiers::UnsignedInt => TypeSpecifiers::UnsignedLongInt,
         | TypeSpecifiers::Signed => TypeSpecifiers::SignedLong,
         | TypeSpecifiers::Unsigned => TypeSpecifiers::UnsignedLong,
         | TypeSpecifiers::Long => TypeSpecifiers::LongLong,
@@ -426,6 +433,7 @@ impl TypeSpecifiers {
     );
 
     map_fn!(map_double, make_double, is_double,
+        | TypeSpecifiers::Double
         | TypeSpecifiers::ComplexDouble
         | TypeSpecifiers::ComplexLongDouble
         | TypeSpecifiers::LongDouble,
@@ -570,15 +578,14 @@ impl TypeSpecifiers {
         };
         let existing = match self {
             | TypeSpecifiers::StructOrUnion(index) => {
-                let specifier = parser.syntax.struct_or_union_specifiers[index.0 as usize];
+                let specifier = parser.syntax[index];
                 let keyword = match specifier.struct_or_union {
                     | StructOrUnion::Struct => "struct",
                     | StructOrUnion::Union => "union",
                 };
                 tagged(keyword, specifier.identifier)
             },
-            | TypeSpecifiers::Enum(index) =>
-                tagged("enum", parser.syntax.enum_specifiers[index.0 as usize].name),
+            | TypeSpecifiers::Enum(index) => tagged("enum", parser.syntax[index].name),
             | TypeSpecifiers::TypedefName(name) => context.string_cache.at(name.name).into(),
             | type_specifiers => type_specifiers.to_string().into_boxed_str(),
         };
@@ -783,7 +790,7 @@ pub(crate) struct Declarator {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum DirectDeclarator {
     Identifier(Identifier),
-    Parenthesized(Declarator),
+    Parenthesized(ParenthesizedDeclaratorIndex),
     KAndRStyleFunction {
         parameters: SyntaxList<Identifier>,
     },
@@ -797,6 +804,15 @@ pub(crate) enum DirectDeclarator {
         parameter_list: SyntaxList<ParameterDeclaration>,
         is_variadic:    bool,
     },
+}
+
+/// Grouping syntax lives in the arena so its child and delimiter span do not
+/// enlarge every direct-declarator variant.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) struct ParenthesizedDeclarator {
+    pub(crate) declarator: Declarator,
+    /// Only the parentheses; child provenance stays on the child.
+    pub(crate) delimiters: SourceVectors,
 }
 
 /// parameter-declaration:

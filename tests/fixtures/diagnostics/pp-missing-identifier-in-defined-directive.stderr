@@ -6,11 +6,11 @@ error: expected a macro name inside `defined(`, found number `1`
   |
   = note: C99 §6.10.1p1: write `defined NAME` or `defined(NAME)`
 
-error: expected an expression inside `()`
+error: unexpected `)` in `#if` expression
  --> pp-missing-identifier-in-defined-directive.c:1:14
   |
 1 | #if defined(1)
-  |              ^ empty parentheses
+  |              ^ not valid in an integer constant expression
   |
   = note: C99 §6.10.1p1: the condition must be an integer constant expression
 

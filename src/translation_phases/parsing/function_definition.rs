@@ -32,18 +32,14 @@ use super::{
         SyntaxList,
     },
 };
-use crate::{
-    translation_phases::{
-        Context,
-        GetPosition,
-        GetSourceFileIndex,
-        SourceVectors,
-        preprocessing::{
-            OperatorTokenType,
-            Token,
-        },
+use crate::translation_phases::{
+    Context,
+    SourceVectors,
+    TranslationError,
+    preprocessing::{
+        OperatorTokenType,
+        Token,
     },
-    util::vector_slice::UsizeExt,
 };
 
 #[derive(Debug)]
@@ -56,6 +52,9 @@ pub(super) struct FunctionDefinitionFrame {
     starting_error_count: usize,
     entry_scope_depth: Option<usize>,
     diagnosed_prototype_declaration_list: bool,
+    /// Whether a declaration-list diagnostic already explained a probable
+    /// missing `;` after a non-function head.
+    suggested_missing_semicolon: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -83,6 +82,7 @@ impl FunctionDefinitionFrame {
             starting_error_count,
             entry_scope_depth: None,
             diagnosed_prototype_declaration_list: false,
+            suggested_missing_semicolon: false,
         }
     }
 
@@ -96,7 +96,7 @@ impl FunctionDefinitionFrame {
         match self.phase {
             | FunctionDefinitionPhase::Start => {
                 debug_assert!(returned.is_none());
-                let declaration = parser.syntax.declarations[self.head.0 as usize];
+                let declaration = parser.syntax[self.head];
                 let declarator = parser
                     .declaration_head_declarator(self.head)
                     .expect("a function definition has one uninitialized declarator");
@@ -112,10 +112,22 @@ impl FunctionDefinitionFrame {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                                 return ParseAction::Reprocess;
                             }
-                            let start = parameter_list.start_index() as usize;
-                            let end = start + parameter_list.length() as usize;
+                            // C99 §6.2.1p4: every identifier declared in the
+                            // parameter declarations, including enumerators
+                            // declared inside array bounds or nested
+                            // specifiers, has block scope ending with the
+                            // body. The parameter list retained those
+                            // bindings when it saw names its declarators alone
+                            // cannot rebuild.
+                            if parser.scopes.publish_retained_bindings((
+                                parameter_list.start_index,
+                                parameter_list.length,
+                            )) {
+                                self.phase = FunctionDefinitionPhase::DeclarationOrBody;
+                                return ParseAction::Reprocess;
+                            }
                             let mut names = Vec::new();
-                            for parameter in &parser.syntax.parameter_declarations[start..end] {
+                            for parameter in &parser.syntax[parameter_list] {
                                 parser.collect_type_specifier_bindings(
                                     parameter.declaration_specifiers.type_specifiers,
                                     &mut names,
@@ -137,9 +149,7 @@ impl FunctionDefinitionFrame {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                                 return ParseAction::Reprocess;
                             }
-                            let start = parameters.start_index() as usize;
-                            let end = start + parameters.length() as usize;
-                            let names = parser.syntax.identifiers[start..end]
+                            let names = parser.syntax[parameters]
                                 .iter()
                                 .map(|identifier| identifier.name)
                                 .collect::<Vec<_>>();
@@ -176,7 +186,6 @@ impl FunctionDefinitionFrame {
                     }
                     self.phase = FunctionDefinitionPhase::AwaitDeclaration;
                     ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
-                        parser.syntax.init_declarators.len().to_u32(),
                         DeclarationContext::OldStyleParameter,
                         parser.hard_error_count,
                     )))
@@ -189,29 +198,36 @@ impl FunctionDefinitionFrame {
                     // A head that is not a function declarator only became a
                     // definition because a declaration followed it; the usual
                     // cause is a missing `;` after it.
-                    if let Some(declarator) = parser.declaration_head_declarator(self.head)
-                        && parser.function_suffix(declarator).is_none()
+                    let head_is_function = parser
+                        .declaration_head_declarator(self.head)
+                        .and_then(|declarator| parser.function_suffix(declarator))
+                        .is_some();
+                    if !self.suggested_missing_semicolon
+                        && !head_is_function
+                        && let Some(declarator) = parser.declaration_head_declarator(self.head)
                     {
+                        self.suggested_missing_semicolon = true;
                         parser.suggest_semicolon_after(context, declarator.source_vectors);
                     }
-                    if token.is_none() {
-                        let body_source = context.create_source_vectors(
-                            parser.position(context),
-                            parser.source_file_index(),
-                            0,
-                        );
-                        let body = parser.syntax.statements.len().to_u32();
-                        parser.push_syntax(
-                            |syntax| &mut syntax.statements,
-                            Statement {
-                                kind:           StatementType::Compound {
-                                    items: SyntaxList::empty(parser.syntax_id),
-                                },
-                                source_vectors: body_source,
-                                recovered:      true,
+                    // A declaration-list without a body after a head that is
+                    // not a function declarator, or that already needed
+                    // recovery (an unknown `__declspec(x)` prefix reads as an
+                    // identifier-list head), was most likely never a
+                    // definition. Parsing the rest of the file as its body
+                    // would swallow every later declaration, so end it here
+                    // and let the token start the next external declaration.
+                    let head_is_doubtful = !self.declaration_list.is_empty()
+                        && (!head_is_function || parser.syntax[self.head].recovered);
+                    if token.is_none() || head_is_doubtful {
+                        let body_source = parser.missing_syntax_source(context);
+                        let body = parser.push_syntax(Statement {
+                            kind:           StatementType::Compound {
+                                items: SyntaxList::empty(),
                             },
-                        );
-                        self.body = Some(StatementIndex(body, parser.syntax_id));
+                            source_vectors: body_source,
+                            recovered:      true,
+                        });
+                        self.body = Some(StatementIndex(body));
                         self.phase = FunctionDefinitionPhase::Finish;
                         ParseAction::Reprocess
                     } else {
@@ -226,12 +242,30 @@ impl FunctionDefinitionFrame {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("old-style declaration returned an unexpected value: {returned:?}");
                 };
-                let source = parser.syntax.declarations[declaration.0 as usize].source_vectors;
+                let source = parser.syntax[declaration].source_vectors;
                 self.source_vectors = Some(
                     self.source_vectors
                         .map_or(source, |existing| context.merge_vectors(existing, source)),
                 );
                 self.declaration_list.push(declaration);
+                // A head that is not a function declarator only became a
+                // definition because this declaration followed it. When the
+                // declaration itself then failed, the usual cause is a
+                // missing `;` after the head: say so on its diagnostic,
+                // unless that diagnostic already proposes its own insertion
+                // point (a `;` missing after this declaration as well).
+                if parser.syntax[declaration].recovered
+                    && !self.suggested_missing_semicolon
+                    && matches!(
+                        context.pending_errors.back(),
+                        Some(TranslationError::Parsing(error)) if error.insertion_point.is_none()
+                    )
+                    && let Some(declarator) = parser.declaration_head_declarator(self.head)
+                    && parser.function_suffix(declarator).is_none()
+                {
+                    self.suggested_missing_semicolon = true;
+                    parser.suggest_semicolon_after(context, declarator.source_vectors);
+                }
                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                 ParseAction::Reprocess
             },
@@ -250,32 +284,20 @@ impl FunctionDefinitionFrame {
             },
             | FunctionDefinitionPhase::Finish => {
                 debug_assert!(returned.is_none());
-                let head = parser.syntax.declarations[self.head.0 as usize];
+                let head = parser.syntax[self.head];
                 let declarator = parser
                     .declaration_head_declarator(self.head)
                     .expect("function definition head remains available");
-                let declaration_start = parser.syntax.declaration_indices.len().to_u32();
-                parser.append_syntax(
-                    |syntax| &mut syntax.declaration_indices,
-                    &mut self.declaration_list,
-                );
+                let declaration_start = parser.append_syntax(&mut self.declaration_list);
                 let recovered = parser.hard_error_count > self.starting_error_count;
-                let index = parser.syntax.function_definitions.len().to_u32();
-                parser.push_syntax(
-                    |syntax| &mut syntax.function_definitions,
-                    FunctionDefinition {
-                        declaration_specifiers: head.declaration_specifiers,
-                        declarator,
-                        declaration_list: SyntaxList::new(
-                            parser.syntax_id,
-                            declaration_start,
-                            parser.syntax.declaration_indices.len().to_u32(),
-                        ),
-                        body: self.body.expect("function definition has a body node"),
-                        source_vectors: self.source_vectors.unwrap_or_default(),
-                        recovered,
-                    },
-                );
+                let index = parser.push_syntax(FunctionDefinition {
+                    declaration_specifiers: head.declaration_specifiers,
+                    declarator,
+                    declaration_list: declaration_start,
+                    body: self.body.expect("function definition has a body node"),
+                    source_vectors: self.source_vectors.unwrap_or_default(),
+                    recovered,
+                });
                 parser.scopes.restore_depth(
                     self.entry_scope_depth
                         .expect("function definition entered function scope"),
@@ -288,7 +310,6 @@ impl FunctionDefinitionFrame {
                 );
                 ParseAction::Reduce(ParseValue::FunctionDefinition(FunctionDefinitionIndex(
                     index,
-                    parser.syntax_id,
                 )))
             },
         }

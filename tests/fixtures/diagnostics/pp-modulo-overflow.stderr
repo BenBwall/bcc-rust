@@ -1,8 +1,8 @@
 error: remainder overflows in `#if` expression
- --> pp-modulo-overflow.c:2:1
+ --> pp-modulo-overflow.c:1:34
   |
-2 | #endif
-  | ^ the result is out of range
+1 | #if (-9223372036854775807LL - 1) % -1
+  |                                  ^ the result is out of range
   |
   = note: C99 §6.10.1p3: `#if` arithmetic uses `intmax_t` and `uintmax_t`, and §6.6p4 requires constant expressions to stay in range
 

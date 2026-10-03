@@ -153,7 +153,8 @@ impl SyntaxTree {
                         &mut output,
                         indent,
                         &format!(
-                            "{role}: declaration{} storage={} type={}",
+                            "{role}: declaration{} storage={} type={} qualifiers={} \
+                             function-specifiers={}",
                             if declaration.recovered {
                                 " recovered"
                             } else {
@@ -167,6 +168,16 @@ impl SyntaxTree {
                                 declaration.declaration_specifiers.type_specifiers,
                                 context,
                             ),
+                            qualifier_list(declaration.declaration_specifiers.type_qualifiers),
+                            if declaration
+                                .declaration_specifiers
+                                .function_specifiers
+                                .is_inline
+                            {
+                                "inline"
+                            } else {
+                                "none"
+                            },
                         ),
                         Some(declaration.source_vectors),
                         context,
@@ -223,12 +234,27 @@ impl SyntaxTree {
                         &mut output,
                         indent,
                         &format!(
-                            "{role} {name}{} type={}",
+                            "{role} {name}{} type={} storage={} qualifiers={} \
+                             function-specifiers={}",
                             if function.recovered { " recovered" } else { "" },
                             self.type_label(
                                 function.declaration_specifiers.type_specifiers,
                                 context
                             ),
+                            function
+                                .declaration_specifiers
+                                .storage_class
+                                .map_or("none", StorageClass::spelling),
+                            qualifier_list(function.declaration_specifiers.type_qualifiers),
+                            if function
+                                .declaration_specifiers
+                                .function_specifiers
+                                .is_inline
+                            {
+                                "inline"
+                            } else {
+                                "none"
+                            },
                         ),
                         Some(function.source_vectors),
                         context,
@@ -285,6 +311,16 @@ impl SyntaxTree {
                         context,
                         options,
                     );
+                    for (level, qualifiers) in pointers.iter().enumerate() {
+                        Self::line(
+                            &mut output,
+                            indent + 1,
+                            &format!("pointer {level} qualifiers={}", qualifier_list(*qualifiers)),
+                            None,
+                            context,
+                            options,
+                        );
+                    }
                     for direct in self.direct_declarators(declarator.kind).iter().rev() {
                         work.push(Work::DirectDeclarator(*direct, indent + 1));
                     }
@@ -293,12 +329,15 @@ impl SyntaxTree {
                     | DirectDeclarator::Identifier(identifier) => {
                         work.push(Work::Identifier(identifier, indent, "identifier"));
                     },
-                    | DirectDeclarator::Parenthesized(declarator) => {
+                    | DirectDeclarator::Parenthesized(index) => {
+                        let parenthesized = self.parenthesized_declarator(index);
+                        let declarator = parenthesized.declarator;
+                        let delimiters = parenthesized.delimiters;
                         Self::line(
                             &mut output,
                             indent,
                             "parenthesized-declarator",
-                            Some(declarator.source_vectors),
+                            Some(delimiters),
                             context,
                             options,
                         );
@@ -369,11 +408,25 @@ impl SyntaxTree {
                         &mut output,
                         indent,
                         &format!(
-                            "parameter type={}",
+                            "parameter type={} storage={} qualifiers={} function-specifiers={}",
                             self.type_label(
                                 parameter.declaration_specifiers.type_specifiers,
                                 context,
-                            )
+                            ),
+                            parameter
+                                .declaration_specifiers
+                                .storage_class
+                                .map_or("none", StorageClass::spelling),
+                            qualifier_list(parameter.declaration_specifiers.type_qualifiers),
+                            if parameter
+                                .declaration_specifiers
+                                .function_specifiers
+                                .is_inline
+                            {
+                                "inline"
+                            } else {
+                                "none"
+                            },
                         ),
                         Some(parameter.source_vectors),
                         context,
@@ -699,7 +752,7 @@ impl SyntaxTree {
                         &mut output,
                         indent,
                         &format!(
-                            "{role}: type-name{} type={}",
+                            "{role}: type-name{} type={} qualifiers={}",
                             if type_name.recovered {
                                 " recovered"
                             } else {
@@ -709,6 +762,7 @@ impl SyntaxTree {
                                 type_name.declaration_specifiers.type_specifiers,
                                 context,
                             ),
+                            qualifier_list(type_name.declaration_specifiers.type_qualifiers),
                         ),
                         Some(type_name.source_vectors),
                         context,
@@ -778,7 +832,8 @@ impl SyntaxTree {
             for direct in self.direct_declarators(declarator.kind) {
                 match *direct {
                     | DirectDeclarator::Identifier(identifier) => return Some(identifier),
-                    | DirectDeclarator::Parenthesized(child) => nested = Some(child),
+                    | DirectDeclarator::Parenthesized(index) =>
+                        nested = Some(self.parenthesized_declarator(index).declarator),
                     | _ => {},
                 }
             }
@@ -821,13 +876,16 @@ impl SyntaxTree {
             | StatementType::While {
                 condition_expression,
                 body_statement,
-            }
+            } => {
+                work.push(Work::Statement(body_statement, indent, "body"));
+                Self::push_slot(work, condition_expression, indent, "condition");
+            },
             | StatementType::DoWhile {
                 condition_expression,
                 body_statement,
             } => {
-                work.push(Work::Statement(body_statement, indent, "body"));
                 Self::push_slot(work, condition_expression, indent, "condition");
+                work.push(Work::Statement(body_statement, indent, "body"));
             },
             | StatementType::For {
                 initializer,
@@ -925,16 +983,10 @@ impl SyntaxTree {
                 format!("constant {}", constant_label(constant)),
             | ExpressionType::StringLiteral(string) => match string {
                 | StringTokenType::String(contents) => {
-                    format!(
-                        "string {}",
-                        c_quoted("", '"', context.string_cache.at(*contents))
-                    )
+                    format!("string {}", context.literal_spelling(*contents, false))
                 },
                 | StringTokenType::WideString(contents) => {
-                    format!(
-                        "wide-string {}",
-                        c_quoted("L", '"', context.string_cache.at(*contents))
-                    )
+                    format!("wide-string {}", context.literal_spelling(*contents, true))
                 },
             },
             | ExpressionType::SizeofType(..) => "sizeof type".to_owned(),
@@ -1046,7 +1098,11 @@ impl SyntaxTree {
         context: &Context,
         options: InspectionOptions,
     ) {
-        let _ = write!(output, "{}{}", "  ".repeat(indent), text);
+        let _ = write!(output, "{}", "  ".repeat(indent.min(32)));
+        if indent > 32 {
+            let _ = write!(output, "[depth={indent}] ");
+        }
+        output.push_str(text);
         if options.show_locations
             && let Some(source) = source
             && source.length > 0
@@ -1150,20 +1206,26 @@ fn constant_label(constant: &Constant) -> String {
         | Constant::Integer(integer) => {
             let (value, type_name) = match integer {
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),
-                | IntegerTokenType::Long(value) => (i128::from(value), "long"),
-                | IntegerTokenType::LongLong(value) => (i128::from(value), "long long"),
+                | IntegerTokenType::Long(value) => (i128::from(value.get()), "long"),
+                | IntegerTokenType::LongLong(value) => (i128::from(value.get()), "long long"),
                 | IntegerTokenType::UnsignedInt(value) => (i128::from(value), "unsigned int"),
-                | IntegerTokenType::UnsignedLong(value) => (i128::from(value), "unsigned long"),
+                | IntegerTokenType::UnsignedLong(value) =>
+                    (i128::from(value.get()), "unsigned long"),
                 | IntegerTokenType::UnsignedLongLong(value) =>
-                    (i128::from(value), "unsigned long long"),
+                    (i128::from(value.get()), "unsigned long long"),
             };
             format!("{value} ({type_name})")
         },
         | Constant::Float(float) => format!("{float} ({})", float.type_name()),
         | Constant::Char(CharacterTokenType::Char(c)) =>
             format!("{} (int)", c_quoted("", '\'', &c.to_string())),
-        | Constant::Char(CharacterTokenType::WideChar(c)) =>
-            format!("{} (wchar_t)", c_quoted("L", '\'', &c.to_string())),
+        | Constant::Char(CharacterTokenType::WideChar(c)) => format!(
+            "{} (wchar_t)",
+            char::from_u32(c).map_or_else(
+                || format!("L\'\\x{c:x}\'"),
+                |c| c_quoted("L", '\'', &c.to_string())
+            )
+        ),
         | Constant::Char(CharacterTokenType::MultiChar(value)) =>
             format!("{value} (int, multi-character)"),
     }

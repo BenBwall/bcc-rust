@@ -17,7 +17,13 @@ use crate::{
         parsing::{
             declaration_syntax::{
                 DirectDeclarator,
+                EnumSpecifier,
+                Enumerator,
+                InitDeclarator,
+                StructDeclaration,
+                StructDeclarator,
                 StructOrUnion,
+                StructOrUnionSpecifier,
                 TypeQualifiers,
                 TypeSpecifiers,
             },
@@ -31,7 +37,6 @@ use crate::{
                 StatementType,
                 StorageClass,
                 StructOrUnionSpecifierIndex,
-                SyntaxTreeId,
             },
         },
         preprocessing::{
@@ -127,10 +132,8 @@ fn ordinary_pointer_and_typedef_declarations_are_reachable() {
         .declarator
         .pointer
         .type_qualifiers_list;
-    let start = pointer.start_index as usize;
-    let end = start + pointer.length as usize;
     assert_eq!(
-        &parsed.parser.syntax.type_qualifiers[start..end],
+        &parsed.parser.syntax[pointer],
         &[TypeQualifiers::CONST, TypeQualifiers::VOLATILE]
     );
 }
@@ -148,14 +151,12 @@ fn name_classification_is_published_after_each_declarator() {
     assert!(parsed
         .parser
         .syntax
-        .direct_declarators
-        .iter()
+        .iter::<DirectDeclarator>()
         .any(|direct| matches!(direct, DirectDeclarator::Function { parameter_list, .. } if parameter_list.length == 1)));
     assert!(parsed
         .parser
         .syntax
-        .direct_declarators
-        .iter()
+        .iter::<DirectDeclarator>()
         .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 1)));
     let t = parsed
         .context
@@ -289,8 +290,7 @@ fn conflicting_typedef_names_remain_specifiers_and_preserve_following_declaratio
         parsed
             .parser
             .syntax
-            .init_declarators
-            .iter()
+            .iter::<InitDeclarator>()
             .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
             .collect::<Vec<_>>(),
         ["T", "x", "pointer", "nested", "y"]
@@ -345,8 +345,7 @@ fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
         parsed
             .parser
             .syntax
-            .direct_declarators
-            .iter()
+            .iter::<DirectDeclarator>()
             .any(|direct| {
                 matches!(
                     direct,
@@ -361,8 +360,7 @@ fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
         parsed
             .parser
             .syntax
-            .direct_declarators
-            .iter()
+            .iter::<DirectDeclarator>()
             .any(|direct| {
                 matches!(
                     direct,
@@ -373,7 +371,7 @@ fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
                 )
             })
     );
-    assert!(parsed.parser.syntax.direct_declarators.iter().any(|direct| {
+    assert!(parsed.parser.syntax.iter::<DirectDeclarator>().any(|direct| {
         matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 2)
     }));
 }
@@ -395,21 +393,18 @@ fn union_kind_and_enum_arena_slice_are_correct() {
         parsed
             .parser
             .syntax
-            .struct_or_union_specifiers
-            .iter()
+            .iter::<StructOrUnionSpecifier>()
             .any(|specifier| specifier.struct_or_union == StructOrUnion::Union)
     );
     let enum_specifier = parsed
         .parser
         .syntax
-        .enum_specifiers
-        .iter()
+        .iter::<EnumSpecifier>()
         .find(|specifier| specifier.name.is_some())
         .expect("named enum specifier");
     let enumeration_list = enum_specifier.enumeration_list.expect("enum body");
     assert_eq!(enumeration_list.length, 2);
-    let start = enumeration_list.start_index as usize;
-    let names = parsed.parser.syntax.enumerators[start..start + 2]
+    let names = parsed.parser.syntax[enumeration_list]
         .iter()
         .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
         .collect::<Vec<_>>();
@@ -418,23 +413,20 @@ fn union_kind_and_enum_arena_slice_are_correct() {
         parsed
             .parser
             .syntax
-            .enumerators
-            .iter()
+            .iter::<Enumerator>()
             .all(|enumerator| enumerator.source_vectors.length > 0)
     );
     assert!(
         parsed
             .parser
             .syntax
-            .struct_declarations
-            .iter()
+            .iter::<StructDeclaration>()
             .map(|declaration| declaration.source_vectors)
             .chain(
                 parsed
                     .parser
                     .syntax
-                    .struct_declarators
-                    .iter()
+                    .iter::<StructDeclarator>()
                     .map(|declarator| declarator.source_vectors)
             )
             .all(|source_vectors| source_vectors.length > 0)
@@ -479,11 +471,8 @@ fn specifier_combinations_and_conflicts_keep_legacy_diagnostics() {
     );
     assert!(TypeSpecifiers::Long.is_long());
     assert!(TypeSpecifiers::LongDouble.is_long_double());
-    assert!(
-        TypeSpecifiers::StructOrUnion(StructOrUnionSpecifierIndex(0, SyntaxTreeId(0)))
-            .is_struct_or_union()
-    );
-    assert!(TypeSpecifiers::Enum(EnumSpecifierIndex(0, SyntaxTreeId(0))).is_enum());
+    assert!(TypeSpecifiers::StructOrUnion(StructOrUnionSpecifierIndex(0)).is_struct_or_union());
+    assert!(TypeSpecifiers::Enum(EnumSpecifierIndex(0)).is_enum());
     let duplicate = parsed
         .context
         .string_cache
@@ -507,8 +496,7 @@ fn expression_dependent_positions_store_typed_syntax_children() {
         parsed
             .parser
             .syntax
-            .direct_declarators
-            .iter()
+            .iter::<DirectDeclarator>()
             .any(|direct| matches!(
                 direct,
                 DirectDeclarator::Array {
@@ -521,24 +509,21 @@ fn expression_dependent_positions_store_typed_syntax_children() {
         parsed
             .parser
             .syntax
-            .struct_declarators
-            .iter()
+            .iter::<StructDeclarator>()
             .any(|declarator| declarator.bitfield_width.is_some())
     );
     assert!(
         parsed
             .parser
             .syntax
-            .enumerators
-            .iter()
+            .iter::<Enumerator>()
             .any(|enumerator| enumerator.expression.is_some())
     );
     assert!(
         parsed
             .parser
             .syntax
-            .init_declarators
-            .iter()
+            .iter::<InitDeclarator>()
             .any(|declarator| declarator.initializer.is_some())
     );
     assert!(
@@ -599,11 +584,7 @@ fn braced_declarators_retain_function_definition_syntax_before_constraint_checki
     assert_eq!(
         identifier_name(
             &parsed,
-            init_declarators(
-                &parsed,
-                &parsed.parser.syntax.declarations[retained.0 as usize]
-            )[0]
-            .declarator
+            init_declarators(&parsed, &parsed.parser.syntax[retained])[0].declarator
         )
         .as_deref(),
         Some("retained")
@@ -620,9 +601,10 @@ fn braced_declarators_retain_function_definition_syntax_before_constraint_checki
     let parsed = parse("int object, f() { int swallowed; } int after;\n");
     assert!(parser_errors(&parsed).any(|error| matches!(
         error,
-        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(TokenType::Operator(
-            OperatorTokenType::OpeningCurlyBrace
-        )))
+        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+            Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)),
+            _
+        )
     )));
     assert_eq!(init_declarators(&parsed, declaration(&parsed, 0)).len(), 2);
     assert_eq!(
@@ -651,7 +633,7 @@ fn declaration_lists_retain_constraint_invalid_function_definitions() {
     let definition = function_definition(&parsed, 0);
     assert_eq!(definition.declaration_list.length(), 1);
     assert!(matches!(
-        parsed.parser.syntax.statements[definition.body.0 as usize].kind,
+        parsed.parser.syntax[definition.body].kind,
         StatementType::Compound { .. }
     ));
 }
@@ -666,9 +648,10 @@ fn function_body_dispatch_follows_parenthesized_pointer_binding() {
     );
     assert!(!parser_errors(&function).any(|error| matches!(
         error,
-        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(TokenType::Operator(
-            OperatorTokenType::OpeningCurlyBrace
-        )))
+        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+            Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)),
+            _
+        )
     )));
 
     let pointer = parse("int (*fp)(void) { int swallowed; } int after;\n");

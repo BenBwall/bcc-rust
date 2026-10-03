@@ -22,6 +22,53 @@ mod tests {
     }
 
     #[test]
+    fn lookahead_warnings_follow_earlier_parser_errors() {
+        for strategy in ["streaming", "batch-lexing", "batch"] {
+            let output = run(&[
+                "--preprocessing-strategy",
+                strategy,
+                "--input",
+                "void f(int a){\n  a = { 1, 2\n#warning late\n  };\n}\n",
+            ]);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let error = stderr
+                .find("error: expected an expression")
+                .expect("parser error");
+            let warning = stderr
+                .find("warning: unknown preprocessing directive")
+                .expect("warning");
+            assert!(error < warning, "{strategy}: {stderr}");
+            assert!(
+                stderr.contains("1 error and 1 warning generated"),
+                "{strategy}: {stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_order_uses_macro_invocations_instead_of_definitions() {
+        for strategy in ["streaming", "batch-lexing", "batch"] {
+            let output = run(&[
+                "--preprocessing-strategy",
+                strategy,
+                "--input",
+                "#define BAD )\nvoid f(){\nint a = ;\n#warning middle\nint b = BAD;\n}\n",
+            ]);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let first = stderr
+                .find("error: expected an expression, found `;`")
+                .expect("first error");
+            let warning = stderr
+                .find("warning: unknown preprocessing directive")
+                .expect("warning");
+            let last = stderr
+                .find("error: expected an expression, found `)`")
+                .expect("macro error");
+            assert!(first < warning && warning < last, "{strategy}: {stderr}");
+        }
+    }
+
+    #[test]
     fn cli_help_prints_usage_to_stdout_and_succeeds_without_input() {
         for flag in ["--help", "-h"] {
             let output = run(&[flag]);
@@ -312,12 +359,15 @@ mod tests {
     fn pragma_operator_diagnostics_quote_their_own_payload() {
         let stderr = stderr_of(&[
             "--input",
-            "_Pragma(\"aaaaaaaa(\")\n_Pragma(\"b(\")\n_Pragma(\"\u{e9}\u{20ac}(\")\nint x;\n",
+            // Unknown pragmas are ignored whole (C99 6.10.6), so malformed
+            // standard pragmas provide the diagnostics.
+            "_Pragma(\"STDC aaaaaaaa(\")\n_Pragma(\"STDC b(\")\n_Pragma(\"STDC \
+             \u{e9}\u{20ac}(\")\nint x;\n",
         ]);
 
-        assert!(stderr.contains("1 | aaaaaaaa(\n"), "{stderr}");
-        assert!(stderr.contains("1 | b(\n"), "{stderr}");
-        assert!(stderr.contains("1 | \u{e9}\u{20ac}(\n"), "{stderr}");
+        assert!(stderr.contains("1 | STDC aaaaaaaa(\n"), "{stderr}");
+        assert!(stderr.contains("1 | STDC b(\n"), "{stderr}");
+        assert!(stderr.contains("1 | STDC \u{e9}\u{20ac}(\n"), "{stderr}");
     }
 
     #[test]
@@ -381,6 +431,42 @@ mod tests {
         assert!(stderr.is_empty(), "{stderr}");
     }
 
+    /// Diagnostics with the order relation dropped: batch reports every
+    /// preprocessing diagnostic first, so only the set may agree.
+    fn sorted_diagnostics(stderr: &str) -> Vec<String> {
+        let mut blocks: Vec<String> = stderr
+            .split("\n\n")
+            .map(str::to_owned)
+            .filter(|block| !block.trim().is_empty())
+            .collect();
+        blocks.sort();
+        blocks
+    }
+
+    #[test]
+    fn diagnostic_folding_does_not_depend_on_the_preprocessing_strategy() {
+        for input in [
+            // Each unterminated constant also draws a parser error at the
+            // same token, which is folded into the lexer error.
+            "'a\n'b\n",
+            // A preprocessing diagnostic lands between two parser errors at
+            // one token under the streaming strategies.
+            "int x[] = {1 B\n#error e\n};\n",
+        ] {
+            let streaming = stderr_of(&["--preprocessing-strategy", "streaming", "--input", input]);
+            for strategy in ["batch-lexing", "batch"] {
+                let other = stderr_of(&["--preprocessing-strategy", strategy, "--input", input]);
+                assert_eq!(
+                    sorted_diagnostics(&other),
+                    sorted_diagnostics(&streaming),
+                    "{strategy} for {input:?}"
+                );
+            }
+        }
+        let stderr = stderr_of(&["--input", "'a\n'b\n"]);
+        assert!(stderr.contains("2 errors generated."), "{stderr}");
+    }
+
     #[test]
     fn a_label_spanning_many_lines_renders_in_linear_time() {
         // Too long for a command line, so it goes through a file.
@@ -397,5 +483,12 @@ mod tests {
             "rendering took {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn errors_in_two_uses_of_one_macro_are_reported_separately() {
+        let stderr = stderr_of(&["--input", "#define SEMI ;\nint a = SEMI\nint b = SEMI\n"]);
+
+        assert!(stderr.contains("2 errors generated."), "{stderr}");
     }
 }

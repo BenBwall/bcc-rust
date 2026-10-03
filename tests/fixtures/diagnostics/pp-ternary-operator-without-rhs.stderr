@@ -1,7 +1,7 @@
 error: expected an expression after `:`
- --> pp-ternary-operator-without-rhs.c:2:1
+ --> pp-ternary-operator-without-rhs.c:1:11
   |
-2 | #endif
-  | ^ `:` needs an operand here
+1 | #if 1 ? 2 :
+  |           ^ `:` needs an operand here
 
 1 error generated.

@@ -4,7 +4,7 @@ error: unexpected end of file while parsing function-like macro invocation
 2 | int value = F(
   |             ^ the file ends here
 
-error: expected an expression in expression, found end of file
+error: expected an expression, found end of file
  --> pp-unexpected-end-of-input.c:3:1
   |
 3 | 

@@ -16,6 +16,7 @@ use super::{
         IntegerSuffix,
         IntegerTokenType,
         KeywordTokenType,
+        LiteralUnit,
         OperatorTokenType,
         SignedIntegerLiteralType,
         StringTokenType,
@@ -37,8 +38,10 @@ use crate::{
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,
+            PreprocessorTokenizerError,
         },
     },
+    util::packed::Packed,
 };
 
 impl Preprocessor {
@@ -54,8 +57,12 @@ impl Preprocessor {
         let first_contents = match first_kind {
             | StringTokenType::String(contents) | StringTokenType::WideString(contents) => contents,
         };
-        let mut contents = context.string_cache.at(first_contents).to_string();
-        let mut sources = vec![first.source_vectors];
+        // Most literals stand alone: allocate builders only after adjacency.
+        let mut builder: Option<(
+            Vec<LiteralUnit>,
+            Vec<crate::translation_phases::SourceVectors>,
+            String,
+        )> = None;
 
         loop {
             let existing_errors = context.take_pending_errors();
@@ -82,18 +89,30 @@ impl Preprocessor {
                     contents
                 },
             };
-            contents.push_str(context.string_cache.at(next_contents));
+            let (units, sources, spelling) = builder.get_or_insert_with(|| {
+                (
+                    context.literal_units(first_contents).to_vec(),
+                    vec![first.source_vectors],
+                    context.string_cache.at(first.contents).to_owned(),
+                )
+            });
+            units.extend_from_slice(context.literal_units(next_contents));
             sources.push(next.source_vectors);
+            spelling.push(' ');
+            spelling.push_str(context.string_cache.at(next.contents));
         }
 
-        let contents = context.string_cache.intern(&contents);
+        let Some((units, sources, spelling)) = builder else {
+            return first;
+        };
+        let contents = context.intern_literal(units);
         Token {
-            kind: if wide {
+            kind:           if wide {
                 TokenType::String(StringTokenType::WideString(contents))
             } else {
                 TokenType::String(StringTokenType::String(contents))
             },
-            contents,
+            contents:       context.string_cache.intern(&spelling),
             source_vectors: context.merge_vector_list(&sources),
         }
     }
@@ -128,6 +147,7 @@ impl Preprocessor {
             }
             (result, did_overflow)
         };
+        let missing_digits = radix == 16 && index == start_index;
         if did_overflow {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::IntegerLiteralOverflow,
@@ -140,17 +160,14 @@ impl Preprocessor {
             contents.char_at(index + 1),
             contents.char_at(index + 2),
         ) {
-            | (Some('u'), Some('l'), Some('l'))
-            | (Some('U'), Some('L'), Some('L'))
-            | (Some('l'), Some('l'), Some('u'))
-            | (Some('L'), Some('L'), Some('U')) => {
+            | (Some('u' | 'U'), Some('l'), Some('l'))
+            | (Some('u' | 'U'), Some('L'), Some('L'))
+            | (Some('l'), Some('l'), Some('u' | 'U'))
+            | (Some('L'), Some('L'), Some('u' | 'U')) => {
                 index += 3;
                 Some(IntegerSuffix::UnsignedLongLong)
             },
-            | (Some('u'), Some('l'), _)
-            | (Some('U'), Some('L'), _)
-            | (Some('l'), Some('u'), _)
-            | (Some('L'), Some('U'), _) => {
+            | (Some('u' | 'U'), Some('l' | 'L'), _) | (Some('l' | 'L'), Some('u' | 'U'), _) => {
                 index += 2;
                 Some(IntegerSuffix::UnsignedLong)
             },
@@ -168,7 +185,7 @@ impl Preprocessor {
             },
             | _ => None,
         };
-        if index != contents.len() - 1 {
+        if missing_digits || index != contents.len() - 1 {
             context.preprocessor_error(PreprocessorError {
                 error_type:     invalid_integer_literal_error,
                 source_vectors: token.source_vectors,
@@ -176,7 +193,9 @@ impl Preprocessor {
         }
         match suffix_type {
             | Some(IntegerSuffix::UnsignedLongLong) => Token {
-                kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
+                kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(
+                    Packed::new(result),
+                )),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
             },
@@ -189,18 +208,24 @@ impl Preprocessor {
                     source_vectors: token.source_vectors,
                 });
                 Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
+                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(
+                        Packed::new(result),
+                    )),
                     source_vectors: token.source_vectors,
                     contents:       token.contents,
                 }
             },
             | Some(IntegerSuffix::LongLong) => Token {
-                kind:           TokenType::Integer(IntegerTokenType::LongLong(result as _)),
+                kind:           TokenType::Integer(IntegerTokenType::LongLong(Packed::new(
+                    result as _,
+                ))),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
             },
             | Some(IntegerSuffix::UnsignedLong) => Token {
-                kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
+                kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(Packed::new(
+                    result,
+                ))),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
             },
@@ -213,13 +238,17 @@ impl Preprocessor {
                     source_vectors: token.source_vectors,
                 });
                 Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
+                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(
+                        Packed::new(result),
+                    )),
                     source_vectors: token.source_vectors,
                     contents:       token.contents,
                 }
             },
             | Some(IntegerSuffix::Long) => Token {
-                kind:           TokenType::Integer(IntegerTokenType::Long(result as _)),
+                kind:           TokenType::Integer(IntegerTokenType::Long(Packed::new(
+                    result as _,
+                ))),
                 source_vectors: token.source_vectors,
                 contents:       token.contents,
             },
@@ -232,7 +261,9 @@ impl Preprocessor {
                     source_vectors: token.source_vectors,
                 });
                 Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(result)),
+                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(
+                        Packed::new(result),
+                    )),
                     source_vectors: token.source_vectors,
                     contents:       token.contents,
                 }
@@ -255,7 +286,9 @@ impl Preprocessor {
                     source_vectors: token.source_vectors,
                 });
                 Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(result)),
+                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(
+                        Packed::new(result),
+                    )),
                     source_vectors: token.source_vectors,
                     contents:       token.contents,
                 }
@@ -269,7 +302,9 @@ impl Preprocessor {
                     source_vectors: token.source_vectors,
                 });
                 Token {
-                    kind:           TokenType::Integer(IntegerTokenType::Long(result as i64)),
+                    kind:           TokenType::Integer(IntegerTokenType::Long(Packed::new(
+                        result as i64,
+                    ))),
                     source_vectors: token.source_vectors,
                     contents:       token.contents,
                 }
@@ -343,7 +378,8 @@ impl Preprocessor {
         let res = match contents.char_at(contents.len() - 2) {
             | Some('f' | 'F') => string_to_float(contents).map(FloatTokenType::Float),
             | Some('l' | 'L') => string_to_long_double(contents).map(FloatTokenType::LongDouble),
-            | _ => string_to_double(contents).map(FloatTokenType::Double),
+            | _ =>
+                string_to_double(contents).map(|value| FloatTokenType::Double(Packed::new(value))),
         };
         match res {
             | Ok(kind) => Token {
@@ -399,184 +435,132 @@ impl Preprocessor {
         )
     }
 
-    fn eval_escape_sequences(&mut self, context: &mut Context, token: PreprocessorToken) -> String {
-        _ = self;
-        let mut ret = String::new();
-        let mut index = 0;
+    fn eval_escape_sequences(
+        context: &mut Context,
+        token: PreprocessorToken,
+    ) -> (Vec<LiteralUnit>, bool) {
         let string = context.string_cache.at(token.contents);
-        if let Some('L') = string.char_at(0) {
-            index += 1;
-        }
-        if let Some('"' | '\'') = string.char_at(index) {
-            index += 1;
-        }
-        while let Some(c) = string.char_at(index) {
-            if c == '\\' {
-                let Some(c) = string.char_at(index + 1) else {
-                    context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnterminatedEscapeSequence,
-                        source_vectors: token.source_vectors,
-                    });
-                    return ret;
-                };
-                index += 2;
-                ret.push(match c {
-                    | 'a' => '\x07',
-                    | 'b' => '\x08',
-                    | 'f' => '\x0C',
-                    | 'n' => '\n',
-                    | 'r' => '\r',
-                    | 't' => '\t',
-                    | 'v' => '\x0B',
-                    | '\'' => '\'',
-                    | '"' => '"',
-                    | '?' => '?',
-                    | '\\' => '\\',
-                    | 'x' => {
-                        let code_point = (|| {
-                            let mut code_point = 0u32;
-                            while let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16)) {
-                                index += 1;
-                                code_point = code_point.checked_mul(16)?;
-                                code_point = code_point.checked_add(d)?;
-                            }
-                            Some(code_point)
-                        })();
-                        let Some(code_point) = code_point else {
-                            Context::raw_preprocessor_error(
-                                &mut context.pending_errors,
-                                PreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::HexEscapeSequenceTooLarge,
-                                    source_vectors: token.source_vectors,
-                                },
-                            );
-                            continue;
-                        };
-                        let Ok(c) = char::try_from(code_point) else {
-                            Context::raw_preprocessor_error(
-                                &mut context.pending_errors,
-                                PreprocessorError {
-                                    error_type:     PreprocessorErrorType::InvalidHexEscapeSequence,
-                                    source_vectors: token.source_vectors,
-                                },
-                            );
-                            continue;
-                        };
-                        c
-                    },
-                    | '0'..='7' => {
-                        #[expect(clippy::cast_possible_truncation, reason = "We are checking that d is range before casting to a u16.")]
-                        let code_point = (|| {
-                            let mut code_point = c as u16 - '0' as u16;
-                            for _ in 0..2 {
-                                let Some(d) = string.char_at(index).and_then(|c| c.to_digit(8))
-                                else {
-                                    break;
-                                };
-                                index += 1;
-                                code_point = code_point.checked_mul(8)?;
-
-                                code_point = code_point.checked_add(d as u16)?;
-                            }
-                            Some(code_point)
-                        })();
-
-                        let Some(code_point) = code_point else {
-                            Context::raw_preprocessor_error(
-                                &mut context.pending_errors,
-                                PreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::OctalEscapeSequenceTooLarge,
-                                    source_vectors: token.source_vectors,
-                                },
-                            );
-
-                            continue;
-                        };
-                        let Ok(c) = char::try_from(u32::from(code_point)) else {
-                            Context::raw_preprocessor_error(
-                                &mut context.pending_errors,
-                                PreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::InvalidOctalEscapeSequence,
-                                    source_vectors: token.source_vectors,
-                                },
-                            );
-                            continue;
-                        };
-                        c
-                    },
-                    | 'u' => {
-                        let mut code_point = 0u32;
-                        for _ in 0..4 {
-                            let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16)) else {
-                                Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
-                                    source_vectors: token.source_vectors,
-                                });
+        let wide = string.starts_with('L');
+        let mut index = usize::from(wide) + 1;
+        let quote = string.as_bytes().get(index - 1).copied();
+        let end = if string.len() > index && string.as_bytes().last().copied() == quote {
+            string.len() - 1
+        } else {
+            string.len()
+        };
+        let mut units = Vec::new();
+        let mut failed = false;
+        while index < end {
+            let c = string[index..].chars().next().unwrap();
+            index += c.len_utf8();
+            if c != '\\' {
+                units.push(LiteralUnit::Character(c));
+                continue;
+            }
+            let mut error = None;
+            let unit = if index == end {
+                error = Some(PreprocessorErrorType::UnterminatedEscapeSequence);
+                None
+            } else {
+                let c = string[index..].chars().next().unwrap();
+                index += c.len_utf8();
+                match c {
+                    | 'a' => Some(LiteralUnit::Character('\x07')),
+                    | 'b' => Some(LiteralUnit::Character('\x08')),
+                    | 'f' => Some(LiteralUnit::Character('\x0c')),
+                    | 'n' => Some(LiteralUnit::Character('\n')),
+                    | 'r' => Some(LiteralUnit::Character('\r')),
+                    | 't' => Some(LiteralUnit::Character('\t')),
+                    | 'v' => Some(LiteralUnit::Character('\x0b')),
+                    | '\'' | '"' | '?' | '\\' => Some(LiteralUnit::Character(c)),
+                    | 'x' | '0'..='7' => {
+                        let hex = c == 'x';
+                        let radix = if hex { 16 } else { 8 };
+                        let mut count = usize::from(!hex);
+                        let mut value = Some(if hex { 0u32 } else { c.to_digit(8).unwrap() });
+                        while index < end && (hex || count < 3) {
+                            let Some(digit) = string[index..]
+                                .chars()
+                                .next()
+                                .and_then(|c| c.to_digit(radix))
+                            else {
                                 break;
                             };
                             index += 1;
-                            code_point *= 16;
-                            code_point += d;
+                            count += 1;
+                            value = value
+                                .and_then(|value| value.checked_mul(radix))
+                                .and_then(|value| value.checked_add(digit));
                         }
-                        let Ok(c) = char::try_from(code_point) else {
-                            Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence,
-                                    source_vectors: token.source_vectors,
-                                },
-                            );
-                            continue;
-                        };
-                        c
+                        if count == 0 {
+                            error = Some(PreprocessorErrorType::InvalidHexEscapeSequence);
+                            None
+                        } else if let Some(value) = value.filter(|value| wide || *value <= 255) {
+                            Some(LiteralUnit::Numeric(value))
+                        } else {
+                            error = Some(if hex {
+                                PreprocessorErrorType::HexEscapeSequenceTooLarge
+                            } else {
+                                PreprocessorErrorType::OctalEscapeSequenceTooLarge
+                            });
+                            None
+                        }
                     },
-                    | 'U' => {
-                        let mut code_point = 0u32;
-                        for _ in 0..8 {
-                            let Some(d) = string.char_at(index).and_then(|c| c.to_digit(16)) else {
-                                Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall,
-                                    source_vectors: token.source_vectors,
-                                });
+                    | 'u' | 'U' => {
+                        let required = if c == 'u' { 4 } else { 8 };
+                        let mut count = 0;
+                        let mut value = 0u32;
+                        while count < required && index < end {
+                            let Some(digit) =
+                                string[index..].chars().next().and_then(|c| c.to_digit(16))
+                            else {
                                 break;
                             };
+                            value = value * 16 + digit;
                             index += 1;
-                            code_point *= 16;
-                            code_point += d;
+                            count += 1;
                         }
-                        let Ok(c) = char::try_from(code_point) else {
-                            Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
-                                    error_type:
-                                        PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence,
-                                    source_vectors: token.source_vectors,
-                                },
-                            );
-                            continue;
-                        };
-                        c
+                        if count != required {
+                            error = Some(if c == 'u' {
+                                PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort
+                            } else {
+                                PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
+                            });
+                            None
+                        } else if let Some(character) = char::from_u32(value)
+                            .filter(|_| value >= 0xA0 || matches!(value, 0x24 | 0x40 | 0x60))
+                        {
+                            Some(LiteralUnit::Character(character))
+                        } else {
+                            error = Some(if c == 'u' {
+                                PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence
+                            } else {
+                                PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence
+                            });
+                            None
+                        }
                     },
                     | _ => {
-                        Context::raw_preprocessor_error(&mut context.pending_errors,PreprocessorError {
-                                error_type:     PreprocessorErrorType::InvalidEscapeSequence,
-                                source_vectors: token.source_vectors,
-                            },
-                        );
-                        continue;
+                        error = Some(PreprocessorErrorType::InvalidEscapeSequence);
+                        None
                     },
-                });
-            } else {
-                ret.push(c);
-                index += c.len_utf8();
+                }
+            };
+            if let Some(unit) = unit {
+                units.push(unit);
+            }
+            if let Some(error_type) = error {
+                failed = true;
+                Context::raw_preprocessor_error(
+                    &mut context.pending_errors,
+                    PreprocessorError {
+                        error_type,
+                        source_vectors: token.source_vectors,
+                    },
+                );
             }
         }
-        if ret.ends_with('"') || ret.ends_with('\'') {
-            _ = ret.pop();
-        }
-        ret
+        (units, failed)
     }
 
     fn build_token(token: PreprocessorToken, kind: TokenType) -> Token {
@@ -617,9 +601,9 @@ impl Preprocessor {
         }
     }
 
-    fn parse_string(&mut self, context: &mut Context, token: PreprocessorToken) -> StringTokenType {
-        let contents = self.eval_escape_sequences(context, token);
-        let cached_contents = context.string_cache.intern(&contents);
+    fn parse_string(context: &mut Context, token: PreprocessorToken) -> StringTokenType {
+        let (contents, _) = Self::eval_escape_sequences(context, token);
+        let cached_contents = context.intern_literal(contents);
         if context.string_cache.at(token.contents).starts_with('L') {
             StringTokenType::WideString(cached_contents)
         } else {
@@ -628,32 +612,39 @@ impl Preprocessor {
     }
 
     pub(super) fn parse_character(
-        &mut self,
         context: &mut Context,
         token: PreprocessorToken,
     ) -> CharacterTokenType {
-        let contents = self.eval_escape_sequences(context, token);
+        let (units, had_escape_error) = Self::eval_escape_sequences(context, token);
         let wide = context.string_cache.at(token.contents).starts_with('L');
-        if contents.chars().take(2).count() != 1 {
-            if !wide && !contents.is_empty() {
-                // C99 6.4.4.4 leaves this value implementation-defined. Pack
-                // UTF-8 execution bytes most-significant first into an int,
-                // keeping the final four bytes when the spelling is longer.
-                let value = contents
-                    .bytes()
-                    .fold(0_i32, |value, byte| value.wrapping_shl(8) | i32::from(byte));
-                return CharacterTokenType::MultiChar(value);
-            }
-            context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
-                source_vectors: token.source_vectors,
-            });
-        }
-        let char = contents.chars().next().unwrap_or('\0');
+        let contents = context.intern_literal(units);
         if wide {
-            CharacterTokenType::WideChar(char)
+            let units = context.literal_wide_units(contents);
+            if units.len() != 1 && (!units.is_empty() || !had_escape_error) {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
+                    source_vectors: token.source_vectors,
+                });
+            }
+            CharacterTokenType::WideChar(units.first().copied().unwrap_or(0))
         } else {
-            CharacterTokenType::Char(char)
+            let bytes = context.literal_bytes(contents);
+            match bytes.as_slice() {
+                | [byte] => CharacterTokenType::Char(char::from(*byte)),
+                | [] => {
+                    if !had_escape_error {
+                        context.preprocessor_error(PreprocessorError {
+                            error_type:
+                                PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
+                    CharacterTokenType::Char('\0')
+                },
+                | _ => CharacterTokenType::MultiChar(bytes.iter().fold(0_i32, |value, byte| {
+                    value.wrapping_shl(8) | i32::from(*byte)
+                })),
+            }
         }
     }
 
@@ -663,6 +654,19 @@ impl Preprocessor {
         token: PreprocessorToken,
     ) -> Option<Token> {
         Some(match token.kind {
+            | PreprocessorTokenType::Other => {
+                let character = context
+                    .string_cache
+                    .at(token.contents)
+                    .chars()
+                    .next()
+                    .expect("Other tokens contain one character");
+                let source = context.first_source_vector(token.source_vectors).clone();
+                context.preprocessor_tokenizer_error(
+                    PreprocessorTokenizerError::unknown_character(source, character),
+                );
+                return None;
+            },
             | PreprocessorTokenType::Number => self.parse_number(context, token),
             | PreprocessorTokenType::Newline => return None,
             | PreprocessorTokenType::Hash => {
@@ -678,75 +682,44 @@ impl Preprocessor {
                 self.parse_directive(context, token);
                 return None;
             },
-            | PreprocessorTokenType::GeneratedString => Token {
-                kind:           TokenType::String(StringTokenType::String(token.contents)),
-                contents:       token.contents,
-                source_vectors: token.source_vectors,
-            },
+            | PreprocessorTokenType::GeneratedString
             | PreprocessorTokenType::WideGeneratedString => {
-                // Discard the L prefix.
-                let contents = &context.string_cache.at(token.contents)[1..].to_token_string();
-                let contents = context.string_cache.intern(contents);
+                let wide = token.kind == PreprocessorTokenType::WideGeneratedString;
+                let text = &context.string_cache.at(token.contents)[usize::from(wide)..];
+                let units = text.chars().map(LiteralUnit::Character).collect();
+                let id = context.intern_literal(units);
                 Token {
-                    kind: TokenType::String(StringTokenType::WideString(contents)),
-                    contents,
-                    source_vectors: token.source_vectors,
+                    kind: TokenType::String(if wide {
+                        StringTokenType::WideString(id)
+                    } else {
+                        StringTokenType::String(id)
+                    }),
+                    ..Self::build_token(token, TokenType::Identifier)
                 }
             },
             | PreprocessorTokenType::String => Token {
-                kind:           TokenType::String(self.parse_string(context, token)),
+                kind:           TokenType::String(Self::parse_string(context, token)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             },
             | PreprocessorTokenType::Character => Token {
-                kind:           TokenType::Character(self.parse_character(context, token)),
+                kind:           TokenType::Character(Self::parse_character(context, token)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             },
-            | PreprocessorTokenType::Identifier | PreprocessorTokenType::Defined =>
-                Self::build_token(
-                    token,
-                    match context.string_cache.at(token.contents) {
-                        | "auto" => TokenType::Keyword(KeywordTokenType::Auto),
-                        | "break" => TokenType::Keyword(KeywordTokenType::Break),
-                        | "case" => TokenType::Keyword(KeywordTokenType::Case),
-                        | "char" => TokenType::Keyword(KeywordTokenType::Char),
-                        | "const" => TokenType::Keyword(KeywordTokenType::Const),
-                        | "continue" => TokenType::Keyword(KeywordTokenType::Continue),
-                        | "default" => TokenType::Keyword(KeywordTokenType::Default),
-                        | "do" => TokenType::Keyword(KeywordTokenType::Do),
-                        | "double" => TokenType::Keyword(KeywordTokenType::Double),
-                        | "else" => TokenType::Keyword(KeywordTokenType::Else),
-                        | "enum" => TokenType::Keyword(KeywordTokenType::Enum),
-                        | "extern" => TokenType::Keyword(KeywordTokenType::Extern),
-                        | "float" => TokenType::Keyword(KeywordTokenType::Float),
-                        | "for" => TokenType::Keyword(KeywordTokenType::For),
-                        | "goto" => TokenType::Keyword(KeywordTokenType::Goto),
-                        | "if" => TokenType::Keyword(KeywordTokenType::If),
-                        | "inline" => TokenType::Keyword(KeywordTokenType::Inline),
-                        | "int" => TokenType::Keyword(KeywordTokenType::Int),
-                        | "long" => TokenType::Keyword(KeywordTokenType::Long),
-                        | "register" => TokenType::Keyword(KeywordTokenType::Register),
-                        | "restrict" => TokenType::Keyword(KeywordTokenType::Restrict),
-                        | "return" => TokenType::Keyword(KeywordTokenType::Return),
-                        | "short" => TokenType::Keyword(KeywordTokenType::Short),
-                        | "signed" => TokenType::Keyword(KeywordTokenType::Signed),
-                        | "sizeof" => TokenType::Keyword(KeywordTokenType::Sizeof),
-                        | "static" => TokenType::Keyword(KeywordTokenType::Static),
-                        | "struct" => TokenType::Keyword(KeywordTokenType::Struct),
-                        | "switch" => TokenType::Keyword(KeywordTokenType::Switch),
-                        | "typedef" => TokenType::Keyword(KeywordTokenType::Typedef),
-                        | "union" => TokenType::Keyword(KeywordTokenType::Union),
-                        | "unsigned" => TokenType::Keyword(KeywordTokenType::Unsigned),
-                        | "void" => TokenType::Keyword(KeywordTokenType::Void),
-                        | "volatile" => TokenType::Keyword(KeywordTokenType::Volatile),
-                        | "while" => TokenType::Keyword(KeywordTokenType::While),
-                        | "_Bool" => TokenType::Keyword(KeywordTokenType::Bool),
-                        | "_Complex" => TokenType::Keyword(KeywordTokenType::Complex),
-                        | "_Imaginary" => TokenType::Keyword(KeywordTokenType::Imaginary),
-                        | _ => TokenType::Identifier,
-                    },
-                ),
+            | PreprocessorTokenType::Identifier
+            | PreprocessorTokenType::UniversalIdentifier
+            | PreprocessorTokenType::UnavailableIdentifier
+            | PreprocessorTokenType::UnavailableUniversalIdentifier
+            | PreprocessorTokenType::Defined => {
+                let contents = token.identifier_id(context);
+                Token {
+                    kind: KeywordTokenType::from_cache_id(contents)
+                        .map_or(TokenType::Identifier, TokenType::Keyword),
+                    contents,
+                    source_vectors: token.source_vectors,
+                }
+            },
             | PreprocessorTokenType::Plus =>
                 Self::build_operator_token(token, OperatorTokenType::Plus),
             | PreprocessorTokenType::Minus =>

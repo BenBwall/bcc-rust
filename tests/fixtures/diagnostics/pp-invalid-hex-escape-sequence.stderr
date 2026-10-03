@@ -1,7 +1,7 @@
-error: hexadecimal escape sequence is not a valid character
+error: hexadecimal escape sequence is out of range
  --> pp-invalid-hex-escape-sequence.c:1:13
   |
 1 | int value = '\x110000';
-  |             ^^^^^^^^^^ contains an invalid `\x` escape
+  |             ^^^^^^^^^^ contains an oversized `\x` escape
 
 1 error generated.

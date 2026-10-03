@@ -1,3 +1,3 @@
-#if ~)
+#if (~)
 #endif
 int value;

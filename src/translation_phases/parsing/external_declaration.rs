@@ -22,17 +22,14 @@ use super::{
     },
     syntax::ExternalDeclaration,
 };
-use crate::{
-    translation_phases::{
-        Context,
-        ErrorSeverity,
-        TranslationError,
-        preprocessing::{
-            OperatorTokenType,
-            Token,
-        },
+use crate::translation_phases::{
+    Context,
+    ErrorSeverity,
+    TranslationError,
+    preprocessing::{
+        OperatorTokenType,
+        Token,
     },
-    util::vector_slice::UsizeExt,
 };
 
 /// Root frame that converts one declaration child into a valid or explicitly
@@ -88,7 +85,6 @@ impl ExternalDeclarationFrame {
                 );
                 self.phase = ExternalDeclarationPhase::AwaitDeclaration;
                 ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
-                    parser.syntax.init_declarators.len().to_u32(),
                     DeclarationContext::External,
                     parser.hard_error_count,
                 )))
@@ -108,8 +104,7 @@ impl ExternalDeclarationFrame {
                 }
                 if parser.hard_error_count > self.starting_error_count {
                     if !parser.declaration_is_meaningful(declaration) {
-                        let declaration_source =
-                            parser.syntax.declarations[declaration.0 as usize].source_vectors;
+                        let declaration_source = parser.syntax[declaration].source_vectors;
                         let source = if declaration_source.length == 0 {
                             token.map_or(declaration_source, |token| token.source_vectors)
                         } else {
@@ -151,7 +146,7 @@ impl ExternalDeclarationFrame {
                 let Some(ParseValue::FunctionDefinition(definition)) = returned else {
                     panic!("function-definition frame returned an unexpected value: {returned:?}");
                 };
-                let recovered = parser.syntax.function_definitions[definition.0 as usize].recovered;
+                let recovered = parser.syntax[definition].recovered;
                 ParseAction::Reduce(ParseValue::ExternalDeclaration(if recovered {
                     ExternalDeclaration::RecoveredFunctionDefinition(definition)
                 } else {

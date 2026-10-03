@@ -46,21 +46,20 @@ use super::{
         StatementType,
     },
 };
-use crate::{
-    translation_phases::{
-        Context,
-        GetPosition,
-        GetSourceFileIndex,
-        SourceVectors,
-        preprocessing::{
-            KeywordTokenType,
-            OperatorTokenType,
-            Token,
-            TokenType,
-        },
+use crate::translation_phases::{
+    Context,
+    SourceVectors,
+    preprocessing::{
+        KeywordTokenType,
+        OperatorTokenType,
+        Token,
+        TokenType,
     },
-    util::vector_slice::UsizeExt,
 };
+
+/// Tokens a malformed statement header may span before recovery stops
+/// looking for its closing parenthesis.
+const HEADER_RECOVERY_LOOKAHEAD: u16 = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HeaderKind {
@@ -132,6 +131,14 @@ pub(super) enum StatementPhase {
         Option<ForInitializer>,
         Option<ExpressionSlot>,
         Option<ExpressionSlot>,
+    ),
+    /// Consumes the counted remaining tokens of a malformed `for` header,
+    /// which include an extra `;` clause, before its closing parenthesis.
+    ForSkipHeader(
+        Option<ForInitializer>,
+        Option<ExpressionSlot>,
+        Option<ExpressionSlot>,
+        u16,
     ),
     ForPushBody(
         Option<ForInitializer>,
@@ -279,6 +286,22 @@ impl StatementFrame {
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::Default => {
+                            // The duplicate is the label itself, so the
+                            // diagnostic belongs on its keyword rather than
+                            // on whatever token follows it.
+                            if parser
+                                .switch_scopes
+                                .last()
+                                .is_some_and(|switch| switch.has_default)
+                            {
+                                parser.report(
+                                    context,
+                                    ParserErrorType::DuplicateDefaultLabel,
+                                    Some(token),
+                                );
+                            } else if let Some(switch) = parser.switch_scopes.last_mut() {
+                                switch.has_default = true;
+                            }
                             self.merge_token(parser, context, token);
                             self.phase = StatementPhase::DefaultColon;
                             return ParseAction::Consume;
@@ -330,6 +353,48 @@ impl StatementFrame {
                         },
                         | _ => {},
                     }
+                }
+                // A typedef name that continues into declaration specifiers
+                // or a declarator starts a declaration, which C99 allows only
+                // as a block item, never as a substatement. Compound blocks
+                // route such tokens to a declaration frame before a statement
+                // frame starts, so only substatements reach this point.
+                if let Some(token) = token
+                    && token.kind == TokenType::Identifier
+                    && parser.declaration_recovery_starts_here(context, token)
+                {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStatement(Some(token.kind)),
+                        Some(token),
+                    );
+                    self.phase = StatementPhase::Recovered;
+                    return ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::Statement,
+                        target: ParseFrameKind::Statement,
+                    });
+                }
+                // A closing delimiter or label colon cannot start any
+                // statement or expression; skip just that token so the
+                // following statement parses without a cascade.
+                if let Some(token) = token
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(
+                            OperatorTokenType::Colon
+                                | OperatorTokenType::ClosingParenthesis
+                                | OperatorTokenType::ClosingSquareBracket
+                        )
+                    )
+                {
+                    parser.report(
+                        context,
+                        ParserErrorType::ExpectedStatement(Some(token.kind)),
+                        Some(token),
+                    );
+                    self.merge_token(parser, context, token);
+                    self.phase = StatementPhase::Finish(StatementType::Null);
+                    return ParseAction::Consume;
                 }
                 let stray_else = token
                     .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Else));
@@ -459,11 +524,7 @@ impl StatementFrame {
                     );
                     Identifier::new(
                         context.string_cache.intern("<missing-label>"),
-                        context.create_source_vectors(
-                            parser.position(context),
-                            parser.source_file_index(),
-                            0,
-                        ),
+                        parser.missing_syntax_source(context),
                     )
                 };
                 self.phase = StatementPhase::GotoSemicolon(identifier);
@@ -527,6 +588,26 @@ impl StatementFrame {
                     self.merge_token(parser, context, token.expect("semicolon exists"));
                     return ParseAction::Consume;
                 }
+                // A leftover run such as the `, 3` of `case 2, 3:` is skipped
+                // to the real `:` instead of starting the labeled statement.
+                if token.is_some()
+                    && !is_operator(token, OperatorTokenType::Colon)
+                    && super::expression::closer_follows_stray_run(
+                        parser,
+                        context,
+                        |token| token == TokenType::Operator(OperatorTokenType::Colon),
+                        true,
+                    )
+                    .is_some()
+                {
+                    self.own_colon_or_report(parser, context, token, "case label");
+                    return ParseAction::Recover(SynchronizationSet {
+                        kind:   SynchronizationKind::StatementExpression(
+                            ExpressionTerminator::Colon,
+                        ),
+                        target: ParseFrameKind::Statement,
+                    });
+                }
                 self.own_colon_or_report(parser, context, token, "case label");
                 self.phase = StatementPhase::PushLabeled(LabelPrefix::Case(expression));
                 if is_operator(token, OperatorTokenType::Colon) {
@@ -538,15 +619,6 @@ impl StatementFrame {
             | StatementPhase::DefaultColon => {
                 debug_assert!(returned.is_none());
                 self.own_colon_or_report(parser, context, token, "default label");
-                if parser
-                    .switch_scopes
-                    .last()
-                    .is_some_and(|switch| switch.has_default)
-                {
-                    parser.report(context, ParserErrorType::DuplicateDefaultLabel, token);
-                } else if let Some(switch) = parser.switch_scopes.last_mut() {
-                    switch.has_default = true;
-                }
                 self.phase = StatementPhase::PushLabeled(LabelPrefix::Default);
                 if is_operator(token, OperatorTokenType::Colon) {
                     ParseAction::Consume
@@ -780,8 +852,23 @@ impl StatementFrame {
                         ParserErrorType::ExpectedWhileAfterDoBody(token.map(|token| token.kind)),
                         token,
                     );
-                    self.phase = StatementPhase::DoOpening(body);
-                    ParseAction::Reprocess
+                    if is_operator(token, OperatorTokenType::OpeningParenthesis) {
+                        // Only the keyword is missing; the condition follows.
+                        self.phase = StatementPhase::DoOpening(body);
+                        return ParseAction::Reprocess;
+                    }
+                    // Without `while (` the following tokens belong to the
+                    // next statement, not to a condition that was never
+                    // written, so finish here without consuming them.
+                    let condition_expression = Self::missing_slot(parser, context);
+                    self.finish(
+                        parser,
+                        context,
+                        StatementType::DoWhile {
+                            condition_expression,
+                            body_statement: body,
+                        },
+                    )
                 }
             },
             | StatementPhase::DoOpening(body) => {
@@ -914,7 +1001,6 @@ impl StatementFrame {
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
                     self.phase = StatementPhase::AwaitForInitializerDeclaration;
                     ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
-                        parser.syntax.init_declarators.len().to_u32(),
                         DeclarationContext::ForInitializer,
                         parser.hard_error_count,
                     )))
@@ -937,11 +1023,19 @@ impl StatementFrame {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("for declaration returned an unexpected value: {returned:?}");
                 };
-                let source = parser.syntax.declarations[declaration.0 as usize].source_vectors;
+                let source = parser.syntax[declaration].source_vectors;
                 self.source_vectors = Some(
                     self.source_vectors
                         .map_or(source, |existing| context.merge_vectors(existing, source)),
                 );
+                // A for-initializer declaration ends at the header's `)`
+                // without reporting when its own `;` is missing; that `;`
+                // belongs to the initializer, not to the condition.
+                if is_operator(token, OperatorTokenType::ClosingParenthesis)
+                    && !is_operator(parser.cursor.previous, OperatorTokenType::Semicolon)
+                {
+                    self.own_semicolon_or_report(parser, context, token, "for initializer");
+                }
                 self.phase =
                     StatementPhase::ForCondition(Some(ForInitializer::Declaration(declaration)));
                 ParseAction::Reprocess
@@ -1077,9 +1171,42 @@ impl StatementFrame {
                         ),
                         token,
                     );
+                    // An extra `;` clause ends the iteration expression, and
+                    // balanced recovery stops before every `;`, so the rest
+                    // of the header is skipped by count once lookahead has
+                    // found its `)`.
+                    if is_operator(token, OperatorTokenType::Semicolon)
+                        && let Some(distance) = Self::for_header_closer_distance(parser, context)
+                    {
+                        self.phase = StatementPhase::ForSkipHeader(
+                            initializer,
+                            condition,
+                            iteration,
+                            distance,
+                        );
+                        return ParseAction::Reprocess;
+                    }
                     self.phase = StatementPhase::ForPushBody(initializer, condition, iteration);
                     ParseAction::Reprocess
                 }
+            },
+            | StatementPhase::ForSkipHeader(initializer, condition, iteration, remaining) => {
+                debug_assert!(returned.is_none());
+                let Some(token) = token else {
+                    self.phase = StatementPhase::ForPushBody(initializer, condition, iteration);
+                    return ParseAction::Reprocess;
+                };
+                self.merge_token(parser, context, token);
+                self.phase = if remaining == 0 {
+                    debug_assert!(is_operator(
+                        Some(token),
+                        OperatorTokenType::ClosingParenthesis
+                    ));
+                    StatementPhase::ForPushBody(initializer, condition, iteration)
+                } else {
+                    StatementPhase::ForSkipHeader(initializer, condition, iteration, remaining - 1)
+                };
+                ParseAction::Consume
             },
             | StatementPhase::ForPushBody(initializer, condition, iteration) => {
                 debug_assert!(returned.is_none());
@@ -1133,20 +1260,46 @@ impl StatementFrame {
         })
     }
 
-    fn missing_slot(parser: &Parser, context: &mut Context) -> ExpressionSlot {
-        let position = parser.position(context);
-        let source_file_index = parser.source_file_index();
-        ExpressionSlot::Missing(context.create_source_vectors(position, source_file_index, 0))
+    /// Counts the tokens from the current extra `;` of a `for` header up to
+    /// the header's `)`.
+    ///
+    /// Extra `;`-separated clauses are admitted outside parentheses. The scan
+    /// gives up at any token where skipping on could swallow the body or a
+    /// following statement (a brace, a statement keyword, or a declaration
+    /// starter outside parentheses), at the end of input, or after
+    /// [`HEADER_RECOVERY_LOOKAHEAD`] tokens.
+    fn for_header_closer_distance(parser: &mut Parser, context: &mut Context) -> Option<u16> {
+        let mut depth = 0_usize;
+        let mut token = parser.cursor.current(context);
+        for distance in 0..HEADER_RECOVERY_LOOKAHEAD {
+            let current = token?;
+            match current.kind {
+                | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => depth += 1,
+                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) => {
+                    if depth == 0 {
+                        return Some(distance);
+                    }
+                    depth -= 1;
+                },
+                | TokenType::Operator(
+                    OperatorTokenType::OpeningCurlyBrace | OperatorTokenType::ClosingCurlyBrace,
+                ) => return None,
+                | TokenType::Operator(OperatorTokenType::Semicolon) if depth > 0 => return None,
+                | kind if is_statement_keyword(kind) => return None,
+                | _ if depth == 0 && parser.declaration_starter(current) => return None,
+                | _ => {},
+            }
+            token = parser.cursor.lookahead(context, usize::from(distance));
+        }
+        None
     }
 
-    fn missing_constant_slot(parser: &Parser, context: &mut Context) -> ConstantExpressionSlot {
-        let position = parser.position(context);
-        let source_file_index = parser.source_file_index();
-        ConstantExpressionSlot::Missing(context.create_source_vectors(
-            position,
-            source_file_index,
-            0,
-        ))
+    fn missing_slot(parser: &mut Parser, context: &mut Context) -> ExpressionSlot {
+        ExpressionSlot::Missing(parser.missing_syntax_source(context))
+    }
+
+    fn missing_constant_slot(parser: &mut Parser, context: &mut Context) -> ConstantExpressionSlot {
+        ConstantExpressionSlot::Missing(parser.missing_syntax_source(context))
     }
 
     fn merge_token(&mut self, parser: &Parser, context: &mut Context, token: Token) {
@@ -1186,8 +1339,7 @@ impl StatementFrame {
 
     fn merge_slot(&mut self, parser: &Parser, context: &mut Context, slot: ExpressionSlot) {
         let source = match slot {
-            | ExpressionSlot::Parsed(index) =>
-                parser.syntax.expressions[index.0 as usize].source_vectors,
+            | ExpressionSlot::Parsed(index) => parser.syntax[index].source_vectors,
             | ExpressionSlot::Missing(source) => source,
         };
         if source.length > 0 {
@@ -1205,8 +1357,7 @@ impl StatementFrame {
         slot: ConstantExpressionSlot,
     ) {
         let source = match slot {
-            | ConstantExpressionSlot::Parsed(index) =>
-                parser.syntax.expressions[index.0 as usize].source_vectors,
+            | ConstantExpressionSlot::Parsed(index) => parser.syntax[index].source_vectors,
             | ConstantExpressionSlot::Missing(source) => source,
         };
         if source.length > 0 {
@@ -1267,23 +1418,16 @@ impl StatementFrame {
         context: &mut Context,
         kind: StatementType,
     ) -> ParseAction {
-        let index = parser.syntax.statements.len().to_u32();
-        let source_vectors = self.source_vectors.unwrap_or_else(|| {
-            context.create_source_vectors(parser.position(context), parser.source_file_index(), 0)
+        let source_vectors = self
+            .source_vectors
+            .unwrap_or_else(|| parser.missing_syntax_source(context));
+        let index = parser.push_syntax(Statement {
+            kind,
+            source_vectors,
+            recovered: parser.hard_error_count > self.starting_error_count,
         });
-        parser.push_syntax(
-            |syntax| &mut syntax.statements,
-            Statement {
-                kind,
-                source_vectors,
-                recovered: parser.hard_error_count > self.starting_error_count,
-            },
-        );
         self.restore_scopes(parser);
-        ParseAction::Reduce(ParseValue::Statement(StatementIndex(
-            index,
-            parser.syntax_id,
-        )))
+        ParseAction::Reduce(ParseValue::Statement(StatementIndex(index)))
     }
 
     fn restore_scopes(&mut self, parser: &mut Parser) {

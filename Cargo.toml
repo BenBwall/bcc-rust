@@ -12,6 +12,8 @@ rust-version = "1.99.0"
 
 [features]
 benchmarking-internals = ["dep:coz"]
+# Vectorized lexer scans through the unstable `std::simd`; requires nightly.
+portable-simd = []
 
 [profile.release]
 lto = "fat"

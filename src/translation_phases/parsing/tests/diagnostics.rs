@@ -18,7 +18,10 @@ use crate::{
         GetPosition,
         TranslationError,
         parsing::{
-            declaration_syntax::TypeSpecifiers,
+            declaration_syntax::{
+                ParameterDeclaration,
+                TypeSpecifiers,
+            },
             errors::{
                 ExpectedSyntax,
                 ParserDiagnosticCode,
@@ -29,6 +32,7 @@ use crate::{
             machine::ParseFrameKind,
             syntax::{
                 BinaryOperator,
+                Expression,
                 ExpressionType,
                 ExternalDeclaration,
                 StatementType,
@@ -157,10 +161,10 @@ fn strict_c99_compatibility_corpus_matches_reviewed_parser_boundaries() {
                     parsed.items.as_slice(),
                     [ExternalDeclaration::RecoveredFunctionDefinition(_)]
                 ));
-                assert!(parsed.parser.syntax.expressions.iter().any(|expression| {
+                assert!(parsed.parser.syntax.iter::<Expression>().any(|expression| {
                     matches!(expression.kind, ExpressionType::Error) && expression.recovered
                 }));
-                assert!(parsed.parser.syntax.expressions.iter().all(|expression| {
+                assert!(parsed.parser.syntax.iter::<Expression>().all(|expression| {
                     !matches!(expression.kind, ExpressionType::CompoundLiteral { .. })
                 }));
             },
@@ -169,8 +173,7 @@ fn strict_c99_compatibility_corpus_matches_reviewed_parser_boundaries() {
                     parsed
                         .parser
                         .syntax
-                        .expressions
-                        .iter()
+                        .iter::<Expression>()
                         .any(|expression| matches!(
                             expression.kind,
                             ExpressionType::Binary {
@@ -189,8 +192,7 @@ fn strict_c99_compatibility_corpus_matches_reviewed_parser_boundaries() {
                     parsed
                         .parser
                         .syntax
-                        .parameter_declarations
-                        .iter()
+                        .iter::<ParameterDeclaration>()
                         .any(|parameter| {
                             matches!(
                                 parameter.declaration_specifiers.type_specifiers,
@@ -298,7 +300,7 @@ fn prototype_declaration_list_is_retained_in_one_recovered_function() {
     let definition = function_definition(&parsed, 0);
     assert_eq!(definition.declaration_list.length(), 1);
     assert!(matches!(
-        parsed.parser.syntax.statements[definition.body.0 as usize].kind,
+        parsed.parser.syntax[definition.body].kind,
         StatementType::Compound { .. }
     ));
 }
@@ -313,7 +315,7 @@ fn declaration_continuation_diagnostic_has_structured_expectation() {
             | TranslationError::Parsing(error)
                 if matches!(
                     error.error_type,
-                    ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(_)
+                    ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
                 ) =>
                 Some(error),
             | _ => None,

@@ -24,8 +24,8 @@ use super::{
     },
     expression_operators::is_operator,
     external_declaration::ExternalDeclarationFrame,
+    frame_pool::FramePools,
     machine::{
-        FrameStep,
         ParseAction,
         ParseFrame,
         ParseFrameKind,
@@ -48,18 +48,19 @@ use super::{
         ExternalDeclaration,
         Identifier,
         StatementIndex,
-        SyntaxTreeId,
+        SyntaxList,
     },
     syntax_store::{
-        Arena,
         SyntaxStore,
         SyntaxStoreCheckpoint,
         SyntaxTree,
     },
-    token_cursor::TokenCursor,
+    token_cursor::{
+        TokenCursor,
+        Upstream,
+    },
 };
 use crate::{
-    diagnostics::c_quoted,
     translation_phases::{
         Context,
         ErrorSeverity,
@@ -86,11 +87,27 @@ impl Parser {
     ///
     /// C99: the input is the translation unit produced after phase 7 under
     /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
-    pub(crate) fn new(preprocessor: Preprocessor) -> Self {
+    pub(crate) fn new(mut preprocessor: Preprocessor) -> Self {
+        preprocessor.prepare_for_parsing();
+        Self::with_upstream(Upstream::Preprocessor(preprocessor))
+    }
+
+    /// Preprocesses the whole translation unit, then creates an idle parser
+    /// over the result. Every preprocessing diagnostic is pending in
+    /// `context` before any parser diagnostic.
+    pub(crate) fn after_preprocessing(
+        mut preprocessor: Preprocessor,
+        context: &mut Context,
+    ) -> Self {
+        preprocessor.prepare_for_parsing();
+        Self::with_upstream(Upstream::preprocess_all(preprocessor, context))
+    }
+
+    fn with_upstream(upstream: Upstream) -> Self {
         Self {
-            syntax_id: SyntaxTreeId::fresh(),
-            cursor: TokenCursor::new(preprocessor),
+            cursor: TokenCursor::new(upstream),
             frames: Vec::new(),
+            pools: FramePools::default(),
             retained_frame_nodes: 0,
             returned: None,
             syntax: SyntaxStore::default(),
@@ -151,7 +168,7 @@ impl Parser {
             roots.push(root);
         }
         let roots = roots.into_boxed_slice();
-        let syntax = SyntaxTree::new(self.syntax_id, self.syntax, &roots);
+        let syntax = SyntaxTree::new(self.syntax, &roots);
         ParsedTranslationUnit { roots, syntax }
     }
 
@@ -179,6 +196,9 @@ impl Parser {
                 };
                 self.has_external_declaration = true;
                 self.external_declaration_count += 1;
+                context.discard_completed_macro_locations(
+                    self.cursor.previous.map(|token| token.source_vectors),
+                );
                 return Some(external);
             }
             debug_assert!(
@@ -232,9 +252,10 @@ impl Parser {
             // stack, so it is detached while the frame borrows the parser.
             let mut frames = std::mem::take(&mut self.frames);
             let frame = frames.last_mut().expect("parser frame stack is nonempty");
-            self.active_frame = frame.kind();
+            let frame_kind = frame.kind();
+            self.active_frame = frame_kind;
             let retained_before = frame.retained_node_count();
-            let FrameStep { frame_kind, action } = frame.step(self, context, token, returned);
+            let action = frame.step(self, context, token, returned);
             let retained_after = frame.retained_node_count();
             self.frames = frames;
             self.retained_frame_nodes = self
@@ -290,7 +311,8 @@ impl Parser {
                     self.push_frame(child);
                 },
                 | ParseAction::Reduce(value) => {
-                    drop(self.pop_frame());
+                    let mut frame = self.pop_frame();
+                    frame.reclaim_pooled(&mut self.pools);
                     self.returned = Some(value);
                 },
                 | ParseAction::Reprocess => {},
@@ -323,20 +345,33 @@ impl Parser {
         }
     }
 
-    /// Adds one node to a syntax arena and counts it toward the node limit.
-    pub(super) fn push_syntax<T>(&mut self, arena: fn(&mut SyntaxStore) -> &mut Arena<T>, node: T) {
-        self.syntax_nodes += 1;
-        arena(&mut self.syntax).0.push(node);
+    /// Returns a zero-width location for syntax the input left out: the start
+    /// of the current token, or the end of input when no token remains.
+    ///
+    /// Unlike the upstream position, this does not depend on how far the
+    /// preprocessor has read ahead, so every preprocessing strategy places
+    /// recovered and missing nodes identically.
+    pub(super) fn missing_syntax_source(&mut self, context: &mut Context) -> SourceVectors {
+        if let Some(token) = self.cursor.current(context)
+            && let Some(first) = context.get_source_vectors(token.source_vectors).first()
+        {
+            let (position, source_file_index) = (first.position(context), first.source_file_index);
+            return context.create_retained_source_vectors(position, source_file_index, 0);
+        }
+        context.create_retained_source_vectors(self.position(context), self.source_file_index(), 0)
     }
 
-    /// Moves frame-retained nodes into a syntax arena and counts them.
-    pub(super) fn append_syntax<T>(
-        &mut self,
-        arena: fn(&mut SyntaxStore) -> &mut Arena<T>,
-        nodes: &mut Vec<T>,
-    ) {
+    /// Adds one node to the syntax arena, counts it toward the node limit,
+    /// and returns its raw handle.
+    pub(super) fn push_syntax<T: 'static>(&mut self, node: T) -> u32 {
+        self.syntax_nodes += 1;
+        self.syntax.push(node)
+    }
+
+    /// Moves frame-retained nodes into one syntax list and counts them.
+    pub(super) fn append_syntax<T: 'static>(&mut self, nodes: &mut Vec<T>) -> SyntaxList<T> {
         self.syntax_nodes += nodes.len();
-        arena(&mut self.syntax).0.append(nodes);
+        self.syntax.append(nodes)
     }
 
     /// Truncates the arenas to `checkpoint` and resynchronizes the total.
@@ -345,7 +380,8 @@ impl Parser {
         self.syntax_nodes = self.syntax.node_count();
     }
 
-    fn push_frame(&mut self, frame: ParseFrame) {
+    fn push_frame(&mut self, mut frame: ParseFrame) {
+        frame.lend_pooled(&mut self.pools);
         self.retained_frame_nodes = self
             .retained_frame_nodes
             .saturating_add(frame.retained_node_count());
@@ -374,7 +410,13 @@ impl Parser {
         self.has_external_declaration = true;
         let token = self.cursor.current(context);
         let source_vectors = token.map_or_else(
-            || context.create_source_vectors(self.position(context), self.source_file_index(), 0),
+            || {
+                context.create_retained_source_vectors(
+                    self.position(context),
+                    self.source_file_index(),
+                    0,
+                )
+            },
             |token| token.source_vectors,
         );
         self.report(
@@ -606,9 +648,9 @@ impl Parser {
         let found_spelling = token.map(|token| -> Box<str> {
             match token.kind {
                 | TokenType::String(StringTokenType::String(contents)) =>
-                    c_quoted("", '"', context.string_cache.at(contents)).into(),
+                    context.literal_spelling(contents, false).into(),
                 | TokenType::String(StringTokenType::WideString(contents)) =>
-                    c_quoted("L", '"', context.string_cache.at(contents)).into(),
+                    context.literal_spelling(contents, true).into(),
                 | _ => context
                     .string_cache
                     .at(token.contents)
@@ -616,10 +658,10 @@ impl Parser {
                     .into(),
             }
         });
-        let source_vectors = token.map_or_else(
-            || context.create_source_vectors(self.position(context), self.source_file_index(), 0),
-            |token| token.source_vectors,
-        );
+        let source_vectors = match token {
+            | Some(token) => token.source_vectors,
+            | None => self.missing_syntax_source(context),
+        };
         let insertion_point = if error_type.expects_terminating_semicolon() {
             self.semicolon_insertion_point(context, token)
         } else {
@@ -639,6 +681,10 @@ impl Parser {
             ranges: Box::new([]),
             related: Box::new([]),
             recovery: None,
+            consumed_tokens: self.cursor.consumed,
+            ordering_location: context
+                .user_source_end(source_vectors)
+                .map(|location| (location.source_file_index, location.index)),
         });
     }
 
@@ -646,13 +692,13 @@ impl Parser {
     /// just reported, explaining why the following input was misread.
     pub(super) fn suggest_semicolon_after(&self, context: &mut Context, source: SourceVectors) {
         _ = self;
-        let Some(last) = context.get_source_vectors(source).last().cloned() else {
+        let Some(last) = context.user_source_end(source) else {
             return;
         };
-        let column = last.column + u32::try_from(last.length).unwrap_or(0);
-        let insertion_point = context.create_source_vectors(
+        let column = last.column + last.length;
+        let insertion_point = context.create_retained_source_vectors(
             SourcePosition {
-                index: last.index + last.length,
+                index: last.end(),
                 line: last.line,
                 column,
             },
@@ -678,10 +724,7 @@ impl Parser {
         found: Option<Token>,
     ) -> Option<SourceVectors> {
         let previous = self.cursor.previous?;
-        let previous = context
-            .get_source_vectors(previous.source_vectors)
-            .last()?
-            .clone();
+        let previous = context.user_source_end(previous.source_vectors)?;
         let next = context
             .get_source_vectors(found?.source_vectors)
             .first()?
@@ -689,11 +732,10 @@ impl Parser {
         if previous.source_file_index != next.source_file_index || previous.line >= next.line {
             return None;
         }
-        let column =
-            previous.column + u32::try_from(previous.length).unwrap_or(u32::MAX - previous.column);
-        Some(context.create_source_vectors(
+        let column = previous.column + previous.length;
+        Some(context.create_retained_source_vectors(
             SourcePosition {
-                index: previous.index + previous.length,
+                index: previous.end(),
                 line: previous.line,
                 column,
             },
@@ -803,6 +845,57 @@ impl Parser {
     /// C99: typedef-name is §6.7.7, pp. 123-124; PDF pp. 135-136, and its
     /// declarator ambiguity is constrained by §6.7.5.3 paragraph 11,
     /// p. 119; PDF p. 131.
+    /// Returns whether the declaration starting at the current token
+    /// declares one of `names`, judged from its first identifiers that are
+    /// neither typedef names nor tags. Recovery uses this to tell an
+    /// old-style parameter declaration from an unrelated declaration that
+    /// follows a head missing its `;`. When the scan runs out of lookahead it
+    /// answers yes, keeping the definition reading.
+    pub(super) fn next_declaration_declares_one_of(
+        &mut self,
+        context: &mut Context,
+        names: &[StringCacheId],
+    ) -> bool {
+        const LOOKAHEAD: usize = 32;
+        let mut after_tag_keyword = false;
+        let mut depth = 0_usize;
+        for index in 0..LOOKAHEAD {
+            let token = if index == 0 {
+                self.cursor.current(context)
+            } else {
+                self.cursor.lookahead(context, index - 1)
+            };
+            let Some(token) = token else {
+                return false;
+            };
+            match token.kind {
+                | TokenType::Keyword(
+                    KeywordTokenType::Struct | KeywordTokenType::Union | KeywordTokenType::Enum,
+                ) => after_tag_keyword = true,
+                | TokenType::Identifier => {
+                    let tag = std::mem::take(&mut after_tag_keyword);
+                    if depth == 0 && !tag && !self.scopes.is_typedef(token.contents) {
+                        return names.contains(&token.contents);
+                    }
+                },
+                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
+                    after_tag_keyword = false;
+                    depth += 1;
+                },
+                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
+                    depth = depth.saturating_sub(1);
+                },
+                | TokenType::Operator(
+                    OperatorTokenType::Semicolon
+                    | OperatorTokenType::Comma
+                    | OperatorTokenType::Equals,
+                ) if depth == 0 => return false,
+                | _ => after_tag_keyword = false,
+            }
+        }
+        true
+    }
+
     pub(super) fn typedef_name_continues_specifiers(&mut self, context: &mut Context) -> bool {
         let Some(following) = self.cursor.following(context) else {
             return false;
@@ -841,13 +934,12 @@ impl Parser {
     pub(super) fn declarator_identifier(&self, declarator: Declarator) -> Option<Identifier> {
         let mut declarator = declarator;
         loop {
-            let start = declarator.kind.start_index() as usize;
-            let end = start + declarator.kind.length() as usize;
             let mut nested = None;
-            for direct in &self.syntax.direct_declarators[start..end] {
+            for direct in &self.syntax[declarator.kind] {
                 match *direct {
                     | DirectDeclarator::Identifier(identifier) => return Some(identifier),
-                    | DirectDeclarator::Parenthesized(child) => nested = Some(child),
+                    | DirectDeclarator::Parenthesized(index) =>
+                        nested = Some(self.syntax[index].declarator),
                     | _ => {},
                 }
             }
@@ -859,24 +951,19 @@ impl Parser {
         &self,
         declaration: DeclarationIndex,
     ) -> Option<Declarator> {
-        let declaration = self.syntax.declarations.get(declaration.0 as usize)?;
-        if declaration.init_declarators.length() != 1 {
+        let [init] = &self.syntax[self.syntax[declaration].init_declarators] else {
             return None;
-        }
-        let init = self
-            .syntax
-            .init_declarators
-            .get(declaration.init_declarators.start_index() as usize)?;
+        };
         init.initializer.is_none().then_some(init.declarator)
     }
 
     pub(super) fn declaration_is_definition_head(&self, declaration: DeclarationIndex) -> bool {
-        self.syntax.declarations[declaration.0 as usize].is_function_definition_head
+        self.syntax[declaration].is_function_definition_head
             && self.declaration_head_declarator(declaration).is_some()
     }
 
     pub(super) fn declaration_is_meaningful(&self, declaration: DeclarationIndex) -> bool {
-        let declaration = &self.syntax.declarations[declaration.0 as usize];
+        let declaration = &self.syntax[declaration];
         let specifiers = declaration.declaration_specifiers;
         declaration.init_declarators.length() > 0
             || specifiers.storage_class.is_some()
@@ -888,9 +975,7 @@ impl Parser {
     pub(super) fn function_suffix(&self, mut declarator: Declarator) -> Option<DirectDeclarator> {
         let mut suffix = None;
         loop {
-            let start = declarator.kind.start_index() as usize;
-            let end = start + declarator.kind.length() as usize;
-            let direct = &self.syntax.direct_declarators[start..end];
+            let direct = &self.syntax[declarator.kind];
             if let Some(candidate) = direct.get(1).copied()
                 && matches!(
                     candidate,
@@ -899,10 +984,10 @@ impl Parser {
             {
                 suffix = Some(candidate);
             }
-            let Some(DirectDeclarator::Parenthesized(nested)) = direct.first() else {
+            let Some(DirectDeclarator::Parenthesized(index)) = direct.first() else {
                 return suffix;
             };
-            declarator = *nested;
+            declarator = self.syntax[*index].declarator;
         }
     }
 
@@ -915,27 +1000,18 @@ impl Parser {
         while let Some(type_specifiers) = pending.pop() {
             match type_specifiers {
                 | TypeSpecifiers::Enum(index) => {
-                    if let Some(enumeration_list) =
-                        self.syntax.enum_specifiers[index.0 as usize].enumeration_list
-                    {
-                        let start = enumeration_list.start_index() as usize;
-                        let end = start + enumeration_list.length() as usize;
+                    if let Some(enumeration_list) = self.syntax[index].enumeration_list {
                         names.extend(
-                            self.syntax.enumerators[start..end]
+                            self.syntax[enumeration_list]
                                 .iter()
                                 .map(|enumerator| enumerator.name.name),
                         );
                     }
                 },
                 | TypeSpecifiers::StructOrUnion(index) => {
-                    if let Some(declarations) = self.syntax.struct_or_union_specifiers
-                        [index.0 as usize]
-                        .struct_declaration_list
-                    {
-                        let start = declarations.start_index() as usize;
-                        let end = start + declarations.length() as usize;
+                    if let Some(declarations) = self.syntax[index].struct_declaration_list {
                         pending.extend(
-                            self.syntax.struct_declarations[start..end]
+                            self.syntax[declarations]
                                 .iter()
                                 .map(|declaration| declaration.type_specifiers),
                         );
@@ -947,7 +1023,7 @@ impl Parser {
     }
 
     pub(super) fn statement_source(&self, index: StatementIndex) -> SourceVectors {
-        self.syntax.statements[index.0 as usize].source_vectors
+        self.syntax[index].source_vectors
     }
 
     pub(super) fn store_expression(
@@ -958,29 +1034,16 @@ impl Parser {
         recovered: bool,
     ) -> ExpressionIndex {
         let recovered = recovered || self.expression_children_recovered(&kind);
-        let index = ExpressionIndex(
-            self.syntax
-                .expressions
-                .len()
-                .try_into()
-                .expect("expression arena length must fit in u32"),
-            self.syntax_id,
-        );
-        self.push_syntax(
-            |syntax| &mut syntax.expressions,
-            Expression {
-                kind,
-                source_vectors,
-                operator_source_vectors,
-                recovered,
-            },
-        );
-        index
+        ExpressionIndex(self.push_syntax(Expression {
+            kind,
+            source_vectors,
+            operator_source_vectors,
+            recovered,
+        }))
     }
 
     fn expression_children_recovered(&self, kind: &ExpressionType) -> bool {
-        let expression_recovered =
-            |index: ExpressionIndex| self.syntax.expressions[index.0 as usize].recovered;
+        let expression_recovered = |index: ExpressionIndex| self.syntax[index].recovered;
         match kind {
             | ExpressionType::Parenthesized { expression }
             | ExpressionType::Unary {
@@ -1004,15 +1067,12 @@ impl Parser {
             | ExpressionType::Call {
                 function_expression,
                 arguments,
-            } => {
-                let start = arguments.start_index() as usize;
-                let end = start + arguments.length() as usize;
+            } =>
                 expression_recovered(*function_expression)
-                    || self.syntax.expression_indices[start..end]
+                    || self.syntax[*arguments]
                         .iter()
                         .copied()
-                        .any(expression_recovered)
-            },
+                        .any(expression_recovered),
             | ExpressionType::DirectMember {
                 base_expression, ..
             }
@@ -1022,17 +1082,12 @@ impl Parser {
             | ExpressionType::CompoundLiteral {
                 type_name,
                 initializer,
-            } =>
-                self.syntax.type_names[type_name.0 as usize].recovered
-                    || self.syntax.initializers[initializer.0 as usize].recovered,
-            | ExpressionType::SizeofType(type_name) =>
-                self.syntax.type_names[type_name.0 as usize].recovered,
+            } => self.syntax[*type_name].recovered || self.syntax[*initializer].recovered,
+            | ExpressionType::SizeofType(type_name) => self.syntax[*type_name].recovered,
             | ExpressionType::Cast {
                 target_type,
                 operand_expression,
-            } =>
-                self.syntax.type_names[target_type.0 as usize].recovered
-                    || expression_recovered(*operand_expression),
+            } => self.syntax[*target_type].recovered || expression_recovered(*operand_expression),
             | ExpressionType::Error => true,
             | ExpressionType::Identifier(..)
             | ExpressionType::Constant(..)

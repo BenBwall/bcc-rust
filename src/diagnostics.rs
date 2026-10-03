@@ -384,10 +384,10 @@ impl Renderer {
                 let Some(text) = context.source_text(file) else {
                     continue;
                 };
-                let offset = vector.index.min(text.len());
+                let offset = (vector.index as usize).min(text.len());
                 let (line, line_start, line_end) = self.locate(file, text, offset);
                 let start = offset.max(line_start);
-                let end = (vector.index + vector.length).clamp(start, line_end);
+                let end = vector.end().clamp(start, line_end);
                 // Adjacent segments of one range on one line form one mark.
                 if let Some(last) = marks.last_mut()
                     && last.file == file

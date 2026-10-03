@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use proptest::prelude::*;
 
 use super::{
+    Parsed,
     parse,
     parse_unit,
     parser_errors,
@@ -13,6 +14,7 @@ use crate::{
     translation_phases::{
         Context,
         GetSourceVectors,
+        SourceVector,
         TranslationError,
         TranslationPhase,
         parsing::{
@@ -100,34 +102,6 @@ fn complete_translation_unit_retains_roots_already_streamed() {
         })
         .collect::<Vec<_>>();
     assert_eq!(names, ["first", "second"]);
-}
-
-#[test]
-fn syntax_tree_rejects_handles_from_another_parsed_unit() {
-    let (first, _) = parse_unit("int first;\n");
-    let (second, _) = parse_unit("int second;\n");
-    let ExternalDeclaration::Declaration(first_declaration) = first.external_declarations()[0]
-    else {
-        panic!("expected a declaration root")
-    };
-    let first_init_declarators = first
-        .syntax()
-        .declaration(first_declaration)
-        .syntax()
-        .init_declarators;
-
-    let foreign_node = std::panic::catch_unwind(|| second.syntax().declaration(first_declaration));
-    let foreign_list =
-        std::panic::catch_unwind(|| second.syntax().init_declarators(first_init_declarators));
-
-    assert!(
-        foreign_node.is_err(),
-        "a foreign handle must not resolve silently"
-    );
-    assert!(
-        foreign_list.is_err(),
-        "a foreign list handle must not resolve silently"
-    );
 }
 
 #[test]
@@ -312,11 +286,12 @@ fn inspection_has_a_stable_statement_expression_and_missing_slot_golden() {
     );
 
     let expected = [
-        "recovered-function-definition f recovered type=int",
+        "recovered-function-definition f recovered type=int storage=none qualifiers=none \
+         function-specifiers=none",
         "  declarator: declarator pointer-levels=0",
         "    identifier f",
         "    function variadic=false",
-        "      parameter type=void",
+        "      parameter type=void storage=none qualifiers=none function-specifiers=none",
         "  body: compound recovered",
         "    block-item: if",
         "      condition: identifier x",
@@ -423,4 +398,33 @@ proptest! {
             prop_assert!(vectors.length > 0 || source.is_empty());
         }
     }
+}
+
+#[test]
+fn pending_preprocessing_diagnostics_survive_arena_compaction() {
+    fn preprocessing_vectors(parsed: &Parsed) -> Vec<SourceVector> {
+        parsed
+            .errors
+            .iter()
+            .filter_map(|error| match error {
+                | TranslationError::Preprocessing(error) => Some(error.source_vectors),
+                | _ => None,
+            })
+            .flat_map(|source| parsed.context.get_source_vectors(source).to_vec())
+            .collect()
+    }
+
+    let short = parse("#undef\nint first;\n");
+    let long = parse(&format!(
+        "#undef\nint first;\n{}",
+        "int later;\n".repeat(200)
+    ));
+
+    assert_ne!(preprocessing_vectors(&short), []);
+    assert_eq!(preprocessing_vectors(&short), preprocessing_vectors(&long));
+    assert!(
+        long.context.source_vectors.0.len() < 16,
+        "the parser left {} vectors in the preprocessor arena",
+        long.context.source_vectors.0.len()
+    );
 }

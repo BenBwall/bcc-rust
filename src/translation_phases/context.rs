@@ -23,30 +23,121 @@ use crate::{
     translation_phases::{
         initial_processing::InitialProcessorError,
         parsing::ParserError,
-        preprocessing::PreprocessorError,
-        preprocessor_tokenizer::PreprocessorTokenizerError,
+        preprocessing::{
+            KeywordTokenType,
+            LiteralId,
+            LiteralUnit,
+            PreprocessorError,
+        },
+        preprocessor_tokenizer::{
+            LexingStrategy,
+            PreprocessorTokenizerError,
+        },
     },
     util::{
+        HashMap,
         dedup_arena::DedupArena,
         shared::SharedString,
-        string_cache::StringCache,
+        string_cache::{
+            StringCache,
+            StringCacheId,
+        },
         vector_slice::UsizeExt,
     },
 };
 
+/// Endpoints are normally appended in source-arena order. Keep sparse keys
+/// packed, and reuse end locations within each invocation. Unlike a global
+/// interner, the transient pool is cleared during preprocessing compaction.
+#[derive(Default)]
+struct ExpansionSites {
+    entries: Vec<(u32, u32)>,
+    ends:    Vec<SourceVector>,
+}
+
+impl ExpansionSites {
+    fn get(&self, end: u32) -> Option<u32> {
+        let &(last, id) = self.entries.last()?;
+        if end >= last {
+            return (end == last).then_some(id);
+        }
+        self.entries
+            .binary_search_by_key(&end, |&(key, _)| key)
+            .ok()
+            .map(|index| self.entries[index].1)
+    }
+
+    fn insert(&mut self, end: u32, id: u32) {
+        if let Some(last) = self.entries.last_mut() {
+            if last.0 == end {
+                last.1 = id;
+                return;
+            }
+            if last.0 > end {
+                match self.entries.binary_search_by_key(&end, |&(key, _)| key) {
+                    | Ok(index) => self.entries[index].1 = id,
+                    | Err(index) => self.entries.insert(index, (end, id)),
+                }
+                return;
+            }
+        }
+        self.entries.push((end, id));
+    }
+
+    fn site_id(&mut self, site: SourceVector) -> u32 {
+        if self.ends.last() == Some(&site) {
+            return (self.ends.len() - 1).to_u32();
+        }
+        let id = self.ends.len().to_u32();
+        self.ends.push(site);
+        id
+    }
+
+    fn discard_before(&mut self, end: u32) {
+        let count = self.entries.partition_point(|&(key, _)| key < end);
+        // Compact geometrically for full-batch input; shifting the whole tail
+        // after every declaration would make parsing quadratic.
+        if count == 0 || count < self.entries.len() / 2 {
+            return;
+        }
+        drop(self.entries.drain(..count));
+        let Some(first_id) = self.entries.iter().map(|&(_, id)| id).min() else {
+            self.ends.clear();
+            return;
+        };
+        drop(self.ends.drain(..first_id as usize));
+        for (_, id) in &mut self.entries {
+            *id -= first_id;
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.ends.clear();
+    }
+}
+
 pub(crate) struct Context {
-    pub(crate) configuration:     CompilerConfiguration,
-    pub(crate) source_vectors:    SourceVectorStack,
-    parser_token_vectors:         Vec<SourceVector>,
-    parser_merge_vectors:         Vec<SourceVector>,
-    pub(crate) string_cache:      StringCache,
-    is_tokenizing_include_string: bool,
-    ignore_tokenizer_errors:      bool,
-    pub(super) pending_errors:    VecDeque<TranslationError>,
-    pub(crate) source_files:      DedupArena<Box<Path>, FxBuildHasher>,
+    pub(crate) configuration:         CompilerConfiguration,
+    pub(crate) source_vectors:        SourceVectorStack,
+    parser_token_vectors:             Vec<SourceVector>,
+    retained_vectors:                 Vec<SourceVector>,
+    pub(crate) string_cache:          StringCache,
+    pub(crate) canonical_identifiers: HashMap<StringCacheId, StringCacheId>,
+    literal_values:                   DedupArena<Box<[LiteralUnit]>, FxBuildHasher>,
+    /// Sparse endpoints follow their source arena's lifetime.
+    expansion_sites:                  [ExpansionSites; 3],
+    is_tokenizing_include_string:     bool,
+    ignore_tokenizer_errors:          bool,
+    lexing_strategy:                  LexingStrategy,
+    pub(super) pending_errors:        VecDeque<TranslationError>,
+    /// How many leading pending errors no longer refer to the preprocessor
+    /// arena, so compaction relocates each error's provenance only once.
+    relocated_errors:                 usize,
+    pub(crate) source_files:          DedupArena<Box<Path>, FxBuildHasher>,
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
-    source_texts:                 Vec<Option<SharedString>>,
+    source_texts:                     Vec<Option<SharedString>>,
 }
 
 impl Context {
@@ -55,18 +146,151 @@ impl Context {
     }
 
     pub(crate) fn with_configuration(configuration: CompilerConfiguration) -> Self {
+        let mut string_cache = StringCache::new();
+        for &keyword in KeywordTokenType::ALL {
+            let id = string_cache.intern(keyword.spelling());
+            debug_assert_eq!(
+                id,
+                keyword.cache_id(),
+                "keywords must occupy the reserved prefix"
+            );
+        }
         Self {
             configuration,
             source_vectors: SourceVectorStack(Vec::new()),
             parser_token_vectors: Vec::new(),
-            parser_merge_vectors: Vec::new(),
-            string_cache: StringCache::new(),
+            retained_vectors: Vec::new(),
+            string_cache,
+            canonical_identifiers: HashMap::default(),
+            literal_values: DedupArena::new(),
+            expansion_sites: Default::default(),
             is_tokenizing_include_string: false,
             ignore_tokenizer_errors: false,
+            lexing_strategy: LexingStrategy::default(),
             pending_errors: VecDeque::new(),
+            relocated_errors: 0,
             source_files: DedupArena::new(),
             source_texts: Vec::new(),
         }
+    }
+
+    pub(crate) fn record_expansion_end(&mut self, source: SourceVectors, site: SourceVector) {
+        if source.length != 0 {
+            let (arena, start) = SourceArena::decode(source);
+            let sites = &mut self.expansion_sites[arena as usize];
+            let id = sites.site_id(site);
+            sites.insert(start + source.length - 1, id);
+        }
+    }
+
+    /// Where a source range ends in the user's input, before macro expansion.
+    pub(crate) fn user_source_end(&self, source: SourceVectors) -> Option<SourceVector> {
+        if source.length == 0 {
+            return None;
+        }
+        let (arena, start) = SourceArena::decode(source);
+        self.expansion_sites[arena as usize]
+            .get(start + source.length - 1)
+            .map(|id| self.expansion_sites[arena as usize].ends[id as usize].clone())
+            .or_else(|| self.get_source_vectors(source).last().cloned())
+    }
+
+    /// Hint metadata is needed only by the active external declaration. Keep
+    /// `previous` and prefetched tokens, but no endpoints from completed
+    /// syntax.
+    pub(crate) fn discard_completed_macro_locations(&mut self, previous: Option<SourceVectors>) {
+        if self.expansion_sites[SourceArena::Retained as usize]
+            .entries
+            .is_empty()
+            && self.expansion_sites[SourceArena::ParserTokens as usize]
+                .entries
+                .is_empty()
+        {
+            return;
+        }
+        self.expansion_sites[SourceArena::Retained as usize].clear();
+        if let Some(previous) = previous
+            && previous.length != 0
+        {
+            let (arena, start) = SourceArena::decode(previous);
+            if arena == SourceArena::ParserTokens {
+                self.expansion_sites[arena as usize].discard_before(start + previous.length - 1);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn macro_hint_storage_capacity(&self) -> usize {
+        self.expansion_sites
+            .iter()
+            .map(|sites| {
+                sites.entries.capacity() * size_of::<(u32, u32)>()
+                    + sites.ends.capacity() * size_of::<SourceVector>()
+            })
+            .sum()
+    }
+
+    pub(crate) fn intern_literal(&mut self, units: Vec<LiteralUnit>) -> LiteralId {
+        LiteralId(self.literal_values.intern(units.into_boxed_slice()))
+    }
+
+    pub(crate) fn literal_units(&self, id: LiteralId) -> &[LiteralUnit] {
+        &self.literal_values[id.0]
+    }
+
+    pub(crate) fn literal_bytes(&self, id: LiteralId) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for unit in self.literal_units(id) {
+            match *unit {
+                | LiteralUnit::Character(c) => {
+                    bytes.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
+                },
+                | LiteralUnit::Numeric(code) =>
+                    bytes.push(u8::try_from(code).expect("narrow escape checked during decoding")),
+            }
+        }
+        bytes
+    }
+
+    pub(crate) fn literal_wide_units(&self, id: LiteralId) -> Vec<u32> {
+        self.literal_units(id)
+            .iter()
+            .map(|unit| match *unit {
+                | LiteralUnit::Character(c) => u32::from(c),
+                | LiteralUnit::Numeric(code) => code,
+            })
+            .collect()
+    }
+
+    /// Text-only consumers (filenames and tests) must reject non-UTF-8 values.
+    pub(crate) fn literal_text(&self, id: LiteralId, wide: bool) -> Option<String> {
+        if wide {
+            self.literal_wide_units(id)
+                .into_iter()
+                .map(char::from_u32)
+                .collect()
+        } else {
+            String::from_utf8(self.literal_bytes(id)).ok()
+        }
+    }
+
+    pub(crate) fn literal_spelling(&self, id: LiteralId, wide: bool) -> String {
+        use std::fmt::Write;
+        if let Some(text) = self.literal_text(id, wide) {
+            return crate::diagnostics::c_quoted(if wide { "L" } else { "" }, '"', &text);
+        }
+        let mut spelling = String::from(if wide { "L\"" } else { "\"" });
+        if wide {
+            for unit in self.literal_wide_units(id) {
+                let _ = write!(spelling, "\\x{unit:x}");
+            }
+        } else {
+            for byte in self.literal_bytes(id) {
+                let _ = write!(spelling, "\\{byte:03o}");
+            }
+        }
+        spelling.push('"');
+        spelling
     }
 
     pub(crate) fn push_source_vector(
@@ -77,13 +301,9 @@ impl Context {
     ) -> u32 {
         let index = self.source_vectors.0.len().to_u32();
         assert!(index < SourceArena::INDEX_MASK, "source arena overflow");
-        self.source_vectors.0.push(SourceVector {
-            index: start_position.index,
-            column: start_position.column,
-            line: start_position.line,
-            source_file_index,
-            length,
-        });
+        self.source_vectors
+            .0
+            .push(SourceVector::new(start_position, source_file_index, length));
         index
     }
 
@@ -99,7 +319,8 @@ impl Context {
             .expect("overflow in duplicate_source_vectors");
         assert!(end <= SourceArena::INDEX_MASK, "source arena overflow");
         let start_index = self_source_vectors.len() as u32;
-        for i in source_vectors.start_index..source_vectors.start_index + source_vectors.length {
+        let start = source_vectors.start_index();
+        for i in start..start + source_vectors.length {
             self_source_vectors.push(self_source_vectors[i as usize].clone());
         }
         start_index
@@ -129,12 +350,23 @@ impl Context {
     /// result is copied into the preprocessor arena when both inputs live
     /// there, and into the parser merge arena when either is parser-owned; a
     /// left range already ending at that arena's tail is extended in place.
+    ///
+    /// A parser anchor (see [`Self::is_parser_anchor`]) after a nonempty
+    /// range, or before one that starts where it points, adds nothing and is
+    /// dropped. Keeping it would break adjacency, so every enclosing node of
+    /// recovered syntax would copy its whole provenance again.
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
         if v1.length == 0 {
             return v2;
         }
         if v2.length == 0 {
             return v1;
+        }
+        if self.is_parser_anchor(v2) && !self.is_parser_anchor(v1) {
+            return v1;
+        }
+        if self.is_parser_anchor(v1) && self.anchors_start_of(v1, v2) {
+            return v2;
         }
         let (arena1, start1) = SourceArena::decode(v1);
         let (arena2, start2) = SourceArena::decode(v2);
@@ -157,7 +389,35 @@ impl Context {
     /// Joins an ordered list of exact source segments in one allocation.
     /// List-owning parser frames defer this until reduction so a growing
     /// prefix is not copied once for every child.
+    ///
+    /// Parser anchors are dropped as in [`Self::merge_vectors`]: after the
+    /// first nonempty range, or before the range they point at.
     pub(crate) fn merge_vector_list(&mut self, sources: &[SourceVectors]) -> SourceVectors {
+        let mut kept = Vec::new();
+        let sources = if sources.iter().any(|source| self.is_parser_anchor(*source)) {
+            // Before the first real range, an anchor is dropped only if it
+            // points at the start of the next real range.
+            let first_real = sources
+                .iter()
+                .find(|source| source.length != 0 && !self.is_parser_anchor(**source))
+                .copied();
+            let mut real_seen = false;
+            for source in sources.iter().filter(|source| source.length != 0) {
+                if self.is_parser_anchor(*source) {
+                    if real_seen
+                        || first_real.is_some_and(|first| self.anchors_start_of(*source, first))
+                    {
+                        continue;
+                    }
+                } else {
+                    real_seen = true;
+                }
+                kept.push(*source);
+            }
+            &kept[..]
+        } else {
+            sources
+        };
         let mut first = None;
         let mut end = 0;
         let mut contiguous = true;
@@ -188,12 +448,28 @@ impl Context {
         target.encode(start, self.arena(target).len().to_u32())
     }
 
-    /// Copies a parser-fetched token's provenance into the parser token arena
-    /// once, so provenance of consecutively fetched tokens is adjacent.
-    pub(crate) fn record_parser_token_source(
-        &mut self,
-        source_vectors: SourceVectors,
-    ) -> SourceVectors {
+    /// Whether `source` only marks where the parser found syntax missing: a
+    /// zero-width location the parser created in the retained arena.
+    fn is_parser_anchor(&self, source: SourceVectors) -> bool {
+        source.length != 0
+            && SourceArena::decode(source).0 == SourceArena::Retained
+            && self
+                .get_source_vectors(source)
+                .iter()
+                .all(|vector| vector.length == 0)
+    }
+
+    /// Whether the anchor `anchor` points exactly at the start of `source`.
+    fn anchors_start_of(&self, anchor: SourceVectors, source: SourceVectors) -> bool {
+        let anchor = self.first_source_vector(anchor);
+        let start = self.first_source_vector(source);
+        anchor.source_file_index == start.source_file_index && anchor.index == start.index
+    }
+
+    /// Copies a phase-6 output token's provenance into the token arena once,
+    /// so provenance of consecutive tokens is adjacent and survives
+    /// [`Self::compact_preprocessor_vectors`].
+    pub(crate) fn retain_token_source(&mut self, source_vectors: SourceVectors) -> SourceVectors {
         if source_vectors.length == 0
             || SourceArena::decode(source_vectors).0 != SourceArena::Preprocessor
         {
@@ -204,18 +480,62 @@ impl Context {
         SourceArena::ParserTokens.encode(start, self.parser_token_vectors.len().to_u32())
     }
 
+    /// Creates a location in the retained arena, which preprocessor-arena
+    /// compaction never discards. The parser makes its locations here.
+    pub(crate) fn create_retained_source_vectors(
+        &mut self,
+        start_position: SourcePosition,
+        source_file_index: u32,
+        length: usize,
+    ) -> SourceVectors {
+        let start = self.retained_vectors.len().to_u32();
+        self.retained_vectors
+            .push(SourceVector::new(start_position, source_file_index, length));
+        SourceArena::Retained.encode(start, self.retained_vectors.len().to_u32())
+    }
+
+    /// Discards the preprocessor provenance arena once nothing but pending
+    /// diagnostics can still refer to it. Those ranges move to the retained
+    /// arena first, so diagnostics read the same vectors afterwards.
+    pub(crate) fn compact_preprocessor_vectors(&mut self) {
+        if self.source_vectors.0.is_empty() {
+            return;
+        }
+        let mut pending_errors = std::mem::take(&mut self.pending_errors);
+        for error in pending_errors.iter_mut().skip(self.relocated_errors) {
+            error.for_each_source_vectors_mut(&mut |source_vectors| {
+                *source_vectors = self.retain_preprocessor_range(*source_vectors);
+            });
+        }
+        self.relocated_errors = pending_errors.len();
+        self.pending_errors = pending_errors;
+        self.source_vectors.0.clear();
+        self.expansion_sites[SourceArena::Preprocessor as usize].clear();
+    }
+
+    /// Copies a preprocessor-arena range into the retained arena; other
+    /// ranges are returned unchanged.
+    fn retain_preprocessor_range(&mut self, source_vectors: SourceVectors) -> SourceVectors {
+        if source_vectors.length == 0
+            || SourceArena::decode(source_vectors).0 != SourceArena::Preprocessor
+        {
+            return source_vectors;
+        }
+        let start = self.retained_vectors.len().to_u32();
+        self.copy_into(SourceArena::Retained, source_vectors);
+        SourceArena::Retained.encode(start, self.retained_vectors.len().to_u32())
+    }
+
     /// Total vectors retained by every provenance arena.
     pub(crate) fn source_segment_count(&self) -> usize {
-        self.source_vectors.0.len()
-            + self.parser_token_vectors.len()
-            + self.parser_merge_vectors.len()
+        self.source_vectors.0.len() + self.parser_token_vectors.len() + self.retained_vectors.len()
     }
 
     fn merge_target(all_preprocessor: bool) -> SourceArena {
         if all_preprocessor {
             SourceArena::Preprocessor
         } else {
-            SourceArena::ParserMerges
+            SourceArena::Retained
         }
     }
 
@@ -223,7 +543,7 @@ impl Context {
         match arena {
             | SourceArena::Preprocessor => &self.source_vectors.0,
             | SourceArena::ParserTokens => &self.parser_token_vectors,
-            | SourceArena::ParserMerges => &self.parser_merge_vectors,
+            | SourceArena::Retained => &self.retained_vectors,
         }
     }
 
@@ -231,30 +551,50 @@ impl Context {
     fn copy_into(&mut self, target: SourceArena, source: SourceVectors) {
         let (arena, start) = SourceArena::decode(source);
         let range = start as usize..(start + source.length) as usize;
+        if source.length != 0
+            && let Some(site) = self.expansion_sites[arena as usize].get(start + source.length - 1)
+        {
+            let end = self.arena(target).len().to_u32() + source.length - 1;
+            let site = if arena == target {
+                site
+            } else {
+                let location = self.expansion_sites[arena as usize].ends[site as usize].clone();
+                self.expansion_sites[target as usize].site_id(location)
+            };
+            self.expansion_sites[target as usize].insert(end, site);
+        }
         let (source, target) = match (arena, target) {
             | (SourceArena::Preprocessor, SourceArena::Preprocessor) => {
                 self.source_vectors.0.extend_from_within(range);
                 return;
             },
-            | (SourceArena::ParserMerges, SourceArena::ParserMerges) => {
-                self.parser_merge_vectors.extend_from_within(range);
+            | (SourceArena::Retained, SourceArena::Retained) => {
+                self.retained_vectors.extend_from_within(range);
                 return;
             },
             | (SourceArena::Preprocessor, SourceArena::ParserTokens) => (
                 &self.source_vectors.0[range],
                 &mut self.parser_token_vectors,
             ),
-            | (SourceArena::Preprocessor, SourceArena::ParserMerges) => (
-                &self.source_vectors.0[range],
-                &mut self.parser_merge_vectors,
-            ),
-            | (SourceArena::ParserTokens, SourceArena::ParserMerges) => (
+            | (SourceArena::Preprocessor, SourceArena::Retained) =>
+                (&self.source_vectors.0[range], &mut self.retained_vectors),
+            | (SourceArena::ParserTokens, SourceArena::Retained) => (
                 &self.parser_token_vectors[range],
-                &mut self.parser_merge_vectors,
+                &mut self.retained_vectors,
             ),
             | _ => unreachable!("parser provenance is never copied back into earlier arenas"),
         };
         target.extend_from_slice(source);
+    }
+
+    /// When translation phases 1 through 3 run for source buffers opened
+    /// from now on.
+    pub(crate) fn lexing_strategy(&self) -> LexingStrategy {
+        self.lexing_strategy
+    }
+
+    pub(crate) fn set_lexing_strategy(&mut self, strategy: LexingStrategy) {
+        self.lexing_strategy = strategy;
     }
 
     pub(crate) fn is_tokenizing_include_string(&self) -> bool {
@@ -279,6 +619,15 @@ impl Context {
             self.pending_errors
                 .push_back(TranslationError::InitialProcessing(
                     InitialProcessorError::MissingFinalNewline(vector),
+                ));
+        }
+    }
+
+    pub(crate) fn escaped_final_newline(&mut self, vector: SourceVector) {
+        if !self.ignore_tokenizer_errors() {
+            self.pending_errors
+                .push_back(TranslationError::InitialProcessing(
+                    InitialProcessorError::EscapedFinalNewline(vector),
                 ));
         }
     }
@@ -318,7 +667,9 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError> {
-        self.pending_errors.pop_front()
+        let error = self.pending_errors.pop_front();
+        self.relocated_errors = self.relocated_errors.saturating_sub(1);
+        error
     }
 
     pub(crate) fn has_pending_errors(&self) -> bool {
@@ -326,6 +677,7 @@ impl Context {
     }
 
     pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError> {
+        self.relocated_errors = 0;
         std::mem::take(&mut self.pending_errors).into()
     }
 
@@ -387,6 +739,45 @@ impl Context {
             return None;
         };
         self.source_text(vector.source_file_index)?
-            .get(vector.index..vector.index + vector.length)
+            .get(vector.range())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Context,
+        SourceArena,
+        SourceVector,
+    };
+
+    #[test]
+    fn macro_locations_survive_compaction_without_retaining_temporary_metadata() {
+        let mut context = Context::new();
+        let mut saved = Vec::new();
+        for index in 0..2_000 {
+            let source = context.push_source_vectors(&[SourceVector {
+                length: 1,
+                ..SourceVector::default()
+            }]);
+            let site = SourceVector {
+                index,
+                line: index + 1,
+                length: 1,
+                ..SourceVector::default()
+            };
+            context.record_expansion_end(source, site.clone());
+            let token = context.retain_token_source(source);
+            let retained = context.retain_preprocessor_range(source);
+            saved.push((token, retained, site));
+            context.compact_preprocessor_vectors();
+            let temporary = &context.expansion_sites[SourceArena::Preprocessor as usize];
+            assert_eq!(temporary.entries, []);
+            assert_eq!(temporary.ends, []);
+        }
+        for (token, retained, site) in saved {
+            assert_eq!(context.user_source_end(token), Some(site.clone()));
+            assert_eq!(context.user_source_end(retained), Some(site));
+        }
     }
 }

@@ -1,7 +1,7 @@
 error: expected an expression after `%`
- --> pp-modulo-without-rhs.c:2:1
+ --> pp-modulo-without-rhs.c:1:7
   |
-2 | #endif
-  | ^ `%` needs an operand here
+1 | #if 1 %
+  |       ^ `%` needs an operand here
 
 1 error generated.

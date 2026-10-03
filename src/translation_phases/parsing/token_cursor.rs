@@ -2,14 +2,95 @@
 
 use std::collections::VecDeque;
 
-use crate::translation_phases::{
-    Context,
-    TranslationPhase,
-    preprocessing::{
-        Preprocessor,
-        Token,
+use crate::{
+    translation_phases::{
+        Context,
+        GetPosition,
+        GetSourceFileIndex,
+        SetPosition,
+        SetSourceFileIndex,
+        SourcePosition,
+        preprocessing::{
+            Preprocessor,
+            Token,
+        },
     },
+    util::chunked_queue::ChunkedQueue,
 };
+
+/// Where parser-facing tokens come from.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Boxing would add an indirection to every streamed token fetch."
+)]
+pub(super) enum Upstream {
+    /// Tokens are preprocessed as the parser asks for them.
+    Preprocessor(Preprocessor),
+    /// The whole translation unit was preprocessed before parsing began.
+    Preprocessed {
+        /// Tokens not yet read; chunks are freed as the parser reads them.
+        tokens:            ChunkedQueue<Token>,
+        /// Where the preprocessor stopped, used to locate end-of-input
+        /// diagnostics.
+        end:               SourcePosition,
+        source_file_index: u32,
+    },
+}
+
+impl Upstream {
+    /// Runs the whole of `preprocessor` now, so parsing never interleaves
+    /// with preprocessing.
+    pub(super) fn preprocess_all(mut preprocessor: Preprocessor, context: &mut Context) -> Self {
+        let tokens = preprocessor.preprocess_all(context);
+        Self::Preprocessed {
+            tokens,
+            end: preprocessor.position(context),
+            source_file_index: preprocessor.source_file_index(),
+        }
+    }
+}
+
+impl GetPosition for Upstream {
+    fn position(&self, context: &Context) -> SourcePosition {
+        match self {
+            | Self::Preprocessor(preprocessor) => preprocessor.position(context),
+            | Self::Preprocessed { end, .. } => *end,
+        }
+    }
+}
+
+impl SetPosition for Upstream {
+    fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
+        match self {
+            | Self::Preprocessor(preprocessor) => preprocessor.set_position(context, position),
+            | Self::Preprocessed { end, .. } => *end = position,
+        }
+    }
+}
+
+impl GetSourceFileIndex for Upstream {
+    fn source_file_index(&self) -> u32 {
+        match self {
+            | Self::Preprocessor(preprocessor) => preprocessor.source_file_index(),
+            | Self::Preprocessed {
+                source_file_index, ..
+            } => *source_file_index,
+        }
+    }
+}
+
+impl SetSourceFileIndex for Upstream {
+    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
+        match self {
+            | Self::Preprocessor(preprocessor) =>
+                preprocessor.set_source_file_index(context, source_file_index),
+            | Self::Preprocessed {
+                source_file_index: stored,
+                ..
+            } => *stored = source_file_index,
+        }
+    }
+}
 
 /// Buffered adapter from the preprocessor's iterator interface to parser
 /// current-token and arbitrary-lookahead operations.
@@ -22,36 +103,47 @@ use crate::translation_phases::{
 /// §6.4, pp. 49-50; PDF pp. 61-62.
 pub(super) struct TokenCursor {
     /// Upstream producer of parser-facing tokens.
-    pub(super) preprocessor: Preprocessor,
+    pub(super) upstream: Upstream,
     /// Token currently owned by the active parser frame.
-    current:                 Option<Token>,
+    current:             Option<Token>,
     /// Tokens fetched beyond `current`, ordered nearest first.
-    lookahead:               VecDeque<Token>,
+    lookahead:           VecDeque<Token>,
     /// The most recently consumed token, used to suggest insertions after it.
-    pub(super) previous:     Option<Token>,
+    pub(super) previous: Option<Token>,
     /// Whether the upstream preprocessor has returned EOF.
-    reached_eof:             bool,
+    reached_eof:         bool,
+    /// Number of tokens consumed so far.
+    pub(super) consumed: usize,
 }
 
 impl TokenCursor {
-    /// Creates an empty cursor over `preprocessor`; no token is fetched
-    /// eagerly.
-    pub(super) fn new(preprocessor: Preprocessor) -> Self {
+    /// Creates an empty cursor over `upstream`; no token is fetched eagerly.
+    pub(super) fn new(upstream: Upstream) -> Self {
         Self {
-            preprocessor,
+            upstream,
             current: None,
             lookahead: VecDeque::new(),
             previous: None,
             reached_eof: false,
+            consumed: 0,
         }
     }
 
-    /// Fetches the next upstream token and records its provenance in the
-    /// parser token arena, so consecutive tokens have adjacent provenance.
+    /// Fetches the next upstream token with its provenance in the token
+    /// arena, so consecutive tokens have adjacent provenance.
+    ///
+    /// Streamed tokens are copied out of the preprocessor arena as they
+    /// arrive, so the preprocessor may compact that arena before producing
+    /// the next one; batch-preprocessed tokens were copied when produced.
     fn fetch(&mut self, context: &mut Context) -> Option<Token> {
-        let mut token = self.preprocessor.next_item(context)?;
-        token.source_vectors = context.record_parser_token_source(token.source_vectors);
-        Some(token)
+        match &mut self.upstream {
+            | Upstream::Preprocessor(preprocessor) => {
+                let mut token = preprocessor.next_iterator_item(context)?;
+                token.source_vectors = context.retain_token_source(token.source_vectors);
+                Some(token)
+            },
+            | Upstream::Preprocessed { tokens, .. } => tokens.next(),
+        }
     }
 
     /// Returns the current token, fetching it once if necessary.
@@ -94,5 +186,6 @@ impl TokenCursor {
         debug_assert!(self.current.is_some(), "cannot consume parser EOF");
         self.previous = self.current;
         self.current = self.lookahead.pop_front();
+        self.consumed += 1;
     }
 }

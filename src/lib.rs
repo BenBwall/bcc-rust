@@ -1,4 +1,5 @@
 //! BCC C compiler
+#![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
 #[cfg(test)]
 #[doc(hidden)]

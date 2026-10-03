@@ -4,6 +4,6 @@ error: `\U` escape does not name a valid character
 1 | int value = '\U00110000';
   |             ^^^^^^^^^^^^ contains an invalid universal character name
   |
-  = note: C99 §6.4.3: a universal character name must be a valid code point
+  = note: C99 §6.4.3: values below U+00A0 are forbidden except U+0024, U+0040 and U+0060; surrogates are forbidden
 
 1 error generated.

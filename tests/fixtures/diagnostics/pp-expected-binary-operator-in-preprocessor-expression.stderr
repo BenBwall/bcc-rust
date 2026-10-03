@@ -1,15 +1,7 @@
-error: expected an expression after `?`
- --> pp-expected-binary-operator-in-preprocessor-expression.c:1:12
+error: expected `:` after `?` in preprocessor expression
+ --> pp-expected-binary-operator-in-preprocessor-expression.c:1:8
   |
 1 | #if (1 ? 2)
-  |            ^ `?` needs an operand here
+  |        ^ this conditional operator has no colon
 
-error: expected an operator between the operands of `#if`
- --> pp-expected-binary-operator-in-preprocessor-expression.c:2:1
-  |
-2 | #endif
-  | ^ the expression ends with an operand still unjoined
-  |
-  = note: C99 §6.10.1p1: the condition must be an integer constant expression
-
-2 errors generated.
+1 error generated.

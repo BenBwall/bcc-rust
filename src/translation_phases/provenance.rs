@@ -8,6 +8,7 @@ use std::{
         Result as FmtResult,
     },
     hash::Hash,
+    ops::Range,
 };
 
 use super::{
@@ -37,13 +38,51 @@ impl Default for SourcePosition {
     }
 }
 
+/// One contiguous source segment. Byte offsets and lengths are `u32`, which
+/// limits a source file to 4 GiB and keeps the many vectors the parser
+/// retains at 20 bytes each.
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub(crate) struct SourceVector {
-    pub(crate) index:             usize,
+    pub(crate) index:             u32,
     pub(crate) column:            u32,
     pub(crate) line:              u32,
     pub(crate) source_file_index: u32,
-    pub(crate) length:            usize,
+    pub(crate) length:            u32,
+}
+
+impl SourceVector {
+    pub(crate) fn new(
+        start_position: SourcePosition,
+        source_file_index: u32,
+        length: usize,
+    ) -> Self {
+        Self {
+            index: source_offset(start_position.index),
+            column: start_position.column,
+            line: start_position.line,
+            source_file_index,
+            length: source_offset(length),
+        }
+    }
+
+    /// The byte offset just past this segment.
+    pub(crate) fn end(&self) -> usize {
+        self.index as usize + self.length as usize
+    }
+
+    /// The source bytes this segment covers.
+    pub(crate) fn range(&self) -> Range<usize> {
+        self.index as usize..self.end()
+    }
+}
+
+/// Converts a source byte offset or length to its stored width.
+///
+/// # Panics
+///
+/// If a source file exceeds 4 GiB.
+pub(crate) fn source_offset(offset: usize) -> u32 {
+    u32::try_from(offset).expect("source files larger than 4 GiB are not supported")
 }
 
 impl Default for SourceVector {
@@ -62,7 +101,7 @@ impl GetPosition for SourceVector {
     #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         SourcePosition {
-            index:  self.index,
+            index:  self.index as usize,
             line:   self.line,
             column: self.column,
         }
@@ -76,7 +115,7 @@ impl GetPosition for SourceVectors {
     fn position(&self, context: &Context) -> SourcePosition {
         let start = context.first_source_vector(*self);
         SourcePosition {
-            index:  start.index,
+            index:  start.index as usize,
             line:   start.line,
             column: start.column,
         }
@@ -167,11 +206,14 @@ pub(super) enum SourceArena {
     /// Vectors produced by initial processing, tokenization, and
     /// preprocessing.
     Preprocessor,
-    /// One copy of each parser-fetched token's vectors, in fetch order, so
+    /// One copy of each phase-6 output token's vectors, in output order, so
     /// provenance of consecutive tokens is adjacent and merges in O(1).
     ParserTokens,
-    /// Parser merges whose operands are not adjacent in one arena.
-    ParserMerges,
+    /// Provenance that must survive compaction of the preprocessor arena
+    /// without being a token copy: parser merges whose operands are not
+    /// adjacent in one arena, parser-made locations, and the ranges of
+    /// diagnostics still pending when the preprocessor arena is compacted.
+    Retained,
 }
 
 impl SourceArena {
@@ -180,13 +222,13 @@ impl SourceArena {
 
     #[inline(always)]
     pub(super) fn decode(source_vectors: SourceVectors) -> (Self, u32) {
-        let arena = match source_vectors.start_index >> Self::INDEX_BITS {
+        let arena = match source_vectors.start_index() >> Self::INDEX_BITS {
             | 0 => Self::Preprocessor,
             | 1 => Self::ParserTokens,
-            | 2 => Self::ParserMerges,
+            | 2 => Self::Retained,
             | _ => unreachable!("empty source ranges carry no arena"),
         };
-        (arena, source_vectors.start_index & Self::INDEX_MASK)
+        (arena, source_vectors.start_index() & Self::INDEX_MASK)
     }
 
     #[inline(always)]

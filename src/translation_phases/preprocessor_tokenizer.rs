@@ -1,4 +1,16 @@
+mod batch;
+mod replay;
+#[cfg(test)]
+mod tests;
+mod token_source;
+pub(crate) mod ucn;
+
 use std::fmt::Display;
+
+pub(crate) use token_source::{
+    LexingStrategy,
+    TokenSource,
+};
 
 use super::{
     Context,
@@ -23,6 +35,7 @@ use crate::{
         quote_spelling,
     },
     util::{
+        byte_scan,
         shared::SharedString,
         string_cache::StringCacheId,
     },
@@ -65,6 +78,7 @@ impl SetSourceFileIndex for PreprocessorTokenizer {
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum PreprocessorTokenizerErrorType {
     UnknownToken,
+    UnterminatedBlockComment,
     UnterminatedCharacter,
     UnterminatedString,
     UnterminatedIncludeString,
@@ -88,10 +102,14 @@ impl PreprocessorTokenizerErrorType {
                 Explanation::new(format!("unexpected character {quoted} in source"))
                     .label("no C token starts with this character")
                     .note(
-                        "C99 §5.2.1: `@`, `$`, and `` ` `` are not part of the basic source \
-                         character set; outside literals and comments they cannot appear",
+                        "C99 §6.4: a preprocessing token that survives replacement must be \
+                         convertible to a C token",
                     )
             },
+            | Self::UnterminatedBlockComment => Explanation::new("unterminated block comment")
+                .label("the file ends before the closing `*/`")
+                .note("C99 §5.1.1.2p3: a source file shall not end in a partial comment")
+                .help("close the comment with `*/`"),
             | Self::UnterminatedCharacter => Explanation::new("unterminated character constant")
                 .label("the file ends before the closing `'`"),
             | Self::UnterminatedString => Explanation::new("unterminated string literal")
@@ -127,11 +145,15 @@ impl PreprocessorTokenType {
     /// "`(`".
     pub(crate) fn description(self) -> &'static str {
         match self {
-            | Self::Identifier => "identifier",
+            | Self::Identifier
+            | Self::UnavailableIdentifier
+            | Self::UnavailableUniversalIdentifier
+            | Self::UniversalIdentifier => "identifier",
             | Self::Number => "number",
             | Self::String | Self::GeneratedString => "string literal",
             | Self::WideGeneratedString => "wide string literal",
             | Self::Character => "character constant",
+            | Self::Other => "character",
             | Self::Placeholder => "empty macro argument",
             | Self::AngleBracketString | Self::IncludeString => "header name",
             | Self::Newline => "end of line",
@@ -188,6 +210,16 @@ impl PreprocessorTokenType {
         }
     }
 
+    pub(crate) fn is_identifier(self) -> bool {
+        matches!(
+            self,
+            Self::Identifier
+                | Self::UniversalIdentifier
+                | Self::UnavailableIdentifier
+                | Self::UnavailableUniversalIdentifier
+        )
+    }
+
     /// Describes a found token, quoting its spelling when the kind alone
     /// does not say what was written.
     pub(crate) fn found(self, spelling: Option<&str>) -> String {
@@ -199,6 +231,7 @@ impl PreprocessorTokenType {
                 | Self::GeneratedString
                 | Self::WideGeneratedString
                 | Self::Character
+                | Self::Other
                 | Self::AngleBracketString
                 | Self::IncludeString
         );
@@ -219,6 +252,18 @@ pub(crate) struct PreprocessorTokenizerError {
     character:     Option<char>,
 }
 
+impl PreprocessorTokenizerError {
+    /// Reports a phase-3 character that survived preprocessing but cannot
+    /// become a C token in phase 7.
+    pub(crate) fn unknown_character(source_vector: SourceVector, character: char) -> Self {
+        Self {
+            source_vector,
+            error_type: PreprocessorTokenizerErrorType::UnknownToken,
+            character: Some(character),
+        }
+    }
+}
+
 impl std::error::Error for PreprocessorTokenizerError {}
 
 impl GetPosition for PreprocessorTokenizerError {
@@ -234,7 +279,7 @@ impl GetSourceVectors for PreprocessorTokenizerError {
         context.create_source_vectors(
             self.source_vector.position(context),
             self.source_vector.source_file_index,
-            self.source_vector.length,
+            self.source_vector.length as usize,
         )
     }
 }
@@ -243,6 +288,7 @@ impl GetSeverity for PreprocessorTokenizerError {
     fn severity(&self) -> ErrorSeverity {
         match self.error_type {
             | PreprocessorTokenizerErrorType::UnknownToken
+            | PreprocessorTokenizerErrorType::UnterminatedBlockComment
             | PreprocessorTokenizerErrorType::UnterminatedCharacter
             | PreprocessorTokenizerErrorType::UnterminatedString
             | PreprocessorTokenizerErrorType::UnterminatedIncludeString
@@ -293,6 +339,8 @@ impl TranslationPhase for PreprocessorTokenizer {
                 | '[' => self.generate_token(context, PreprocessorTokenType::OpeningSquareBracket),
                 | ']' => self.generate_token(context, PreprocessorTokenType::ClosingSquareBracket),
                 | 'L' => self.tokenize_wide_string_or_identifier(context),
+                | '\\' if self.consume_ucn(context, true, false) =>
+                    self.tokenize_identifier(context, true),
                 | c if c.is_alphabetic() || c == '_' =>
                     self.tokenize_keyword_or_identifier(context),
                 | '.' => self.tokenize_period_or_number(context),
@@ -335,10 +383,7 @@ impl TranslationPhase for PreprocessorTokenizer {
                 | '|' => self.tokenize_pipe(context),
                 | '!' => self.tokenize_exclamation_mark(context),
                 | '=' => self.tokenize_equals(context),
-                | unknown => {
-                    self.generate_unknown_character_error(context, unknown);
-                    continue;
-                },
+                | unknown => self.generate_other_token(context, unknown),
             });
         }
     }
@@ -355,35 +400,32 @@ impl PreprocessorTokenizer {
         let position = self.current_token_start;
 
         context.preprocessor_tokenizer_error(PreprocessorTokenizerError {
-            source_vector: SourceVector {
-                index:             position.index,
-                column:            position.column,
-                line:              position.line,
-                source_file_index: self.source_file_index(),
-                length:            self.index(context) - position.index,
-            },
+            source_vector: SourceVector::new(
+                position,
+                self.source_file_index(),
+                self.index(context) - position.index,
+            ),
             error_type,
             character: None,
         });
     }
 
-    /// Reports `character` at its own location rather than at the token
+    /// Preserves `character` at its own location rather than at the token
     /// start, which precedes any line splice deleted before it.
     #[inline(never)]
     #[cold]
-    fn generate_unknown_character_error(&mut self, context: &mut Context, character: char) {
+    fn generate_other_token(
+        &mut self,
+        context: &mut Context,
+        character: char,
+    ) -> PreprocessorToken {
         let (position, length) = self.initial_processor.last_char_start(character);
-        context.preprocessor_tokenizer_error(PreprocessorTokenizerError {
-            source_vector: SourceVector {
-                index: position.index,
-                column: position.column,
-                line: position.line,
-                source_file_index: self.source_file_index(),
-                length,
-            },
-            error_type:    PreprocessorTokenizerErrorType::UnknownToken,
-            character:     Some(character),
-        });
+        let vector = context.push_source_vector(position, self.source_file_index(), length);
+        PreprocessorToken {
+            kind:           PreprocessorTokenType::Other,
+            contents:       context.string_cache.end_str(),
+            source_vectors: SourceVectors::new(vector, vector + 1),
+        }
     }
 
     fn generate_token(
@@ -404,41 +446,113 @@ impl PreprocessorTokenizer {
         }
     }
 
+    /// Continues a whitespace token after its first character or comment.
+    /// Comments become part of the surrounding whitespace (C99
+    /// §5.1.1.2p1, phase 3), so the token's spelling is one space.
     fn tokenize_whitespace(&mut self, context: &mut Context) -> PreprocessorToken {
-        let mut current;
-        let mut last_position = self.position(context);
         loop {
-            current = self.initial_processor.next_item(context);
-            match current {
-                | None => {
-                    last_position = self.position(context);
+            let run = byte_scan::horizontal_space_run(self.initial_processor.raw_remaining());
+            _ = self.initial_processor.consume_verbatim(run);
+            let last_position = self.position(context);
+            match self.initial_processor.next_item(context) {
+                | Some('/') => {
+                    let (comment_start, _) = self.initial_processor.last_char_start('/');
+                    match self.initial_processor.next_item(context) {
+                        | Some('/') => self.skip_line_comment(context),
+                        | Some('*') => self.skip_block_comment(context, comment_start),
+                        | _ => {
+                            self.set_position(context, last_position);
+                            break;
+                        },
+                    }
+                },
+                | Some(c) if c.is_whitespace() && c != '\n' => {},
+                | _ => {
+                    self.set_position(context, last_position);
                     break;
                 },
-                | Some(i) if i.is_whitespace() && i != '\n' => {
-                    last_position = self.position(context);
-                },
-                | Some(_) => break,
             }
         }
-        self.set_position(context, last_position);
         context.string_cache.undo_str();
         context.string_cache.push(' ');
         self.generate_token(context, PreprocessorTokenType::Whitespace)
     }
 
+    /// Skips the body of a `//` comment, leaving the line ending unread.
+    fn skip_line_comment(&mut self, context: &mut Context) {
+        loop {
+            let run = byte_scan::raw_verbatim_run(self.initial_processor.raw_remaining());
+            _ = self.initial_processor.consume_verbatim(run);
+            let last_position = self.position(context);
+            match self.initial_processor.next_item(context) {
+                | Some('\n') | None => {
+                    self.set_position(context, last_position);
+                    return;
+                },
+                | Some(_) => {},
+            }
+        }
+    }
+
+    /// Skips the body of a `/*` comment through its closing `*/`, or to the
+    /// end of the input.
+    fn skip_block_comment(&mut self, context: &mut Context, comment_start: SourcePosition) {
+        let mut after_asterisk = false;
+        loop {
+            if !after_asterisk {
+                let run = byte_scan::raw_block_comment_run(self.initial_processor.raw_remaining());
+                _ = self.initial_processor.consume_verbatim(run);
+            }
+            match self.initial_processor.next_item(context) {
+                | Some('/') if after_asterisk => return,
+                | Some(c) => after_asterisk = c == '*',
+                | None => {
+                    context.preprocessor_tokenizer_error(PreprocessorTokenizerError {
+                        source_vector: SourceVector::new(
+                            comment_start,
+                            self.source_file_index(),
+                            self.index(context) - comment_start.index,
+                        ),
+                        error_type:    PreprocessorTokenizerErrorType::UnterminatedBlockComment,
+                        character:     None,
+                    });
+                    return;
+                },
+            }
+        }
+    }
+
     fn tokenize_forward_slash(&mut self, context: &mut Context) -> PreprocessorToken {
         let last_position = self.position(context);
+        let (comment_start, _) = self.initial_processor.last_char_start('/');
         let current = self.initial_processor.next_item(context);
         match current {
             | Some('=') => {
                 context.string_cache.push('=');
                 self.generate_token(context, PreprocessorTokenType::ForwardSlashEquals)
             },
+            | Some('/') => {
+                self.skip_line_comment(context);
+                self.tokenize_whitespace(context)
+            },
+            | Some('*') => {
+                self.skip_block_comment(context, comment_start);
+                self.tokenize_whitespace(context)
+            },
             | Some(_) | None => {
                 self.set_position(context, last_position);
                 self.generate_token(context, PreprocessorTokenType::ForwardSlash)
             },
         }
+    }
+
+    /// See [`InitialProcessor::final_newline_withheld`].
+    pub(crate) fn final_newline_withheld(&self) -> bool {
+        self.initial_processor.final_newline_withheld()
+    }
+
+    pub(crate) fn set_final_newline_withheld(&mut self, withheld: bool) {
+        self.initial_processor.set_final_newline_withheld(withheld);
     }
 
     pub(crate) fn new(source_file_index: u32, source: SharedString) -> Self {
@@ -463,22 +577,73 @@ impl PreprocessorTokenizer {
         }
     }
 
-    fn tokenize_identifier(&mut self, context: &mut Context) -> PreprocessorToken {
+    /// Called just after a backslash; only commit a complete valid UCN.
+    fn consume_ucn(&mut self, context: &mut Context, first: bool, append_backslash: bool) -> bool {
+        let mut cursor = self.initial_processor.clone();
+        let ignored = context.ignore_tokenizer_errors();
+        context.set_ignore_tokenizer_errors(true);
+        let spelling = (|| {
+            let mut spelling = String::from("\\");
+            let count = match cursor.next_item(context) {
+                | Some('u') => {
+                    spelling.push('u');
+                    4
+                },
+                | Some('U') => {
+                    spelling.push('U');
+                    8
+                },
+                | _ => return None,
+            };
+            for _ in 0..count {
+                match cursor.next_item(context) {
+                    | Some(c) if c.is_ascii_hexdigit() => spelling.push(c),
+                    | _ => return None,
+                }
+            }
+            let _ = ucn::decode(&spelling, first)?;
+            Some(spelling)
+        })();
+        context.set_ignore_tokenizer_errors(ignored);
+        let Some(spelling) = spelling else {
+            return false;
+        };
+        self.initial_processor = cursor;
+        context
+            .string_cache
+            .push_str(&spelling[usize::from(!append_backslash)..]);
+        true
+    }
+
+    fn tokenize_identifier(
+        &mut self,
+        context: &mut Context,
+        mut universal: bool,
+    ) -> PreprocessorToken {
         loop {
+            let run = byte_scan::identifier_run(self.initial_processor.raw_remaining());
+            context
+                .string_cache
+                .push_str(self.initial_processor.consume_verbatim(run));
             let last_position = self.position(context);
             let current = self.initial_processor.next_item(context);
             match current {
+                | Some('\\') if self.consume_ucn(context, false, true) => universal = true,
                 | Some(c) if c.is_alphanumeric() || c == '_' => context.string_cache.push(c),
                 | _ => {
                     self.set_position(context, last_position);
-                    break self.generate_token(context, PreprocessorTokenType::Identifier);
+                    let mut token = self.generate_token(context, PreprocessorTokenType::Identifier);
+                    if universal {
+                        (token.kind, token.contents) = ucn::identifier(context, token.contents);
+                    }
+                    break token;
                 },
             }
         }
     }
 
     fn tokenize_keyword_or_identifier(&mut self, context: &mut Context) -> PreprocessorToken {
-        let mut res = self.tokenize_identifier(context);
+        let mut res = self.tokenize_identifier(context, false);
         if context.string_cache.get(res.contents) == Some("defined") {
             res.kind = PreprocessorTokenType::Defined;
         }
@@ -517,6 +682,10 @@ impl PreprocessorTokenizer {
         newline_error_type: PreprocessorTokenizerErrorType,
     ) -> PreprocessorToken {
         loop {
+            let run = byte_scan::raw_literal_run(self.initial_processor.raw_remaining());
+            context
+                .string_cache
+                .push_str(self.initial_processor.consume_verbatim(run));
             let last_position = self.position(context);
             let Some(current) = self.initial_processor.next_item(context) else {
                 self.generate_error(context, unterminated_error_type);
@@ -633,6 +802,19 @@ impl PreprocessorTokenizer {
 
     fn tokenize_number(&mut self, context: &mut Context) -> PreprocessorToken {
         loop {
+            let run = byte_scan::number_run(self.initial_processor.raw_remaining());
+            let text = self.initial_processor.consume_verbatim(run);
+            context.string_cache.push_str(text);
+            if matches!(text.as_bytes().last(), Some(b'e' | b'E' | b'p' | b'P')) {
+                let sign_position = self.position(context);
+                match self.initial_processor.next_item(context) {
+                    | Some(sign @ ('+' | '-')) => {
+                        context.string_cache.push(sign);
+                        continue;
+                    },
+                    | None | Some(_) => self.set_position(context, sign_position),
+                }
+            }
             let last_position = self.position(context);
             let Some(current) = self.initial_processor.next_item(context) else {
                 break;
@@ -640,6 +822,9 @@ impl PreprocessorTokenizer {
             // A preprocessing number is a spelling, not yet a floating-point
             // value. Keep optional signs after e/E/p/P. Those letters may
             // also be digits in a hexadecimal integer.
+            if current == '\\' && self.consume_ucn(context, false, true) {
+                continue;
+            }
             if current.is_alphanumeric() || matches!(current, '.' | '_') {
                 context.string_cache.push(current);
                 if matches!(current, 'e' | 'E' | 'p' | 'P') {
@@ -671,7 +856,10 @@ impl PreprocessorTokenizer {
                 context.string_cache.push('>');
                 self.generate_token(context, PreprocessorTokenType::ClosingCurlyBrace)
             },
-            | Some(':') => self.tokenize_hash_digraph(context),
+            | Some(':') => {
+                context.string_cache.push(':');
+                self.tokenize_hash_digraph(context)
+            },
             | None | Some(_) => {
                 self.set_position(context, last_position);
                 self.generate_token(context, PreprocessorTokenType::Percent)
@@ -699,7 +887,7 @@ impl PreprocessorTokenizer {
     ) -> PreprocessorToken {
         match self.initial_processor.next_item(context) {
             | Some(':') => {
-                context.string_cache.push_str(":%:");
+                context.string_cache.push_str("%:");
                 self.generate_token(context, PreprocessorTokenType::HashHash)
             },
             | _ => {
@@ -950,9 +1138,20 @@ impl PreprocessorTokenizer {
 pub(crate) enum PreprocessorTokenType {
     // Literals
     Identifier,
+    /// Suppressed during rescan; remains unavailable in later rescans
+    /// (6.10.3.4p2).
+    UnavailableIdentifier,
+    /// Canonical identity is in contents; this payload preserves source
+    /// spelling.
+    UniversalIdentifier,
+    UnavailableUniversalIdentifier,
     Number,
     String,
     Character,
+
+    /// A non-whitespace character outside the other pp-token categories
+    /// (C99 §6.4p3). It can be discarded or stringified in phase 4.
+    Other,
 
     // Expanded from hash operator
     GeneratedString,
@@ -1031,11 +1230,22 @@ pub(crate) struct PreprocessorToken {
     pub(crate) contents:       StringCacheId,
 }
 
+impl PreprocessorToken {
+    pub(crate) fn identifier_id(self, context: &Context) -> StringCacheId {
+        match self.kind {
+            | PreprocessorTokenType::UniversalIdentifier
+            | PreprocessorTokenType::UnavailableUniversalIdentifier =>
+                context.canonical_identifiers[&self.contents],
+            | _ => self.contents,
+        }
+    }
+}
+
 impl Default for PreprocessorToken {
     fn default() -> Self {
         Self {
             kind:           PreprocessorTokenType::WideGeneratedString,
-            source_vectors: SourceVectors::new(u32::MAX, u32::MAX),
+            source_vectors: SourceVectors::empty(),
             contents:       StringCacheId::from_u32(u32::MAX),
         }
     }

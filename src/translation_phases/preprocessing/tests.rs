@@ -1,3 +1,14 @@
+mod conditional_boundary_regressions;
+mod directive_regressions;
+mod encoding_regressions;
+mod expression_regressions;
+mod keyword_regressions;
+mod literal_regressions;
+mod macro_regressions;
+mod other_token_regressions;
+mod predefined_regressions;
+mod strategies;
+
 use std::path::PathBuf;
 
 use super::{
@@ -24,6 +35,7 @@ use crate::{
         Context,
         ErrorSeverity,
         GetSeverity,
+        GetSourceVectors,
         SourceVectors,
         TranslationError,
         TranslationPhase,
@@ -409,10 +421,22 @@ fn tokens_of(source: &str, path: &str) -> (Vec<Token>, Context) {
 
 fn string_value(context: &Context, token: Token) -> (bool, String) {
     match token.kind {
-        | TokenType::String(StringTokenType::String(contents)) =>
-            (false, context.string_cache.at(contents).to_owned()),
-        | TokenType::String(StringTokenType::WideString(contents)) =>
-            (true, context.string_cache.at(contents).to_owned()),
+        | TokenType::String(StringTokenType::String(contents)) => (
+            false,
+            context
+                .literal_text(contents, false)
+                .as_deref()
+                .expect("UTF-8 test literal")
+                .to_owned(),
+        ),
+        | TokenType::String(StringTokenType::WideString(contents)) => (
+            true,
+            context
+                .literal_text(contents, true)
+                .as_deref()
+                .expect("UTF-8 test literal")
+                .to_owned(),
+        ),
         | other => panic!("expected a string literal, found {other:?}"),
     }
 }
@@ -430,7 +454,7 @@ fn wide_literal_spellings_keep_their_opening_quote() {
     let (tokens, mut context) = tokens_of("L'\"'\n", "<test>");
     assert!(matches!(
         tokens[0].kind,
-        TokenType::Character(CharacterTokenType::WideChar('"'))
+        TokenType::Character(CharacterTokenType::WideChar(34))
     ));
     assert!(context.take_pending_errors().is_empty());
 
@@ -576,4 +600,261 @@ fn quoted_includes_search_beside_the_including_file_not_the_working_directory() 
         "{errors:#?}"
     );
     drop(std::fs::remove_dir_all(&directory));
+}
+
+/// Preprocesses `source`, spelling each token as written in C source with a
+/// space between tokens.
+fn expansion_of(source: &str) -> (String, Vec<TranslationError>) {
+    let (tokens, mut context) = tokens_of(source, "<test>");
+    let spellings: Vec<String> = tokens
+        .iter()
+        .map(|&token| match token.kind {
+            | TokenType::String(StringTokenType::String(contents)) => format!(
+                "{:?}",
+                context
+                    .literal_text(contents, false)
+                    .as_deref()
+                    .expect("UTF-8 test literal")
+            ),
+            | _ => context
+                .string_cache
+                .at(token.contents)
+                .trim_end_matches('\0')
+                .to_owned(),
+        })
+        .collect();
+    (spellings.join(" "), context.take_pending_errors())
+}
+
+#[track_caller]
+fn assert_expansion(source: &str, expected: &str) {
+    let (expansion, errors) = expansion_of(source);
+    assert_eq!(expansion, expected, "{source}");
+    assert!(errors.is_empty(), "{source}: {errors:#?}");
+}
+
+#[test]
+fn commas_inside_nested_parentheses_do_not_separate_macro_arguments() {
+    // C99 §6.10.3p11: commas between matching inner parentheses do not
+    // separate arguments.
+    for (source, expected) in [
+        ("#define F(x) x\nF((a, b))\n", "( a , b )"),
+        ("#define F(x) [x]\nF(g(a, b))\n", "[ g ( a , b ) ]"),
+        (
+            "#define STR(x) #x\n#define NAME(p, i) p ## i\nSTR(NAME(a, 0))\n",
+            "\"NAME(a, 0)\"",
+        ),
+        (
+            "#define MIN(a, b) ((a) < (b) ? (a) : (b))\n#define MAX(a, b) ((a) > (b) ? (a) : \
+             (b))\n#define CLAMP(x, lo, hi) MIN(MAX(x, lo), hi)\nCLAMP(v, 0, 9)\n",
+            "( ( ( ( v ) > ( 0 ) ? ( v ) : ( 0 ) ) ) < ( 9 ) ? ( ( ( v ) > ( 0 ) ? ( v ) : ( 0 ) \
+             ) ) : ( 9 ) )",
+        ),
+        (
+            "#define V(x, ...) [x] __VA_ARGS__\nV(f(a, b), c, (d, e))\n",
+            "[ f ( a , b ) ] c , ( d , e )",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn enclosing_parameters_are_replaced_before_a_nested_macro_takes_its_operand() {
+    // C99 §6.10.3.1p1: each parameter is replaced by its fully macro-replaced
+    // argument before the nested invocation is rescanned.
+    for (source, expected) in [
+        (
+            "#define CAT(a, b) a ## b\n#define RECORD(i) CAT(record_, i)\nRECORD(7)\n",
+            "record_7",
+        ),
+        (
+            "#define CAT(a, b) a ## b\n#define SUFFIX(i) CAT(i, _x)\nSUFFIX(y)\n",
+            "y_x",
+        ),
+        (
+            "#define CAT(a, b) a ## b\n#define SEVEN 7\n#define RECORD(i) CAT(record_, \
+             i)\nRECORD(SEVEN) CAT(record_, SEVEN)\n",
+            "record_7 record_SEVEN",
+        ),
+        (
+            "#define CAT(a, b) a ## b\n#define PAIR(i, j) CAT(i, j) CAT(j, i)\nPAIR(x, y)\n",
+            "xy yx",
+        ),
+        // An empty enclosing argument is a placemarker operand.
+        (
+            "#define CAT(a, b) a ## b
+#define E(i) CAT(i, z) CAT(i, i) w
+E()
+",
+            "z w",
+        ),
+        (
+            "#define STR(x) #x\n#define XSTR(x) STR(x)\n#define FOO bar\nXSTR(foo); XSTR(FOO); \
+             STR(FOO)\n",
+            "\"foo\" ; \"bar\" ; \"FOO\"",
+        ),
+        // C99 §6.10.3.5 EXAMPLE 4's `xstr(INCFILE(2).h)` combines both rules.
+        (
+            "#define str(s) # s\n#define xstr(s) str(s)\n#define INCFILE(n) vers ## \
+             n\nxstr(INCFILE(2).h)\n",
+            "\"vers2.h\"",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn numbers_paste_into_preprocessing_numbers() {
+    // C99 §6.4.8: a pp-number continues with identifier characters, and with
+    // a sign after an exponent letter.
+    assert_expansion(
+        "#define CAT(a, b) a ## b\nCAT(1, e5) CAT(0x, 1fu)\n",
+        "1e5 0x1fu",
+    );
+    assert_expansion(
+        "#define CAT(a, b) a ## b\n#define S(x) #x\n#define XS(x) S(x)\nXS(CAT(1e, +)) ; \
+         XS(CAT(0x1p, -))\n",
+        "\"1e+\" ; \"0x1p-\"",
+    );
+
+    // Neither a sign without an exponent nor an identifier followed by an
+    // exponent sign forms one token, and diagnostics spell numbers as source.
+    let (_, errors) = expansion_of("#define CAT(a, b) a ## b\nCAT(1, +) CAT(x, 1e+5)\n");
+    let pastes: Vec<_> = errors
+        .iter()
+        .filter_map(|error| match error {
+            | TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
+                ..
+            }) => Some((lhs.as_str(), rhs.as_str())),
+            | _ => None,
+        })
+        .collect();
+    assert_eq!(pastes, [("1", "+"), ("x", "1e+5")], "{errors:#?}");
+}
+
+#[test]
+fn replayed_operands_report_their_source_locations() {
+    let source = "#define CAT(a, b) a ## b\n#define O(i) CAT(i, 1 / 0 + 1)\n#if O(2)\n#endif\n";
+    let (_, mut context) = tokens_of(source, "<test>");
+    let errors = context.take_pending_errors();
+    let [error] = errors.as_slice() else {
+        panic!("expected one diagnostic: {errors:#?}");
+    };
+    assert!(matches!(
+        error,
+        TranslationError::Preprocessing(PreprocessorError {
+            error_type: PreprocessorErrorType::DivideByZero,
+            ..
+        })
+    ));
+    let source_vectors = error.source_vectors(&mut context);
+    let location = &context.get_source_vectors(source_vectors)[0];
+    assert_eq!(
+        (
+            context.get_source_file(location.source_file_index).to_str(),
+            location.line,
+        ),
+        (Some("<test>"), 2)
+    );
+
+    assert_expansion(
+        "#define CAT(a, b) a ## b\n#define F(i) CAT(i, x __FILE__)\nF(y)\n",
+        "yx \"<test>\"",
+    );
+}
+
+#[test]
+fn parameters_hide_macros_of_the_same_name() {
+    // C99 §6.10.3.1: parameters are replaced before the replacement list is
+    // rescanned, and `##` results are not parameters.
+    for (source, expected) in [
+        (
+            "#define i 3\n#define TWICE(i) (i + i)\nTWICE(x)\n",
+            "( x + x )",
+        ),
+        ("#define f(f) [f]\nf(f(1))\n", "[ [ 1 ] ]"),
+        ("#define a 9\n#define G(a) a(a)\nG(a)\n", "9 ( 9 )"),
+        ("#define F(xy) x ## y\nF(1)\n", "xy"),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn variadic_macros_may_omit_the_variable_arguments() {
+    for (source, expected) in [
+        (
+            "#define V(x, ...) [x __VA_ARGS__]\nV(a) after\n",
+            "[ a ] after",
+        ),
+        (
+            "#define V(x, ...) [x __VA_ARGS__]\nV(a,) after\n",
+            "[ a ] after",
+        ),
+        (
+            "#define CAT(a, ...) a ## __VA_ARGS__\nCAT(p) CAT(p, q)\n",
+            "p pq",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+
+    let (_, errors) = preprocess("#define W(x, y, ...) x y __VA_ARGS__\nW(a) after\n");
+    assert!(
+        matches!(
+            errors.as_slice(),
+            [TranslationError::Preprocessing(PreprocessorError {
+                error_type:
+                    PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
+                        expected: 2,
+                        found:    1,
+                    },
+                ..
+            })]
+        ),
+        "{errors:#?}"
+    );
+
+    // C99 §6.10.3p4 requires an argument for `...`.
+    let source = "#define V(x, ...) x __VA_ARGS__\nV(a) after\n";
+    for (policy, severity) in [
+        (ExtensionPolicy::Warn, ErrorSeverity::Warning),
+        (ExtensionPolicy::Deny, ErrorSeverity::Error),
+    ] {
+        let configuration = CompilerConfiguration::new(CStandard::C99, policy);
+        let (identifiers, errors) = preprocess_with_configuration(source, configuration);
+        assert_eq!(identifiers, ["a", "after"]);
+        assert!(
+            matches!(
+                errors.as_slice(),
+                [error @ TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::MissingVariadicArgument(found),
+                    ..
+                })] if *found == policy && error.severity() == severity
+            ),
+            "{errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn whitespace_is_never_a_paste_operand() {
+    // C99 §6.10.3.3p2: `##` pastes the preprocessing tokens beside it, and an
+    // argument of only whitespace is a placemarker.
+    for (source, expected) in [
+        (
+            "#define CAT(a, b) a ## b\nCAT( , x) CAT(y, ) CAT( p , q )\n",
+            "x y pq",
+        ),
+        (
+            "#define CAT(a, b) a ## b\n#define S(x) #x\n#define XS(x) S(x)\nXS(CAT( a , b )) ; \
+             XS(CAT( , c ))\n",
+            "\"ab\" ; \"c\"",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
 }

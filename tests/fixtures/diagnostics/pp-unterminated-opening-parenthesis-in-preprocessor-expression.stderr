@@ -1,7 +1,7 @@
 error: unclosed `(` in `#if` expression
- --> pp-unterminated-opening-parenthesis-in-preprocessor-expression.c:2:1
+ --> pp-unterminated-opening-parenthesis-in-preprocessor-expression.c:1:5
   |
-2 | #endif
-  | ^ expected `)`
+1 | #if (1
+  |     ^ expected `)`
 
 1 error generated.

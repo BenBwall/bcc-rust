@@ -6,11 +6,11 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
+    marker::PhantomData,
     ops::{
-        Deref,
-        DerefMut,
+        Index,
+        IndexMut,
     },
-    slice::Iter as SliceIter,
 };
 
 use super::{
@@ -29,6 +29,7 @@ use super::{
         InitializerElement,
         InitializerType,
         ParameterDeclaration,
+        ParenthesizedDeclarator,
         StructDeclaration,
         StructDeclarator,
         StructOrUnionSpecifier,
@@ -38,6 +39,7 @@ use super::{
     },
     syntax::{
         BlockItem,
+        ConstantExpressionIndex,
         ConstantExpressionSlot,
         DeclarationIndex,
         DesignationIndex,
@@ -52,136 +54,206 @@ use super::{
         FunctionDefinitionIndex,
         Identifier,
         InitializerIndex,
+        ParenthesizedDeclaratorIndex,
         Statement,
         StatementIndex,
         StatementType,
         StructOrUnionSpecifierIndex,
         SyntaxList,
-        SyntaxTreeId,
         TypeNameIndex,
     },
 };
+use crate::util::arena::{
+    Arena,
+    ArenaCheckpoint,
+};
 
-/// One syntax arena. It reads and updates in place like a slice, but only
+/// Owns the storage of every syntax domain constructed by parser frames.
+///
+/// Nodes of every kind share one chunked [`Arena`], which grows a block at a
+/// time instead of doubling and copying per-kind vectors. AST nodes refer to
+/// each other through 4-byte typed handles and [`SyntaxList`] runs, keeping
+/// nested syntax compact and avoiding recursive ownership. Only
 /// [`Parser::push_syntax`](super::Parser::push_syntax) and
 /// [`Parser::append_syntax`](super::Parser::append_syntax) add nodes, so the
 /// parser's running node total stays exact.
-pub(super) struct Arena<T>(pub(super) Vec<T>);
-
-impl<T> Default for Arena<T> {
-    fn default() -> Self {
-        Self(Vec::new())
-    }
-}
-
-impl<T: Debug> Debug for Arena<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        self.0.fmt(f)
-    }
-}
-
-impl<T> Deref for Arena<T> {
-    type Target = [T];
-
-    fn deref(&self) -> &[T] {
-        &self.0
-    }
-}
-
-impl<T> DerefMut for Arena<T> {
-    fn deref_mut(&mut self) -> &mut [T] {
-        &mut self.0
-    }
-}
-
-impl<'a, T> IntoIterator for &'a Arena<T> {
-    type IntoIter = SliceIter<'a, T>;
-    type Item = &'a T;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
-    }
-}
-
-/// Owns arena storage for every syntax domain constructed by parser frames.
-///
-/// AST nodes refer to these vectors through typed handles and
-/// [`VectorSlice`](crate::util::vector_slice::VectorSlice)
-/// ranges, keeping nested syntax compact and avoiding recursive ownership.
 ///
 /// C99: the stored language syntax spans expressions through external
 /// definitions, §6.5-§6.9, pp. 67-144; PDF pp. 79-156. Arena storage is an
 /// implementation strategy, not a normative C concept.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(super) struct SyntaxStore {
-    pub(super) type_names:                 Arena<TypeName>,
-    pub(super) declarations:               Arena<Declaration>,
-    pub(super) init_declarators:           Arena<InitDeclarator>,
-    pub(super) initializers:               Arena<Initializer>,
-    pub(super) initializer_elements:       Arena<InitializerElement>,
-    pub(super) designations:               Arena<Designation>,
-    pub(super) designators:                Arena<Designator>,
-    pub(super) expressions:                Arena<Expression>,
-    pub(super) expression_indices:         Arena<ExpressionIndex>,
-    pub(super) statements:                 Arena<Statement>,
-    pub(super) block_items:                Arena<BlockItem>,
-    pub(super) function_definitions:       Arena<FunctionDefinition>,
-    pub(super) declaration_indices:        Arena<DeclarationIndex>,
-    pub(super) type_qualifiers:            Arena<TypeQualifiers>,
-    pub(super) direct_declarators:         Arena<DirectDeclarator>,
-    pub(super) identifiers:                Arena<Identifier>,
-    pub(super) parameter_declarations:     Arena<ParameterDeclaration>,
-    pub(super) struct_or_union_specifiers: Arena<StructOrUnionSpecifier>,
-    pub(super) struct_declarations:        Arena<StructDeclaration>,
-    pub(super) struct_declarators:         Arena<StructDeclarator>,
-    pub(super) enum_specifiers:            Arena<EnumSpecifier>,
-    pub(super) enumerators:                Arena<Enumerator>,
+    arena: Arena,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct SyntaxStoreCheckpoint {
-    type_names:                 usize,
-    declarations:               usize,
-    init_declarators:           usize,
-    initializers:               usize,
-    initializer_elements:       usize,
-    designations:               usize,
-    designators:                usize,
-    expressions:                usize,
-    expression_indices:         usize,
-    statements:                 usize,
-    block_items:                usize,
-    function_definitions:       usize,
-    declaration_indices:        usize,
-    type_qualifiers:            usize,
-    direct_declarators:         usize,
-    identifiers:                usize,
-    parameter_declarations:     usize,
-    struct_or_union_specifiers: usize,
-    struct_declarations:        usize,
-    struct_declarators:         usize,
-    enum_specifiers:            usize,
-    enumerators:                usize,
+pub(super) struct SyntaxStoreCheckpoint(ArenaCheckpoint);
+
+/// Typed handles resolve through the store like slice indices.
+macro_rules! syntax_handles {
+    ($($handle:ty => $node:ty),* $(,)?) => {$(
+        impl Index<$handle> for SyntaxStore {
+            type Output = $node;
+
+            fn index(&self, handle: $handle) -> &$node {
+                self.arena.get(handle.0)
+            }
+        }
+
+        impl IndexMut<$handle> for SyntaxStore {
+            fn index_mut(&mut self, handle: $handle) -> &mut $node {
+                self.arena.get_mut(handle.0)
+            }
+        }
+
+        impl Index<&$handle> for SyntaxStore {
+            type Output = $node;
+
+            fn index(&self, handle: &$handle) -> &$node {
+                &self[*handle]
+            }
+        }
+    )*};
+}
+
+syntax_handles! {
+    TypeNameIndex => TypeName,
+    ParenthesizedDeclaratorIndex => ParenthesizedDeclarator,
+    DeclarationIndex => Declaration,
+    InitializerIndex => Initializer,
+    DesignationIndex => Designation,
+    ExpressionIndex => Expression,
+    ConstantExpressionIndex => Expression,
+    StatementIndex => Statement,
+    FunctionDefinitionIndex => FunctionDefinition,
+    StructOrUnionSpecifierIndex => StructOrUnionSpecifier,
+    EnumSpecifierIndex => EnumSpecifier,
+}
+
+impl<T: 'static> Index<SyntaxList<T>> for SyntaxStore {
+    type Output = [T];
+
+    fn index(&self, index: SyntaxList<T>) -> &[T] {
+        self.arena.slice(index.run())
+    }
+}
+
+impl<T: 'static> IndexMut<SyntaxList<T>> for SyntaxStore {
+    fn index_mut(&mut self, index: SyntaxList<T>) -> &mut [T] {
+        self.arena.slice_mut(index.run())
+    }
+}
+
+impl SyntaxStore {
+    /// Stores one node and returns its raw handle.
+    pub(super) fn push<T: 'static>(&mut self, node: T) -> u32 {
+        self.arena.push(node)
+    }
+
+    /// Moves `nodes` into one contiguous list.
+    pub(super) fn append<T: 'static>(&mut self, nodes: &mut Vec<T>) -> SyntaxList<T> {
+        SyntaxList::new(self.arena.extend(nodes))
+    }
+
+    /// Marks the store so [`Self::restore`] can discard later nodes.
+    pub(super) fn checkpoint(&mut self) -> SyntaxStoreCheckpoint {
+        SyntaxStoreCheckpoint(self.arena.checkpoint())
+    }
+
+    /// Discards every node added since the most recent checkpoint.
+    pub(super) fn restore(&mut self, checkpoint: SyntaxStoreCheckpoint) {
+        self.arena.restore(checkpoint.0);
+    }
+
+    /// Nodes of every kind.
+    pub(super) fn node_count(&self) -> usize {
+        self.arena.len()
+    }
+
+    /// Nodes of kind `T`.
+    #[cfg(test)]
+    pub(super) fn count<T: 'static>(&self) -> usize {
+        self.arena.count::<T>()
+    }
+
+    /// Every node of kind `T`, in the order they were stored.
+    pub(super) fn iter<T: 'static>(&self) -> impl Iterator<Item = &T> {
+        self.arena.iter::<T>()
+    }
+
+    /// The `n`th stored node of kind `T`.
+    #[cfg(test)]
+    pub(super) fn nth<T: 'static>(&self, n: usize) -> &T {
+        self.iter::<T>()
+            .nth(n)
+            .expect("the syntax store holds that many nodes of this kind")
+    }
+}
+
+/// Lists every node of one kind for [`SyntaxStore`]'s debug view.
+struct DebugNodes<'a, T>(&'a SyntaxStore, PhantomData<T>);
+
+impl<T: Debug + 'static> Debug for DebugNodes<'_, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_list().entries(self.0.iter::<T>()).finish()
+    }
+}
+
+impl Debug for SyntaxStore {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        fn nodes<T>(store: &SyntaxStore) -> DebugNodes<'_, T> {
+            DebugNodes(store, PhantomData)
+        }
+        f.debug_struct("SyntaxStore")
+            .field("type_names", &nodes::<TypeName>(self))
+            .field("declarations", &nodes::<Declaration>(self))
+            .field("init_declarators", &nodes::<InitDeclarator>(self))
+            .field("initializers", &nodes::<Initializer>(self))
+            .field("initializer_elements", &nodes::<InitializerElement>(self))
+            .field("designations", &nodes::<Designation>(self))
+            .field("designators", &nodes::<Designator>(self))
+            .field("expressions", &nodes::<Expression>(self))
+            .field("expression_indices", &nodes::<ExpressionIndex>(self))
+            .field("statements", &nodes::<Statement>(self))
+            .field("block_items", &nodes::<BlockItem>(self))
+            .field("function_definitions", &nodes::<FunctionDefinition>(self))
+            .field("declaration_indices", &nodes::<DeclarationIndex>(self))
+            .field("type_qualifiers", &nodes::<TypeQualifiers>(self))
+            .field("direct_declarators", &nodes::<DirectDeclarator>(self))
+            .field(
+                "parenthesized_declarators",
+                &nodes::<ParenthesizedDeclarator>(self),
+            )
+            .field("identifiers", &nodes::<Identifier>(self))
+            .field(
+                "parameter_declarations",
+                &nodes::<ParameterDeclaration>(self),
+            )
+            .field(
+                "struct_or_union_specifiers",
+                &nodes::<StructOrUnionSpecifier>(self),
+            )
+            .field("struct_declarations", &nodes::<StructDeclaration>(self))
+            .field("struct_declarators", &nodes::<StructDeclarator>(self))
+            .field("enum_specifiers", &nodes::<EnumSpecifier>(self))
+            .field("enumerators", &nodes::<Enumerator>(self))
+            .finish()
+    }
 }
 
 /// Validated, read-only access to arena-backed C syntax.
 ///
 /// Typed handles cannot be constructed outside this module. List-bearing
-/// views resolve their ranges here so callers never coordinate raw vectors or
-/// perform unchecked arithmetic themselves.
+/// views resolve their ranges here so callers never coordinate raw arena
+/// positions themselves. The arena checks every handle as it resolves it.
 #[derive(Debug)]
 pub(crate) struct SyntaxTree {
-    syntax_id: SyntaxTreeId,
-    store:     SyntaxStore,
+    store: SyntaxStore,
 }
 
 impl SyntaxTree {
-    pub(super) fn new(
-        syntax_id: SyntaxTreeId,
-        store: SyntaxStore,
-        roots: &[ExternalDeclaration],
-    ) -> Self {
-        let tree = Self { syntax_id, store };
+    pub(super) fn new(store: SyntaxStore, roots: &[ExternalDeclaration]) -> Self {
+        let tree = Self { store };
         tree.validate(roots);
         tree
     }
@@ -200,11 +272,11 @@ impl SyntaxTree {
                 | ExternalDeclaration::Error(_) => {},
             }
         }
-        for declaration in &self.store.declarations {
+        for declaration in self.store.iter::<Declaration>() {
             let _ = self.init_declarators(declaration.init_declarators);
             self.validate_specifiers(declaration.declaration_specifiers);
         }
-        for definition in &self.store.function_definitions {
+        for definition in self.store.iter::<FunctionDefinition>() {
             self.validate_declarator(definition.declarator);
             for declaration in self.declaration_indices(definition.declaration_list) {
                 let _ = self.declaration(*declaration);
@@ -212,13 +284,13 @@ impl SyntaxTree {
             let _ = self.statement(definition.body);
             self.validate_specifiers(definition.declaration_specifiers);
         }
-        for init in &self.store.init_declarators {
+        for init in self.store.iter::<InitDeclarator>() {
             self.validate_declarator(init.declarator);
             if let Some(initializer) = init.initializer {
                 let _ = self.initializer(initializer);
             }
         }
-        for expression in &self.store.expressions {
+        for expression in self.store.iter::<Expression>() {
             match expression.kind {
                 | ExpressionType::Parenthesized { expression }
                 | ExpressionType::Unary {
@@ -285,10 +357,10 @@ impl SyntaxTree {
                 | ExpressionType::Error => {},
             }
         }
-        for expression in &self.store.expression_indices {
+        for expression in self.store.iter::<ExpressionIndex>() {
             let _ = self.expression(*expression);
         }
-        for initializer in &self.store.initializers {
+        for initializer in self.store.iter::<Initializer>() {
             match initializer.kind {
                 | InitializerType::AssignmentExpression(expression) => {
                     let _ = self.expression(expression);
@@ -298,21 +370,21 @@ impl SyntaxTree {
                 },
             }
         }
-        for element in &self.store.initializer_elements {
+        for element in self.store.iter::<InitializerElement>() {
             if let Some(designation) = element.designation {
                 let _ = self.designation(designation);
             }
             let _ = self.initializer(element.initializer);
         }
-        for designation in &self.store.designations {
+        for designation in self.store.iter::<Designation>() {
             let _ = self.designators(designation.designators);
         }
-        for designator in &self.store.designators {
+        for designator in self.store.iter::<Designator>() {
             if let DesignatorType::Array(expression) = designator.kind {
                 let _ = self.expression(expression.into());
             }
         }
-        for statement in &self.store.statements {
+        for statement in self.store.iter::<Statement>() {
             match statement.kind {
                 | StatementType::Compound { items } => {
                     let _ = self.block_items(items);
@@ -387,7 +459,7 @@ impl SyntaxTree {
                 | StatementType::Null => {},
             }
         }
-        for item in &self.store.block_items {
+        for item in self.store.iter::<BlockItem>() {
             match *item {
                 | BlockItem::Declaration(declaration) => {
                     let _ = self.declaration(declaration);
@@ -397,19 +469,19 @@ impl SyntaxTree {
                 },
             }
         }
-        for declaration in &self.store.declaration_indices {
+        for declaration in self.store.iter::<DeclarationIndex>() {
             let _ = self.declaration(*declaration);
         }
-        for type_name in &self.store.type_names {
+        for type_name in self.store.iter::<TypeName>() {
             self.validate_specifiers(type_name.declaration_specifiers);
             if let Some(declarator) = type_name.declarator {
                 self.validate_declarator(declarator);
             }
         }
-        for direct in &self.store.direct_declarators {
+        for direct in self.store.iter::<DirectDeclarator>() {
             match *direct {
-                | DirectDeclarator::Parenthesized(declarator) => {
-                    self.validate_declarator(declarator);
+                | DirectDeclarator::Parenthesized(index) => {
+                    self.validate_declarator(self.store[index].declarator);
                 },
                 | DirectDeclarator::KAndRStyleFunction { parameters } => {
                     let _ = self.identifiers(parameters);
@@ -427,22 +499,22 @@ impl SyntaxTree {
                 | DirectDeclarator::Identifier(_) => {},
             }
         }
-        for parameter in &self.store.parameter_declarations {
+        for parameter in self.store.iter::<ParameterDeclaration>() {
             self.validate_specifiers(parameter.declaration_specifiers);
             if let Some(declarator) = parameter.declarator {
                 self.validate_declarator(declarator);
             }
         }
-        for specifier in &self.store.struct_or_union_specifiers {
+        for specifier in self.store.iter::<StructOrUnionSpecifier>() {
             if let Some(declarations) = specifier.struct_declaration_list {
                 let _ = self.struct_declarations(declarations);
             }
         }
-        for declaration in &self.store.struct_declarations {
+        for declaration in self.store.iter::<StructDeclaration>() {
             self.validate_type_specifiers(declaration.type_specifiers);
             let _ = self.struct_declarators(declaration.struct_declarator_list);
         }
-        for declarator in &self.store.struct_declarators {
+        for declarator in self.store.iter::<StructDeclarator>() {
             if let Some(syntax) = declarator.declarator {
                 self.validate_declarator(syntax);
             }
@@ -450,12 +522,12 @@ impl SyntaxTree {
                 let _ = self.expression(expression.into());
             }
         }
-        for specifier in &self.store.enum_specifiers {
+        for specifier in self.store.iter::<EnumSpecifier>() {
             if let Some(enumerators) = specifier.enumeration_list {
                 let _ = self.enumerators(enumerators);
             }
         }
-        for enumerator in &self.store.enumerators {
+        for enumerator in self.store.iter::<Enumerator>() {
             if let Some(expression) = enumerator.expression {
                 let _ = self.expression(expression.into());
             }
@@ -489,55 +561,10 @@ impl SyntaxTree {
         }
     }
 
-    fn checked_handle(
-        &self,
-        syntax_id: SyntaxTreeId,
-        index: u32,
-        arena_len: usize,
-        kind: &'static str,
-    ) -> usize {
-        assert_eq!(
-            syntax_id, self.syntax_id,
-            "{kind} handle belongs to a different syntax tree"
-        );
-        let index = index as usize;
-        assert!(index < arena_len, "validated {kind} handle");
-        index
-    }
-
-    fn checked_slice<'a, T>(&self, arena: &'a [T], range: SyntaxList<T>) -> &'a [T] {
-        assert_eq!(
-            range.syntax_id(),
-            self.syntax_id,
-            "syntax-list handle belongs to a different syntax tree"
-        );
-        if range.length() == 0 {
-            return &arena[..0];
-        }
-        let start = range.start_index() as usize;
-        let end = start
-            .checked_add(range.length() as usize)
-            .expect("validated syntax range length overflowed usize");
-        arena
-            .get(start..end)
-            .expect("parser produced an invalid typed syntax range")
-    }
-
     pub(crate) fn declaration(&self, index: DeclarationIndex) -> DeclarationView<'_> {
-        let index = self.checked_handle(
-            index.1,
-            index.0,
-            self.store.declarations.len(),
-            "declaration",
-        );
-        let declaration = self
-            .store
-            .declarations
-            .get(index)
-            .expect("validated declaration handle");
         DeclarationView {
-            tree: self,
-            declaration,
+            tree:        self,
+            declaration: &self.store[index],
         }
     }
 
@@ -545,275 +572,128 @@ impl SyntaxTree {
         &self,
         index: FunctionDefinitionIndex,
     ) -> &FunctionDefinition {
-        let index = self.checked_handle(
-            index.1,
-            index.0,
-            self.store.function_definitions.len(),
-            "function-definition",
-        );
-        self.store
-            .function_definitions
-            .get(index)
-            .expect("validated function-definition handle")
+        &self.store[index]
     }
 
     pub(crate) fn statement(&self, index: StatementIndex) -> &Statement {
-        let index = self.checked_handle(index.1, index.0, self.store.statements.len(), "statement");
-        self.store
-            .statements
-            .get(index)
-            .expect("validated statement handle")
+        &self.store[index]
     }
 
     pub(crate) fn expression(&self, index: ExpressionIndex) -> &Expression {
-        let index =
-            self.checked_handle(index.1, index.0, self.store.expressions.len(), "expression");
-        self.store
-            .expressions
-            .get(index)
-            .expect("validated expression handle")
+        &self.store[index]
     }
 
     pub(crate) fn type_name(&self, index: TypeNameIndex) -> &TypeName {
-        let index = self.checked_handle(index.1, index.0, self.store.type_names.len(), "type-name");
-        self.store
-            .type_names
-            .get(index)
-            .expect("validated type-name handle")
+        &self.store[index]
     }
 
     pub(crate) fn initializer(&self, index: InitializerIndex) -> InitializerView<'_> {
-        let index = self.checked_handle(
-            index.1,
-            index.0,
-            self.store.initializers.len(),
-            "initializer",
-        );
-        let initializer = self
-            .store
-            .initializers
-            .get(index)
-            .expect("validated initializer handle");
         InitializerView {
-            tree: self,
-            initializer,
+            tree:        self,
+            initializer: &self.store[index],
         }
     }
 
     pub(crate) fn designation(&self, index: DesignationIndex) -> &Designation {
-        let index = self.checked_handle(
-            index.1,
-            index.0,
-            self.store.designations.len(),
-            "designation",
-        );
-        self.store
-            .designations
-            .get(index)
-            .expect("validated designation handle")
+        &self.store[index]
     }
 
     pub(crate) fn struct_or_union_specifier(
         &self,
         index: StructOrUnionSpecifierIndex,
     ) -> &StructOrUnionSpecifier {
-        let index = self.checked_handle(
-            index.1,
-            index.0,
-            self.store.struct_or_union_specifiers.len(),
-            "struct-or-union",
-        );
-        self.store
-            .struct_or_union_specifiers
-            .get(index)
-            .expect("validated struct-or-union handle")
+        &self.store[index]
     }
 
     pub(crate) fn enum_specifier(&self, index: EnumSpecifierIndex) -> &EnumSpecifier {
-        let index = self.checked_handle(index.1, index.0, self.store.enum_specifiers.len(), "enum");
-        self.store
-            .enum_specifiers
-            .get(index)
-            .expect("validated enum handle")
+        &self.store[index]
     }
 
     pub(crate) fn init_declarators(&self, range: SyntaxList<InitDeclarator>) -> &[InitDeclarator] {
-        self.checked_slice(&self.store.init_declarators, range)
+        &self.store[range]
     }
 
     pub(crate) fn initializer_elements(
         &self,
         range: SyntaxList<InitializerElement>,
     ) -> &[InitializerElement] {
-        self.checked_slice(&self.store.initializer_elements, range)
+        &self.store[range]
     }
 
     pub(crate) fn designators(&self, range: SyntaxList<Designator>) -> &[Designator] {
-        self.checked_slice(&self.store.designators, range)
+        &self.store[range]
     }
 
     pub(crate) fn expression_indices(
         &self,
         range: SyntaxList<ExpressionIndex>,
     ) -> &[ExpressionIndex] {
-        self.checked_slice(&self.store.expression_indices, range)
+        &self.store[range]
     }
 
     pub(crate) fn block_items(&self, range: SyntaxList<BlockItem>) -> &[BlockItem] {
-        self.checked_slice(&self.store.block_items, range)
+        &self.store[range]
     }
 
     pub(crate) fn declaration_indices(
         &self,
         range: SyntaxList<DeclarationIndex>,
     ) -> &[DeclarationIndex] {
-        self.checked_slice(&self.store.declaration_indices, range)
+        &self.store[range]
     }
 
     pub(crate) fn pointer_qualifiers(
         &self,
         range: SyntaxList<TypeQualifiers>,
     ) -> &[TypeQualifiers] {
-        self.checked_slice(&self.store.type_qualifiers, range)
+        &self.store[range]
+    }
+
+    pub(crate) fn parenthesized_declarator(
+        &self,
+        index: ParenthesizedDeclaratorIndex,
+    ) -> &ParenthesizedDeclarator {
+        &self.store[index]
     }
 
     pub(crate) fn direct_declarators(
         &self,
         range: SyntaxList<DirectDeclarator>,
     ) -> &[DirectDeclarator] {
-        self.checked_slice(&self.store.direct_declarators, range)
+        &self.store[range]
     }
 
     pub(crate) fn identifiers(&self, range: SyntaxList<Identifier>) -> &[Identifier] {
-        self.checked_slice(&self.store.identifiers, range)
+        &self.store[range]
     }
 
     pub(crate) fn parameter_declarations(
         &self,
         range: SyntaxList<ParameterDeclaration>,
     ) -> &[ParameterDeclaration] {
-        self.checked_slice(&self.store.parameter_declarations, range)
+        &self.store[range]
     }
 
     pub(crate) fn struct_declarations(
         &self,
         range: SyntaxList<StructDeclaration>,
     ) -> &[StructDeclaration] {
-        self.checked_slice(&self.store.struct_declarations, range)
+        &self.store[range]
     }
 
     pub(crate) fn struct_declarators(
         &self,
         range: SyntaxList<StructDeclarator>,
     ) -> &[StructDeclarator] {
-        self.checked_slice(&self.store.struct_declarators, range)
+        &self.store[range]
     }
 
     pub(crate) fn enumerators(&self, range: SyntaxList<Enumerator>) -> &[Enumerator] {
-        self.checked_slice(&self.store.enumerators, range)
+        &self.store[range]
     }
 
     pub(crate) fn raw_debug(&self) -> impl Debug + '_ {
         &self.store
-    }
-}
-
-impl SyntaxStore {
-    pub(super) fn checkpoint(&self) -> SyntaxStoreCheckpoint {
-        SyntaxStoreCheckpoint {
-            type_names:                 self.type_names.len(),
-            declarations:               self.declarations.len(),
-            init_declarators:           self.init_declarators.len(),
-            initializers:               self.initializers.len(),
-            initializer_elements:       self.initializer_elements.len(),
-            designations:               self.designations.len(),
-            designators:                self.designators.len(),
-            expressions:                self.expressions.len(),
-            expression_indices:         self.expression_indices.len(),
-            statements:                 self.statements.len(),
-            block_items:                self.block_items.len(),
-            function_definitions:       self.function_definitions.len(),
-            declaration_indices:        self.declaration_indices.len(),
-            type_qualifiers:            self.type_qualifiers.len(),
-            direct_declarators:         self.direct_declarators.len(),
-            identifiers:                self.identifiers.len(),
-            parameter_declarations:     self.parameter_declarations.len(),
-            struct_or_union_specifiers: self.struct_or_union_specifiers.len(),
-            struct_declarations:        self.struct_declarations.len(),
-            struct_declarators:         self.struct_declarators.len(),
-            enum_specifiers:            self.enum_specifiers.len(),
-            enumerators:                self.enumerators.len(),
-        }
-    }
-
-    pub(super) fn restore(&mut self, checkpoint: SyntaxStoreCheckpoint) {
-        self.type_names.0.truncate(checkpoint.type_names);
-        self.declarations.0.truncate(checkpoint.declarations);
-        self.init_declarators
-            .0
-            .truncate(checkpoint.init_declarators);
-        self.initializers.0.truncate(checkpoint.initializers);
-        self.initializer_elements
-            .0
-            .truncate(checkpoint.initializer_elements);
-        self.designations.0.truncate(checkpoint.designations);
-        self.designators.0.truncate(checkpoint.designators);
-        self.expressions.0.truncate(checkpoint.expressions);
-        self.expression_indices
-            .0
-            .truncate(checkpoint.expression_indices);
-        self.statements.0.truncate(checkpoint.statements);
-        self.block_items.0.truncate(checkpoint.block_items);
-        self.function_definitions
-            .0
-            .truncate(checkpoint.function_definitions);
-        self.declaration_indices
-            .0
-            .truncate(checkpoint.declaration_indices);
-        self.type_qualifiers.0.truncate(checkpoint.type_qualifiers);
-        self.direct_declarators
-            .0
-            .truncate(checkpoint.direct_declarators);
-        self.identifiers.0.truncate(checkpoint.identifiers);
-        self.parameter_declarations
-            .0
-            .truncate(checkpoint.parameter_declarations);
-        self.struct_or_union_specifiers
-            .0
-            .truncate(checkpoint.struct_or_union_specifiers);
-        self.struct_declarations
-            .0
-            .truncate(checkpoint.struct_declarations);
-        self.struct_declarators
-            .0
-            .truncate(checkpoint.struct_declarators);
-        self.enum_specifiers.0.truncate(checkpoint.enum_specifiers);
-        self.enumerators.0.truncate(checkpoint.enumerators);
-    }
-
-    pub(super) fn node_count(&self) -> usize {
-        self.type_names.len()
-            + self.declarations.len()
-            + self.init_declarators.len()
-            + self.initializers.len()
-            + self.initializer_elements.len()
-            + self.designations.len()
-            + self.designators.len()
-            + self.expressions.len()
-            + self.expression_indices.len()
-            + self.statements.len()
-            + self.block_items.len()
-            + self.function_definitions.len()
-            + self.declaration_indices.len()
-            + self.type_qualifiers.len()
-            + self.direct_declarators.len()
-            + self.identifiers.len()
-            + self.parameter_declarations.len()
-            + self.struct_or_union_specifiers.len()
-            + self.struct_declarations.len()
-            + self.struct_declarators.len()
-            + self.enum_specifiers.len()
-            + self.enumerators.len()
     }
 }
 

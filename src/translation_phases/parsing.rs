@@ -34,6 +34,7 @@ mod errors;
 mod expression;
 mod expression_operators;
 mod external_declaration;
+mod frame_pool;
 mod function_definition;
 mod initializer;
 mod inspection;
@@ -73,7 +74,6 @@ use scope::{
     SwitchScope,
 };
 pub(crate) use syntax::ExternalDeclaration;
-use syntax::SyntaxTreeId;
 use syntax_store::{
     SyntaxStore,
     SyntaxTree,
@@ -102,12 +102,12 @@ use crate::{
 /// p. 140; PDF p. 152: a translation unit “consists of a sequence of external
 /// declarations.” The diagnostic obligation is §5.1.1.3, p. 11; PDF p. 23.
 pub(crate) struct Parser {
-    /// Identity carried by every handle issued for this parsed unit.
-    syntax_id: SyntaxTreeId,
     /// Buffered parser-facing token stream.
     cursor: TokenCursor,
     /// Heap-backed grammar control stack; the final element is active.
     frames: Vec<ParseFrame>,
+    /// Spare vectors lent to pushed frames and reclaimed when they pop.
+    pools: frame_pool::FramePools,
     /// Syntax nodes retained by the pending frames, updated on push/pop.
     retained_frame_nodes: usize,
     /// Completed child value waiting for its parent frame.
@@ -193,26 +193,26 @@ impl ParsedTranslationUnit {
 
 impl GetPosition for Parser {
     fn position(&self, context: &Context) -> SourcePosition {
-        self.cursor.preprocessor.position(context)
+        self.cursor.upstream.position(context)
     }
 }
 
 impl SetPosition for Parser {
     fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
-        self.cursor.preprocessor.set_position(context, position);
+        self.cursor.upstream.set_position(context, position);
     }
 }
 
 impl GetSourceFileIndex for Parser {
     fn source_file_index(&self) -> u32 {
-        self.cursor.preprocessor.source_file_index()
+        self.cursor.upstream.source_file_index()
     }
 }
 
 impl SetSourceFileIndex for Parser {
     fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
         self.cursor
-            .preprocessor
+            .upstream
             .set_source_file_index(context, source_file_index);
     }
 }

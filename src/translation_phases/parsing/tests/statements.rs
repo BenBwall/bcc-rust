@@ -15,7 +15,11 @@ use super::{
 use crate::translation_phases::{
     TranslationError,
     parsing::{
-        declaration_syntax::InitializerType,
+        declaration_syntax::{
+            InitializerType,
+            ParameterDeclaration,
+            StructDeclarator,
+        },
         errors::ParserErrorType,
         scope::ScopeKind,
         syntax::{
@@ -46,7 +50,7 @@ fn prototype_style_definition_produces_real_function_syntax() {
     let ExternalDeclaration::FunctionDefinition(index) = parsed.items[0] else {
         panic!("expected a function definition: {:#?}", parsed.items);
     };
-    let definition = &parsed.parser.syntax.function_definitions[index.0 as usize];
+    let definition = &parsed.parser.syntax[index];
     assert_eq!(
         identifier_name(&parsed, definition.declarator).as_deref(),
         Some("defined")
@@ -57,7 +61,7 @@ fn prototype_style_definition_produces_real_function_syntax() {
     );
     assert!(!definition.recovered);
     assert!(matches!(
-        parsed.parser.syntax.statements[definition.body.0 as usize].kind,
+        parsed.parser.syntax[definition.body].kind,
         StatementType::Compound { .. }
     ));
 }
@@ -84,8 +88,7 @@ fn compound_blocks_preserve_mixed_items_and_every_statement_family() {
     let kinds = items
         .iter()
         .filter_map(|item| match item {
-            | BlockItem::Statement(index) =>
-                Some(parsed.parser.syntax.statements[index.0 as usize].kind),
+            | BlockItem::Statement(index) => Some(parsed.parser.syntax[index].kind),
             | BlockItem::Declaration(_) => None,
         })
         .collect::<Vec<_>>();
@@ -186,28 +189,21 @@ fn old_style_definition_keeps_its_parameter_declaration_list() {
     ));
     let definition = function_definition(&parsed, 2);
     assert_eq!(definition.declaration_list.length, 2);
-    let start = definition.declaration_list.start_index as usize;
-    let names = parsed.parser.syntax.declaration_indices
-        [start..start + definition.declaration_list.length as usize]
+    let names = parsed.parser.syntax[definition.declaration_list]
         .iter()
         .map(|index| {
             identifier_name(
                 &parsed,
-                init_declarators(
-                    &parsed,
-                    &parsed.parser.syntax.declarations[index.0 as usize],
-                )[0]
-                .declarator,
+                init_declarators(&parsed, &parsed.parser.syntax[index])[0].declarator,
             )
             .expect("old-style declaration name")
         })
         .collect::<Vec<_>>();
     assert_eq!(names, ["left", "right"]);
     assert!(
-        parsed.parser.syntax.declaration_indices
-            [start..start + definition.declaration_list.length as usize]
+        parsed.parser.syntax[definition.declaration_list]
             .iter()
-            .all(|index| !parsed.parser.syntax.declarations[index.0 as usize].recovered)
+            .all(|index| !parsed.parser.syntax[index].recovered)
     );
     assert_eq!(
         sourced_text(&parsed, definition.source_vectors),
@@ -274,8 +270,8 @@ fn function_definition_publishes_identifier_bound_parameters() {
             &nested,
             init_declarators(
                 &nested,
-                &nested.parser.syntax.declarations[match items[0] {
-                    | BlockItem::Declaration(index) => index.0 as usize,
+                &nested.parser.syntax[match items[0] {
+                    | BlockItem::Declaration(index) => index,
                     | BlockItem::Statement(_) => unreachable!(),
                 }],
             )[0]
@@ -300,21 +296,21 @@ fn old_style_parameter_recovery_preserves_the_function_body() {
         let parsed = parse(source);
         let definition = function_definition(&parsed, 0);
         assert_eq!(definition.declaration_list.length, 1);
-        let declaration = parsed.parser.syntax.declaration_indices
-            [definition.declaration_list.start_index as usize];
-        assert!(parsed.parser.syntax.declarations[declaration.0 as usize].recovered);
+        let declaration = parsed.parser.syntax[definition.declaration_list][0];
+        assert!(parsed.parser.syntax[declaration].recovered);
         let [BlockItem::Statement(statement)] = block_items(&parsed, definition.body) else {
             panic!("expected the recovered function body to retain its return statement")
         };
         assert!(matches!(
-            parsed.parser.syntax.statements[statement.0 as usize].kind,
+            parsed.parser.syntax[statement].kind,
             StatementType::Return(None)
         ));
         assert!(parser_errors(&parsed).any(|error| matches!(
             error,
-            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(
-                TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-            ))
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+                Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)),
+                _
+            )
         )));
     }
 }
@@ -330,13 +326,11 @@ fn dangling_else_binds_to_the_nearest_unmatched_if() {
         then_statement: inner,
         else_statement: outer_else,
         ..
-    } = parsed.parser.syntax.statements[outer.0 as usize].kind
+    } = parsed.parser.syntax[outer].kind
     else {
         panic!("expected outer if")
     };
-    let StatementType::If { else_statement, .. } =
-        parsed.parser.syntax.statements[inner.0 as usize].kind
-    else {
+    let StatementType::If { else_statement, .. } = parsed.parser.syntax[inner].kind else {
         panic!("expected inner if")
     };
     assert!(outer_else.is_none());
@@ -355,16 +349,16 @@ fn missing_if_body_leaves_else_for_its_enclosing_if() {
         then_statement,
         else_statement: Some(else_statement),
         ..
-    } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+    } = parsed.parser.syntax[if_statement].kind
     else {
         panic!("expected a recovered if statement with an else branch")
     };
     assert!(matches!(
-        parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+        parsed.parser.syntax[then_statement].kind,
         StatementType::Null
     ));
     assert!(matches!(
-        parsed.parser.syntax.statements[else_statement.0 as usize].kind,
+        parsed.parser.syntax[else_statement].kind,
         StatementType::Expression(ExpressionSlot::Parsed(_))
     ));
 }
@@ -381,21 +375,20 @@ fn nested_missing_if_body_leaves_else_for_its_enclosing_if() {
         then_statement,
         else_statement: Some(else_statement),
         ..
-    } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+    } = parsed.parser.syntax[if_statement].kind
     else {
         panic!("expected a recovered if statement with an else branch")
     };
-    let StatementType::While { body_statement, .. } =
-        parsed.parser.syntax.statements[then_statement.0 as usize].kind
+    let StatementType::While { body_statement, .. } = parsed.parser.syntax[then_statement].kind
     else {
         panic!("expected the if then-branch to be a while statement")
     };
     assert!(matches!(
-        parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+        parsed.parser.syntax[body_statement].kind,
         StatementType::Null
     ));
     assert!(matches!(
-        parsed.parser.syntax.statements[else_statement.0 as usize].kind,
+        parsed.parser.syntax[else_statement].kind,
         StatementType::Expression(ExpressionSlot::Parsed(_))
     ));
 }
@@ -412,23 +405,23 @@ fn missing_else_body_leaves_a_later_else_for_its_enclosing_if() {
         then_statement,
         else_statement: Some(outer_else),
         ..
-    } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+    } = parsed.parser.syntax[if_statement].kind
     else {
         panic!("expected the outer if to retain its else branch")
     };
     let StatementType::If {
         else_statement: Some(inner_else),
         ..
-    } = parsed.parser.syntax.statements[then_statement.0 as usize].kind
+    } = parsed.parser.syntax[then_statement].kind
     else {
         panic!("expected the inner if to retain its first else branch")
     };
     assert!(matches!(
-        parsed.parser.syntax.statements[inner_else.0 as usize].kind,
+        parsed.parser.syntax[inner_else].kind,
         StatementType::Null
     ));
     assert!(matches!(
-        parsed.parser.syntax.statements[outer_else.0 as usize].kind,
+        parsed.parser.syntax[outer_else].kind,
         StatementType::Expression(ExpressionSlot::Parsed(_))
     ));
 }
@@ -440,16 +433,14 @@ fn case_recovery_distinguishes_a_conditional_colon_from_the_label_colon() {
     else {
         panic!("expected one switch statement")
     };
-    let StatementType::Switch { body_statement, .. } =
-        parsed.parser.syntax.statements[switch.0 as usize].kind
-    else {
+    let StatementType::Switch { body_statement, .. } = parsed.parser.syntax[switch].kind else {
         panic!("expected switch syntax")
     };
     let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
         panic!("expected one case label")
     };
     let StatementType::Case(ConstantExpressionSlot::Parsed(expression), _) =
-        parsed.parser.syntax.statements[case.0 as usize].kind
+        parsed.parser.syntax[case].kind
     else {
         panic!("expected a parsed case expression")
     };
@@ -469,16 +460,14 @@ fn case_recovery_does_not_steal_a_colon_after_a_closed_conditional_delimiter() {
     else {
         panic!("expected one switch statement")
     };
-    let StatementType::Switch { body_statement, .. } =
-        parsed.parser.syntax.statements[switch.0 as usize].kind
-    else {
+    let StatementType::Switch { body_statement, .. } = parsed.parser.syntax[switch].kind else {
         panic!("expected switch syntax")
     };
     let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
         panic!("expected one case label")
     };
     let StatementType::Case(ConstantExpressionSlot::Parsed(expression), _) =
-        parsed.parser.syntax.statements[case.0 as usize].kind
+        parsed.parser.syntax[case].kind
     else {
         panic!("expected a parsed case expression")
     };
@@ -497,16 +486,14 @@ fn case_recovery_matches_an_outer_question_after_closed_inner_nesting() {
     else {
         panic!("expected one switch statement")
     };
-    let StatementType::Switch { body_statement, .. } =
-        parsed.parser.syntax.statements[switch.0 as usize].kind
-    else {
+    let StatementType::Switch { body_statement, .. } = parsed.parser.syntax[switch].kind else {
         panic!("expected switch syntax")
     };
     let [BlockItem::Statement(case)] = block_items(&parsed, body_statement) else {
         panic!("expected one case label")
     };
     let StatementType::Case(ConstantExpressionSlot::Parsed(expression), _) =
-        parsed.parser.syntax.statements[case.0 as usize].kind
+        parsed.parser.syntax[case].kind
     else {
         panic!("expected a parsed case expression")
     };
@@ -520,15 +507,15 @@ fn stray_else_consumes_its_token_and_preserves_following_items() {
     let items = block_items(&parsed, function_definition(&parsed, 0).body);
     assert_eq!(items.len(), 3);
     assert!(matches!(items[0], BlockItem::Statement(first) if matches!(
-        parsed.parser.syntax.statements[first.0 as usize].kind,
+        parsed.parser.syntax[first].kind,
         StatementType::Null
     )));
     assert!(matches!(items[1], BlockItem::Statement(second) if matches!(
-        parsed.parser.syntax.statements[second.0 as usize].kind,
+        parsed.parser.syntax[second].kind,
         StatementType::Null
     )));
     assert!(matches!(items[2], BlockItem::Statement(third) if matches!(
-        parsed.parser.syntax.statements[third.0 as usize].kind,
+        parsed.parser.syntax[third].kind,
         StatementType::Return(None)
     )));
     assert!(parser_errors(&parsed).any(|error| matches!(
@@ -582,7 +569,7 @@ fn for_slots_distinguish_absent_expressions_and_declarations() {
                 condition_expression,
                 iteration_expression,
                 ..
-            } = parsed.parser.syntax.statements[index.0 as usize].kind
+            } = parsed.parser.syntax[index].kind
             else {
                 panic!("expected for syntax")
             };
@@ -625,7 +612,7 @@ fn missing_expressions_remain_distinct_from_present_children() {
         condition_expression,
         iteration_expression,
         ..
-    } = parsed.parser.syntax.statements[for_statement.0 as usize].kind
+    } = parsed.parser.syntax[for_statement].kind
     else {
         panic!("expected a for statement")
     };
@@ -636,19 +623,19 @@ fn missing_expressions_remain_distinct_from_present_children() {
     let StatementType::If {
         condition_expression: ExpressionSlot::Missing(if_expression),
         ..
-    } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+    } = parsed.parser.syntax[if_statement].kind
     else {
         panic!("expected an if statement with a missing expression")
     };
     let StatementType::Case(ConstantExpressionSlot::Missing(case_expression), _) =
-        parsed.parser.syntax.statements[case_statement.0 as usize].kind
+        parsed.parser.syntax[case_statement].kind
     else {
         panic!("expected a case statement with a missing expression")
     };
     assert_eq!(sourced_text(&parsed, if_expression), "");
     assert_eq!(sourced_text(&parsed, case_expression), "");
     assert!(matches!(
-        parsed.parser.syntax.statements[return_statement.0 as usize].kind,
+        parsed.parser.syntax[return_statement].kind,
         StatementType::Return(None)
     ));
 }
@@ -659,15 +646,15 @@ fn expression_recovery_preserves_following_statement_keywords() {
     let items = block_items(&parsed, function_definition(&parsed, 0).body);
     assert_eq!(items.len(), 3);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(Some(ExpressionSlot::Parsed(_)))
     )));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
     assert!(parser_errors(&parsed).any(|error| matches!(
@@ -686,7 +673,7 @@ fn typedef_named_members_remain_inside_expressions() {
         panic!("expected a return statement")
     };
     let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
-        parsed.parser.syntax.statements[statement.0 as usize].kind
+        parsed.parser.syntax[statement].kind
     else {
         panic!("expected a parsed return expression")
     };
@@ -704,7 +691,7 @@ fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
         .initializer
         .expect("value must have an initializer");
     let InitializerType::AssignmentExpression(initializer_expression) =
-        parsed.parser.syntax.initializers[initializer.0 as usize].kind
+        parsed.parser.syntax[initializer].kind
     else {
         panic!("expected a scalar initializer")
     };
@@ -714,7 +701,7 @@ fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
         .initializer
         .expect("product must have an initializer");
     let InitializerType::AssignmentExpression(initializer_expression) =
-        parsed.parser.syntax.initializers[initializer.0 as usize].kind
+        parsed.parser.syntax[initializer].kind
     else {
         panic!("expected a scalar initializer")
     };
@@ -724,7 +711,7 @@ fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
         .initializer
         .expect("sum must have an initializer");
     let InitializerType::AssignmentExpression(initializer_expression) =
-        parsed.parser.syntax.initializers[initializer.0 as usize].kind
+        parsed.parser.syntax[initializer].kind
     else {
         panic!("expected a scalar initializer")
     };
@@ -735,7 +722,7 @@ fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
         panic!("expected one return statement: {items:#?}")
     };
     let StatementType::Return(Some(ExpressionSlot::Parsed(return_expression))) =
-        parsed.parser.syntax.statements[statement.0 as usize].kind
+        parsed.parser.syntax[statement].kind
     else {
         panic!("expected a parsed return expression")
     };
@@ -767,11 +754,11 @@ fn bare_return_recovery_preserves_following_statement_keywords() {
     let items = block_items(&parsed, function_definition(&parsed, 0).body);
     assert_eq!(items.len(), 2);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
     assert!(parser_errors(&parsed).any(|error| matches!(
@@ -789,12 +776,12 @@ fn bare_return_recovery_preserves_following_declarations() {
     let items = block_items(&parsed, function_definition(&parsed, 0).body);
     assert_eq!(items.len(), 3);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
     assert!(matches!(items[1], BlockItem::Declaration(_)));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -806,11 +793,11 @@ fn bare_return_recovery_preserves_following_identifier_labels() {
 
     assert_eq!(items.len(), 2);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Label(_, _)
     )));
 }
@@ -822,18 +809,19 @@ fn block_declaration_recovery_preserves_following_statement_keywords() {
     assert_eq!(items.len(), 3);
     assert!(matches!(items[0], BlockItem::Declaration(_)));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
     assert!(parser_errors(&parsed).any(|error| matches!(
         error,
-        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(Some(TokenType::Keyword(
-            KeywordTokenType::Return
-        )))
+        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+            Some(TokenType::Keyword(KeywordTokenType::Return)),
+            _
+        )
     )));
 }
 
@@ -843,12 +831,12 @@ fn expression_recovery_preserves_following_declarations() {
     let items = block_items(&parsed, function_definition(&parsed, 0).body);
     assert_eq!(items.len(), 3);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Expression(ExpressionSlot::Parsed(_))
     )));
     assert!(matches!(items[1], BlockItem::Declaration(_)));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
 }
@@ -862,7 +850,7 @@ fn initializer_recovery_preserves_following_typedef_led_declarations() {
     assert!(matches!(items[0], BlockItem::Declaration(_)));
     assert!(matches!(items[1], BlockItem::Declaration(_)));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(Some(ExpressionSlot::Parsed(_)))
     )));
 }
@@ -876,8 +864,7 @@ fn typedef_spelled_struct_member_declarators_are_not_consumed_as_specifiers() {
         parsed
             .parser
             .syntax
-            .struct_declarators
-            .iter()
+            .iter::<StructDeclarator>()
             .filter_map(|member| member
                 .declarator
                 .and_then(|declarator| identifier_name(&parsed, declarator)))
@@ -897,15 +884,15 @@ fn expression_recovery_preserves_following_identifier_labels() {
     let items = block_items(&parsed, function_definition(&parsed, 0).body);
     assert_eq!(items.len(), 3);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Expression(ExpressionSlot::Parsed(_))
     )));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Label(_, _)
     )));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
 }
@@ -917,11 +904,11 @@ fn malformed_expression_recovery_preserves_following_identifier_labels() {
 
     assert_eq!(items.len(), 2);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Expression(ExpressionSlot::Parsed(_))
     )));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Label(_, _)
     )));
 }
@@ -933,11 +920,11 @@ fn grouped_expression_recovery_preserves_following_identifier_labels() {
 
     assert_eq!(items.len(), 2);
     assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(Some(ExpressionSlot::Parsed(_)))
     )));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Label(_, _)
     )));
 }
@@ -952,13 +939,13 @@ fn conditional_operands_are_not_recovered_as_identifier_labels() {
         panic!("expected an expression statement")
     };
     let StatementType::Expression(ExpressionSlot::Parsed(source)) =
-        parsed.parser.syntax.statements[expression.0 as usize].kind
+        parsed.parser.syntax[expression].kind
     else {
         panic!("expected a parsed expression")
     };
     assert_eq!(expression_text(&parsed, source), "c?x:y");
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
 }
@@ -971,11 +958,11 @@ fn block_declaration_recovery_preserves_following_identifier_labels() {
     assert_eq!(items.len(), 3);
     assert!(matches!(items[0], BlockItem::Declaration(_)));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Label(_, _)
     )));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
 }
@@ -997,12 +984,12 @@ fn malformed_block_items_preserve_following_compound_statements() {
         let nested_items = block_items(&parsed, compound);
         assert!(
             matches!(nested_items, [BlockItem::Statement(index)] if matches!(
-                parsed.parser.syntax.statements[index.0 as usize].kind,
+                parsed.parser.syntax[index].kind,
                 StatementType::Return(None)
             ))
         );
         assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-            parsed.parser.syntax.statements[index.0 as usize].kind,
+            parsed.parser.syntax[index].kind,
             StatementType::Break
         )));
     }
@@ -1017,21 +1004,18 @@ fn block_brace_initializers_remain_in_the_declaration() {
     let BlockItem::Declaration(declaration) = items[0] else {
         panic!("expected a block declaration")
     };
-    let initializer = *init_declarators(
-        &parsed,
-        &parsed.parser.syntax.declarations[declaration.0 as usize],
-    )[0]
-    .initializer
-    .as_ref()
-    .expect("parsed initializer");
-    let initializer = &parsed.parser.syntax.initializers[initializer.0 as usize];
+    let initializer = *init_declarators(&parsed, &parsed.parser.syntax[declaration])[0]
+        .initializer
+        .as_ref()
+        .expect("parsed initializer");
+    let initializer = &parsed.parser.syntax[initializer];
     assert!(matches!(
         initializer.kind,
         InitializerType::InitializerList(_)
     ));
     assert_eq!(sourced_text(&parsed, initializer.source_vectors), "{1}");
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
 }
@@ -1045,13 +1029,13 @@ fn block_initializer_recovery_preserves_following_statement_keywords() {
     let BlockItem::Declaration(declaration) = items[0] else {
         panic!("expected a recovered block declaration")
     };
-    assert!(parsed.parser.syntax.declarations[declaration.0 as usize].recovered);
+    assert!(parsed.parser.syntax[declaration].recovered);
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -1065,12 +1049,12 @@ fn block_initializer_recovery_preserves_statement_keyword_after_operator() {
     let BlockItem::Declaration(declaration) = items[0] else {
         panic!("expected a recovered block declaration")
     };
-    assert!(parsed.parser.syntax.declarations[declaration.0 as usize].recovered);
+    assert!(parsed.parser.syntax[declaration].recovered);
     assert!(matches!(
         items[1],
         BlockItem::Statement(index)
             if matches!(
-                parsed.parser.syntax.statements[index.0 as usize].kind,
+                parsed.parser.syntax[index].kind,
                 StatementType::Return(None)
             )
     ));
@@ -1078,7 +1062,7 @@ fn block_initializer_recovery_preserves_statement_keyword_after_operator() {
         items[2],
         BlockItem::Statement(index)
             if matches!(
-                parsed.parser.syntax.statements[index.0 as usize].kind,
+                parsed.parser.syntax[index].kind,
                 StatementType::Break
             )
     ));
@@ -1092,11 +1076,11 @@ fn block_initializer_recovery_preserves_a_following_compound_statement() {
     assert_eq!(items.len(), 3);
     assert!(matches!(items[0], BlockItem::Declaration(_)));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Compound { .. }
     )));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -1110,17 +1094,15 @@ fn call_parentheses_do_not_hide_a_following_statement_body() {
     let BlockItem::Statement(if_statement) = items[0] else {
         panic!("expected an if statement")
     };
-    let StatementType::If { then_statement, .. } =
-        parsed.parser.syntax.statements[if_statement.0 as usize].kind
-    else {
+    let StatementType::If { then_statement, .. } = parsed.parser.syntax[if_statement].kind else {
         panic!("expected an if statement")
     };
     assert!(matches!(
-        parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+        parsed.parser.syntax[then_statement].kind,
         StatementType::Compound { .. }
     ));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -1134,17 +1116,15 @@ fn sizeof_type_parentheses_do_not_hide_a_following_statement_body() {
     let BlockItem::Statement(if_statement) = items[0] else {
         panic!("expected an if statement")
     };
-    let StatementType::If { then_statement, .. } =
-        parsed.parser.syntax.statements[if_statement.0 as usize].kind
-    else {
+    let StatementType::If { then_statement, .. } = parsed.parser.syntax[if_statement].kind else {
         panic!("expected an if statement")
     };
     assert!(matches!(
-        parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+        parsed.parser.syntax[then_statement].kind,
         StatementType::Compound { .. }
     ));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -1158,17 +1138,15 @@ fn sizeof_type_parentheses_do_not_hide_a_declaration_led_body() {
     let BlockItem::Statement(if_statement) = items[0] else {
         panic!("expected an if statement")
     };
-    let StatementType::If { then_statement, .. } =
-        parsed.parser.syntax.statements[if_statement.0 as usize].kind
-    else {
+    let StatementType::If { then_statement, .. } = parsed.parser.syntax[if_statement].kind else {
         panic!("expected an if statement")
     };
     assert!(matches!(
-        parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+        parsed.parser.syntax[then_statement].kind,
         StatementType::Compound { .. }
     ));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -1183,7 +1161,7 @@ fn sizeof_type_parentheses_can_introduce_a_compound_literal_operand() {
         panic!("expected a return statement")
     };
     let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
-        parsed.parser.syntax.statements[statement.0 as usize].kind
+        parsed.parser.syntax[statement].kind
     else {
         panic!("expected a parsed return expression")
     };
@@ -1197,11 +1175,11 @@ fn statement_recovery_preserves_following_identifier_labels() {
 
     assert_eq!(items.len(), 3);
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Label(_, _)
     )));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
 }
@@ -1215,18 +1193,16 @@ fn statement_recovery_preserves_following_statement_keywords() {
     let BlockItem::Statement(if_statement) = items[0] else {
         panic!("expected an if statement")
     };
-    let StatementType::If { then_statement, .. } =
-        parsed.parser.syntax.statements[if_statement.0 as usize].kind
-    else {
+    let StatementType::If { then_statement, .. } = parsed.parser.syntax[if_statement].kind else {
         panic!("expected an if statement")
     };
-    assert!(parsed.parser.syntax.statements[then_statement.0 as usize].recovered);
+    assert!(parsed.parser.syntax[then_statement].recovered);
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -1243,17 +1219,17 @@ fn compound_literals_survive_parenthesized_expression_recovery() {
         condition_expression: ExpressionSlot::Parsed(expression),
         then_statement,
         else_statement: None,
-    } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+    } = parsed.parser.syntax[if_statement].kind
     else {
         panic!("expected a parsed if condition without an else branch")
     };
     assert!(expression_text(&parsed, expression).contains("{0}"));
     assert!(matches!(
-        parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+        parsed.parser.syntax[then_statement].kind,
         StatementType::Null
     ));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
 }
@@ -1267,11 +1243,11 @@ fn compound_literal_type_names_do_not_mark_outer_grouping_parentheses() {
     assert_eq!(items.len(), 3);
     assert!(matches!(items[0], BlockItem::Statement(_)));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Compound { .. }
     )));
     assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -1288,16 +1264,16 @@ fn malformed_condition_preserves_the_following_body_brace() {
         then_statement,
         else_statement: None,
         ..
-    } = parsed.parser.syntax.statements[if_statement.0 as usize].kind
+    } = parsed.parser.syntax[if_statement].kind
     else {
         panic!("expected a recovered if statement")
     };
     assert!(matches!(
-        parsed.parser.syntax.statements[then_statement.0 as usize].kind,
+        parsed.parser.syntax[then_statement].kind,
         StatementType::Compound { .. }
     ));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -1315,16 +1291,16 @@ fn malformed_for_declaration_recovery_preserves_the_header_close() {
         condition_expression: None,
         iteration_expression: None,
         body_statement,
-    } = parsed.parser.syntax.statements[for_statement.0 as usize].kind
+    } = parsed.parser.syntax[for_statement].kind
     else {
         panic!("expected a recovered declaration-form for statement")
     };
     assert!(matches!(
-        parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+        parsed.parser.syntax[body_statement].kind,
         StatementType::Null
     ));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
 }
@@ -1342,20 +1318,20 @@ fn malformed_for_declaration_preserves_a_statement_body() {
         initializer: Some(ForInitializer::Declaration(_)),
         body_statement,
         ..
-    } = parsed.parser.syntax.statements[for_statement.0 as usize].kind
+    } = parsed.parser.syntax[for_statement].kind
     else {
         panic!("expected a recovered declaration-form for statement")
     };
     assert!(
         matches!(
-            parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+            parsed.parser.syntax[body_statement].kind,
             StatementType::Return(None)
         ),
         "{:#?}",
-        parsed.parser.syntax.statements[body_statement.0 as usize]
+        parsed.parser.syntax[body_statement]
     );
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Break
     )));
 }
@@ -1373,31 +1349,23 @@ fn malformed_for_initializer_recovery_preserves_the_header_close() {
         condition_expression: None,
         iteration_expression: None,
         body_statement,
-    } = parsed.parser.syntax.statements[for_statement.0 as usize].kind
+    } = parsed.parser.syntax[for_statement].kind
     else {
         panic!("expected a recovered declaration-form for statement")
     };
-    assert_eq!(
-        parsed.parser.syntax.declarations[declaration.0 as usize]
-            .init_declarators
-            .length,
-        1
-    );
-    assert!(!parsed.parser.syntax.declarations[declaration.0 as usize].recovered);
+    assert_eq!(parsed.parser.syntax[declaration].init_declarators.length, 1);
+    assert!(!parsed.parser.syntax[declaration].recovered);
     assert!(
-        init_declarators(
-            &parsed,
-            &parsed.parser.syntax.declarations[declaration.0 as usize],
-        )[0]
-        .initializer
-        .is_some()
+        init_declarators(&parsed, &parsed.parser.syntax[declaration],)[0]
+            .initializer
+            .is_some()
     );
     assert!(matches!(
-        parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+        parsed.parser.syntax[body_statement].kind,
         StatementType::Null
     ));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(None)
     )));
 }
@@ -1411,17 +1379,15 @@ fn malformed_for_declaration_preserves_a_compound_body() {
     let BlockItem::Statement(for_statement) = items[0] else {
         panic!("expected a for statement")
     };
-    let StatementType::For { body_statement, .. } =
-        parsed.parser.syntax.statements[for_statement.0 as usize].kind
-    else {
+    let StatementType::For { body_statement, .. } = parsed.parser.syntax[for_statement].kind else {
         panic!("expected a recovered for statement")
     };
     assert!(matches!(
-        parsed.parser.syntax.statements[body_statement.0 as usize].kind,
+        parsed.parser.syntax[body_statement].kind,
         StatementType::Compound { .. }
     ));
     assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax.statements[index.0 as usize].kind,
+        parsed.parser.syntax[index].kind,
         StatementType::Return(Some(ExpressionSlot::Parsed(_)))
     )));
 }
@@ -1616,9 +1582,9 @@ fn premature_eof_unwinds_every_phase_03_frame_family() {
             []
         );
         assert_ne!(
-            parsed.context.get_source_vectors(
-                parsed.parser.syntax.statements[definition.body.0 as usize].source_vectors
-            ),
+            parsed
+                .context
+                .get_source_vectors(parsed.parser.syntax[definition.body].source_vectors),
             []
         );
         assert!(parsed.parser.scopes.nested_scopes.is_empty(), "{source:?}");
@@ -1635,18 +1601,21 @@ fn synthesized_missing_statements_are_anchored_at_the_recovery_point() {
         let [BlockItem::Statement(if_statement)] = block_items(&parsed, definition.body) else {
             panic!("expected one if statement for {source:?}")
         };
-        let StatementType::If { then_statement, .. } =
-            parsed.parser.syntax.statements[if_statement.0 as usize].kind
+        let StatementType::If { then_statement, .. } = parsed.parser.syntax[if_statement].kind
         else {
             panic!("expected an if statement for {source:?}")
         };
-        let [missing_source] = parsed.context.get_source_vectors(
-            parsed.parser.syntax.statements[then_statement.0 as usize].source_vectors,
-        ) else {
+        let [missing_source] = parsed
+            .context
+            .get_source_vectors(parsed.parser.syntax[then_statement].source_vectors)
+        else {
             panic!("expected one missing-statement anchor for {source:?}")
         };
 
-        assert_eq!(missing_source.index, source.len());
+        // At the token that ends the statement, or at the end of input; not
+        // wherever the preprocessor happens to have read ahead to.
+        let recovery_point = source.find('}').unwrap_or(source.len());
+        assert_eq!(missing_source.index as usize, recovery_point);
         assert_eq!(missing_source.length, 0);
     }
 }
@@ -1656,13 +1625,13 @@ fn missing_function_body_at_eof_retains_a_zero_width_source_location() {
     let source = "int f(parameter) int parameter;";
     let parsed = parse(source);
     let definition = function_definition(&parsed, 0);
-    let body = &parsed.parser.syntax.statements[definition.body.0 as usize];
+    let body = &parsed.parser.syntax[definition.body];
     let [body_source] = parsed.context.get_source_vectors(body.source_vectors) else {
         panic!("expected one source vector for the recovered function body")
     };
 
     assert!(body.recovered);
-    assert_eq!(body_source.index, source.len());
+    assert_eq!(body_source.index as usize, source.len());
     assert_eq!(body_source.length, 0);
 }
 
@@ -1735,7 +1704,7 @@ fn blocks_and_definition_parameters_meet_the_c99_translation_floor() {
         parsed.items.first(),
         Some(ExternalDeclaration::FunctionDefinition(_))
     ));
-    assert_eq!(parsed.parser.syntax.parameter_declarations.len(), 127);
+    assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 127);
     assert!(
         parser_errors(&parsed).next().is_none(),
         "{:#?}",

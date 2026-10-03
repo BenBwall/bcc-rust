@@ -7,7 +7,10 @@ use std::{
     },
 };
 
-use crate::translation_phases::preprocessing::FloatTokenType;
+use crate::{
+    translation_phases::preprocessing::FloatTokenType,
+    util::packed::Packed,
+};
 
 mod ffi {
     #![allow(
@@ -198,11 +201,13 @@ pub(crate) fn string_to_double(s: &str) -> Result<f64, ParseFloatError> {
     // SAFETY: The string is NUL-terminated and the end pointer is writable.
     let double = unsafe { ffi::string_to_double(s.as_ptr().cast::<c_char>(), &raw mut endptr) };
     if !consumed_whole_spelling(s, endptr, 0) {
-        return Err(ParseFloatError::Invalid(FloatTokenType::Double(0.0)));
+        return Err(ParseFloatError::Invalid(FloatTokenType::Double(
+            Packed::new(0.0),
+        )));
     }
     match range_error(class_of(double), s) {
         | Some(error) => Err(ParseFloatError::OutOfRange(
-            FloatTokenType::Double(double),
+            FloatTokenType::Double(Packed::new(double)),
             error,
         )),
         | None => Ok(double),
