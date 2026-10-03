@@ -8,11 +8,17 @@ This glossary defines the canonical language for bcc-rust's C front end and its 
 A stage that consumes one source representation and yields the next while retaining enough provenance to diagnose the original input.
 
 **Initial processing**:
-The character-level phase that normalizes source text before preprocessing-token recognition, including line endings, trigraphs, escaped newlines, and comments.
+The character-level phase that normalizes source text before preprocessing-token recognition: line endings, trigraphs, and escaped newlines (C99 translation phases 1 and 2). Comments are not recognized here, so a spliced `/` and `*` still open one and string literals never contain one.
 
 **Preprocessing token**:
-A lexical unit recognized before macro expansion and directive handling; it preserves spellings and categories needed by the C preprocessor.
+A lexical unit recognized before macro expansion and directive handling; it preserves spellings and categories needed by the C preprocessor. Recognition replaces each comment with whitespace.
 _Avoid_: Token
+
+**Lexing strategy** *(implemented as `LexingStrategy`)*:
+When initial processing and preprocessing-token recognition run relative to preprocessing. *Streaming* lexing recognizes each preprocessing token when preprocessing asks for it; *batch* lexing recognizes all of a source buffer's preprocessing tokens when the buffer is opened and then replays them. Both yield identical preprocessing tokens, provenance, and diagnostics.
+
+**Preprocessing strategy** *(implemented as `PreprocessingStrategy`)*:
+How the front end schedules translation phases 1 through 7: streaming throughout, batch lexing with streaming preprocessing, or batch, which also preprocesses the whole translation unit before parsing. Batch reports every preprocessing diagnostic before any parser diagnostic.
 
 **Preprocessing**:
 The phase that expands macros, executes directives, resolves includes and conditional groups, and converts surviving preprocessing tokens into parser-facing tokens.
@@ -23,7 +29,7 @@ _Avoid_: Preprocessing token
 
 **Source vector**:
 A segment of original-source provenance attached to generated characters, preprocessing tokens, tokens, and diagnostics. A value may carry multiple source vectors when preprocessing combines or transforms input.
-A value refers to its ordered source vectors as one contiguous range in a context-owned arena. The parser copies each fetched token's source vectors once into a parser arena in fetch order, so merging the provenance of consecutive syntax extends a range instead of copying it; any merge yields exactly the first value's source vectors followed by the second's.
+A value refers to its ordered source vectors as one contiguous range in a context-owned arena. Each phase-6 output token's source vectors are copied once into a token arena in output order, so merging the provenance of consecutive syntax extends a range instead of copying it; any merge yields exactly the first value's source vectors followed by the second's. The preprocessor's own arena is then discarded between output tokens; ranges that pending diagnostics still name move to a retained arena first.
 _Avoid_: Source span
 
 **Context**:
@@ -91,7 +97,7 @@ A syntax tree for operators and operands that may compute a value, designate an 
 The structured syntax representation produced by language parsing. It records grammatical form and provenance without deciding every semantic property of the program.
 
 **Arena**:
-An owning collection for compiler-domain objects whose relationships are represented by compact handles rather than nested ownership.
+An owning collection for compiler-domain objects whose relationships are represented by compact handles rather than nested ownership. Syntax nodes of every kind share one chunked arena, so it grows a block at a time instead of reallocating.
 
 **Index handle**:
 A typed numeric reference to one object or contiguous object range owned by an arena. Handles distinguish domains such as expressions, statements, declarations, and types.

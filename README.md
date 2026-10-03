@@ -40,11 +40,6 @@ Malformed input retains repaired syntax where meaningful, produces a
 provenance-only external error node for pure top-level garbage, and emits
 structured FIFO diagnostics with recovery context.
 
-Ordinary multi-character constants pack their UTF-8 execution bytes into a
-signed 32-bit integer, most-significant byte first, retaining the final four
-bytes. The same value is used in syntax nodes and `#if` expressions. This is
-the implementation-defined choice for constants such as `'ab'`.
-
 Parser resource accounting includes source provenance, with a default budget
 of 40 million stored segments per translation unit. Extreme nesting can
 produce a `SourceSegments` resource diagnostic; flat syntax lists collect
@@ -178,6 +173,58 @@ N + 1'
 ```
 
 Use `--iquote <directory>` (`-q`) and `--isystem <directory>` (`-s`) to add include search paths. Header lookup follows GCC and Clang: `#include "name"` looks beside the including file (the working directory for `--input`), then each `--iquote` directory; both forms then search `CPATH`, each `--isystem` directory, and `C_INCLUDE_PATH`. The working directory is never searched implicitly. The environment variables use the platform path separator, and, as in GCC, an empty element names the working directory. A missing header's diagnostic lists every directory searched. `__DATE__` and `__TIME__` are fixed once per translation unit and honor `SOURCE_DATE_EPOCH` for reproducible output. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
+
+The preprocessor permits 200 simultaneously nested included headers, excluding
+the main source file. An include beyond that limit produces a diagnostic and
+processing continues with the remaining input. This exceeds C99's required
+minimum of 15 nested includes.
+
+Preprocessing uses a freestanding execution model: `__STDC__` is `1`,
+`__STDC_VERSION__` is `199901L`, and `__STDC_HOSTED__` is `0`.
+`__STDC_MB_MIGHT_NEQ_WC__` is `1`, permitting multibyte and wide-character
+codes to differ. These predefined values describe the front end's selected
+language and execution model; semantic analysis, runtime support, and code
+generation remain unfinished.
+
+Literal values use UTF-8 for source characters in ordinary strings and 8-bit
+codes for numeric escapes (`\xFF` is one byte). Wide literals use 32-bit
+codes, including non-scalar values from numeric escapes; UCNs still require
+valid Unicode scalar values. Ordinary multi-character constants pack the last
+four execution bytes into a signed 32-bit `int`, most-significant byte first;
+the same value is used in syntax nodes and `#if` expressions. Adjacent
+literals retain numeric codes separately from source characters; a wide member
+makes the result wide. Literal values are interned separately from UTF-8 source
+spellings. Identifier UCNs follow C99 Annex D and share identity with their
+UTF-8 spellings.
+
+### Benchmarks and preprocessing strategies
+
+The front end can schedule its translation phases three ways: *streaming*
+pulls each token through every phase when the parser asks for it; *batch
+lexing* lexes each source file completely when it is opened and replays its
+preprocessing tokens; *batch* also preprocesses the whole translation unit
+before parsing, as a standalone preprocessor would. All three produce the same
+tokens and diagnostics. The parser CLI renders each consecutive same-file
+run of parser diagnostics and preprocessing warnings in physical source order,
+using invocation positions for macro errors. Preprocessing errors and
+include-file transitions retain their reporting order. The hidden
+`--preprocessing-strategy streaming|batch-lexing|batch` option selects one.
+
+The lexers' byte-class scans use `std::simd` when the nightly-only
+`portable-simd` feature is enabled and scalar loops otherwise. Criterion
+benchmarks compare the strategies over generated plain, mixed, and
+macro-heavy inputs, and a second harness reports their peak heap use.
+
+The `Parser only` group measures phase 7 with preprocessing in untimed setup.
+It also includes expression-heavy and declaration-heavy inputs to exercise
+nested expressions, declarators, aggregates, and initializers. The
+`Preprocessor allocations` group isolates single strings, empty macro calls,
+and nested reused arguments.
+
+```sh
+cargo +nightly bench --features benchmarking-internals,portable-simd --bench bench
+cargo +nightly bench --features benchmarking-internals,portable-simd --bench memory
+```
 
 ### External torture corpus
 
