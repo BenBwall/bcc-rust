@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agentbus": {
+      "command": "python",
+      "args": ["tools/agentbus/agentbus.py", "serve"],
+      "env": { "AGENTBUS_AGENT": "claude" }
+    }
+  }
+}

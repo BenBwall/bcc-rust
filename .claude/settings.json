@@ -1,0 +1,39 @@
+{
+  "env": {
+    "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP": "0"
+  },
+  "enabledMcpjsonServers": ["agentbus"],
+  "permissions": {
+    "allow": ["mcp__agentbus", "Workflow"]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/tools/agentbus/agentbus.py\" hook --agent claude", "timeout": 10 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/tools/agentbus/agentbus.py\" hook --agent claude", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/tools/agentbus/agentbus.py\" hook --agent claude", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/tools/agentbus/agentbus.py\" hook --agent claude", "timeout": 3600 }
+        ]
+      }
+    ]
+  }
+}

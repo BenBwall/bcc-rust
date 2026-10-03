@@ -1,0 +1,33 @@
+{
+  "description": "agentbus: deliver messages from other agents working in this repository",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python \"$(git rev-parse --show-toplevel)/tools/agentbus/agentbus.py\" hook --agent codex", "timeout": 10, "additionalContextLimit": 8000 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python \"$(git rev-parse --show-toplevel)/tools/agentbus/agentbus.py\" hook --agent codex", "timeout": 10, "additionalContextLimit": 8000 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python \"$(git rev-parse --show-toplevel)/tools/agentbus/agentbus.py\" hook --agent codex", "timeout": 10, "additionalContextLimit": 8000 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python \"$(git rev-parse --show-toplevel)/tools/agentbus/agentbus.py\" hook --agent codex", "timeout": 3600 }
+        ]
+      }
+    ]
+  }
+}
