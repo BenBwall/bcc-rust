@@ -21,11 +21,12 @@ use crate::{
 };
 
 fn expansion(source: &str) -> (String, Vec<TranslationError>) {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<macro regression>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );

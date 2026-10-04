@@ -16,11 +16,12 @@ fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {
                      static struct switch typedef union unsigned void volatile while _Bool \
                      _Complex _Imaginary";
     let source = format!("{spellings} integer Int _bool while_ defined identifier\n");
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut pp = Preprocessor::new(
         &mut context,
         PathBuf::from("<keywords>").into_boxed_path(),
-        source.into(),
+        &source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -44,11 +45,12 @@ fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {
 fn keywords_remain_macro_names_and_paste_results_until_phase_seven() {
     let source =
         "#define int renamed\nint\n#undef int\n#define CAT(a,b) a##b\nCAT(in,t) CAT(wh,ile)\n";
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut pp = Preprocessor::new(
         &mut context,
         PathBuf::from("<keywords>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -66,7 +68,8 @@ fn keywords_remain_macro_names_and_paste_results_until_phase_seven() {
 #[test]
 fn keyword_ids_are_a_stable_prefix_across_contexts_and_cache_growth() {
     for _ in 0..2 {
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         for index in 0..1000 {
             _ = context.string_cache.intern(format!("name_{index}"));
         }

@@ -73,7 +73,7 @@ impl ExternalDeclarationFrame {
     pub(super) fn step(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
     ) -> ParseAction {

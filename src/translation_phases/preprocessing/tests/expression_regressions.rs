@@ -208,11 +208,12 @@ fn each_evaluated_arithmetic_fault_keeps_its_diagnostic_kind() {
 }
 
 fn divide_fault_sources(source: &str) -> Vec<SourceVector> {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<expression-test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -297,11 +298,12 @@ fn malformed_ternary_groups_keep_outer_operands_and_operator_locations() {
         assert_eq!(identifiers, ["selected", "after"], "{errors:#?}");
         assert_eq!(errors.len(), 1, "{expression}: {errors:#?}");
         // Pin the exact operator location, not the cursor after the directive.
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let mut pp = Preprocessor::new(
             &mut context,
             PathBuf::from("<test>").into_boxed_path(),
-            source.into(),
+            &source,
             SharedVec::default(),
             SharedVec::default(),
         );

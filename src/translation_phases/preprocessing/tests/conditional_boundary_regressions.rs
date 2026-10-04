@@ -69,7 +69,7 @@ struct Observation {
     errors:    Vec<ErrorRecord>,
 }
 
-fn drain_errors(context: &mut Context, observation: &mut Observation) {
+fn drain_errors(context: &mut Context<'_>, observation: &mut Observation) {
     for error in context.take_pending_errors() {
         let TranslationError::Preprocessing(error) = error else {
             panic!("unexpected non-preprocessing diagnostic: {error:#?}");
@@ -92,11 +92,12 @@ fn drain_errors(context: &mut Context, observation: &mut Observation) {
 }
 
 fn observe(source: &str, path: &Path) -> Observation {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         path.to_path_buf().into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );

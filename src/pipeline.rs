@@ -23,7 +23,7 @@ use crate::translation_phases::{
 /// so every item stays renderable afterwards.
 pub(crate) fn preprocess_with_diagnostics(
     mut preprocessor: Preprocessor,
-    context: &mut Context,
+    context: &mut Context<'_>,
 ) -> Vec<Result<Token, TranslationError>> {
     let mut tokens = Vec::new();
     while let Some(mut token) = preprocessor.next_iterator_item(context) {

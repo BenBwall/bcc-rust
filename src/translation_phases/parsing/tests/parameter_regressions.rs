@@ -19,12 +19,12 @@ use crate::translation_phases::parsing::{
     },
 };
 
-fn errors<'a>(parsed: &'a Parsed<'_>) -> Vec<&'a ParserErrorType> {
+fn errors<'a>(parsed: &'a Parsed<'_, '_>) -> Vec<&'a ParserErrorType> {
     parser_errors(parsed).collect()
 }
 
 /// The function suffix of the first declarator of the declaration at `item`.
-fn declared_suffix(parsed: &Parsed<'_>, item: usize) -> DirectDeclarator {
+fn declared_suffix(parsed: &Parsed<'_, '_>, item: usize) -> DirectDeclarator {
     let declaration = declaration(parsed, item);
     let declarator = init_declarators(parsed, declaration)[0].declarator;
     parsed
@@ -35,7 +35,7 @@ fn declared_suffix(parsed: &Parsed<'_>, item: usize) -> DirectDeclarator {
 
 /// Whether the body item at `index` of the function definition at `item` is
 /// an expression statement (as opposed to a declaration).
-fn body_item_is_expression(parsed: &Parsed<'_>, item: usize, index: usize) -> bool {
+fn body_item_is_expression(parsed: &Parsed<'_, '_>, item: usize, index: usize) -> bool {
     let body = function_definition(parsed, item).body;
     match block_items(parsed, body)[index] {
         | BlockItem::Statement(statement) => matches!(

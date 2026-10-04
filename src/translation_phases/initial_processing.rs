@@ -29,7 +29,7 @@ pub(crate) enum InitialProcessorError {
 }
 
 impl ToDiagnostic for InitialProcessorError {
-    fn to_diagnostic(&self, _context: &Context, source: SourceVectors) -> Diagnostic {
+    fn to_diagnostic(&self, _context: &Context<'_>, source: SourceVectors) -> Diagnostic {
         match self {
             | Self::EscapedFinalNewline(_) => Explanation::new(self.to_string())
                 .label("this splice removes the final physical newline")
@@ -50,7 +50,7 @@ impl ToDiagnostic for InitialProcessorError {
 
 impl GetPosition for InitialProcessorError {
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         match self {
             | Self::MissingFinalNewline(vector) | Self::EscapedFinalNewline(vector) =>
                 vector.position(context),
@@ -67,7 +67,7 @@ impl GetSeverity for InitialProcessorError {
 }
 
 impl GetSourceVectors for InitialProcessorError {
-    fn source_vectors(&self, context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors {
         match self {
             | Self::MissingFinalNewline(vector) | Self::EscapedFinalNewline(vector) => context
                 .create_source_vectors(

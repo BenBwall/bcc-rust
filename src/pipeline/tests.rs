@@ -40,13 +40,14 @@ use crate::{
 fn with_preprocessed_with<R>(
     source: &str,
     configuration: CompilerConfiguration,
-    inspect: impl FnOnce(std::vec::IntoIter<Result<Token, TranslationError>>, &mut Context) -> R,
+    inspect: impl FnOnce(std::vec::IntoIter<Result<Token, TranslationError>>, &mut Context<'_>) -> R,
 ) -> R {
-    let mut context = Context::with_configuration(configuration);
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::with_configuration(&tu, configuration);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -56,17 +57,21 @@ fn with_preprocessed_with<R>(
 
 fn with_preprocessed<R>(
     source: &str,
-    inspect: impl FnOnce(std::vec::IntoIter<Result<Token, TranslationError>>, &mut Context) -> R,
+    inspect: impl FnOnce(std::vec::IntoIter<Result<Token, TranslationError>>, &mut Context<'_>) -> R,
 ) -> R {
     with_preprocessed_with(source, CompilerConfiguration::default(), inspect)
 }
 
-fn with_parser<R>(source: &str, inspect: impl FnOnce(&mut LanguageParser, &mut Context) -> R) -> R {
-    let mut context = Context::new();
+fn with_parser<R>(
+    source: &str,
+    inspect: impl FnOnce(&mut LanguageParser, &mut Context<'_>) -> R,
+) -> R {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -247,11 +252,12 @@ fn parser_yields_a_parsed_initialized_declaration() {
 
 #[test]
 fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        "int first; int second = 2;\n".to_owned().into(),
+        "int first; int second = 2;\n",
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -274,11 +280,12 @@ fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
 
 #[test]
 fn cli_parser_details_render_recovery_ranges_and_notes() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        "int first extra junk; int after;\n".to_owned().into(),
+        "int first extra junk; int after;\n",
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -324,13 +331,12 @@ use crate::translation_phases::parsing::{
 
 #[test]
 fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<syntax-tree-consumer-test>").into_boxed_path(),
-        "struct S { int member : 3; }; int f(int parameter);"
-            .to_owned()
-            .into(),
+        "struct S { int member : 3; }; int f(int parameter);",
         SharedVec::default(),
         SharedVec::default(),
     );

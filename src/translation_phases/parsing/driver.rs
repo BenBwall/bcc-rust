@@ -89,13 +89,13 @@ impl Parser {
     ///
     /// C99: the input is the translation unit produced after phase 7 under
     /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
-    pub(crate) fn new(preprocessor: Preprocessor, context: &mut Context) -> Self {
+    pub(crate) fn new(preprocessor: Preprocessor, context: &mut Context<'_>) -> Self {
         Self::new_with_config(preprocessor, context, ParserLimits::default())
     }
 
     fn new_with_config(
         mut preprocessor: Preprocessor,
-        context: &mut Context,
+        context: &mut Context<'_>,
         limits: ParserLimits,
     ) -> Self {
         preprocessor.prepare_for_parsing();
@@ -140,7 +140,7 @@ impl Parser {
     #[cfg(test)]
     pub(super) fn new_with_limits(
         preprocessor: Preprocessor,
-        context: &mut Context,
+        context: &mut Context<'_>,
         limits: ParserLimits,
     ) -> Self {
         Self::new_with_config(preprocessor, context, limits)
@@ -170,7 +170,10 @@ impl Parser {
     /// remain part of the aggregate result so mixing the streaming adapter
     /// with the owning seam cannot silently produce a suffix-only
     /// translation unit.
-    pub(crate) fn parse_translation_unit(mut self, context: &mut Context) -> ParsedTranslationUnit {
+    pub(crate) fn parse_translation_unit(
+        mut self,
+        context: &mut Context<'_>,
+    ) -> ParsedTranslationUnit {
         let mut roots = std::mem::take(&mut self.emitted_roots);
         while let Some(root) = self.drive(context) {
             roots.push(root);
@@ -185,7 +188,7 @@ impl Parser {
     ///
     /// C99: translation-unit is a nonempty sequence of external-declaration
     /// values under §6.9, p. 140; PDF p. 152.
-    pub(super) fn drive(&mut self, context: &mut Context) -> Option<ExternalDeclaration> {
+    pub(super) fn drive(&mut self, context: &mut Context<'_>) -> Option<ExternalDeclaration> {
         // A resource failure is terminal: the remaining input is neither
         // fetched nor parsed, so it cannot grow the exhausted storage.
         if self.resource_limit_reported {
@@ -367,7 +370,7 @@ impl Parser {
     /// Unlike the upstream position, this does not depend on how far the
     /// preprocessor has read ahead, so every preprocessing strategy places
     /// recovered and missing nodes identically.
-    pub(super) fn missing_syntax_source(&mut self, context: &mut Context) -> SourceVectors {
+    pub(super) fn missing_syntax_source(&mut self, context: &mut Context<'_>) -> SourceVectors {
         if let Some(token) = self.cursor.current(context)
             && let Some(first) = context.get_source_vectors(token.source_vectors).first()
         {
@@ -415,7 +418,7 @@ impl Parser {
 
     fn resource_failure(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         resource: ParserResource,
         limit: usize,
     ) -> Option<ExternalDeclaration> {
@@ -424,7 +427,7 @@ impl Parser {
 
     fn resource_failure_at(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         resource: ParserResource,
         limit: usize,
         token_override: Option<Token>,
@@ -469,7 +472,7 @@ impl Parser {
     /// synchronization algorithm is implementation-defined.
     fn recover(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         set: SynchronizationSet,
         #[cfg(test)] depth: usize,
     ) -> Option<SourceVectors> {
@@ -658,7 +661,7 @@ impl Parser {
     /// “produce at least one diagnostic message”.
     pub(super) fn report(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         error_type: ParserErrorType,
         token: Option<Token>,
     ) {
@@ -716,7 +719,7 @@ impl Parser {
 
     /// Attaches a "missing `;`" suggestion after `source` to the diagnostic
     /// just reported, explaining why the following input was misread.
-    pub(super) fn suggest_semicolon_after(&self, context: &mut Context, source: SourceVectors) {
+    pub(super) fn suggest_semicolon_after(&self, context: &mut Context<'_>, source: SourceVectors) {
         _ = self;
         let Some(last) = context.user_source_end(source) else {
             return;
@@ -746,7 +749,7 @@ impl Parser {
     /// `;`.
     fn semicolon_insertion_point(
         &self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         found: Option<Token>,
     ) -> Option<SourceVectors> {
         let previous = self.cursor.previous?;
@@ -781,7 +784,7 @@ impl Parser {
     )]
     pub(super) fn merge_source(
         &self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         existing: &mut Option<SourceVectors>,
         token: Token,
     ) {
@@ -857,7 +860,7 @@ impl Parser {
 
     pub(super) fn declaration_recovery_starts_here(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Token,
     ) -> bool {
         self.declaration_starter(token)
@@ -879,7 +882,7 @@ impl Parser {
     /// answers yes, keeping the definition reading.
     pub(super) fn next_declaration_declares_one_of(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         names: &[StringCacheId],
     ) -> bool {
         const LOOKAHEAD: usize = 32;
@@ -922,7 +925,7 @@ impl Parser {
         true
     }
 
-    pub(super) fn typedef_name_continues_specifiers(&mut self, context: &mut Context) -> bool {
+    pub(super) fn typedef_name_continues_specifiers(&mut self, context: &mut Context<'_>) -> bool {
         let Some(following) = self.cursor.following(context) else {
             return false;
         };
@@ -938,7 +941,7 @@ impl Parser {
     /// C99: parenthesized direct-declarator and pointer are §6.7.5,
     /// p. 114; PDF p. 126; typedef-name is §6.7.7, pp. 123-124;
     /// PDF pp. 135-136.
-    fn parenthesized_declarator_follows_typedef(&mut self, context: &mut Context) -> bool {
+    fn parenthesized_declarator_follows_typedef(&mut self, context: &mut Context<'_>) -> bool {
         let mut index = 0;
         while is_operator(
             self.cursor.lookahead(context, index),

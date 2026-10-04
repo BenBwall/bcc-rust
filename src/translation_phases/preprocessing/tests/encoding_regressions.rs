@@ -24,7 +24,7 @@ struct Observation {
     errors:     Vec<String>,
 }
 
-fn record(token: Token, context: &Context, result: &mut Observation) {
+fn record(token: Token, context: &Context<'_>, result: &mut Observation) {
     result.spellings.push(
         context
             .string_cache
@@ -41,11 +41,12 @@ fn record(token: Token, context: &Context, result: &mut Observation) {
 }
 
 fn observe(source: &str) -> Observation {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<encoding followup>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );

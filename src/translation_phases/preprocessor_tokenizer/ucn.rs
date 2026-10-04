@@ -276,7 +276,7 @@ pub(super) fn decode(text: &str, first: bool) -> Option<(char, usize)> {
 }
 
 pub(crate) fn identifier(
-    context: &mut Context,
+    context: &mut Context<'_>,
     raw: StringCacheId,
 ) -> (PreprocessorTokenType, StringCacheId) {
     let text = context.string_cache.at(raw);

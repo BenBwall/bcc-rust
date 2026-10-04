@@ -27,7 +27,7 @@ struct Observation {
     errors:    Vec<String>,
 }
 
-fn record_token(token: Token, context: &Context, observation: &mut Observation) {
+fn record_token(token: Token, context: &Context<'_>, observation: &mut Observation) {
     observation.kinds.push(token.kind);
     observation.spellings.push(
         context
@@ -41,7 +41,7 @@ fn record_token(token: Token, context: &Context, observation: &mut Observation) 
         .push(context.get_source_vectors(token.source_vectors).to_vec());
 }
 
-fn record_errors(context: &mut Context, observation: &mut Observation) {
+fn record_errors(context: &mut Context<'_>, observation: &mut Observation) {
     observation.errors.extend(
         context
             .take_pending_errors()
@@ -51,11 +51,12 @@ fn record_errors(context: &mut Context, observation: &mut Observation) {
 }
 
 fn observe(source: &str) -> Observation {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<predefined regressions>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );

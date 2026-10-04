@@ -37,7 +37,7 @@ use crate::{
 };
 
 /// Renders every pending diagnostic while its provenance is still live.
-fn drain_diagnostics(context: &mut Context, events: &mut Vec<String>) {
+fn drain_diagnostics(context: &mut Context<'_>, events: &mut Vec<String>) {
     while let Some(error) = context.pop_pending_error() {
         let source = error.source_vectors(context);
         let rendered = Renderer::new(RenderColor::Plain)
@@ -63,14 +63,15 @@ enum Step {
 /// Applies `steps` and then reads to the end, recording every observable
 /// effect.
 fn walk(source: &str, steps: &[Step]) -> Vec<String> {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
     let source = SharedString::from(source.to_owned());
-    context.record_source_text(file, source.clone());
+    context.record_source_text(file, &source);
     let mut tokens = TokenSource::new(&mut context, file, &source);
     let mut saved: Vec<SourcePosition> = Vec::new();
     let mut events = Vec::new();
-    let read = |tokens: &mut TokenSource, context: &mut Context, events: &mut Vec<String>| {
+    let read = |tokens: &mut TokenSource, context: &mut Context<'_>, events: &mut Vec<String>| {
         let token = tokens.next_item(context);
         drain_diagnostics(context, events);
         events.push(match token {
@@ -356,7 +357,8 @@ proptest! {
 /// Runs phases 1 through 6 and records every parser-facing token and
 /// diagnostic.
 fn preprocess(source: &str, path: &Path, include_directory: Option<&Path>) -> Vec<String> {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let directories: SharedVec<PathBuf> = include_directory
         .map(|directory| vec![directory.to_owned()])
         .unwrap_or_default()
@@ -364,7 +366,7 @@ fn preprocess(source: &str, path: &Path, include_directory: Option<&Path>) -> Ve
     let mut preprocessor = Preprocessor::new(
         &mut context,
         path.into(),
-        source.to_owned().into(),
+        source,
         directories.clone(),
         directories,
     );
@@ -495,10 +497,11 @@ proptest! {
 #[test]
 fn physically_empty_source_has_no_missing_final_newline() {
     let mut snapshot = Snapshot::new("physically_empty_source_has_no_missing_final_newline");
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
     let source = SharedString::from(String::new());
-    context.record_source_text(file, source.clone());
+    context.record_source_text(file, &source);
     let mut tokens = TokenSource::new(&mut context, file, &source);
     assert!(tokens.next_item(&mut context).is_none(), "");
     assert!(context.take_pending_errors().is_empty(), "");
@@ -536,10 +539,11 @@ fn unterminated_block_comments_report_the_actual_opener() {
         ("/* broken\\\n", 0, 1, 1),
         ("/*", 0, 1, 1),
     ] {
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
         let text = SharedString::from(source.to_owned());
-        context.record_source_text(file, text.clone());
+        context.record_source_text(file, &text);
         let mut tokens = TokenSource::new(&mut context, file, &text);
         let mut spellings = Vec::new();
         while let Some(token) = tokens.next_item(&mut context) {
@@ -589,10 +593,11 @@ fn terminal_spliced_newlines_report_the_actual_last_splice() {
         ("\n\\\n\\\n", 3, 3, 1, 2),
         ("é\\\n", 2, 1, 2, 2),
     ] {
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
         let text = SharedString::from(source.to_owned());
-        context.record_source_text(file, text.clone());
+        context.record_source_text(file, &text);
         let mut tokens = TokenSource::new(&mut context, file, &text);
         while tokens.next_item(&mut context).is_some() {}
         let errors = context.take_pending_errors();
@@ -638,10 +643,11 @@ fn terminal_spliced_newlines_report_the_actual_last_splice() {
 #[test]
 fn terminal_splice_warning_is_deferred_until_the_tail_is_read() {
     // '\n' is already a complete token; batch construction must stay silent.
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
     let text = SharedString::from("\n\\\n".to_owned());
-    context.record_source_text(file, text.clone());
+    context.record_source_text(file, &text);
     let mut tokens = TokenSource::new(&mut context, file, &text);
     assert!(context.take_pending_errors().is_empty());
     let first = tokens.next_item(&mut context).unwrap();
@@ -655,10 +661,11 @@ fn terminal_splice_warning_is_deferred_until_the_tail_is_read() {
 #[test]
 fn cloned_terminal_splice_cursors_keep_independent_warning_state() {
     for source in ["\n\\\n", "word\\\n"] {
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
         let text = SharedString::from(source.to_owned());
-        context.record_source_text(file, text.clone());
+        context.record_source_text(file, &text);
         let mut original = TokenSource::new(&mut context, file, &text);
         let mut cloned = original.clone();
         while original.next_item(&mut context).is_some() {}

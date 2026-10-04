@@ -447,7 +447,7 @@ impl PreprocessorExpressionOperandStack {
         self.retain_faults(Some(root));
     }
 
-    fn emit_faults(&self, context: &mut Context, root: Option<NonZeroU32>) {
+    fn emit_faults(&self, context: &mut Context<'_>, root: Option<NonZeroU32>) {
         let Some(root) = root else {
             return;
         };
@@ -495,7 +495,7 @@ impl PreprocessorExpressionParser {
 impl Preprocessor {
     fn map_operator(
         &mut self,
-        _context: &Context,
+        _context: &Context<'_>,
         operator: PreprocessorToken,
     ) -> PreprocessorExpressionOperator {
         let state = replace(
@@ -551,7 +551,7 @@ impl Preprocessor {
     )]
     fn handle_expression_operator(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         operator: LocatedExpressionOperator,
     ) {
         match operator.kind {
@@ -1242,7 +1242,7 @@ impl Preprocessor {
         }
     }
 
-    fn parse_defined_operator(&mut self, context: &mut Context) {
+    fn parse_defined_operator(&mut self, context: &mut Context<'_>) {
         let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase::<true>(context,
             |_, _, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::OpeningParenthesis),
             |_, _, t|
@@ -1320,7 +1320,7 @@ impl Preprocessor {
 
     /// Consumes the next token of a directive after it was diagnosed, unless
     /// it ends the line.
-    fn skip_token_unless_line_end(&mut self, context: &mut Context) {
+    fn skip_token_unless_line_end(&mut self, context: &mut Context<'_>) {
         let position = self.position(context);
         match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
             | Some(token) if token.kind != PreprocessorTokenType::Newline => {},
@@ -1341,7 +1341,7 @@ impl Preprocessor {
 
     pub(super) fn eval_preprocessor_expression(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         on_no_expression_error: PreprocessorErrorType,
     ) -> bool {
         const UNARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Unary;

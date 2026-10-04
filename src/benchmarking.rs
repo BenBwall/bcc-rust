@@ -14,10 +14,7 @@ use crate::{
         preprocessing::Preprocessor,
         preprocessor_tokenizer::TokenSource,
     },
-    util::shared::{
-        SharedString,
-        SharedVec,
-    },
+    util::shared::SharedVec,
 };
 
 #[doc(hidden)]
@@ -131,10 +128,6 @@ impl BenchmarkInput {
             },
         }
     }
-
-    fn shared_source(self) -> SharedString {
-        self.source().to_owned().into()
-    }
 }
 
 /// `count` functions whose statements nest expressions of every precedence
@@ -193,7 +186,8 @@ fn declaration_heavy_source(count: usize) -> String {
 #[doc(hidden)]
 #[must_use]
 pub fn lex(input: BenchmarkInput) -> usize {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let file = context.intern_source_file(box_path_from_str("<input>"));
     let mut tokens = TokenSource::new(&mut context, file, input.source());
     let mut count = 0;
@@ -207,11 +201,11 @@ pub fn lex(input: BenchmarkInput) -> usize {
 }
 
 /// Opens `input` as the main source file.
-fn preprocessor(context: &mut Context, input: BenchmarkInput) -> Preprocessor {
+fn preprocessor(context: &mut Context<'_>, input: BenchmarkInput) -> Preprocessor {
     Preprocessor::new(
         context,
         box_path_from_str("<input>"),
-        input.shared_source(),
+        input.source(),
         SharedVec::default(),
         SharedVec::default(),
     )
@@ -223,7 +217,8 @@ fn preprocessor(context: &mut Context, input: BenchmarkInput) -> Preprocessor {
 #[doc(hidden)]
 #[must_use]
 pub fn preprocess(input: BenchmarkInput) -> usize {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     preprocessor(&mut context, input)
         .preprocess_all(&mut context)
         .len()
@@ -242,19 +237,20 @@ pub struct ParseBenchmarkSummary {
 #[doc(hidden)]
 #[must_use]
 pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     prepare_parse_in_context(&mut context, input).parse()
 }
 
 /// A translation unit preprocessed through phase 6 and ready to parse, so a
 /// benchmark can time phase 7 alone.
 #[doc(hidden)]
-pub struct PreparedParse<'a> {
-    context: &'a mut Context,
+pub struct PreparedParse<'a, 'tu> {
+    context: &'a mut Context<'tu>,
     parser:  Parser,
 }
 
-impl std::fmt::Debug for PreparedParse<'_> {
+impl std::fmt::Debug for PreparedParse<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedParse").finish_non_exhaustive()
     }
@@ -265,19 +261,23 @@ impl std::fmt::Debug for PreparedParse<'_> {
 #[doc(hidden)]
 pub fn with_prepared_parse<R>(
     input: BenchmarkInput,
-    inspect: impl FnOnce(PreparedParse<'_>) -> R,
+    inspect: impl FnOnce(PreparedParse<'_, '_>) -> R,
 ) -> R {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     inspect(prepare_parse_in_context(&mut context, input))
 }
 
-fn prepare_parse_in_context(context: &mut Context, input: BenchmarkInput) -> PreparedParse<'_> {
+fn prepare_parse_in_context<'a, 'tu>(
+    context: &'a mut Context<'tu>,
+    input: BenchmarkInput,
+) -> PreparedParse<'a, 'tu> {
     let preprocessor = preprocessor(context, input);
     let parser = Parser::new(preprocessor, context);
     PreparedParse { context, parser }
 }
 
-impl PreparedParse<'_> {
+impl PreparedParse<'_, '_> {
     /// Runs translation phase 7 and summarizes the parse.
     #[must_use]
     pub fn parse(self) -> ParseBenchmarkSummary {

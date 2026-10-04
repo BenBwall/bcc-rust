@@ -67,7 +67,7 @@ enum LabelSource {
 }
 
 impl LabelSource {
-    fn vectors<'a>(&'a self, context: &'a Context) -> &'a [SourceVector] {
+    fn vectors<'a>(&'a self, context: &'a Context<'_>) -> &'a [SourceVector] {
         match self {
             | Self::Range(source) => context.get_source_vectors(*source),
             | Self::Segments(segments) => segments,
@@ -109,7 +109,7 @@ impl Diagnostic {
 
     /// Folds a follow-on diagnostic reported at the same place into this
     /// one, keeping only its related ranges: one mistake, one error.
-    pub(crate) fn absorb(&mut self, other: Self, context: &Context) {
+    pub(crate) fn absorb(&mut self, other: Self, context: &Context<'_>) {
         for label in other.labels {
             let duplicate = self.labels.iter().any(|existing| {
                 existing.message == label.message
@@ -141,7 +141,7 @@ impl Diagnostic {
 /// `source` is the error's primary range, already materialized by
 /// [`GetSourceVectors`](crate::translation_phases::GetSourceVectors).
 pub(crate) trait ToDiagnostic {
-    fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic;
+    fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic;
 }
 
 /// The location-independent part of a diagnostic: what went wrong, a short
@@ -375,7 +375,7 @@ impl Renderer {
         (line, start, end)
     }
 
-    fn marks(&mut self, diagnostic: &Diagnostic, context: &Context) -> Vec<Mark> {
+    fn marks(&mut self, diagnostic: &Diagnostic, context: &Context<'_>) -> Vec<Mark> {
         let mut marks: Vec<Mark> = Vec::new();
         for label in &diagnostic.labels {
             let mut label_text = label.message.clone();
@@ -413,7 +413,7 @@ impl Renderer {
     }
 
     /// Renders one diagnostic, ending with a blank line.
-    pub(crate) fn render(&mut self, diagnostic: &Diagnostic, context: &Context) -> String {
+    pub(crate) fn render(&mut self, diagnostic: &Diagnostic, context: &Context<'_>) -> String {
         let mut out = String::new();
         let severity_style = Self::severity_style(diagnostic.severity);
         let _ = writeln!(
@@ -682,16 +682,16 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::util::shared::SharedString;
 
-    fn with_context<R>(text: &str, inspect: impl FnOnce(&mut Context, u32) -> R) -> R {
-        let mut context = Context::new();
+    fn with_context<R>(text: &str, inspect: impl FnOnce(&mut Context<'_>, u32) -> R) -> R {
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let file = context.intern_source_file(PathBuf::from("example.c").into_boxed_path());
-        context.record_source_text(file, SharedString::from(text.to_owned()));
+        context.record_source_text(file, text);
         inspect(&mut context, file)
     }
 
-    fn span(context: &mut Context, file: u32, text: &str, needle: &str) -> SourceVectors {
+    fn span(context: &mut Context<'_>, file: u32, text: &str, needle: &str) -> SourceVectors {
         let index = text.find(needle).expect("needle occurs in text");
         let line = text[..index].matches('\n').count() + 1;
         let column = index - text[..index].rfind('\n').map_or(0, |newline| newline + 1) + 1;

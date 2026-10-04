@@ -167,7 +167,7 @@ impl InitializerFrame {
     pub(super) fn step(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
     ) -> ParseAction {
@@ -686,7 +686,12 @@ impl InitializerFrame {
     }
 
     /// Appends one element, with any designation that preceded it.
-    fn push_element(&mut self, parser: &Parser, context: &mut Context, index: InitializerIndex) {
+    fn push_element(
+        &mut self,
+        parser: &Parser,
+        context: &mut Context<'_>,
+        index: InitializerIndex,
+    ) {
         let initializer_source = parser.syntax[index].source_vectors;
         let current_designation = self
             .designation
@@ -711,7 +716,7 @@ impl InitializerFrame {
         self.designation.get_or_insert_with(Box::default)
     }
 
-    fn merge_designation_source(&mut self, context: &mut Context, source: SourceVectors) {
+    fn merge_designation_source(&mut self, context: &mut Context<'_>, source: SourceVectors) {
         let designation = self.designation_state();
         designation.designation_source_vectors = Some(
             designation
@@ -744,7 +749,7 @@ impl InitializerFrame {
     fn at_array_designator_sync_boundary(
         &self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
         depth: DelimiterDepth,
         closing_bracket_follows: bool,
@@ -788,7 +793,7 @@ impl InitializerFrame {
     /// scan is bounded so repeated errors in one long list stay linear.
     fn closing_bracket_follows(
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
     ) -> bool {
         const SCAN_LIMIT: usize = 32;
@@ -890,7 +895,7 @@ impl InitializerFrame {
     fn list_boundary(
         &self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
     ) -> ListBoundary {
         if self.at_caller_boundary(token) {
@@ -940,7 +945,7 @@ impl InitializerFrame {
     /// otherwise start a following declaration or statement is a malformed
     /// element when the list's own `}` comes first, as in `{ 1, int 0 }`.
     /// The scan is bounded so repeated errors in one long list stay linear.
-    fn closing_brace_follows(parser: &mut Parser, context: &mut Context) -> bool {
+    fn closing_brace_follows(parser: &mut Parser, context: &mut Context<'_>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {

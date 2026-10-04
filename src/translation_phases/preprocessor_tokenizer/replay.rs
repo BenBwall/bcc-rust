@@ -67,7 +67,7 @@ impl ReplaySources {
 impl ReplayCursor {
     /// Replays `tokens`; `empty_location` locates an empty replay.
     pub(super) fn new(
-        context: &Context,
+        context: &Context<'_>,
         tokens: &[PreprocessorToken],
         empty_location: SourceVector,
     ) -> Self {
@@ -133,13 +133,13 @@ impl ReplayCursor {
     /// A zero-length diagnostic location at a position of this cursor.
     pub(super) fn location_at(
         &self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         position: SourcePosition,
     ) -> SourceVectors {
         context.push_source_vectors(&[self.start_of(position.index)])
     }
 
-    pub(super) fn next_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
+    pub(super) fn next_item(&mut self, context: &mut Context<'_>) -> Option<PreprocessorToken> {
         let token = self.tokens.get(self.next)?;
         self.next += 1;
         Some(PreprocessorToken {

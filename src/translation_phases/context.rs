@@ -33,8 +33,11 @@ use crate::{
     },
     util::{
         HashMap,
+        bump::{
+            ArenaVec,
+            Bump,
+        },
         dedup_arena::DedupArena,
-        shared::SharedString,
         string_cache::{
             StringCache,
             StringCacheId,
@@ -114,33 +117,34 @@ impl ExpansionSites {
     }
 }
 
-pub(crate) struct Context {
-    pub(crate) configuration:         CompilerConfiguration,
-    pub(crate) source_vectors:        SourceVectorStack,
-    parser_token_vectors:             Vec<SourceVector>,
-    retained_vectors:                 Vec<SourceVector>,
-    pub(crate) string_cache:          StringCache,
+pub(crate) struct Context<'tu> {
+    tu: &'tu Bump,
+    pub(crate) configuration: CompilerConfiguration,
+    pub(crate) source_vectors: SourceVectorStack,
+    parser_token_vectors: ArenaVec<'tu, SourceVector>,
+    retained_vectors: ArenaVec<'tu, SourceVector>,
+    pub(crate) string_cache: StringCache,
     pub(crate) canonical_identifiers: HashMap<StringCacheId, StringCacheId>,
-    literal_values:                   DedupArena<Box<[LiteralUnit]>, FxBuildHasher>,
+    literal_values: DedupArena<Box<[LiteralUnit]>, FxBuildHasher>,
     /// Sparse endpoints follow their source arena's lifetime.
-    expansion_sites:                  [ExpansionSites; 3],
-    ignore_tokenizer_errors:          bool,
-    pub(super) pending_errors:        VecDeque<TranslationError>,
+    expansion_sites: [ExpansionSites; 3],
+    ignore_tokenizer_errors: bool,
+    pub(super) pending_errors: VecDeque<TranslationError>,
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
-    relocated_errors:                 usize,
-    pub(crate) source_files:          DedupArena<Box<Path>, FxBuildHasher>,
+    relocated_errors: usize,
+    pub(crate) source_files: DedupArena<Box<Path>, FxBuildHasher>,
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
-    source_texts:                     Vec<Option<SharedString>>,
+    source_texts: ArenaVec<'tu, Option<&'tu str>>,
 }
 
-impl Context {
-    pub(crate) fn new() -> Self {
-        Self::with_configuration(CompilerConfiguration::default())
+impl<'tu> Context<'tu> {
+    pub(crate) fn new(tu: &'tu Bump) -> Self {
+        Self::with_configuration(tu, CompilerConfiguration::default())
     }
 
-    pub(crate) fn with_configuration(configuration: CompilerConfiguration) -> Self {
+    pub(crate) fn with_configuration(tu: &'tu Bump, configuration: CompilerConfiguration) -> Self {
         let mut string_cache = StringCache::new();
         for &keyword in KeywordTokenType::ALL {
             let id = string_cache.intern(keyword.spelling());
@@ -151,10 +155,11 @@ impl Context {
             );
         }
         Self {
+            tu,
             configuration,
             source_vectors: SourceVectorStack(Vec::new()),
-            parser_token_vectors: Vec::new(),
-            retained_vectors: Vec::new(),
+            parser_token_vectors: ArenaVec::new_in(tu),
+            retained_vectors: ArenaVec::new_in(tu),
             string_cache,
             canonical_identifiers: HashMap::default(),
             literal_values: DedupArena::new(),
@@ -163,7 +168,7 @@ impl Context {
             pending_errors: VecDeque::new(),
             relocated_errors: 0,
             source_files: DedupArena::new(),
-            source_texts: Vec::new(),
+            source_texts: ArenaVec::new_in(tu),
         }
     }
 
@@ -530,7 +535,7 @@ impl Context {
         }
     }
 
-    fn arena(&self, arena: SourceArena) -> &Vec<SourceVector> {
+    fn arena(&self, arena: SourceArena) -> &[SourceVector] {
         match arena {
             | SourceArena::Preprocessor => &self.source_vectors.0,
             | SourceArena::ParserTokens => &self.parser_token_vectors,
@@ -679,7 +684,7 @@ impl Context {
     /// Registers synthetic source text under a fresh identity, even when
     /// `path` names an earlier input, so diagnostics retained from each
     /// input keep quoting their own text.
-    pub(crate) fn add_synthetic_source_file(&mut self, path: Box<Path>, text: SharedString) -> u32 {
+    pub(crate) fn add_synthetic_source_file(&mut self, path: Box<Path>, text: &str) -> u32 {
         let index = self.source_files.push_unindexed(path);
         self.record_source_text(index, text);
         index
@@ -690,7 +695,8 @@ impl Context {
     }
 
     /// Remembers the text a source file was translated from.
-    pub(crate) fn record_source_text(&mut self, index: u32, text: SharedString) {
+    pub(crate) fn record_source_text(&mut self, index: u32, text: &str) {
+        let text = self.tu.alloc_str(text);
         let index = index as usize;
         if self.source_texts.len() <= index {
             self.source_texts.resize(index + 1, None);
@@ -726,7 +732,8 @@ mod tests {
 
     #[test]
     fn macro_locations_survive_compaction_without_retaining_temporary_metadata() {
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let mut saved = Vec::new();
         for index in 0..2_000 {
             let source = context.push_source_vectors(&[SourceVector {

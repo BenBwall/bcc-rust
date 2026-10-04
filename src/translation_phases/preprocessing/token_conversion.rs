@@ -47,7 +47,7 @@ use crate::{
 impl Preprocessor {
     pub(super) fn concatenate_adjacent_strings(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         first: Token,
     ) -> Token {
         let TokenType::String(first_kind) = first.kind else {
@@ -127,7 +127,7 @@ impl Preprocessor {
     #[inline(always)]
     fn parse_integer_radix(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         radix: u32,
         start_index: usize,
         invalid_integer_literal_error: PreprocessorErrorType,
@@ -330,7 +330,7 @@ impl Preprocessor {
 
     fn parse_hexadecimal_integer(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Token {
         self.parse_integer_radix(
@@ -342,7 +342,11 @@ impl Preprocessor {
         )
     }
 
-    fn parse_binary_integer(&mut self, context: &mut Context, token: PreprocessorToken) -> Token {
+    fn parse_binary_integer(
+        &mut self,
+        context: &mut Context<'_>,
+        token: PreprocessorToken,
+    ) -> Token {
         self.parse_integer_radix(
             context,
             2,
@@ -352,7 +356,11 @@ impl Preprocessor {
         )
     }
 
-    fn parse_octal_integer(&mut self, context: &mut Context, token: PreprocessorToken) -> Token {
+    fn parse_octal_integer(
+        &mut self,
+        context: &mut Context<'_>,
+        token: PreprocessorToken,
+    ) -> Token {
         self.parse_integer_radix(
             context,
             8,
@@ -362,7 +370,11 @@ impl Preprocessor {
         )
     }
 
-    fn parse_decimal_integer(&mut self, context: &mut Context, token: PreprocessorToken) -> Token {
+    fn parse_decimal_integer(
+        &mut self,
+        context: &mut Context<'_>,
+        token: PreprocessorToken,
+    ) -> Token {
         self.parse_integer_radix(
             context,
             10,
@@ -375,7 +387,7 @@ impl Preprocessor {
     #[inline(always)]
     fn parse_float(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         invalid_float_literal_error: PreprocessorErrorType,
         token: PreprocessorToken,
     ) -> Token {
@@ -424,7 +436,7 @@ impl Preprocessor {
 
     fn parse_hexadecimal_float(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Token {
         self.parse_float(
@@ -434,7 +446,11 @@ impl Preprocessor {
         )
     }
 
-    fn parse_decimal_float(&mut self, context: &mut Context, token: PreprocessorToken) -> Token {
+    fn parse_decimal_float(
+        &mut self,
+        context: &mut Context<'_>,
+        token: PreprocessorToken,
+    ) -> Token {
         self.parse_float(
             context,
             PreprocessorErrorType::InvalidDecimalFloatLiteral,
@@ -443,7 +459,7 @@ impl Preprocessor {
     }
 
     fn eval_escape_sequences(
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> (Vec<LiteralUnit>, bool) {
         let string = context.string_cache.at(token.contents);
@@ -584,7 +600,7 @@ impl Preprocessor {
 
     pub(super) fn parse_number(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Token {
         let contents = context.string_cache.at(token.contents);
@@ -608,7 +624,7 @@ impl Preprocessor {
         }
     }
 
-    fn parse_string(context: &mut Context, token: PreprocessorToken) -> StringTokenType {
+    fn parse_string(context: &mut Context<'_>, token: PreprocessorToken) -> StringTokenType {
         let (contents, _) = Self::eval_escape_sequences(context, token);
         let cached_contents = context.intern_literal(contents);
         if context.string_cache.at(token.contents).starts_with('L') {
@@ -619,7 +635,7 @@ impl Preprocessor {
     }
 
     pub(super) fn parse_character(
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> CharacterTokenType {
         let (units, had_escape_error) = Self::eval_escape_sequences(context, token);
@@ -657,7 +673,7 @@ impl Preprocessor {
 
     pub(super) fn map_preprocessor_token(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Option<Token> {
         Some(match token.kind {

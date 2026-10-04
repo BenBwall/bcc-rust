@@ -393,7 +393,7 @@ impl ParseFrame {
     /// frame; frames without an owned syntax range intentionally ignore them.
     pub(super) fn merge_recovered_sources(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         recovered: Option<SourceVectors>,
     ) {
         let Some(recovered) = recovered else {
@@ -442,7 +442,7 @@ impl ParseFrame {
     pub(super) fn step(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
     ) -> ParseAction {
@@ -460,7 +460,7 @@ impl ParseFrame {
     fn step_once(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
     ) -> ParseAction {

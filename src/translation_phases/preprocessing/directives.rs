@@ -62,7 +62,7 @@ const MAX_INCLUDE_NESTING: usize = 200;
 /// tokens must be spelled identically, while any two whitespace separations
 /// are equivalent and a line end matches the end of input.
 fn same_replacement_token(
-    context: &Context,
+    context: &Context<'_>,
     old: Option<&PreprocessorToken>,
     new: Option<&PreprocessorToken>,
 ) -> bool {
@@ -132,7 +132,7 @@ fn invalid_header_sequence(name: &str, angle: bool) -> Option<(usize, &'static s
 /// corresponding bytes in a source file. Pasted or rewritten tokens retain
 /// their original provenance when they cannot be narrowed this way.
 fn expanded_header_sequence_source(
-    context: &mut Context,
+    context: &mut Context<'_>,
     token_source: SourceVectors,
     offset: usize,
     sequence: &'static str,
@@ -219,7 +219,7 @@ fn header_name_from_source(
     reason = "The macro-parameter loop has multiple semantic exit conditions."
 )]
 impl Preprocessor {
-    pub(super) fn parse_directive(&mut self, context: &mut Context, token: PreprocessorToken) {
+    pub(super) fn parse_directive(&mut self, context: &mut Context<'_>, token: PreprocessorToken) {
         if !self.last_was_newline {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
@@ -281,7 +281,7 @@ impl Preprocessor {
 
     pub(super) fn prepare_pragma_operator_string(
         &self,
-        context: &Context,
+        context: &Context<'_>,
         string: StringCacheId,
     ) -> SharedString {
         _ = self;
@@ -340,7 +340,7 @@ impl Preprocessor {
     /// a macro-expanded operand can switch to its definition's tokenizer.
     fn find_header_from_path(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         including_file: u32,
         operand: SourceVectors,
         path: &Path,
@@ -394,7 +394,7 @@ impl Preprocessor {
 
     /// Judges an `#include` operand by its first token as written, without
     /// consuming it or reporting what reading it reports.
-    fn peek_include_operand(&mut self, context: &mut Context) -> IncludeOperand {
+    fn peek_include_operand(&mut self, context: &mut Context<'_>) -> IncludeOperand {
         // Only a source file's own text can be read between the delimiters.
         if !matches!(
             self.tokenizer_stack.last().map(|frame| &frame.frame_type),
@@ -426,7 +426,7 @@ impl Preprocessor {
     /// it keeps the whitespace that the tokens between them do not spell.
     fn read_written_angle_header(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) -> HeaderName {
         let open = Self::next_ignore_whitespace(&mut self.tokenizer, context)
@@ -530,7 +530,7 @@ impl Preprocessor {
 
     /// Reads a `"…"` operand as written: one string literal, whose source
     /// text between its quotes is the name.
-    fn read_written_quoted_header(&mut self, context: &mut Context) -> HeaderName {
+    fn read_written_quoted_header(&mut self, context: &mut Context<'_>) -> HeaderName {
         let token = Self::next_ignore_whitespace(&mut self.tokenizer, context)
             .expect("the operand was peeked");
         let vector = context.first_source_vector(token.source_vectors).clone();
@@ -589,7 +589,7 @@ impl Preprocessor {
     /// one (C99 §6.10.2p4), whose tokens are combined by their spellings.
     fn read_expanded_header(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) -> Option<HeaderName> {
         let include_string =
@@ -712,7 +712,7 @@ impl Preprocessor {
     /// Inspect the active expansion frames and the including file without
     /// advancing them; reading through the file's end here could enter its
     /// parent's next line before the include frame is pushed.
-    fn include_tail_is_empty(&self, context: &mut Context) -> bool {
+    fn include_tail_is_empty(&self, context: &mut Context<'_>) -> bool {
         let ignored = context.ignore_tokenizer_errors();
         context.set_ignore_tokenizer_errors(true);
         let mut empty = false;
@@ -746,7 +746,7 @@ impl Preprocessor {
         empty
     }
 
-    fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
+    fn parse_include_directive(&mut self, context: &mut Context<'_>, directive: PreprocessorToken) {
         let including_file = self.physical_source_file_index();
         let header = match self.peek_include_operand(context) {
             | IncludeOperand::Angle => Some(self.read_written_angle_header(context, directive)),
@@ -857,7 +857,7 @@ impl Preprocessor {
             return;
         };
         let header_string = SharedString::from(header_string);
-        context.record_source_text(header_source_index, header_string.clone());
+        context.record_source_text(header_source_index, &header_string);
         let tokenizer = TokenSource::new(context, header_source_index, &header_string);
         self.push_tokenizer_frame(
             context,
@@ -873,7 +873,7 @@ impl Preprocessor {
         self.current_is_newline = true;
     }
 
-    fn parse_define_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
+    fn parse_define_directive(&mut self, context: &mut Context<'_>, _directive: PreprocessorToken) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind.is_identifier(),
@@ -1142,7 +1142,7 @@ impl Preprocessor {
         self.current_is_newline = true;
     }
 
-    fn parse_undef_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
+    fn parse_undef_directive(&mut self, context: &mut Context<'_>, _directive: PreprocessorToken) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind.is_identifier(),
@@ -1182,7 +1182,7 @@ impl Preprocessor {
         self.current_is_newline = true;
     }
 
-    fn parse_line_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
+    fn parse_line_directive(&mut self, context: &mut Context<'_>, _directive: PreprocessorToken) {
         let Some(token) = self.expect_token_without_rewind::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Number,
@@ -1304,7 +1304,7 @@ impl Preprocessor {
         }
     }
 
-    fn parse_error_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
+    fn parse_error_directive(&mut self, context: &mut Context<'_>, directive: PreprocessorToken) {
         let mut contents = String::new();
         // A directive ending at end of file is complete; the missing final
         // newline is diagnosed on its own.
@@ -1327,7 +1327,7 @@ impl Preprocessor {
 
     pub(super) fn parse_pragma_directive(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         _directive: PreprocessorToken,
     ) -> bool {
         let mut consumed_newline = false;

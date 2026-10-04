@@ -50,10 +50,7 @@ use crate::{
     util::{
         HashMap,
         read_to_string_lossy,
-        shared::{
-            SharedString,
-            SharedVec,
-        },
+        shared::SharedVec,
     },
 };
 
@@ -145,17 +142,14 @@ pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
     let (input_string, source_filename) =
         match (args.input.input.take(), args.input.input_file.take()) {
-            | (Some(input), None) => (
-                SharedString::from(input),
-                PathBuf::from("<input>").into_boxed_path(),
-            ),
+            | (Some(input), None) => (input, PathBuf::from("<input>").into_boxed_path()),
             | (None, Some(input_file)) => (
-                SharedString::from(read_to_string_lossy(&input_file).map_err(|source| {
+                read_to_string_lossy(&input_file).map_err(|source| {
                     MainError::OpenInputFileError {
                         path: input_file.clone(),
                         source,
                     }
-                })?),
+                })?,
                 input_file.into_boxed_path(),
             ),
             | _ => unreachable!("clap requires exactly one input source"),
@@ -170,14 +164,14 @@ pub fn run() -> Result<(), MainError> {
     if args.output.tokens {
         print_preprocessor_output(
             source_filename,
-            input_string,
+            &input_string,
             args.quote_include.into(),
             args.system_include.into(),
         );
     } else {
         print_parser_output(
             source_filename,
-            input_string,
+            &input_string,
             args.quote_include.into(),
             args.system_include.into(),
             &args.output.parser,
@@ -191,11 +185,12 @@ pub fn run() -> Result<(), MainError> {
 /// diagnostics its production reported.
 fn print_preprocessor_output(
     source_filename: Box<Path>,
-    input_string: SharedString,
+    input_string: &str,
     quote_include: SharedVec<PathBuf>,
     system_include: SharedVec<PathBuf>,
 ) {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         source_filename,
@@ -218,7 +213,7 @@ fn print_preprocessor_output(
 
 /// One line per token: its location, kind, source spelling, and for
 /// constants the value and type the preprocessor assigned.
-pub(crate) fn describe_token(token: Token, context: &Context) -> String {
+pub(crate) fn describe_token(token: Token, context: &Context<'_>) -> String {
     let spelling = context
         .string_cache
         .at(token.contents)
@@ -274,13 +269,14 @@ pub(crate) fn describe_token(token: Token, context: &Context) -> String {
 
 fn print_parser_output(
     source_filename: Box<Path>,
-    input_string: SharedString,
+    input_string: &str,
     quote_include: SharedVec<PathBuf>,
     system_include: SharedVec<PathBuf>,
     output: &ParserOutput,
     repeated_specifier_warnings: bool,
 ) {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
@@ -371,7 +367,7 @@ impl DiagnosticReporter {
         }
     }
 
-    fn report(&mut self, error: &TranslationError, context: &mut Context) {
+    fn report(&mut self, error: &TranslationError, context: &mut Context<'_>) {
         let source = error.source_vectors(context);
         let diagnostic = error.to_diagnostic(context, source);
         let location = context.get_source_vectors(source).to_vec();
@@ -449,7 +445,7 @@ impl DiagnosticReporter {
         self.other_errors.clear();
     }
 
-    fn flush(&mut self, context: &Context) {
+    fn flush(&mut self, context: &Context<'_>) {
         for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
             match diagnostic.severity {
                 | ErrorSeverity::Error => self.errors += 1,
@@ -463,7 +459,7 @@ impl DiagnosticReporter {
         self.other_errors.clear();
     }
 
-    fn finish(&mut self, context: &Context) {
+    fn finish(&mut self, context: &Context<'_>) {
         self.flush(context);
         let counts: Vec<String> = [(self.errors, "error"), (self.warnings, "warning")]
             .into_iter()

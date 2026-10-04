@@ -136,11 +136,12 @@ fn source_storage_exhaustion_reports_one_resource_diagnostic() {
 
 #[test]
 fn source_storage_exhaustion_stops_preprocessing_the_remaining_input() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<limit-test>").into_boxed_path(),
-        "int a;\n".repeat(1_000).into(),
+        &"int a;\n".repeat(1_000),
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -402,7 +403,7 @@ fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
     assert!(defaults.frame_depth < u32::MAX as usize);
 }
 
-fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_>) {
+fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_>) {
     assert!(parsed.parser.frames.is_empty());
     assert!(parsed.parser.returned.is_none());
     assert!(parsed.parser.recovery.active.is_none());

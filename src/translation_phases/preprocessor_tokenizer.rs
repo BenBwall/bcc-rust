@@ -217,14 +217,14 @@ impl std::error::Error for PreprocessorTokenizerError {}
 
 impl GetPosition for PreprocessorTokenizerError {
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.source_vector.position(context)
     }
 }
 
 impl GetSourceVectors for PreprocessorTokenizerError {
     #[inline(always)]
-    fn source_vectors(&self, context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors {
         context.create_source_vectors(
             self.source_vector.position(context),
             self.source_vector.source_file_index,
@@ -253,7 +253,7 @@ impl Display for PreprocessorTokenizerError {
 }
 
 impl ToDiagnostic for PreprocessorTokenizerError {
-    fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic {
+    fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic {
         let mut buffer = [0; 4];
         let spelling = match self.character {
             | Some(character) => Some(&*character.encode_utf8(&mut buffer)),
@@ -358,7 +358,7 @@ pub(crate) struct PreprocessorToken {
 }
 
 impl PreprocessorToken {
-    pub(crate) fn identifier_id(self, context: &Context) -> StringCacheId {
+    pub(crate) fn identifier_id(self, context: &Context<'_>) -> StringCacheId {
         match self.kind {
             | PreprocessorTokenType::UniversalIdentifier
             | PreprocessorTokenType::UnavailableUniversalIdentifier =>

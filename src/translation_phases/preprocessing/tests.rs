@@ -52,11 +52,12 @@ fn preprocess_with_configuration(
     source: &str,
     configuration: CompilerConfiguration,
 ) -> (Vec<String>, Vec<TranslationError>) {
-    let mut context = Context::with_configuration(configuration);
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::with_configuration(&tu, configuration);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -111,11 +112,12 @@ fn adjacent_string_diagnostics_remain_in_source_order() {
 
 #[test]
 fn malformed_include_restores_include_tokenization_mode() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        "#include 123 extra\nint x = a < b > c;\n".to_owned().into(),
+        "#include 123 extra\nint x = a < b > c;\n",
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -229,11 +231,12 @@ fn malformed_macro_include_does_not_repeat_expansion_diagnostics() {
 
 #[test]
 fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<phase-7-totality-test>").into_boxed_path(),
-        String::new().into(),
+        "",
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -406,13 +409,14 @@ fn comma_in_unevaluated_conditional_middle_preserves_the_question_marker() {
 fn with_tokens_of<R>(
     source: &str,
     path: &str,
-    inspect: impl FnOnce(&[Token], &mut Context) -> R,
+    inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
 ) -> R {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from(path).into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -423,7 +427,7 @@ fn with_tokens_of<R>(
     inspect(&tokens, &mut context)
 }
 
-fn string_value(context: &Context, token: Token) -> (bool, String) {
+fn string_value(context: &Context<'_>, token: Token) -> (bool, String) {
     match token.kind {
         | TokenType::String(StringTokenType::String(contents)) => (
             false,

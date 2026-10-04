@@ -98,7 +98,7 @@ impl SyntaxTree {
     pub(crate) fn inspect(
         &self,
         roots: &[ExternalDeclaration],
-        context: &Context,
+        context: &Context<'_>,
         options: InspectionOptions,
     ) -> String {
         let mut output = String::new();
@@ -790,7 +790,7 @@ impl SyntaxTree {
         }
     }
 
-    fn type_label(&self, specifiers: TypeSpecifiers, context: &Context) -> String {
+    fn type_label(&self, specifiers: TypeSpecifiers, context: &Context<'_>) -> String {
         match specifiers {
             | TypeSpecifiers::TypedefName(identifier) => {
                 format!("typedef {}", context.string_cache.at(identifier.name))
@@ -936,7 +936,7 @@ impl SyntaxTree {
         }
     }
 
-    fn statement_label(kind: &StatementType, context: &Context) -> String {
+    fn statement_label(kind: &StatementType, context: &Context<'_>) -> String {
         match kind {
             | StatementType::Label(identifier, _) => {
                 format!("label {}", context.string_cache.at(identifier.name))
@@ -960,7 +960,7 @@ impl SyntaxTree {
         }
     }
 
-    fn expression_label(kind: &ExpressionType, context: &Context) -> String {
+    fn expression_label(kind: &ExpressionType, context: &Context<'_>) -> String {
         match kind {
             | ExpressionType::Parenthesized { .. } => "parenthesized".to_owned(),
             | ExpressionType::Conditional { .. } => "conditional ?:".to_owned(),
@@ -1077,7 +1077,7 @@ impl SyntaxTree {
         role: &str,
         kind: &str,
         index: u32,
-        context: &Context,
+        context: &Context<'_>,
         options: InspectionOptions,
     ) {
         Self::line(
@@ -1095,7 +1095,7 @@ impl SyntaxTree {
         indent: usize,
         text: &str,
         source: Option<SourceVectors>,
-        context: &Context,
+        context: &Context<'_>,
         options: InspectionOptions,
     ) {
         let _ = write!(output, "{}", "  ".repeat(indent.min(32)));

@@ -382,7 +382,7 @@ pub(super) struct LexedFile {
 
 impl LexedFile {
     /// Runs translation phases 1 through 3 over all of `source`.
-    pub(super) fn lex(context: &mut Context, source_file_index: u32, source: &str) -> Self {
+    pub(super) fn lex(context: &mut Context<'_>, source_file_index: u32, source: &str) -> Self {
         let (text, remaps) = splice(source);
         let terminal_splice = terminal_splice_length(source);
         let file = Lexer::new(context, &text, &remaps, source.is_empty())
@@ -411,7 +411,7 @@ impl LexedFile {
     /// once after each real character.
     pub(super) fn report_escaped_final_newline(
         &self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         source_file_index: u32,
         line_delta: u32,
     ) {
@@ -502,7 +502,7 @@ impl LexedFile {
     /// Reports the missing final newline at the end of input.
     pub(super) fn report_missing_final_newline(
         &self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         source_file_index: u32,
         line_delta: u32,
     ) {
@@ -544,7 +544,7 @@ impl LexedFile {
     #[inline(always)]
     pub(super) fn replay_diagnostics(
         &self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         entry: usize,
         source_file_index: u32,
         line_delta: u32,
@@ -559,7 +559,7 @@ impl LexedFile {
     #[inline(never)]
     fn replay_diagnostics_slow(
         &self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         entry: usize,
         source_file_index: u32,
         line_delta: u32,
@@ -609,8 +609,8 @@ struct Lexed {
     clippy::struct_excessive_bools,
     reason = "Each flag is one piece of the end-of-input reading state."
 )]
-struct Lexer<'a> {
-    context:             &'a mut Context,
+struct Lexer<'a, 'tu> {
+    context:             &'a mut Context<'tu>,
     text:                &'a str,
     bytes:               &'a [u8],
     tracker:             PositionTracker<'a>,
@@ -638,9 +638,9 @@ struct Lexer<'a> {
     file:                LexedFile,
 }
 
-impl<'a> Lexer<'a> {
+impl<'a, 'tu> Lexer<'a, 'tu> {
     fn new(
-        context: &'a mut Context,
+        context: &'a mut Context<'tu>,
         text: &'a str,
         remaps: &'a [Remap],
         physically_empty: bool,

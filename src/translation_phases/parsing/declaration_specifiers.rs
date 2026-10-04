@@ -116,7 +116,7 @@ impl DeclarationSpecifiersFrame {
     pub(super) fn step(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
     ) -> ParseAction {
@@ -379,7 +379,7 @@ impl DeclarationSpecifiersFrame {
     ///
     /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112 lists only
     /// `float _Complex`, `double _Complex`, and `long double _Complex`.
-    fn report_incomplete_complex(&self, parser: &mut Parser, context: &mut Context) {
+    fn report_incomplete_complex(&self, parser: &mut Parser, context: &mut Context<'_>) {
         if !self.invalid_type_seen
             && !self.type_conflict_seen
             && matches!(
@@ -398,7 +398,7 @@ impl DeclarationSpecifiersFrame {
     fn apply_type_specifier(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Token,
         specifier: PrimitiveTypeSpecifier,
     ) {
@@ -502,7 +502,7 @@ pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
 
 pub(super) fn report_duplicate_type_qualifier(
     parser: &mut Parser,
-    context: &mut Context,
+    context: &mut Context<'_>,
     token: Token,
     qualifier: TypeQualifiers,
 ) {

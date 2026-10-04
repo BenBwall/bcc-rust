@@ -27,7 +27,7 @@ struct Observation {
     errors: Vec<(String, Vec<SourceVector>)>,
 }
 
-fn record_token(token: Token, context: &Context, observation: &mut Observation) {
+fn record_token(token: Token, context: &Context<'_>, observation: &mut Observation) {
     let spelling = match token.kind {
         | TokenType::String(StringTokenType::String(contents)) => format!(
             "string:{}",
@@ -44,7 +44,7 @@ fn record_token(token: Token, context: &Context, observation: &mut Observation) 
     ));
 }
 
-fn record_errors(context: &mut Context, observation: &mut Observation) {
+fn record_errors(context: &mut Context<'_>, observation: &mut Observation) {
     while let Some(error) = context.pop_pending_error() {
         let sources = error.source_vectors(context);
         let message = error.to_diagnostic(context, sources).message;
@@ -55,11 +55,12 @@ fn record_errors(context: &mut Context, observation: &mut Observation) {
 }
 
 fn observe(source: &str) -> Observation {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<other tokens>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -77,11 +78,12 @@ fn observe(source: &str) -> Observation {
 
 #[test]
 fn lexers_preserve_other_tokens_before_preprocessing() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<other tokens>").into_boxed_path(),
-        "a\\\n@\n".to_owned().into(),
+        "a\\\n@\n",
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -148,8 +150,9 @@ fn surviving_other_tokens_keep_their_actual_character_locations() {
         };
         assert_eq!(message, &format!("unexpected character {quoted} in source"));
         assert_eq!(vectors.len(), 1, "{vectors:#?}");
+        let tu = crate::util::bump::Bump::new();
         assert_eq!(
-            vectors[0].position(&Context::new()),
+            vectors[0].position(&Context::new(&tu)),
             SourcePosition {
                 index,
                 line,

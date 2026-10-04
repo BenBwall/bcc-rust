@@ -33,7 +33,7 @@ struct Observation {
     errors:     Vec<(String, Vec<SourceVector>)>,
 }
 
-fn record_token(token: Token, context: &Context, observation: &mut Observation) {
+fn record_token(token: Token, context: &Context<'_>, observation: &mut Observation) {
     observation
         .spellings
         .push(context.string_cache.at(token.contents).to_owned());
@@ -60,7 +60,7 @@ fn record_token(token: Token, context: &Context, observation: &mut Observation) 
     }
 }
 
-fn record_errors(context: &mut Context, observation: &mut Observation) {
+fn record_errors(context: &mut Context<'_>, observation: &mut Observation) {
     while let Some(error) = context.pop_pending_error() {
         let sources = error.source_vectors(context);
         let kind = match error {
@@ -74,11 +74,12 @@ fn record_errors(context: &mut Context, observation: &mut Observation) {
 }
 
 fn observe(source: &str) -> Observation {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<literal regressions>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );

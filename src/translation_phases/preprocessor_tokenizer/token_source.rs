@@ -46,7 +46,7 @@ impl Default for TokenSource {
 
 impl TokenSource {
     /// Lexes all of `source` (translation phases 1 through 3) and opens it.
-    pub(crate) fn new(context: &mut Context, source_file_index: u32, source: &str) -> Self {
+    pub(crate) fn new(context: &mut Context<'_>, source_file_index: u32, source: &str) -> Self {
         Self::File(LexedCursor::new(Rc::new(LexedFile::lex(
             context,
             source_file_index,
@@ -56,7 +56,7 @@ impl TokenSource {
 
     /// Replays `tokens`; `empty_location` locates an empty replay.
     pub(crate) fn replay(
-        context: &Context,
+        context: &Context<'_>,
         tokens: &[PreprocessorToken],
         empty_location: SourceVector,
     ) -> Self {
@@ -67,7 +67,7 @@ impl TokenSource {
     /// reported.
     pub(crate) fn location_at(
         &self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         position: SourcePosition,
     ) -> SourceVectors {
         match self {
@@ -79,7 +79,7 @@ impl TokenSource {
 
 impl GetPosition for TokenSource {
     #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
         match self {
             | Self::File(cursor) => cursor.position(),
             | Self::Replay(cursor) => cursor.position(),
@@ -89,7 +89,7 @@ impl GetPosition for TokenSource {
 
 impl SetPosition for TokenSource {
     #[inline(always)]
-    fn set_position(&mut self, _context: &mut Context, position: SourcePosition) {
+    fn set_position(&mut self, _context: &mut Context<'_>, position: SourcePosition) {
         match self {
             | Self::File(cursor) => cursor.set_position(position),
             | Self::Replay(cursor) => cursor.set_position(position),
@@ -108,7 +108,7 @@ impl GetSourceFileIndex for TokenSource {
 }
 
 impl SetSourceFileIndex for TokenSource {
-    fn set_source_file_index(&mut self, _context: &mut Context, source_file_index: u32) {
+    fn set_source_file_index(&mut self, _context: &mut Context<'_>, source_file_index: u32) {
         match self {
             | Self::File(cursor) => cursor.source_file_index = source_file_index,
             // Replayed tokens keep the files they came from.
@@ -121,7 +121,7 @@ impl TranslationPhase for TokenSource {
     type Item = PreprocessorToken;
 
     #[inline(always)]
-    fn next_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
+    fn next_item(&mut self, context: &mut Context<'_>) -> Option<PreprocessorToken> {
         match self {
             | Self::File(cursor) => cursor.next_item(context),
             | Self::Replay(cursor) => cursor.next_item(context),
@@ -241,7 +241,7 @@ impl LexedCursor {
 
     /// Reading the end of input reports an escaped final newline once after
     /// each real character.
-    fn read_end(&mut self, context: &mut Context) {
+    fn read_end(&mut self, context: &mut Context<'_>) {
         if !self.splice_reported && self.file.has_escaped_final_newline() {
             self.file.report_escaped_final_newline(
                 context,
@@ -253,7 +253,7 @@ impl LexedCursor {
     }
 
     #[inline(always)]
-    fn next_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
+    fn next_item(&mut self, context: &mut Context<'_>) -> Option<PreprocessorToken> {
         loop {
             let entry = self.next;
             if entry >= self.file.len() {
@@ -302,7 +302,7 @@ impl LexedCursor {
     /// only happens when the entries were not read in lexing order.
     #[cold]
     #[inline(never)]
-    fn supply_final_newline(&mut self, context: &mut Context) -> PreprocessorToken {
+    fn supply_final_newline(&mut self, context: &mut Context<'_>) -> PreprocessorToken {
         let mut start = self.file.start(self.file.len());
         start.line = start.line.wrapping_add(self.line_delta);
         if !self.file.has_escaped_final_newline() {

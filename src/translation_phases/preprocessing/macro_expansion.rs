@@ -105,7 +105,7 @@ impl MacroCallCursor {
     fn next(
         &mut self,
         preprocessor: &mut Preprocessor,
-        context: &mut Context,
+        context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         loop {
             if let Some(token) = self.pending.pop_front() {
@@ -250,7 +250,7 @@ impl MacroCallCursor {
     fn commit(
         mut self,
         preprocessor: &mut Preprocessor,
-        context: &Context,
+        context: &Context<'_>,
         location: crate::translation_phases::SourceVector,
     ) {
         if !self.pending.is_empty() {
@@ -278,7 +278,7 @@ impl Preprocessor {
     /// can come from different replacement/argument/source frames.
     pub(super) fn capture_cross_frame_call(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         invocation: PreprocessorToken,
         names: &[StringCacheId],
         variadic: bool,
@@ -401,7 +401,7 @@ impl Preprocessor {
 
     pub(super) fn get_arguments(
         &self,
-        _context: &Context,
+        _context: &Context<'_>,
     ) -> Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>> {
         match self.tokenizer_stack.last().map(|frame| &frame.frame_type) {
             // Argument tokens belong to the invocation's caller. Looking them
@@ -414,7 +414,7 @@ impl Preprocessor {
         }
     }
 
-    pub(super) fn macro_argument_is_at_end(&mut self, context: &mut Context) -> bool {
+    pub(super) fn macro_argument_is_at_end(&mut self, context: &mut Context<'_>) -> bool {
         let Some(TokenizerFrame {
             frame_type:
                 TokenizerFrameType::FunctionLikeMacroArgument {
@@ -493,7 +493,7 @@ impl Preprocessor {
 
     pub(super) fn handle_macro_argument(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Option<TokenizerFrame> {
         let arguments = self.get_arguments(context)?;
@@ -511,7 +511,7 @@ impl Preprocessor {
     /// `_Pragma` effects.
     fn expanded_argument(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
         argument: &FunctionLikeMacroArgument,
     ) -> TokenSource {
@@ -531,7 +531,7 @@ impl Preprocessor {
 
     fn raw_macro_argument_frame(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Option<TokenizerFrame> {
         if let Some(arguments) = self.get_arguments(context)
@@ -564,7 +564,7 @@ impl Preprocessor {
     /// what that enclosing replacement produced.
     fn operand_frame(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Option<TokenizerFrame> {
         let mut frame = self.raw_macro_argument_frame(context, token)?;
@@ -603,7 +603,7 @@ impl Preprocessor {
     /// whitespace is not part of the result.
     fn replace_operand_argument(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         argument: &FunctionLikeMacroArgument,
     ) -> Vec<PreprocessorToken> {
         self.read_argument(context, argument, false)
@@ -611,7 +611,7 @@ impl Preprocessor {
 
     fn read_argument(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         argument: &FunctionLikeMacroArgument,
         expand: bool,
     ) -> Vec<PreprocessorToken> {
@@ -663,7 +663,7 @@ impl Preprocessor {
 
     /// Spells replaced operand tokens as `#` does (C99 §6.10.3.2p2), with
     /// each run of whitespace as one space.
-    fn stringify(context: &mut Context, tokens: &[PreprocessorToken]) -> StringCacheId {
+    fn stringify(context: &mut Context<'_>, tokens: &[PreprocessorToken]) -> StringCacheId {
         let mut spelling = String::from("\"");
         let mut space = false;
         for token in tokens {
@@ -687,7 +687,7 @@ impl Preprocessor {
     /// C99 6.10.3.2p2: escape quotes/backslashes only inside literal tokens.
     /// A backslash that was an Other token participates in phase-5 escapes.
     fn append_stringified_token(
-        context: &Context,
+        context: &Context<'_>,
         spelling: &mut String,
         token: PreprocessorToken,
     ) {
@@ -725,7 +725,7 @@ impl Preprocessor {
 
     fn parse_hash_hash_operator(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         _hash_hash: PreprocessorToken,
         rhs: PreprocessorToken,
@@ -758,7 +758,7 @@ impl Preprocessor {
 
     fn parse_hash_operator(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> PreprocessorToken {
         let position = self.position(context);
@@ -858,7 +858,7 @@ impl Preprocessor {
 
     fn merge_token_contents(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
         result_token_type: PreprocessorTokenType,
@@ -868,7 +868,7 @@ impl Preprocessor {
 
     fn merge_token_contents_with_ranges(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
         lhs_range: impl RangeBounds<usize>,
@@ -899,7 +899,7 @@ impl Preprocessor {
 
     fn create_merge_error(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> PreprocessorToken {
@@ -927,7 +927,7 @@ impl Preprocessor {
     /// number spellings carry.
     fn extend_number(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> PreprocessorToken {
@@ -947,7 +947,7 @@ impl Preprocessor {
 
     pub(super) fn merge_tokens(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         mut lhs: PreprocessorToken,
         mut rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
@@ -971,7 +971,7 @@ impl Preprocessor {
 
     fn merge_tokens_impl(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
@@ -1235,7 +1235,7 @@ impl Preprocessor {
 
     fn expand_macros<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         'base: loop {
             if self.tokenizer_stack.is_empty() {
@@ -1354,7 +1354,7 @@ impl Preprocessor {
         }
     }
 
-    fn placeholder(context: &mut Context) -> PreprocessorToken {
+    fn placeholder(context: &mut Context<'_>) -> PreprocessorToken {
         PreprocessorToken {
             kind:           PreprocessorTokenType::Placeholder,
             contents:       context.string_cache.intern(""),
@@ -1364,7 +1364,7 @@ impl Preprocessor {
 
     fn update_macro_argument_paren_depth(
         &self,
-        context: &Context,
+        context: &Context<'_>,
         token: PreprocessorToken,
         argument_name: StringCacheId,
         paren_depth: usize,
@@ -1388,7 +1388,7 @@ impl Preprocessor {
         Some(paren_depth)
     }
 
-    pub(super) fn current_is_header(&self, _context: &Context) -> bool {
+    pub(super) fn current_is_header(&self, _context: &Context<'_>) -> bool {
         // The first in the tokenizer stack is the original source file.
         for frame in self.tokenizer_stack.iter().skip(1).rev() {
             match frame.frame_type {
@@ -1401,7 +1401,7 @@ impl Preprocessor {
 
     fn handle_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         let token = self.expand_macros::<SHOULD_IGNORE_WHITESPACE>(context)?;
 
@@ -1427,7 +1427,7 @@ impl Preprocessor {
     /// tells whether `##` formed the token, which then names no parameter.
     pub(super) fn handle_hash_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
     ) -> Option<(PreprocessorToken, bool)> {
         'base: loop {
             let lhs = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context)?;

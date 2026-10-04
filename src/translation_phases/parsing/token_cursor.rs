@@ -35,7 +35,7 @@ impl Upstream {
     /// preprocessing.
     pub(super) fn preprocess_all(
         mut preprocessor: Preprocessor,
-        context: &mut Context,
+        context: &mut Context<'_>,
         source_segment_limit: usize,
     ) -> Self {
         let (tokens, preprocessing_limit_token) =
@@ -50,13 +50,13 @@ impl Upstream {
 }
 
 impl GetPosition for Upstream {
-    fn position(&self, _context: &Context) -> SourcePosition {
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
         self.end
     }
 }
 
 impl SetPosition for Upstream {
-    fn set_position(&mut self, _context: &mut Context, position: SourcePosition) {
+    fn set_position(&mut self, _context: &mut Context<'_>, position: SourcePosition) {
         self.end = position;
     }
 }
@@ -68,7 +68,7 @@ impl GetSourceFileIndex for Upstream {
 }
 
 impl SetSourceFileIndex for Upstream {
-    fn set_source_file_index(&mut self, _context: &mut Context, source_file_index: u32) {
+    fn set_source_file_index(&mut self, _context: &mut Context<'_>, source_file_index: u32) {
         self.source_file_index = source_file_index;
     }
 }
@@ -113,12 +113,12 @@ impl TokenCursor {
     /// Fetches the next upstream token. Its provenance was copied to the
     /// token arena when it was preprocessed, so consecutive tokens have
     /// adjacent provenance.
-    fn fetch(&mut self, _context: &mut Context) -> Option<Token> {
+    fn fetch(&mut self, _context: &mut Context<'_>) -> Option<Token> {
         self.upstream.tokens.next()
     }
 
     /// Returns the current token, fetching it once if necessary.
-    pub(super) fn current(&mut self, context: &mut Context) -> Option<Token> {
+    pub(super) fn current(&mut self, context: &mut Context<'_>) -> Option<Token> {
         if self.current.is_none() && !self.reached_eof {
             self.current = self.fetch(context);
             self.reached_eof = self.current.is_none();
@@ -127,12 +127,12 @@ impl TokenCursor {
     }
 
     /// Returns the token immediately following `current` without consuming.
-    pub(super) fn following(&mut self, context: &mut Context) -> Option<Token> {
+    pub(super) fn following(&mut self, context: &mut Context<'_>) -> Option<Token> {
         self.lookahead(context, 0)
     }
 
     /// Returns zero-based lookahead beyond `current` without consuming.
-    pub(super) fn lookahead(&mut self, context: &mut Context, index: usize) -> Option<Token> {
+    pub(super) fn lookahead(&mut self, context: &mut Context<'_>, index: usize) -> Option<Token> {
         let _ = self.current(context)?;
         while self.lookahead.len() <= index && !self.reached_eof {
             let next = self.fetch(context);

@@ -59,13 +59,14 @@ impl Drop for TemporaryHeaders {
 fn with_directive_tokens_at_path<R>(
     source: &str,
     path: &Path,
-    inspect: impl FnOnce(&[Token], &mut Context) -> R,
+    inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
 ) -> R {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         path.to_path_buf().into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -81,13 +82,14 @@ fn with_directive_tokens_with_system_directory<R>(
     source: &str,
     path: &Path,
     system_directory: &Path,
-    inspect: impl FnOnce(&[Token], &mut Context) -> R,
+    inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
 ) -> R {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         path.to_path_buf().into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::from(vec![system_directory.to_path_buf()]),
     );
@@ -97,12 +99,16 @@ fn with_directive_tokens_with_system_directory<R>(
     inspect(&tokens, &mut context)
 }
 
-fn with_directive_tokens<R>(source: &str, inspect: impl FnOnce(&[Token], &mut Context) -> R) -> R {
-    let mut context = Context::new();
+fn with_directive_tokens<R>(
+    source: &str,
+    inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
+) -> R {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<directive-test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -122,11 +128,12 @@ fn pragma_destringizing_preserves_non_special_escapes() {
         (r#"L"unknown café""#, "unknown café\n"),
         (r#""""#, "\n"),
     ] {
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let preprocessor = Preprocessor::new(
             &mut context,
             PathBuf::from("<pragma-test>").into_boxed_path(),
-            String::new().into(),
+            "",
             SharedVec::default(),
             SharedVec::default(),
         );

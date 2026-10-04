@@ -333,13 +333,6 @@ unsafe impl Allocator for &Bump {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Later arena migration stages use these collections."
-    )
-)]
 pub(crate) type ArenaVec<'a, T> = AllocVec<T, &'a Bump>;
 #[cfg_attr(
     not(test),

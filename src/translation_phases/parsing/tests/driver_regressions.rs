@@ -19,11 +19,12 @@ use crate::{
 
 /// Parses `source` and renders its located syntax tree.
 fn located_tree(source: &str) -> String {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<located-tree-test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -80,11 +81,12 @@ fn missing_and_error_nodes_are_located_at_the_offending_token() {
 /// Parses `source` and returns how many source segments the context holds
 /// afterwards.
 fn source_segments_after_parsing(source: &str) -> usize {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<segment-test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -182,11 +184,12 @@ fn missing_semicolon_help_uses_macro_invocations_after_full_batch_preprocessing(
         let source = format!(
             "{definition}\nstruct S {{\n{call}\nint b;\n}};\nstruct T {{\n{call}\nint b;\n}};\n"
         );
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let preprocessor = Preprocessor::new(
             &mut context,
             PathBuf::from("<macro-help>").into_boxed_path(),
-            source.into(),
+            &source,
             SharedVec::default(),
             SharedVec::default(),
         );

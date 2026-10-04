@@ -32,7 +32,7 @@ use crate::{
     util::shared::SharedVec,
 };
 
-fn token_description(token: Token, context: &Context) -> String {
+fn token_description(token: Token, context: &Context<'_>) -> String {
     format!(
         "{} {:?}",
         describe_token(token, context),
@@ -42,11 +42,12 @@ fn token_description(token: Token, context: &Context) -> String {
 
 /// The diagnostics, then the tokens, of preprocessing `source`.
 fn observe(source: &str) -> Vec<String> {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );

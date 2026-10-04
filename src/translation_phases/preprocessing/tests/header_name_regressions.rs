@@ -78,13 +78,13 @@ fn backslash_header() -> PathBuf {
     }
 }
 
-struct Outcome<'a> {
+struct Outcome<'a, 'tu> {
     identifiers: Vec<String>,
     errors:      Vec<TranslationError>,
-    context:     &'a mut Context,
+    context:     &'a mut Context<'tu>,
 }
 
-impl Outcome<'_> {
+impl Outcome<'_, '_> {
     fn preprocessor_errors(&self) -> Vec<&PreprocessorErrorType> {
         self.errors
             .iter()
@@ -113,7 +113,7 @@ impl Outcome<'_> {
 fn with_preprocess<R>(
     headers: &Headers,
     source: &str,
-    inspect: impl FnOnce(Outcome<'_>) -> R,
+    inspect: impl FnOnce(Outcome<'_, '_>) -> R,
 ) -> R {
     with_preprocess_in(headers, source, ExtensionPolicy::Allow, inspect)
 }
@@ -122,7 +122,7 @@ fn with_preprocess_in<R>(
     headers: &Headers,
     source: &str,
     policy: ExtensionPolicy,
-    inspect: impl FnOnce(Outcome<'_>) -> R,
+    inspect: impl FnOnce(Outcome<'_, '_>) -> R,
 ) -> R {
     with_preprocess_directories(headers, source, policy, SharedVec::default(), inspect)
 }
@@ -132,14 +132,15 @@ fn with_preprocess_directories<R>(
     source: &str,
     policy: ExtensionPolicy,
     system_directories: SharedVec<PathBuf>,
-    inspect: impl FnOnce(Outcome<'_>) -> R,
+    inspect: impl FnOnce(Outcome<'_, '_>) -> R,
 ) -> R {
+    let tu = crate::util::bump::Bump::new();
     let mut context =
-        Context::with_configuration(CompilerConfiguration::new(CStandard::C99, policy));
+        Context::with_configuration(&tu, CompilerConfiguration::new(CStandard::C99, policy));
     let mut preprocessor = Preprocessor::new(
         &mut context,
         headers.0.join("main.c").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         system_directories,
     );
@@ -171,11 +172,12 @@ fn written_header_names_keep_their_source_text() {
         "??=include \"plain.h\"\nafter\n",
     ] {
         let directory = SharedVec::from(vec![headers.0.clone()]);
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let mut preprocessor = Preprocessor::new(
             &mut context,
             headers.0.join("main.c").into_boxed_path(),
-            source.to_owned().into(),
+            source,
             SharedVec::default(),
             directory,
         );
@@ -194,7 +196,7 @@ fn written_header_names_keep_their_source_text() {
 fn characters_glued_to_angle_header_closing_are_extra_tokens() {
     let headers = Headers::new();
     headers.write(Path::new("plain.h"), "plain");
-    let preprocess_header = |source: &str, inspect: &mut dyn FnMut(Outcome<'_>)| {
+    let preprocess_header = |source: &str, inspect: &mut dyn FnMut(Outcome<'_, '_>)| {
         with_preprocess_directories(
             &headers,
             source,

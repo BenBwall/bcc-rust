@@ -84,7 +84,7 @@ impl GetSeverity for TranslationError {
 }
 
 impl ToDiagnostic for TranslationError {
-    fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic {
+    fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic {
         match self {
             | Self::InitialProcessing(error) => error.to_diagnostic(context, source),
             | Self::PreprocessorTokenizining(error) => error.to_diagnostic(context, source),
@@ -95,7 +95,7 @@ impl ToDiagnostic for TranslationError {
 }
 
 impl GetPosition for TranslationError {
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         match self {
             | Self::InitialProcessing(error) => error.position(context),
             | Self::PreprocessorTokenizining(error) => error.position(context),
@@ -106,7 +106,7 @@ impl GetPosition for TranslationError {
 }
 
 impl GetSourceVectors for TranslationError {
-    fn source_vectors(&self, context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors {
         match self {
             | Self::InitialProcessing(error) => error.source_vectors(context),
             | Self::PreprocessorTokenizining(error) => error.source_vectors(context),
@@ -181,33 +181,33 @@ pub(crate) trait GetSourceFileIndex {
 }
 
 pub(crate) trait GetPosition {
-    fn position(&self, context: &Context) -> SourcePosition;
+    fn position(&self, context: &Context<'_>) -> SourcePosition;
     #[inline(always)]
-    fn index(&self, context: &Context) -> usize {
+    fn index(&self, context: &Context<'_>) -> usize {
         self.position(context).index
     }
     #[inline(always)]
-    fn column(&self, context: &Context) -> u32 {
+    fn column(&self, context: &Context<'_>) -> u32 {
         self.position(context).column
     }
     #[inline(always)]
-    fn line(&self, context: &Context) -> u32 {
+    fn line(&self, context: &Context<'_>) -> u32 {
         self.position(context).line
     }
 }
 
 pub(crate) trait GetSourceVectors {
-    fn source_vectors(&self, context: &mut Context) -> SourceVectors;
+    fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors;
 }
 
 pub(crate) trait SetPosition: GetPosition {
-    fn set_position(&mut self, context: &mut Context, position: SourcePosition);
+    fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition);
     #[expect(
         dead_code,
         reason = "Position setters are retained for translation-phase implementations."
     )]
     #[inline(always)]
-    fn set_index(&mut self, context: &mut Context, index: usize) {
+    fn set_index(&mut self, context: &mut Context<'_>, index: usize) {
         self.set_position(
             context,
             SourcePosition {
@@ -222,7 +222,7 @@ pub(crate) trait SetPosition: GetPosition {
         reason = "Position setters are retained for translation-phase implementations."
     )]
     #[inline(always)]
-    fn set_column(&mut self, context: &mut Context, column: u32) {
+    fn set_column(&mut self, context: &mut Context<'_>, column: u32) {
         self.set_position(
             context,
             SourcePosition {
@@ -233,7 +233,7 @@ pub(crate) trait SetPosition: GetPosition {
         );
     }
     #[inline(always)]
-    fn set_line(&mut self, context: &mut Context, line: u32) {
+    fn set_line(&mut self, context: &mut Context<'_>, line: u32) {
         self.set_position(
             context,
             SourcePosition {
@@ -246,12 +246,12 @@ pub(crate) trait SetPosition: GetPosition {
 }
 
 pub(crate) trait SetSourceFileIndex {
-    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32);
+    fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32);
 }
 
 impl GetPosition for Infallible {
     #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
         match *self {}
     }
 }
@@ -260,7 +260,7 @@ pub(crate) trait TranslationPhase:
     GetPosition + SetPosition + GetSourceFileIndex + SetSourceFileIndex
 {
     type Item;
-    fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
+    fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item>;
 }
 
 #[cfg(feature = "benchmarking-internals")]

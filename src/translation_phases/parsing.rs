@@ -192,13 +192,13 @@ impl ParsedTranslationUnit {
 }
 
 impl GetPosition for Parser {
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.cursor.upstream.position(context)
     }
 }
 
 impl SetPosition for Parser {
-    fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
+    fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
         self.cursor.upstream.set_position(context, position);
     }
 }
@@ -210,7 +210,7 @@ impl GetSourceFileIndex for Parser {
 }
 
 impl SetSourceFileIndex for Parser {
-    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
+    fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
         self.cursor
             .upstream
             .set_source_file_index(context, source_file_index);
@@ -220,7 +220,7 @@ impl SetSourceFileIndex for Parser {
 impl TranslationPhase for Parser {
     type Item = ExternalDeclaration;
 
-    fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
+    fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item> {
         let root = self.drive(context)?;
         self.emitted_roots.push(root);
         Some(root)

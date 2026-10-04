@@ -240,7 +240,7 @@ impl Display for ParserError {
 }
 
 impl ToDiagnostic for ParserError {
-    fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic {
+    fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic {
         let mut explanation = self.error_type.explain(self.found_spelling.as_deref());
         if self.insertion_point.is_some() {
             if self.error_type.expects_terminating_semicolon() {
@@ -309,13 +309,13 @@ impl GetSeverity for ParserError {
 }
 
 impl GetPosition for ParserError {
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.source_vectors.position(context)
     }
 }
 
 impl GetSourceVectors for ParserError {
-    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         self.source_vectors
     }
 }

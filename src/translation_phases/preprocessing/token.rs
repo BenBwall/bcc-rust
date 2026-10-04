@@ -59,14 +59,14 @@ pub(crate) struct Token {
 
 impl GetPosition for Token {
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.source_vectors.position(context)
     }
 }
 
 impl GetSourceVectors for Token {
     #[inline(always)]
-    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         self.source_vectors
     }
 }

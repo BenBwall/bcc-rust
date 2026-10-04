@@ -281,7 +281,7 @@ macro_rules! map_fn {
         pub(super) fn $make_fn_name(
             &mut self,
             parser: &mut Parser,
-            context: &mut Context,
+            context: &mut Context<'_>,
             token: Token,
         ) {
             match self.$map_fn_name() {
@@ -503,7 +503,7 @@ impl TypeSpecifiers {
     pub(super) fn make_struct_or_union(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         index: StructOrUnionSpecifierIndex,
         token: Token,
     ) {
@@ -527,7 +527,7 @@ impl TypeSpecifiers {
     pub(super) fn make_enum(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         index: EnumSpecifierIndex,
         token: Token,
     ) {
@@ -551,7 +551,7 @@ impl TypeSpecifiers {
     pub(super) fn make_typedef_name(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         name: Identifier,
         token: Token,
     ) {
@@ -566,7 +566,7 @@ impl TypeSpecifiers {
     fn report_conflict(
         self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         conflicting: StringCacheId,
         token: Token,
     ) {

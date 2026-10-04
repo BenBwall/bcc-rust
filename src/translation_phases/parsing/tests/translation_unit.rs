@@ -31,13 +31,12 @@ use crate::{
 
 #[test]
 fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<empty-syntax-lists-test>").into_boxed_path(),
-        "int f(); int (*pointer)(); int g(void);\n"
-            .to_owned()
-            .into(),
+        "int f(); int (*pointer)(); int g(void);\n",
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -63,11 +62,12 @@ fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
 
 #[test]
 fn complete_translation_unit_retains_roots_already_streamed() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<mixed-parser-consumption-test>").into_boxed_path(),
-        "int first; int second;\n".to_owned().into(),
+        "int first; int second;\n",
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -106,7 +106,8 @@ fn complete_translation_unit_retains_roots_already_streamed() {
 
 #[test]
 fn typed_identifier_provenance_survives_macros_and_includes() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let include_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
@@ -114,9 +115,7 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<identifier-provenance-test>").into_boxed_path(),
-        "#define DECL_NAME generated\nint DECL_NAME;\n#include \"identifier-provenance.h\"\n"
-            .to_owned()
-            .into(),
+        "#define DECL_NAME generated\nint DECL_NAME;\n#include \"identifier-provenance.h\"\n",
         vec![include_directory.clone()].into(),
         SharedVec::default(),
     );
@@ -189,12 +188,13 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
 
 #[test]
 fn deterministic_inspection_uses_spellings_and_marks_recovery() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let source = "int good = 1; } int after;\n";
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<inspection-test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -223,12 +223,13 @@ fn deterministic_inspection_uses_spellings_and_marks_recovery() {
 
 #[test]
 fn inspection_traverses_declarators_tags_parameters_and_designations() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let source = "struct S { int member : 3; }; int values[2] = { [1] = 7 }; int f(int arg);\n";
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<inspection-shapes-test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -253,11 +254,12 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
         assert!(output.contains(expected), "missing {expected:?}:\n{output}");
     }
 
-    let mut multi_context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut multi_context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut multi_context,
         PathBuf::from("<inspection-order-test>").into_boxed_path(),
-        "int a = 1, b = 2;\n".to_owned().into(),
+        "int a = 1, b = 2;\n",
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -409,7 +411,7 @@ proptest! {
 
 #[test]
 fn pending_preprocessing_diagnostics_survive_arena_compaction() {
-    fn preprocessing_vectors(parsed: &Parsed<'_>) -> Vec<SourceVector> {
+    fn preprocessing_vectors(parsed: &Parsed<'_, '_>) -> Vec<SourceVector> {
         parsed
             .errors
             .iter()

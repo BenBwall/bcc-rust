@@ -65,10 +65,7 @@ use crate::{
         HashMap,
         HashSet,
         chunked_queue::ChunkedQueue,
-        shared::{
-            SharedString,
-            SharedVec,
-        },
+        shared::SharedVec,
         string_cache::StringCacheId,
     },
 };
@@ -135,14 +132,14 @@ pub(crate) struct Preprocessor {
 
 impl GetPosition for Preprocessor {
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.tokenizer.position(context)
     }
 }
 
 impl SetPosition for Preprocessor {
     #[inline(always)]
-    fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
+    fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
         self.tokenizer.set_position(context, position);
     }
 }
@@ -155,7 +152,7 @@ impl GetSourceFileIndex for Preprocessor {
 }
 
 impl SetSourceFileIndex for Preprocessor {
-    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
+    fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
         self.tokenizer
             .set_source_file_index(context, source_file_index);
     }
@@ -167,9 +164,9 @@ impl Preprocessor {
     }
 
     pub(crate) fn new(
-        context: &mut Context,
+        context: &mut Context<'_>,
         source_name: Box<Path>,
-        source: SharedString,
+        source: &str,
         quote_include_directories: SharedVec<PathBuf>,
         system_include_directories: SharedVec<PathBuf>,
     ) -> Self {
@@ -180,7 +177,7 @@ impl Preprocessor {
             })
             .collect();
         let source_file_index = context.intern_source_file(source_name);
-        let tokenizer = TokenSource::new(context, source_file_index, &source);
+        let tokenizer = TokenSource::new(context, source_file_index, source);
         context.record_source_text(source_file_index, source);
         Self {
             tokenizer_stack: vec![TokenizerFrame {
@@ -213,7 +210,7 @@ impl Preprocessor {
         }
     }
 
-    fn next_parser_token(&mut self, context: &mut Context) -> Option<Token> {
+    fn next_parser_token(&mut self, context: &mut Context<'_>) -> Option<Token> {
         context.append_pending_errors(take(&mut self.pending_parser_errors));
         if let Some(token) = self.pending_parser_token.take() {
             return Some(token);
@@ -246,7 +243,7 @@ impl Preprocessor {
     /// Adjacent-string concatenation may already have mapped a later token or
     /// EOF diagnostic. Source-vector compaction therefore belongs to the
     /// producer that owns that buffered work, not to each iterator consumer.
-    pub(crate) fn next_iterator_item(&mut self, context: &mut Context) -> Option<Token> {
+    pub(crate) fn next_iterator_item(&mut self, context: &mut Context<'_>) -> Option<Token> {
         if self.next_iterator_item_compacts() {
             context.compact_preprocessor_vectors();
         }
@@ -256,7 +253,7 @@ impl Preprocessor {
     /// Runs translation phases 4 through 6 without the parser's resource
     /// budget, for direct preprocessing tests and benchmarks.
     #[cfg(any(test, feature = "benchmarking-internals"))]
-    pub(crate) fn preprocess_all(&mut self, context: &mut Context) -> ChunkedQueue<Token> {
+    pub(crate) fn preprocess_all(&mut self, context: &mut Context<'_>) -> ChunkedQueue<Token> {
         self.preprocess_all_with_limit(context, usize::MAX).0
     }
 
@@ -269,7 +266,7 @@ impl Preprocessor {
     /// budget, letting the parser report the existing resource diagnostic.
     pub(crate) fn preprocess_all_with_limit(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         source_segment_limit: usize,
     ) -> (ChunkedQueue<Token>, Option<Token>) {
         self.source_segment_limit = source_segment_limit;
@@ -307,7 +304,7 @@ impl Preprocessor {
 impl TranslationPhase for Preprocessor {
     type Item = Token;
 
-    fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
+    fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item> {
         let token = self.next_parser_token(context)?;
         Some(self.concatenate_adjacent_strings(context, token))
     }

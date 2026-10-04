@@ -31,7 +31,7 @@ pub(super) struct ConditionalGroup {
 }
 
 impl ConditionalGroup {
-    fn new(context: &Context, directive: PreprocessorToken) -> Self {
+    fn new(context: &Context<'_>, directive: PreprocessorToken) -> Self {
         Self {
             source:   context.get_source_vectors(directive.source_vectors).into(),
             saw_else: false,
@@ -74,7 +74,7 @@ impl Preprocessor {
     /// already consumed its terminating newline.
     fn skip_over_dead_code(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         mut at_line_start: bool,
         mode: SkipMode,
     ) {
@@ -169,7 +169,7 @@ impl Preprocessor {
 
     pub(super) fn parse_if_directive(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) {
         self.open_conditionals
@@ -188,7 +188,7 @@ impl Preprocessor {
     /// the rest of the conditional is skipped through its `#endif`.
     pub(super) fn parse_elif_directive(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) {
         self.skip_remaining_groups(
@@ -200,7 +200,7 @@ impl Preprocessor {
 
     pub(super) fn parse_else_directive(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) {
         self.skip_remaining_groups(
@@ -212,7 +212,7 @@ impl Preprocessor {
 
     fn skip_remaining_groups(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
         unmatched_error: PreprocessorErrorType,
     ) {
@@ -234,7 +234,7 @@ impl Preprocessor {
 
     fn check_conditional_arm(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
         is_else: bool,
     ) -> bool {
@@ -256,7 +256,7 @@ impl Preprocessor {
         true
     }
 
-    fn finish_conditional_directive(&mut self, context: &mut Context, name: &'static str) {
+    fn finish_conditional_directive(&mut self, context: &mut Context<'_>, name: &'static str) {
         if let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, context)
             && token.kind != PreprocessorTokenType::Newline
         {
@@ -272,7 +272,7 @@ impl Preprocessor {
 
     pub(super) fn parse_endif_directive(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) {
         if self.open_conditionals.len() <= self.current_file_conditional_base() {
@@ -288,7 +288,7 @@ impl Preprocessor {
 
     pub(super) fn parse_ifdef_directive(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) {
         self.parse_macro_test_directive(context, directive, true);
@@ -296,7 +296,7 @@ impl Preprocessor {
 
     pub(super) fn parse_ifndef_directive(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) {
         self.parse_macro_test_directive(context, directive, false);
@@ -306,7 +306,7 @@ impl Preprocessor {
     /// is diagnosed and the group is skipped, as GCC and Clang do.
     fn parse_macro_test_directive(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         directive: PreprocessorToken,
         wants_defined: bool,
     ) {

@@ -219,7 +219,7 @@ impl StatementFrame {
     pub(super) fn step(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
     ) -> ParseAction {
@@ -1268,7 +1268,7 @@ impl StatementFrame {
     /// following statement (a brace, a statement keyword, or a declaration
     /// starter outside parentheses), at the end of input, or after
     /// [`HEADER_RECOVERY_LOOKAHEAD`] tokens.
-    fn for_header_closer_distance(parser: &mut Parser, context: &mut Context) -> Option<u16> {
+    fn for_header_closer_distance(parser: &mut Parser, context: &mut Context<'_>) -> Option<u16> {
         let mut depth = 0_usize;
         let mut token = parser.cursor.current(context);
         for distance in 0..HEADER_RECOVERY_LOOKAHEAD {
@@ -1294,22 +1294,25 @@ impl StatementFrame {
         None
     }
 
-    fn missing_slot(parser: &mut Parser, context: &mut Context) -> ExpressionSlot {
+    fn missing_slot(parser: &mut Parser, context: &mut Context<'_>) -> ExpressionSlot {
         ExpressionSlot::Missing(parser.missing_syntax_source(context))
     }
 
-    fn missing_constant_slot(parser: &mut Parser, context: &mut Context) -> ConstantExpressionSlot {
+    fn missing_constant_slot(
+        parser: &mut Parser,
+        context: &mut Context<'_>,
+    ) -> ConstantExpressionSlot {
         ConstantExpressionSlot::Missing(parser.missing_syntax_source(context))
     }
 
-    fn merge_token(&mut self, parser: &Parser, context: &mut Context, token: Token) {
+    fn merge_token(&mut self, parser: &Parser, context: &mut Context<'_>, token: Token) {
         parser.merge_source(context, &mut self.source_vectors, token);
     }
 
     fn merge_statement(
         &mut self,
         parser: &Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         statement: StatementIndex,
     ) {
         let source = parser.statement_source(statement);
@@ -1337,7 +1340,7 @@ impl StatementFrame {
         ConstantExpressionSlot::Parsed(index)
     }
 
-    fn merge_slot(&mut self, parser: &Parser, context: &mut Context, slot: ExpressionSlot) {
+    fn merge_slot(&mut self, parser: &Parser, context: &mut Context<'_>, slot: ExpressionSlot) {
         let source = match slot {
             | ExpressionSlot::Parsed(index) => parser.syntax[index].source_vectors,
             | ExpressionSlot::Missing(source) => source,
@@ -1353,7 +1356,7 @@ impl StatementFrame {
     fn merge_constant_slot(
         &mut self,
         parser: &Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         slot: ConstantExpressionSlot,
     ) {
         let source = match slot {
@@ -1371,7 +1374,7 @@ impl StatementFrame {
     fn own_semicolon_or_report(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
         position: &'static str,
     ) {
@@ -1392,7 +1395,7 @@ impl StatementFrame {
     fn own_colon_or_report(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         token: Option<Token>,
         position: &'static str,
     ) {
@@ -1415,7 +1418,7 @@ impl StatementFrame {
     fn finish(
         &mut self,
         parser: &mut Parser,
-        context: &mut Context,
+        context: &mut Context<'_>,
         kind: StatementType,
     ) -> ParseAction {
         let source_vectors = self

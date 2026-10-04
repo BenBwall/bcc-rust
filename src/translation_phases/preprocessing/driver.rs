@@ -147,7 +147,7 @@ impl Preprocessor {
         None
     }
 
-    fn invocation_location(&self, context: &Context, token: PreprocessorToken) -> SourceVector {
+    fn invocation_location(&self, context: &Context<'_>, token: PreprocessorToken) -> SourceVector {
         for frame in self.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
@@ -179,7 +179,7 @@ impl Preprocessor {
             .unwrap_or_else(|| self.source_file_index())
     }
 
-    pub(super) fn skip_until_newline(&mut self, context: &mut Context) {
+    pub(super) fn skip_until_newline(&mut self, context: &mut Context<'_>) {
         loop {
             if matches!(
                 self.tokenizer.next_item(context),
@@ -195,7 +195,7 @@ impl Preprocessor {
         }
     }
 
-    pub(super) fn skip_and_expand_until_newline(&mut self, context: &mut Context) {
+    pub(super) fn skip_and_expand_until_newline(&mut self, context: &mut Context<'_>) {
         loop {
             if matches!(
                 self.next_preprocessor_token::<true>(context),
@@ -212,7 +212,7 @@ impl Preprocessor {
     }
 
     /// A zero-length diagnostic location at the current input position.
-    pub(super) fn current_location(&self, context: &mut Context) -> SourceVectors {
+    pub(super) fn current_location(&self, context: &mut Context<'_>) -> SourceVectors {
         self.location_at(context, self.position(context))
     }
 
@@ -220,19 +220,23 @@ impl Preprocessor {
     /// source.
     pub(super) fn location_at(
         &self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         position: SourcePosition,
     ) -> SourceVectors {
         self.tokenizer.location_at(context, position)
     }
 
-    pub(super) fn push_tokenizer_frame(&mut self, _context: &mut Context, frame: TokenizerFrame) {
+    pub(super) fn push_tokenizer_frame(
+        &mut self,
+        _context: &mut Context<'_>,
+        frame: TokenizerFrame,
+    ) {
         self.tokenizer_stack.last_mut().unwrap().tokenizer = take(&mut self.tokenizer);
         self.tokenizer = frame.tokenizer.clone();
         self.tokenizer_stack.push(frame);
     }
 
-    pub(super) fn pop_tokenizer_frame(&mut self, context: &mut Context) {
+    pub(super) fn pop_tokenizer_frame(&mut self, context: &mut Context<'_>) {
         let frame = self.tokenizer_stack.pop();
         if let Some(TokenizerFrame {
             frame_type:
@@ -261,11 +265,11 @@ impl Preprocessor {
 
     pub(super) fn expect_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context,
-        is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
+        context: &mut Context<'_>,
+        is_correct_token: impl FnMut(&mut Self, &mut Context<'_>, PreprocessorToken) -> bool,
         on_wrong_token_type: impl FnMut(
             &mut Self,
-            &mut Context,
+            &mut Context<'_>,
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
@@ -281,11 +285,11 @@ impl Preprocessor {
 
     pub(super) fn expect_token_without_rewind<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context,
-        is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
+        context: &mut Context<'_>,
+        is_correct_token: impl FnMut(&mut Self, &mut Context<'_>, PreprocessorToken) -> bool,
         on_wrong_token_type: impl FnMut(
             &mut Self,
-            &mut Context,
+            &mut Context<'_>,
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
@@ -301,11 +305,11 @@ impl Preprocessor {
 
     fn expect_token_with_rewind<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context,
-        mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
+        context: &mut Context<'_>,
+        mut is_correct_token: impl FnMut(&mut Self, &mut Context<'_>, PreprocessorToken) -> bool,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
-            &mut Context,
+            &mut Context<'_>,
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
@@ -349,11 +353,11 @@ impl Preprocessor {
 
     pub(super) fn expect_token_from_previous_phase<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context,
-        mut is_correct_token: impl FnMut(&mut Self, &mut Context, PreprocessorToken) -> bool,
+        context: &mut Context<'_>,
+        mut is_correct_token: impl FnMut(&mut Self, &mut Context<'_>, PreprocessorToken) -> bool,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
-            &mut Context,
+            &mut Context<'_>,
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError>,
         eof_message: &'static str,
@@ -392,7 +396,7 @@ impl Preprocessor {
 
     pub(super) fn next_preprocessor_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         self.last_was_newline = self.current_is_newline;
         let ret = 'base: loop {
@@ -898,7 +902,7 @@ impl Preprocessor {
                             // most recent one.
                             let pragma_string = context.add_synthetic_source_file(
                                 PathBuf::from("<pragma string>").into_boxed_path(),
-                                input.clone(),
+                                &input,
                             );
                             self.tokenizer = TokenSource::new(context, pragma_string, &input);
                             _ = self.parse_pragma_directive(context, string_token);
@@ -941,7 +945,7 @@ impl Preprocessor {
 
     pub(super) fn next_ignore_whitespace(
         tokenizer: &mut TokenSource,
-        context: &mut Context,
+        context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         loop {
             match tokenizer.next_item(context) {
@@ -954,7 +958,7 @@ impl Preprocessor {
 
     pub(super) fn next_treat_newlines_as_whitespace(
         tokenizer: &mut TokenSource,
-        context: &mut Context,
+        context: &mut Context<'_>,
         last_was_whitespace: &mut bool,
     ) -> Option<PreprocessorToken> {
         loop {

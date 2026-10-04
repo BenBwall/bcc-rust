@@ -54,7 +54,7 @@ impl Display for PreprocessorError {
 }
 
 impl ToDiagnostic for PreprocessorError {
-    fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic {
+    fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic {
         self.error_type
             .explain(context.source_spelling(source))
             .at(self.severity(), source)
@@ -64,13 +64,13 @@ impl ToDiagnostic for PreprocessorError {
 impl std::error::Error for PreprocessorError {}
 
 impl GetPosition for PreprocessorError {
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.source_vectors.position(context)
     }
 }
 
 impl GetSourceVectors for PreprocessorError {
-    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         self.source_vectors
     }
 }

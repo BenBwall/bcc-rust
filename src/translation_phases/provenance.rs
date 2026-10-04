@@ -96,7 +96,7 @@ impl Default for SourceVector {
 
 impl GetPosition for SourceVector {
     #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
         SourcePosition {
             index:  self.index as usize,
             line:   self.line,
@@ -109,7 +109,7 @@ pub(crate) type SourceVectors = VectorSlice<SourceVector>;
 
 impl GetPosition for SourceVectors {
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         let start = context.first_source_vector(*self);
         SourcePosition {
             index:  start.index as usize,
@@ -120,14 +120,14 @@ impl GetPosition for SourceVectors {
 }
 
 impl GetSourceVectors for SourceVectors {
-    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         *self
     }
 }
 
 impl GetPosition for SourcePosition {
     #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
         *self
     }
 }
