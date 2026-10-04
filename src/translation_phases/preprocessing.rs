@@ -49,6 +49,8 @@ pub(crate) use token::{
 };
 
 use self::macro_expansion::FunctionLikeMacroArgument;
+#[cfg(any(test, feature = "benchmarking-internals"))]
+use crate::util::shared::SharedVec;
 use crate::{
     translation_phases::{
         Context,
@@ -65,7 +67,6 @@ use crate::{
         HashMap,
         HashSet,
         chunked_queue::ChunkedQueue,
-        shared::SharedVec,
         string_cache::StringCacheId,
     },
 };
@@ -169,22 +170,26 @@ impl Preprocessor {
         quote_include_directories: SharedVec<PathBuf>,
         system_include_directories: SharedVec<PathBuf>,
     ) -> Self {
-        Self::new_inner(
+        let source_name = source_name.into_path_buf();
+        let preprocessor = Self::new_inner(
             context,
-            source_name,
+            &source_name,
             source,
             None,
-            quote_include_directories,
-            system_include_directories,
-        )
+            &quote_include_directories,
+            &system_include_directories,
+        );
+        drop(quote_include_directories);
+        drop(system_include_directories);
+        preprocessor
     }
 
     pub(crate) fn new_with_arena_source<'tu>(
         context: &mut Context<'tu>,
-        source_name: Box<Path>,
+        source_name: &Path,
         source: &'tu str,
-        quote_include_directories: SharedVec<PathBuf>,
-        system_include_directories: SharedVec<PathBuf>,
+        quote_include_directories: &[PathBuf],
+        system_include_directories: &[PathBuf],
     ) -> Self {
         Self::new_inner(
             context,
@@ -198,23 +203,20 @@ impl Preprocessor {
 
     fn new_inner<'tu>(
         context: &mut Context<'tu>,
-        source_name: Box<Path>,
+        source_name: &Path,
         source: &str,
         arena_source: Option<&'tu str>,
-        quote_include_directories: SharedVec<PathBuf>,
-        system_include_directories: SharedVec<PathBuf>,
+        quote_include_directories: &[PathBuf],
+        system_include_directories: &[PathBuf],
     ) -> Self {
-        let source_name = source_name.into_path_buf();
-        context.set_include_directories(&quote_include_directories, &system_include_directories);
-        drop(quote_include_directories);
-        drop(system_include_directories);
+        context.set_include_directories(quote_include_directories, system_include_directories);
         let macro_definitions = PREDEFINED_MACRO_NAMES
             .into_iter()
             .map(|s| -> (StringCacheId, MacroDefinition) {
                 (context.string_cache.intern(s), MacroDefinition::BuiltIn)
             })
             .collect();
-        let source_file_index = context.intern_source_file(&source_name);
+        let source_file_index = context.intern_source_file(source_name);
         let tokenizer = TokenSource::new(context, source_file_index, source);
         if let Some(source) = arena_source {
             context.record_arena_source_text(source_file_index, source);

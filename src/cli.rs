@@ -47,10 +47,7 @@ use crate::{
             TokenType,
         },
     },
-    util::{
-        HashMap,
-        shared::SharedVec,
-    },
+    util::HashMap,
 };
 
 #[derive(Parser)]
@@ -141,12 +138,9 @@ pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
     let tu = crate::util::bump::Bump::new();
     let input_argument = args.input.input.take();
-    let (input_string, source_filename): (&str, Box<Path>) =
+    let (input_string, source_filename): (&str, PathBuf) =
         match (input_argument.as_deref(), args.input.input_file.take()) {
-            | (Some(input), None) => (
-                tu.alloc_str(input),
-                PathBuf::from("<input>").into_boxed_path(),
-            ),
+            | (Some(input), None) => (tu.alloc_str(input), PathBuf::from("<input>")),
             | (None, Some(input_file)) => (
                 tu.read_to_str_lossy(&input_file).map_err(|source| {
                     MainError::OpenInputFileError {
@@ -154,7 +148,7 @@ pub fn run() -> Result<(), MainError> {
                         source,
                     }
                 })?,
-                input_file.into_boxed_path(),
+                input_file,
             ),
             | _ => unreachable!("clap requires exactly one input source"),
         };
@@ -168,18 +162,18 @@ pub fn run() -> Result<(), MainError> {
     if args.output.tokens {
         print_preprocessor_output(
             &tu,
-            source_filename,
+            &source_filename,
             input_string,
-            args.quote_include.into(),
-            args.system_include.into(),
+            &args.quote_include,
+            &args.system_include,
         );
     } else {
         print_parser_output(
             &tu,
-            source_filename,
+            &source_filename,
             input_string,
-            args.quote_include.into(),
-            args.system_include.into(),
+            &args.quote_include,
+            &args.system_include,
             &args.output.parser,
             !args.no_repeated_specifier_warnings,
         );
@@ -191,10 +185,10 @@ pub fn run() -> Result<(), MainError> {
 /// diagnostics its production reported.
 fn print_preprocessor_output<'tu>(
     tu: &'tu crate::util::bump::Bump,
-    source_filename: Box<Path>,
+    source_filename: &Path,
     input_string: &'tu str,
-    quote_include: SharedVec<PathBuf>,
-    system_include: SharedVec<PathBuf>,
+    quote_include: &[PathBuf],
+    system_include: &[PathBuf],
 ) {
     let mut context = Context::new(tu);
     let preprocessor = Preprocessor::new_with_arena_source(
@@ -275,10 +269,10 @@ pub(crate) fn describe_token(token: Token, context: &Context<'_>) -> String {
 
 fn print_parser_output<'tu>(
     tu: &'tu crate::util::bump::Bump,
-    source_filename: Box<Path>,
+    source_filename: &Path,
     input_string: &'tu str,
-    quote_include: SharedVec<PathBuf>,
-    system_include: SharedVec<PathBuf>,
+    quote_include: &[PathBuf],
+    system_include: &[PathBuf],
     output: &ParserOutput,
     repeated_specifier_warnings: bool,
 ) {
