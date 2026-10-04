@@ -89,7 +89,12 @@ struct MacroCallCursor {
 
 impl MacroCallCursor {
     fn new(preprocessor: &Preprocessor<'_, '_>) -> Self {
-        let mut frames = preprocessor.state.tokenizer_stack.clone();
+        let mut frames = preprocessor
+            .state
+            .tokenizer_stack
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
         frames.last_mut().unwrap().tokenizer = preprocessor.tokenizer.clone();
         Self {
             index: frames.len().checked_sub(1),
@@ -265,7 +270,8 @@ impl MacroCallCursor {
             );
         }
         preprocessor.tokenizer = self.frames.last().unwrap().tokenizer.clone();
-        preprocessor.state.tokenizer_stack = self.frames;
+        preprocessor.state.tokenizer_stack.clear();
+        preprocessor.state.tokenizer_stack.extend(self.frames);
     }
 }
 

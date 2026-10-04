@@ -252,7 +252,7 @@ impl Preprocessor<'_, '_> {
             // leave conditional state untouched.
             let base = conditional_base.min(self.state.open_conditionals.len());
             for vectors in self.state.open_conditionals.split_off(base) {
-                let source_vectors = context.push_source_vectors(&vectors.source);
+                let source_vectors = context.push_source_vectors(vectors.source);
                 context.preprocessor_error(PreprocessorError {
                     error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
                     source_vectors,

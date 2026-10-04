@@ -69,6 +69,7 @@ use crate::{
         bump::{
             ArenaMap,
             ArenaSet,
+            ArenaVec,
             Bump,
             RegionVec,
         },
@@ -97,18 +98,30 @@ enum OutputPurpose {
 }
 
 /// State retained while replacement-list and argument expansions unwind.
-#[derive(Debug)]
 struct PreprocessorState<'pp> {
+    arena:                 &'pp Bump,
     once_set:              ArenaSet<'pp, u32>,
     macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition>,
     /// Source and include frames remain between expansions. Macro frames
     /// share this stack until the current expansion finishes.
-    tokenizer_stack:       Vec<TokenizerFrame>,
+    tokenizer_stack:       ArenaVec<'pp, TokenizerFrame>,
     /// Provenance of open conditionals is owned because token iteration
     /// compacts temporary preprocessor provenance while groups remain open.
-    open_conditionals:     Vec<ConditionalGroup>,
+    open_conditionals:     ArenaVec<'pp, ConditionalGroup<'pp>>,
     /// Fixed on first use so every `__DATE__` and `__TIME__` agrees.
     translation_timestamp: Option<TranslationTimestamp>,
+}
+
+impl Debug for PreprocessorState<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreprocessorState")
+            .field("once_set", &self.once_set)
+            .field("macro_definitions", &self.macro_definitions)
+            .field("tokenizer_stack", &self.tokenizer_stack)
+            .field("open_conditionals", &self.open_conditionals)
+            .field("translation_timestamp", &self.translation_timestamp)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -233,6 +246,14 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         }
         let source_file_index = context.intern_source_file(source_name);
         let tokenizer = TokenSource::new(context, source_file_index, source);
+        let mut tokenizer_stack = ArenaVec::new_in(pp);
+        tokenizer_stack.push(TokenizerFrame {
+            frame_type: TokenizerFrameType::SourceFile {
+                conditional_base:           0,
+                physical_source_file_index: source_file_index,
+            },
+            tokenizer:  tokenizer.clone(),
+        });
         if let Some(source) = arena_source {
             context.record_arena_source_text(source_file_index, source);
         } else {
@@ -241,16 +262,11 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         Self {
             hash_hash_stack: Vec::new(),
             state: PreprocessorState {
+                arena: pp,
                 once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                 macro_definitions,
-                tokenizer_stack: vec![TokenizerFrame {
-                    frame_type: TokenizerFrameType::SourceFile {
-                        conditional_base:           0,
-                        physical_source_file_index: source_file_index,
-                    },
-                    tokenizer:  tokenizer.clone(),
-                }],
-                open_conditionals: Vec::new(),
+                tokenizer_stack,
+                open_conditionals: ArenaVec::new_in(pp),
                 translation_timestamp: None,
             },
             tokenizer,
@@ -276,8 +292,8 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         }
         loop {
             let Some(token) = self.next_preprocessor_token::<true>(context) else {
-                for vectors in take(&mut self.state.open_conditionals) {
-                    let source_vectors = context.push_source_vectors(&vectors.source);
+                for vectors in self.state.open_conditionals.drain(..) {
+                    let source_vectors = context.push_source_vectors(vectors.source);
                     context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
                         source_vectors,

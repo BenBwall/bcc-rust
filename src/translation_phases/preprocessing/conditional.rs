@@ -13,27 +13,35 @@ use super::{
         PreprocessorErrorType,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVector,
-    TranslationPhase,
-    preprocessor_tokenizer::{
-        PreprocessorToken,
-        PreprocessorTokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVector,
+        TranslationPhase,
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+        },
     },
+    util::bump::Bump,
 };
 
 /// One source-file-local conditional, including whether its final arm began.
 #[derive(Debug)]
-pub(super) struct ConditionalGroup {
-    pub(super) source: Box<[SourceVector]>,
+pub(super) struct ConditionalGroup<'pp> {
+    pub(super) source: &'pp [SourceVector],
     saw_else:          bool,
 }
 
-impl ConditionalGroup {
-    fn new(context: &Context<'_>, directive: PreprocessorToken) -> Self {
+impl<'pp> ConditionalGroup<'pp> {
+    fn new(pp: &'pp Bump, context: &Context<'_>, directive: PreprocessorToken) -> Self {
         Self {
-            source:   context.get_source_vectors(directive.source_vectors).into(),
+            source:   pp.alloc_slice_fill_iter(
+                context
+                    .get_source_vectors(directive.source_vectors)
+                    .iter()
+                    .cloned(),
+            ),
             saw_else: false,
         }
     }
@@ -120,9 +128,9 @@ impl Preprocessor<'_, '_> {
                 | "if" | "ifdef" | "ifndef" => self
                     .state
                     .open_conditionals
-                    .push(ConditionalGroup::new(context, name)),
+                    .push(ConditionalGroup::new(self.state.arena, context, name)),
                 | "endif" => {
-                    drop(self.state.open_conditionals.pop());
+                    let _ = self.state.open_conditionals.pop();
                     if innermost {
                         context.set_ignore_tokenizer_errors(false);
                         self.finish_conditional_directive(context, "endif");
@@ -174,9 +182,11 @@ impl Preprocessor<'_, '_> {
         context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) {
-        self.state
-            .open_conditionals
-            .push(ConditionalGroup::new(context, directive));
+        self.state.open_conditionals.push(ConditionalGroup::new(
+            self.state.arena,
+            context,
+            directive,
+        ));
         if self
             .eval_preprocessor_expression(context, PreprocessorErrorType::NoConditionInIfDirective)
         {
@@ -284,7 +294,7 @@ impl Preprocessor<'_, '_> {
                 source_vectors: directive.source_vectors,
             });
         } else {
-            drop(self.state.open_conditionals.pop());
+            let _ = self.state.open_conditionals.pop();
         }
         self.finish_conditional_directive(context, "endif");
     }
@@ -313,9 +323,11 @@ impl Preprocessor<'_, '_> {
         directive: PreprocessorToken,
         wants_defined: bool,
     ) {
-        self.state
-            .open_conditionals
-            .push(ConditionalGroup::new(context, directive));
+        self.state.open_conditionals.push(ConditionalGroup::new(
+            self.state.arena,
+            context,
+            directive,
+        ));
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
             |_, _, t| t.kind.is_identifier(),
