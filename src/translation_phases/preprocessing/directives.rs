@@ -36,7 +36,6 @@ use crate::{
         SourcePosition,
         SourceVectors,
         StrExt,
-        TokenString,
         TranslationPhase,
         preprocessor_tokenizer::{
             LogicalCharacter,
@@ -47,6 +46,7 @@ use crate::{
         },
     },
     util::{
+        bump::ArenaString,
         shared::SharedString,
         string_cache::StringCacheId,
     },
@@ -690,7 +690,7 @@ impl Expander<'_, '_, '_> {
                 extra_tokens: None,
             });
         }
-        let mut contents = TokenString::new();
+        let mut contents = ArenaString::new_in(self.scratch);
         contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
         // Each name byte belongs to a token; keep that token's provenance so
         // an invalid sequence does not share the whole operand's location.

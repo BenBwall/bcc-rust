@@ -31,7 +31,6 @@ use crate::{
         GetPosition,
         SetPosition,
         SourceVectors,
-        TokenString,
         TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -40,7 +39,10 @@ use crate::{
         },
     },
     util::{
-        bump::ArenaVec,
+        bump::{
+            ArenaString,
+            ArenaVec,
+        },
         string_cache::StringCacheId,
     },
 };
@@ -911,8 +913,7 @@ impl<'x> Expander<'_, '_, 'x> {
         rhs_range: impl RangeBounds<usize>,
         result_token_type: PreprocessorTokenType,
     ) -> PreprocessorToken {
-        _ = self;
-        let mut new_contents = TokenString::new();
+        let mut new_contents = ArenaString::new_in(self.scratch);
         new_contents.push_str(
             &context.string_cache.at(lhs.contents)[(
                 lhs_range.start_bound().cloned(),
@@ -928,7 +929,7 @@ impl<'x> Expander<'_, '_, 'x> {
         let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
         PreprocessorToken {
             kind: result_token_type,
-            contents: context.string_cache.intern(&new_contents),
+            contents: context.string_cache.intern(new_contents.as_str()),
             source_vectors,
         }
     }
@@ -966,16 +967,15 @@ impl<'x> Expander<'_, '_, 'x> {
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> PreprocessorToken {
-        _ = self;
         let lhs_contents = context.string_cache.at(lhs.contents);
-        let mut contents = TokenString::new();
+        let mut contents = ArenaString::new_in(self.scratch);
         contents.push_str(lhs_contents.strip_suffix('\0').unwrap_or(lhs_contents));
         contents.push_str(context.string_cache.at(rhs.contents));
         contents.push_str("\0");
         let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
         PreprocessorToken {
             kind: PreprocessorTokenType::Number,
-            contents: context.string_cache.intern(&contents),
+            contents: context.string_cache.intern(contents.as_str()),
             source_vectors,
         }
     }

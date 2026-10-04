@@ -26,7 +26,6 @@ pub(crate) use provenance::{
     SourceVector,
     SourceVectors,
 };
-use smallstr::SmallString;
 use thiserror::Error;
 
 use self::{
@@ -110,8 +109,6 @@ impl GetSourceVectors for TranslationError<'_> {
         }
     }
 }
-
-pub(crate) type TokenString = SmallString<[u8; 1024]>;
 
 trait StrExt {
     /// Returns the character at the given index,
