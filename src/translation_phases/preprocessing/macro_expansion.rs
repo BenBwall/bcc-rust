@@ -48,12 +48,12 @@ use crate::{
 };
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum MacroDefinition {
+pub(crate) enum MacroDefinition<'pp> {
     ObjectLike {
         tokenizer: TokenSource,
     },
     FunctionLike {
-        argument_names: Rc<[StringCacheId]>,
+        argument_names: &'pp [StringCacheId],
         tokenizer:      TokenSource,
         is_variadic:    bool,
     },

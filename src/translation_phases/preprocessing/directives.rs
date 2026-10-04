@@ -1046,7 +1046,7 @@ impl Preprocessor<'_, '_> {
                 name.identifier_id(context),
                 MacroDefinition::FunctionLike {
                     tokenizer,
-                    argument_names: argument_names.into(),
+                    argument_names: self.state.arena.alloc_slice_copy(&argument_names),
                     is_variadic,
                 },
             ));

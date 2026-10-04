@@ -539,7 +539,7 @@ impl Preprocessor<'_, '_> {
                             let Some((arguments, invocation_end)) = self.capture_cross_frame_call(
                                 context,
                                 token,
-                                &argument_names,
+                                argument_names,
                                 is_variadic,
                             ) else {
                                 break 'base Some(token);

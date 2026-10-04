@@ -100,7 +100,7 @@ enum OutputPurpose {
 struct PreprocessorState<'pp> {
     arena:                 &'pp Bump,
     once_set:              ArenaSet<'pp, u32>,
-    macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition>,
+    macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
     /// Source and include frames remain between expansions. Macro frames
     /// share this stack until the current expansion finishes.
     tokenizer_stack:       ArenaVec<'pp, TokenizerFrame>,
@@ -142,7 +142,7 @@ pub(crate) struct Preprocessor<'tu, 'pp> {
     expansion_fence: usize,
     empty_arguments: std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
     empty_disabled_macros: std::rc::Rc<[StringCacheId]>,
-    expression_parser: PreprocessorExpressionParser,
+    expression_parser: PreprocessorExpressionParser<'pp>,
     pending_parser_token: Option<Token>,
     pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
     /// Parser-supplied provenance budget, checked within string concatenation
@@ -277,7 +277,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             output_purpose: OutputPurpose::Preprocessing,
             empty_arguments: std::rc::Rc::default(),
             empty_disabled_macros: std::rc::Rc::from([]),
-            expression_parser: PreprocessorExpressionParser::new(),
+            expression_parser: PreprocessorExpressionParser::new(pp),
             pending_parser_token: None,
             pending_parser_errors: ArenaVec::new_in(pp),
             source_segment_limit: usize::MAX,

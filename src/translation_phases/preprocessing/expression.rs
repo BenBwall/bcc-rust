@@ -33,7 +33,10 @@ use crate::{
             PreprocessorTokenType,
         },
     },
-    util::last_entry::last_entry,
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -231,11 +234,11 @@ enum ArithmeticFaultNode {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct PreprocessorExpressionParser {
-    operator_stack:   Vec<LocatedExpressionOperator>,
-    operand_stack:    PreprocessorExpressionOperandStack,
+pub(crate) struct PreprocessorExpressionParser<'pp> {
+    operator_stack:   ArenaVec<'pp, LocatedExpressionOperator>,
+    operand_stack:    PreprocessorExpressionOperandStack<'pp>,
     state:            PreprocessorExpressionParserState,
-    open_parentheses: Vec<usize>,
+    open_parentheses: ArenaVec<'pp, usize>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -352,16 +355,26 @@ impl EvaluatedPreprocessorExpressionOperand {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Default)]
-pub(super) struct PreprocessorExpressionOperandStack {
-    values:                    Vec<EvaluatedPreprocessorExpressionOperand>,
+#[derive(Debug, PartialEq, Clone)]
+pub(super) struct PreprocessorExpressionOperandStack<'pp> {
+    values:                    ArenaVec<'pp, EvaluatedPreprocessorExpressionOperand>,
     floor:                     usize,
     pending_evaluated_comma:   bool,
     pending_arithmetic_faults: Option<NonZeroU32>,
-    arithmetic_faults:         Vec<ArithmeticFaultNode>,
+    arithmetic_faults:         ArenaVec<'pp, ArithmeticFaultNode>,
 }
 
-impl PreprocessorExpressionOperandStack {
+impl<'pp> PreprocessorExpressionOperandStack<'pp> {
+    fn new(pp: &'pp Bump) -> Self {
+        Self {
+            values:                    ArenaVec::new_in(pp),
+            floor:                     0,
+            pending_evaluated_comma:   false,
+            pending_arithmetic_faults: None,
+            arithmetic_faults:         ArenaVec::new_in(pp),
+        }
+    }
+
     fn clear(&mut self) {
         self.values.clear();
         self.floor = 0;
@@ -470,13 +483,13 @@ impl PreprocessorExpressionOperandStack {
     }
 }
 
-impl PreprocessorExpressionParser {
-    pub(super) fn new() -> Self {
+impl<'pp> PreprocessorExpressionParser<'pp> {
+    pub(super) fn new(pp: &'pp Bump) -> Self {
         Self {
-            operator_stack:   Vec::new(),
-            operand_stack:    PreprocessorExpressionOperandStack::default(),
+            operator_stack:   ArenaVec::new_in(pp),
+            operand_stack:    PreprocessorExpressionOperandStack::new(pp),
             state:            PreprocessorExpressionParserState::Unary,
-            open_parentheses: Vec::new(),
+            open_parentheses: ArenaVec::new_in(pp),
         }
     }
 
@@ -1479,21 +1492,19 @@ impl Preprocessor<'_, '_> {
                             });
                         }
                         let mut matched_question_mark = false;
-                        while let Some(mut entry) =
-                            last_entry(&mut self.expression_parser.operator_stack)
-                        {
-                            match entry.kind {
+                        while let Some(last) = self.expression_parser.operator_stack.last() {
+                            match last.kind {
                                 | PreprocessorExpressionOperator::QuestionMark => {
-                                    _ = entry.insert(LocatedExpressionOperator {
+                                    *self.expression_parser.operator_stack.last_mut().unwrap() = LocatedExpressionOperator {
                                         kind: PreprocessorExpressionOperator::Conditional,
                                         source_vectors: token.source_vectors,
-                                    });
+                                    };
                                     matched_question_mark = true;
                                     break;
                                 },
                                 | PreprocessorExpressionOperator::OpeningParenthesis => break,
                                 | _ => {
-                                    let operator = entry.remove();
+                                    let operator = self.expression_parser.operator_stack.pop().unwrap();
                                     self.handle_expression_operator(context, operator);
                                 },
                             }
