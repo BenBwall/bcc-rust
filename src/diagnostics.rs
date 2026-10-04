@@ -34,6 +34,7 @@ use crate::{
         SourceVectors,
     },
     util::bump::{
+        ArenaString,
         ArenaVec,
         Bump,
     },
@@ -432,7 +433,7 @@ impl Renderer {
         self.line_starts.clear();
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.reset();
-        let mut out = String::new();
+        let mut out = ArenaString::new_in(&scratch);
         let severity_style = Self::severity_style(diagnostic.severity);
         let _ = writeln!(
             out,
@@ -526,15 +527,17 @@ impl Renderer {
             }
         }
         out.push('\n');
+        let rendered = out.as_str().to_owned();
+        drop(out);
         drop(files);
         drop(marks);
         self.scratch = scratch;
-        out
+        rendered
     }
 
     fn render_file_lines(
         &self,
-        out: &mut String,
+        out: &mut ArenaString<'_>,
         marks: &[Mark<'_>],
         (file, text, starts): (u32, &str, &[usize]),
         severity: ErrorSeverity,
@@ -662,7 +665,13 @@ impl Renderer {
         }
     }
 
-    fn write_source_line(&self, out: &mut String, line: usize, source: &str, gutter_width: usize) {
+    fn write_source_line(
+        &self,
+        out: &mut ArenaString<'_>,
+        line: usize,
+        source: &str,
+        gutter_width: usize,
+    ) {
         let number = format!("{line:>gutter_width$}");
         let _ = writeln!(
             out,

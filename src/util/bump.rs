@@ -329,10 +329,6 @@ pub(crate) struct ArenaString<'a> {
     bytes: ArenaVec<'a, u8>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Later arena migration stages use these methods.")
-)]
 impl<'a> ArenaString<'a> {
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
         Self {
