@@ -323,6 +323,21 @@ pub(crate) struct Renderer {
     scratch: Bump,
 }
 
+struct Painted<'a> {
+    text:  &'a str,
+    style: Style,
+    color: ColorChoice,
+}
+
+impl std::fmt::Display for Painted<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.color {
+            | ColorChoice::Plain => f.write_str(self.text),
+            | ColorChoice::Ansi => write!(f, "{}", self.text.style(self.style)),
+        }
+    }
+}
+
 /// One underline on one physical source line.
 #[derive(Debug, Clone)]
 struct Mark<'a> {
@@ -343,20 +358,16 @@ impl Renderer {
         }
     }
 
-    fn paint(&self, text: &str, style: Style) -> String {
-        match self.color {
-            | ColorChoice::Plain => text.to_owned(),
-            | ColorChoice::Ansi => text.style(style).to_string(),
+    fn paint<'a>(&self, text: &'a str, style: Style) -> Painted<'a> {
+        Painted {
+            text,
+            style,
+            color: self.color,
         }
     }
 
     fn paint_into(&self, out: &mut ArenaString<'_>, text: &str, style: Style) {
-        match self.color {
-            | ColorChoice::Plain => out.push_str(text),
-            | ColorChoice::Ansi => {
-                let _ = write!(out, "{}", text.style(style));
-            },
-        }
+        let _ = write!(out, "{}", self.paint(text, style));
     }
 
     fn severity_style(severity: ErrorSeverity) -> Style {
