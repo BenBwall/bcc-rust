@@ -398,7 +398,8 @@ fn test_programs() {
     let mut snapshot = Snapshot::new("test_programs");
     let mut checked = 0;
     for path in paths {
-        let source = crate::util::read_to_string_lossy(&path).expect("test program is readable");
+        let bytes = std::fs::read(&path).expect("test program is readable");
+        let source = String::from_utf8_lossy(&bytes);
         snapshot.preprocess(&source, &path, Some(&directory));
         checked += 1;
     }

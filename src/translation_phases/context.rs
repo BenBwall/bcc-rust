@@ -4,7 +4,10 @@
 use std::{
     collections::VecDeque,
     ffi::OsStr,
-    path::Path,
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
 use rustc_hash::FxBuildHasher;
@@ -135,6 +138,8 @@ pub(crate) struct Context<'tu> {
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
     pub(crate) source_files: DedupArena<'tu, &'tu Path, FxBuildHasher>,
+    quote_include_directories: &'tu [&'tu Path],
+    system_include_directories: &'tu [&'tu Path],
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
     source_texts: ArenaVec<'tu, Option<&'tu str>>,
@@ -169,6 +174,8 @@ impl<'tu> Context<'tu> {
             pending_errors: VecDeque::new(),
             relocated_errors: 0,
             source_files: DedupArena::new(tu),
+            quote_include_directories: &[],
+            system_include_directories: &[],
             source_texts: ArenaVec::new_in(tu),
         }
     }
@@ -703,6 +710,23 @@ impl<'tu> Context<'tu> {
         self.source_files[index]
     }
 
+    pub(crate) fn set_include_directories(&mut self, quote: &[PathBuf], system: &[PathBuf]) {
+        self.quote_include_directories = self
+            .tu
+            .alloc_slice_fill_iter(quote.iter().map(|path| Self::alloc_path(self.tu, path)));
+        self.system_include_directories = self
+            .tu
+            .alloc_slice_fill_iter(system.iter().map(|path| Self::alloc_path(self.tu, path)));
+    }
+
+    pub(crate) fn quote_include_directories(&self) -> &[&Path] {
+        self.quote_include_directories
+    }
+
+    pub(crate) fn system_include_directories(&self) -> &[&Path] {
+        self.system_include_directories
+    }
+
     fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {
         let bytes = tu.alloc_slice_copy(path.as_os_str().as_encoded_bytes());
         // SAFETY: These are the complete encoded bytes of an OsStr from this
@@ -718,6 +742,17 @@ impl<'tu> Context<'tu> {
             self.source_texts.resize(index + 1, None);
         }
         self.source_texts[index] = Some(text);
+    }
+
+    /// Reads and retains an included file without a temporary heap string.
+    pub(crate) fn read_source_file(&mut self, index: u32) -> std::io::Result<&'tu str> {
+        let text = self.tu.read_to_str_lossy(self.get_source_file(index))?;
+        let slot = index as usize;
+        if self.source_texts.len() <= slot {
+            self.source_texts.resize(slot + 1, None);
+        }
+        self.source_texts[slot] = Some(text);
+        Ok(text)
     }
 
     /// Returns the text of a source file, if it was recorded.

@@ -17,7 +17,9 @@ use std::{
     },
     cell::RefCell,
     fmt,
+    io::Read,
     ops::Deref,
+    path::Path,
     ptr::{
         self,
         NonNull,
@@ -145,6 +147,40 @@ impl Bump {
         let bytes = self.alloc_slice_copy(value.as_bytes());
         // SAFETY: copied bytes came from a valid UTF-8 string.
         unsafe { std::str::from_utf8_unchecked_mut(bytes) }
+    }
+
+    /// Read a source file into stable arena storage, replacing malformed
+    /// UTF-8 in the same way as `String::from_utf8_lossy`.
+    pub(crate) fn read_to_str_lossy(&self, path: &Path) -> std::io::Result<&str> {
+        let mut file = std::fs::File::open(path)?;
+        let mut bytes = ArenaVec::new_in(self);
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match file.read(&mut buffer) {
+                | Ok(0) => break,
+                | Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+                | Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
+                | Err(error) => return Err(error),
+            }
+        }
+        if std::str::from_utf8(&bytes).is_ok() {
+            let bytes = bytes.leak();
+            // SAFETY: UTF-8 validation above covered these exact bytes.
+            return Ok(unsafe { std::str::from_utf8_unchecked(bytes) });
+        }
+
+        let mut repaired = ArenaVec::new_in(self);
+        let mut remaining = bytes.as_slice();
+        while let Err(error) = std::str::from_utf8(remaining) {
+            let valid = error.valid_up_to();
+            repaired.extend_from_slice(&remaining[..valid]);
+            repaired.extend_from_slice("�".as_bytes());
+            remaining = &remaining[valid + error.error_len().unwrap_or(remaining.len() - valid)..];
+        }
+        repaired.extend_from_slice(remaining);
+        let bytes = repaired.leak();
+        // SAFETY: each valid run was checked above and replacements are UTF-8.
+        Ok(unsafe { std::str::from_utf8_unchecked(bytes) })
     }
 
     pub(crate) fn alloc_slice_fill_iter<T>(&self, values: impl IntoIterator<Item = T>) -> &mut [T] {
@@ -513,6 +549,24 @@ mod tests {
         assert_eq!(after, address);
         assert_eq!(arena.alloc_str("héllo"), "héllo");
         assert_eq!(arena.alloc_slice_fill_iter(0..4), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn file_reads_match_lossy_utf8_across_buffer_boundaries() {
+        let path = std::env::temp_dir().join(format!("bcc-bump-read-{}.c", std::process::id()));
+        let mut source = vec![b'a'; 8191];
+        source.extend_from_slice(&[0xE2, 0x82, 0xAC, 0xFF, 0xF0, 0x9F, 0x92]);
+        source.extend_from_slice(&vec![b'b'; 9000]);
+        std::fs::write(&path, &source).unwrap();
+
+        let arena = Bump::new();
+        let text = arena.read_to_str_lossy(&path).unwrap();
+        assert_eq!(text, String::from_utf8_lossy(&source));
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            arena.read_to_str_lossy(&path).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
     }
 
     #[test]

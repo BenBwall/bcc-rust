@@ -49,7 +49,6 @@ use crate::{
     },
     util::{
         HashMap,
-        read_to_string_lossy,
         shared::SharedVec,
     },
 };
@@ -140,11 +139,13 @@ fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
 #[doc(hidden)]
 pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
+    let tu = crate::util::bump::Bump::new();
+    let input_argument = args.input.input.take();
     let (input_string, source_filename) =
-        match (args.input.input.take(), args.input.input_file.take()) {
+        match (input_argument.as_deref(), args.input.input_file.take()) {
             | (Some(input), None) => (input, PathBuf::from("<input>").into_boxed_path()),
             | (None, Some(input_file)) => (
-                read_to_string_lossy(&input_file).map_err(|source| {
+                tu.read_to_str_lossy(&input_file).map_err(|source| {
                     MainError::OpenInputFileError {
                         path: input_file.clone(),
                         source,
@@ -163,15 +164,17 @@ pub fn run() -> Result<(), MainError> {
 
     if args.output.tokens {
         print_preprocessor_output(
+            &tu,
             source_filename,
-            &input_string,
+            input_string,
             args.quote_include.into(),
             args.system_include.into(),
         );
     } else {
         print_parser_output(
+            &tu,
             source_filename,
-            &input_string,
+            input_string,
             args.quote_include.into(),
             args.system_include.into(),
             &args.output.parser,
@@ -184,13 +187,13 @@ pub fn run() -> Result<(), MainError> {
 /// Prints the preprocessed translation unit, each token after the
 /// diagnostics its production reported.
 fn print_preprocessor_output(
+    tu: &crate::util::bump::Bump,
     source_filename: Box<Path>,
     input_string: &str,
     quote_include: SharedVec<PathBuf>,
     system_include: SharedVec<PathBuf>,
 ) {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::new(tu);
     let preprocessor = Preprocessor::new(
         &mut context,
         source_filename,
@@ -268,6 +271,7 @@ pub(crate) fn describe_token(token: Token, context: &Context<'_>) -> String {
 }
 
 fn print_parser_output(
+    tu: &crate::util::bump::Bump,
     source_filename: Box<Path>,
     input_string: &str,
     quote_include: SharedVec<PathBuf>,
@@ -275,8 +279,7 @@ fn print_parser_output(
     output: &ParserOutput,
     repeated_specifier_warnings: bool,
 ) {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::new(tu);
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);

@@ -108,26 +108,24 @@ pub(crate) struct Preprocessor {
     /// preprocessor arena while a conditional remains open.
     open_conditionals:          Vec<ConditionalGroup>,
 
-    generate_placeholders:      bool,
+    generate_placeholders: bool,
     /// The tokenizer-stack depth of the `#` or `##` operand being replaced,
     /// at which reading stops when that operand ends, or 0 outside such
     /// replacement.
-    operand_fence:              usize,
+    operand_fence:         usize,
     /// Argument prescan stops here without suppressing expansion within it.
-    expansion_fence:            usize,
-    empty_arguments:            std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
-    empty_disabled_macros:      std::rc::Rc<[StringCacheId]>,
-    quote_include_directories:  SharedVec<PathBuf>,
-    system_include_directories: SharedVec<PathBuf>,
-    expression_parser:          PreprocessorExpressionParser,
-    pending_parser_token:       Option<Token>,
-    pending_parser_errors:      Vec<TranslationError>,
+    expansion_fence:       usize,
+    empty_arguments:       std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
+    empty_disabled_macros: std::rc::Rc<[StringCacheId]>,
+    expression_parser:     PreprocessorExpressionParser,
+    pending_parser_token:  Option<Token>,
+    pending_parser_errors: Vec<TranslationError>,
     /// Parser-supplied provenance budget, checked within string concatenation
     /// as well as between completed output tokens.
-    source_segment_limit:       usize,
+    source_segment_limit:  usize,
     /// Fixed on first use so every `__DATE__` and `__TIME__` in one
     /// translation unit agrees (C99 §6.10.8p1).
-    translation_timestamp:      Option<TranslationTimestamp>,
+    translation_timestamp: Option<TranslationTimestamp>,
 }
 
 impl GetPosition for Preprocessor {
@@ -171,6 +169,9 @@ impl Preprocessor {
         system_include_directories: SharedVec<PathBuf>,
     ) -> Self {
         let source_name = source_name.into_path_buf();
+        context.set_include_directories(&quote_include_directories, &system_include_directories);
+        drop(quote_include_directories);
+        drop(system_include_directories);
         let macro_definitions = PREDEFINED_MACRO_NAMES
             .into_iter()
             .map(|s| -> (StringCacheId, MacroDefinition) {
@@ -201,8 +202,6 @@ impl Preprocessor {
             output_purpose: OutputPurpose::Preprocessing,
             empty_arguments: std::rc::Rc::default(),
             empty_disabled_macros: std::rc::Rc::from([]),
-            quote_include_directories,
-            system_include_directories,
             expression_parser: PreprocessorExpressionParser::new(),
             pending_parser_token: None,
             pending_parser_errors: Vec::new(),

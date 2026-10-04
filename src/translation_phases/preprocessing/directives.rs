@@ -48,7 +48,6 @@ use crate::{
         },
     },
     util::{
-        read_to_string_lossy,
         shared::SharedString,
         string_cache::StringCacheId,
     },
@@ -359,9 +358,19 @@ impl Preprocessor {
                         .map(Path::to_path_buf)
                         .unwrap_or_default(),
                 );
-                candidates.extend(self.quote_include_directories.iter().cloned());
+                candidates.extend(
+                    context
+                        .quote_include_directories()
+                        .iter()
+                        .map(|path| path.to_path_buf()),
+                );
             }
-            candidates.extend(self.system_include_directories.iter().cloned());
+            candidates.extend(
+                context
+                    .system_include_directories()
+                    .iter()
+                    .map(|path| path.to_path_buf()),
+            );
             let mut found = None;
             for directory in candidates {
                 let candidate = directory.join(path);
@@ -847,8 +856,7 @@ impl Preprocessor {
             });
             return;
         }
-        let header_path = context.get_source_file(header_source_index);
-        let Ok(header_string) = read_to_string_lossy(header_path).map_err(|e| {
+        let Ok(header_string) = context.read_source_file(header_source_index).map_err(|e| {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderFileInaccessible(e),
                 source_vectors: directive.source_vectors,
@@ -856,9 +864,7 @@ impl Preprocessor {
         }) else {
             return;
         };
-        let header_string = SharedString::from(header_string);
-        context.record_source_text(header_source_index, &header_string);
-        let tokenizer = TokenSource::new(context, header_source_index, &header_string);
+        let tokenizer = TokenSource::new(context, header_source_index, header_string);
         self.push_tokenizer_frame(
             context,
             TokenizerFrame {
