@@ -20,7 +20,7 @@ use crate::{
     util::shared::SharedVec,
 };
 
-fn expansion(source: &str) -> (String, Vec<TranslationError>) {
+fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError]) -> R) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
@@ -49,14 +49,17 @@ fn expansion(source: &str) -> (String, Vec<TranslationError>) {
                 .to_owned(),
         })
         .collect();
-    (spellings.join(" "), context.take_pending_errors())
+    let spelling = spellings.join(" ");
+    let errors = context.take_pending_errors();
+    inspect(&spelling, &errors)
 }
 
 #[track_caller]
 fn assert_expansion(source: &str, expected: &str) {
-    let (actual, errors) = expansion(source);
-    assert_eq!(actual, expected, "{source}");
-    assert!(errors.is_empty(), "{source}: {errors:#?}");
+    with_expansion(source, |actual, errors| {
+        assert_eq!(actual, expected, "{source}");
+        assert!(errors.is_empty(), "{source}: {errors:#?}");
+    });
 }
 
 #[test]
@@ -92,22 +95,23 @@ fn arity_diagnostics_count_every_supplied_argument() {
         ("#define F(x) marker\nF(a,b,c)\n", 1, 3),
         ("#define F(x,y) marker\nF(a,b,c,d,e)\n", 2, 5),
     ] {
-        let (actual, errors) = expansion(source);
-        assert_eq!(actual, "marker", "{source}");
-        assert!(
-            matches!(
-                errors.as_slice(),
-                [TranslationError::Preprocessing(PreprocessorError {
-                    error_type:
-                        PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
-                            expected: actual_expected,
-                            found: actual_found,
-                        },
-                    ..
-                })] if *actual_expected == expected && *actual_found == found
-            ),
-            "{source}: {errors:#?}",
-        );
+        with_expansion(source, |actual, errors| {
+            assert_eq!(actual, "marker", "{source}");
+            assert!(
+                matches!(
+                    errors,
+                    [TranslationError::Preprocessing(PreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
+                                expected: actual_expected,
+                                found: actual_found,
+                            },
+                        ..
+                    })] if *actual_expected == expected && *actual_found == found
+                ),
+                "{source}: {errors:#?}",
+            );
+        });
     }
 }
 
@@ -159,17 +163,18 @@ fn pasted_hash_hash_is_a_token_in_later_stringification() {
 
 #[test]
 fn mixed_hash_spellings_do_not_form_a_single_pasted_token() {
-    let (_, errors) = expansion("#define CAT(a,b) a##b\nCAT(#,%:)\n");
-    assert!(
-        errors.iter().any(|error| matches!(
-            error,
-            TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
-                ..
-            }) if lhs == "#" && rhs == "%:"
-        )),
-        "{errors:#?}"
-    );
+    with_expansion("#define CAT(a,b) a##b\nCAT(#,%:)\n", |_, errors| {
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
+                    ..
+                }) if lhs == "#" && rhs == "%:"
+            )),
+            "{errors:#?}"
+        );
+    });
 }
 
 #[test]
@@ -269,19 +274,20 @@ fn repeated_alias_calls_preserve_locations_through_compaction() {
 #[test]
 fn unterminated_alias_call_reports_a_clean_diagnostic() {
     let source = "#define g(x) [x]\n#define G g\nG(0";
-    let (_, errors) = expansion(source);
-    assert!(
-        errors.iter().any(|error| matches!(
-            error,
-            TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::UnexpectedEndOfInput(
-                    "parsing function-like macro invocation"
-                ),
-                ..
-            })
-        )),
-        "{errors:#?}"
-    );
+    with_expansion(source, |_, errors| {
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                        "parsing function-like macro invocation"
+                    ),
+                    ..
+                })
+            )),
+            "{errors:#?}"
+        );
+    });
 }
 
 #[test]
@@ -391,7 +397,8 @@ fn nested_calls_receive_stringified_parent_arguments() {
 #[test]
 fn failed_cross_frame_lookahead_prescans_each_argument_once() {
     let source = "#define F(x) x\n#define BAD(a,b) a\n#define H(x) F x\nH(BAD(1)) after\n";
-    let (tokens, errors) = expansion(source);
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!(tokens, "F 1 after");
+    with_expansion(source, |tokens, errors| {
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(tokens, "F 1 after");
+    });
 }
