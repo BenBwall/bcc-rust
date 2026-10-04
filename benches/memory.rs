@@ -157,7 +157,7 @@ fn main() -> ExitCode {
     // Arena counters are exact and need no fresh process.
     println!();
     println!(
-        "| input | PP arena high water (MiB) | expansion arena high water (MiB) | peak regions | \
+        "| input | PP arena high water (MiB) | expansion arena high water (KiB) | peak regions | \
          peak reserved (GiB) | peak arena commit (MiB) |"
     );
     println!("|---|---:|---:|---:|---:|---:|");
@@ -167,7 +167,7 @@ fn main() -> ExitCode {
             "| {} | {:.1} | {:.1} | {} | {:.0} | {:.1} |",
             input.name(),
             mebibytes(usage.preprocessor_high_water),
-            mebibytes(usage.expansion_high_water),
+            mebibytes(usage.expansion_high_water) * 1024.0,
             usage.peak_regions,
             mebibytes(usage.peak_reserved) / 1024.0,
             mebibytes(usage.peak_committed)
