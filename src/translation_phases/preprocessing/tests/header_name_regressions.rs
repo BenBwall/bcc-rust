@@ -463,6 +463,92 @@ fn a_backslash_before_the_first_quote_uses_the_quoted_header_extension() {
 }
 
 #[test]
+fn text_after_an_escaped_closing_quote_is_extra_tokens() {
+    let headers = Headers::new();
+    let extra_tokens = |error: &PreprocessorErrorType<'_>| {
+        matches!(
+            error,
+            PreprocessorErrorType::ExtraTokensAfterIncludeDirective
+        )
+    };
+    let not_found = |error: &PreprocessorErrorType<'_>| matches!(error, PreprocessorErrorType::HeaderNotFound { name, .. } if *name == "a\\");
+    // The lexer reads one closed string, or one unterminated string.
+    for source in [
+        "#include \"a\\\" b\"\nafter\n",
+        "#include \"a\\\" b\nafter\n",
+        "#include \"a\\\" b",
+    ] {
+        for policy in [ExtensionPolicy::Allow, ExtensionPolicy::Warn] {
+            with_preprocess_in(&headers, source, policy, |mut outcome| {
+                let errors = outcome.preprocessor_errors();
+                assert!(errors.iter().any(|error| not_found(error)), "{source:?}");
+                assert_eq!(
+                    errors.iter().filter(|error| extra_tokens(error)).count(),
+                    1,
+                    "{source:?}: {:#?}",
+                    outcome.errors
+                );
+                assert!(!outcome.errors.iter().any(|error| {
+                    matches!(error, TranslationError::PreprocessorTokenizining(_))
+                }));
+                // The warning points at `b`; the header name is `"a\"`.
+                let extra = outcome.location(extra_tokens);
+                assert_eq!((extra.line, extra.column, extra.length), (1, 15, 1));
+                let header = outcome.location(not_found);
+                assert_eq!((header.line, header.column, header.length), (1, 10, 4));
+                let warning = outcome
+                    .errors
+                    .iter()
+                    .find(|error| {
+                        matches!(error, TranslationError::Preprocessing(PreprocessorError { error_type, .. }) if extra_tokens(error_type))
+                    })
+                    .unwrap();
+                assert_eq!(warning.severity(), ErrorSeverity::Warning);
+                if source.ends_with("after\n") {
+                    assert_eq!(outcome.identifiers, ["after"], "{source:?}");
+                }
+            });
+        }
+        with_preprocess_in(&headers, source, ExtensionPolicy::Deny, |outcome| {
+            let errors = outcome.preprocessor_errors();
+            assert!(
+                !errors.iter().any(|error| extra_tokens(error)),
+                "{source:?}"
+            );
+            assert!(!errors.iter().any(|error| not_found(error)), "{source:?}");
+            // The escaped quote does not close the name: a closed string
+            // names `a\" b` and rejects its backslash; an unterminated one
+            // keeps the lexer's error and the missing-quote error.
+            if source.starts_with("#include \"a\\\" b\"") {
+                assert!(errors.iter().any(|error| matches!(
+                    error,
+                    PreprocessorErrorType::BackslashInQuotedHeaderName(ExtensionPolicy::Deny)
+                )));
+            } else {
+                assert!(outcome.errors.iter().any(|error| {
+                    matches!(error, TranslationError::PreprocessorTokenizining(_))
+                }));
+                assert!(errors.iter().any(|error| {
+                    matches!(error, PreprocessorErrorType::UnterminatedHeaderName('"'))
+                }));
+            }
+        });
+    }
+    // Only whitespace after the closing quote is not an extra token.
+    with_preprocess_in(
+        &headers,
+        "#include \"a\\\"  \nafter\n",
+        ExtensionPolicy::Allow,
+        |outcome| {
+            let errors = outcome.preprocessor_errors();
+            assert!(errors.iter().any(|error| not_found(error)));
+            assert!(!errors.iter().any(|error| extra_tokens(error)));
+            assert_eq!(outcome.identifiers, ["after"]);
+        },
+    );
+}
+
+#[test]
 fn quoted_backslashes_follow_the_extension_policy() {
     let headers = Headers::new();
     headers.write(&backslash_header(), "found");

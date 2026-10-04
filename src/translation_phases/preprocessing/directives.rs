@@ -551,7 +551,7 @@ impl Expander<'_, '_, '_> {
             column: vector.column,
         };
         let allow_backslash = context.configuration.extension_policy() != ExtensionPolicy::Deny;
-        let (written, unclosed_at, escaped_closing_quote) = {
+        let (written, unclosed_at, escaped_closing_quote, trailing) = {
             let source = context
                 .source_text(physical)
                 .expect("source files record their text");
@@ -582,11 +582,39 @@ impl Expander<'_, '_, '_> {
             // lexing and leaves the header name unterminated too.
             let unclosed_at =
                 (close == characters.len()).then(|| position_after(source, anchor, vector.end()));
-            (written, unclosed_at, escaped_closing_quote)
+            // Closing at an escaped quote can leave text of the same string
+            // token after the header name: the header ends at its quote, and
+            // the first character that is not whitespace starts the extra
+            // tokens, as glued text after `>` does.
+            let trailing = characters
+                .get(close + 1..)
+                .filter(|rest| !rest.is_empty())
+                .map(|rest| {
+                    let close = &characters[close];
+                    (
+                        close.index + close.length - anchor.index,
+                        rest.iter()
+                            .find(|character| !character.character.is_whitespace())
+                            .map(|character| {
+                                (
+                                    position_after(source, anchor, character.index),
+                                    character.length,
+                                )
+                            }),
+                    )
+                });
+            (written, unclosed_at, escaped_closing_quote, trailing)
         };
         if escaped_closing_quote {
             context.withdraw_quoted_header_lexer_error(&vector);
         }
+        let source_vectors = match trailing {
+            | Some((length, _)) => context.create_source_vectors(anchor, file, length),
+            | None => token.source_vectors,
+        };
+        let extra_tokens = trailing
+            .and_then(|(_, extra)| extra)
+            .map(|(position, length)| context.create_source_vectors(position, file, length));
         if unclosed_at.is_some()
             && context
                 .source_text(physical)
@@ -595,18 +623,18 @@ impl Expander<'_, '_, '_> {
             self.current_is_newline = true;
         }
         HeaderName {
-            name:              written.name,
-            is_system_header:  false,
-            source_vectors:    token.source_vectors,
+            name: written.name,
+            is_system_header: false,
+            source_vectors,
             missing_delimiter: unclosed_at
                 .map(|position| ('"', context.create_source_vectors(position, file, 0))),
-            invalid:           written.invalid.map(|(sequence, start, length)| {
+            invalid: written.invalid.map(|(sequence, start, length)| {
                 (sequence, context.create_source_vectors(start, file, length))
             }),
-            backslash:         written
+            backslash: written
                 .backslash
                 .map(|(start, length)| context.create_source_vectors(start, file, length)),
-            extra_tokens:      None,
+            extra_tokens,
         }
     }
 
