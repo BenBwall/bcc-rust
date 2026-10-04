@@ -458,6 +458,16 @@ impl Preprocessor {
             (written.name, written.invalid, unclosed_at)
         };
         let length = closing.map_or(end, |index| index + 1) - anchor.index;
+        // Lexing a terminal `>` may already have read the supplied final
+        // newline while looking for `>=` or `>>`. Do not ask phase 4 for
+        // another token: that would pop this file and read its parent.
+        if closing.is_some_and(|index| {
+            context
+                .source_text(physical)
+                .is_some_and(|source| index + 1 == source.len())
+        }) {
+            self.current_is_newline = true;
+        }
         HeaderName {
             name,
             is_system_header: true,

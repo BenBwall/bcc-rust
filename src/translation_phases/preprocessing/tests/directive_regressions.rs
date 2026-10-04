@@ -73,6 +73,23 @@ fn directive_tokens_at_path(source: &str, path: &Path) -> (Vec<Token>, Context) 
     (tokens, context)
 }
 
+fn directive_tokens_with_system_directory(
+    source: &str,
+    path: &Path,
+    system_directory: &Path,
+) -> (Vec<Token>, Context) {
+    let mut context = Context::new();
+    let mut preprocessor = Preprocessor::new(
+        &mut context,
+        path.to_path_buf().into_boxed_path(),
+        source.to_owned().into(),
+        SharedVec::default(),
+        SharedVec::from(vec![system_directory.to_path_buf()]),
+    );
+    let tokens = preprocessor.preprocess_all(&mut context).collect();
+    (tokens, context)
+}
+
 fn directive_tokens(source: &str) -> (Vec<Token>, Context) {
     let mut context = Context::new();
     let mut preprocessor = Preprocessor::new(
@@ -468,4 +485,57 @@ fn unfinished_include_does_not_consume_the_following_line() {
             .iter()
             .any(|error| error.to_string().contains("extra tokens"))
     );
+}
+
+#[test]
+fn terminal_angle_include_stays_in_its_source_file() {
+    let headers = TemporaryHeaders::new();
+    headers.write("a.h", "from_header\n");
+    for (nested, found) in [(false, true), (false, false), (true, true), (true, false)] {
+        let name = if found { "a.h" } else { "missing.h" };
+        let terminal = format!("#include <{name}>");
+        let source = if nested {
+            headers.write("middle.h", &terminal);
+            "#include \"middle.h\"\nparent_after\n".to_owned()
+        } else {
+            terminal
+        };
+        let (tokens, mut context) =
+            directive_tokens_with_system_directory(&source, &headers.0.join("main.c"), &headers.0);
+        let names: Vec<_> = tokens
+            .iter()
+            .map(|token| context.string_cache.at(token.contents))
+            .collect();
+        let expected = match (nested, found) {
+            | (false, true) => vec!["from_header"],
+            | (false, false) => vec![],
+            | (true, true) => vec!["from_header", "parent_after"],
+            | (true, false) => vec!["parent_after"],
+        };
+        assert_eq!(names, expected, "nested={nested}, found={found}");
+        let errors = context.take_pending_errors();
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.to_string().contains("no newline at end of file"))
+                .count(),
+            1,
+            "nested={nested}, found={found}: {errors:#?}"
+        );
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.to_string().contains("cannot find header"))
+                .count(),
+            usize::from(!found),
+            "nested={nested}, found={found}: {errors:#?}"
+        );
+        assert!(
+            errors.iter().all(|error| {
+                !error.to_string().contains("unexpected end of file")
+                    && !error.to_string().contains("extra tokens")
+            }),
+            "nested={nested}, found={found}: {errors:#?}"
+        );
+    }
 }
