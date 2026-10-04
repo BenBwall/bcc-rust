@@ -67,8 +67,8 @@ use crate::{
         HashMap,
         HashSet,
         bump::{
-            ArenaVec,
             Bump,
+            RegionVec,
         },
         string_cache::StringCacheId,
     },
@@ -298,24 +298,24 @@ impl Preprocessor {
     /// Runs translation phases 4 through 6 without the parser's resource
     /// budget, for direct preprocessing tests.
     #[cfg(test)]
-    pub(crate) fn preprocess_all<'tok>(
+    pub(crate) fn preprocess_all(
         &mut self,
         context: &mut Context<'_>,
-        tok: &'tok Bump,
-    ) -> ArenaVec<'tok, Token> {
+        tok: &Bump,
+    ) -> RegionVec<Token> {
         self.preprocess_into_arena(context, usize::MAX, tok).0
     }
 
     /// Collects the phase-6 output in the token arena before parsing starts.
     /// Diagnostics stay pending in `context`; retained provenance survives
     /// compaction of preprocessor working storage between tokens.
-    pub(crate) fn preprocess_into_arena<'tok>(
+    pub(crate) fn preprocess_into_arena(
         &mut self,
         context: &mut Context<'_>,
         source_segment_limit: usize,
-        tok: &'tok Bump,
-    ) -> (ArenaVec<'tok, Token>, Option<Token>) {
-        let mut tokens = ArenaVec::new_in(tok);
+        _tok: &Bump,
+    ) -> (RegionVec<Token>, Option<Token>) {
+        let mut tokens = RegionVec::new_in(Bump::new());
         let limit_token = self.collect_with_limit(context, source_segment_limit, |token| {
             tokens.push(token);
         });

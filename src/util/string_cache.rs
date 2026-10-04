@@ -17,15 +17,14 @@ use hashbrown::{
 use rustc_hash::FxBuildHasher;
 
 use super::bump::{
-    ArenaString,
-    ArenaVec,
     Bump,
+    RegionVec,
 };
 
 pub(crate) struct StringCache<'tu> {
     arena: &'tu Bump,
-    ends:  ArenaVec<'tu, u32>,
-    data:  ArenaString<'tu>,
+    ends:  RegionVec<u32>,
+    data:  RegionVec<u8>,
     dedup: HashTable<StringCacheId, &'tu Bump>,
 }
 
@@ -33,7 +32,7 @@ impl fmt::Debug for StringCache<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("StringCache")
             .field("ends", &self.ends)
-            .field("data", &self.data)
+            .field("data", &self.data_str())
             .field("dedup", &self.dedup)
             .finish()
     }
@@ -41,7 +40,7 @@ impl fmt::Debug for StringCache<'_> {
 
 impl PartialEq<StringCache<'_>> for StringCache<'_> {
     fn eq(&self, other: &StringCache<'_>) -> bool {
-        self.ends == other.ends && self.data.as_str() == other.data.as_str()
+        self.ends == other.ends && self.data_str() == other.data_str()
     }
 }
 
@@ -114,14 +113,24 @@ impl StringCacheId {
 }
 
 impl<'tu> StringCache<'tu> {
+    fn data_str(&self) -> &str {
+        Self::bytes_str(&self.data)
+    }
+
+    fn bytes_str(data: &[u8]) -> &str {
+        // SAFETY: `data` is private and only `intern_impl` appends complete
+        // UTF-8 strings, so its bytes are valid UTF-8 at every call site.
+        unsafe { std::str::from_utf8_unchecked(data) }
+    }
+
     /// Creates a new empty `StringCache`.
     pub(crate) fn new(arena: &'tu Bump) -> Self {
-        let mut ends = ArenaVec::new_in(arena);
+        let mut ends = RegionVec::new_in(Bump::new());
         ends.push(0);
         Self {
             arena,
             ends,
-            data: ArenaString::new_in(arena),
+            data: RegionVec::new_in(Bump::new()),
             dedup: HashTable::new_in(arena),
         }
     }
@@ -130,14 +139,10 @@ impl<'tu> StringCache<'tu> {
         clippy::cast_possible_truncation,
         reason = "We're checking that we're inbounds before casting."
     )]
-    fn intern_impl(
-        data: &mut ArenaString<'tu>,
-        ends: &mut ArenaVec<'tu, u32>,
-        s: &str,
-    ) -> StringCacheId {
+    fn intern_impl(data: &mut RegionVec<u8>, ends: &mut RegionVec<u32>, s: &str) -> StringCacheId {
         let len = s.len();
         let start = data.len();
-        data.push_str(s);
+        data.extend_from_slice(s.as_bytes());
         let end = start + len;
         assert!(
             end < u32::MAX as usize,
@@ -154,10 +159,16 @@ impl<'tu> StringCache<'tu> {
             let hash = FxBuildHasher.hash_one(s);
             match interner.dedup.entry(
                 hash,
-                |id| s == StringCache::at_impl(&interner.data, &interner.ends, *id),
+                |id| {
+                    s == StringCache::at_impl(
+                        StringCache::bytes_str(&interner.data),
+                        &interner.ends,
+                        *id,
+                    )
+                },
                 |id| {
                     FxBuildHasher.hash_one(StringCache::at_impl(
-                        &interner.data,
+                        StringCache::bytes_str(&interner.data),
                         &interner.ends,
                         *id,
                     ))
@@ -188,7 +199,11 @@ impl<'tu> StringCache<'tu> {
             interner
                 .dedup
                 .find(hash, |symbol| {
-                    s == StringCache::at_impl(&interner.data, &interner.ends, *symbol)
+                    s == StringCache::at_impl(
+                        StringCache::bytes_str(&interner.data),
+                        &interner.ends,
+                        *symbol,
+                    )
                 })
                 .copied()
         }
@@ -197,7 +212,7 @@ impl<'tu> StringCache<'tu> {
 
     /// Returns the bytes for the given ID if it exists in the cache.
     pub(crate) fn get(&self, id: impl Into<StringCacheId>) -> Option<&str> {
-        Self::get_impl(&self.data, &self.ends, id.into())
+        Self::get_impl(self.data_str(), &self.ends, id.into())
     }
 
     fn get_impl<'a>(data: &'a str, ends: &[u32], id: StringCacheId) -> Option<&'a str> {
@@ -213,7 +228,7 @@ impl<'tu> StringCache<'tu> {
     }
 
     pub(crate) fn at(&self, id: impl Into<StringCacheId>) -> &str {
-        Self::at_impl(&self.data, &self.ends, id.into())
+        Self::at_impl(self.data_str(), &self.ends, id.into())
     }
 
     #[cfg_attr(

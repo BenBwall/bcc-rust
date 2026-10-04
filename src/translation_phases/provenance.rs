@@ -16,7 +16,10 @@ use super::{
     GetSourceVectors,
     context::Context,
 };
-use crate::util::vector_slice::VectorSlice;
+use crate::util::{
+    bump::RegionVec,
+    vector_slice::VectorSlice,
+};
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SourcePosition {
@@ -132,8 +135,8 @@ impl GetPosition for SourcePosition {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct SourceVectorStack(pub(crate) Vec<SourceVector>);
+#[derive(Debug)]
+pub(crate) struct SourceVectorStack(pub(crate) RegionVec<SourceVector>);
 
 impl Display for SourceVectorStack {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {

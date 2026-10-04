@@ -223,9 +223,9 @@ impl Inner {
     }
 }
 
-// SAFETY: each returned block belongs to a stable reservation, and exclusive
-// reset/drop cannot occur while an allocation borrowed from `&Bump` is in use.
-unsafe impl Allocator for &Bump {
+// SAFETY: each returned block belongs to a stable reservation. Moving Bump
+// does not move that reservation; reset/drop require exclusive access.
+unsafe impl Allocator for Bump {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.inner.borrow_mut().allocate(layout)
     }
@@ -312,6 +312,8 @@ unsafe impl Allocator for &Bump {
 }
 
 pub(crate) type ArenaVec<'a, T> = AllocVec<T, &'a Bump>;
+/// A growable vector that owns its own fixed-address virtual-memory region.
+pub(crate) type RegionVec<T> = AllocVec<T, Bump>;
 pub(crate) type ArenaMap<'a, K, V> = hashbrown::HashMap<K, V, FxBuildHasher, &'a Bump>;
 #[cfg_attr(
     not(test),
@@ -350,10 +352,6 @@ impl<'a> ArenaString<'a> {
     pub(crate) fn as_str(&self) -> &str {
         // SAFETY: construction and mutation only append valid UTF-8 sequences.
         unsafe { std::str::from_utf8_unchecked(&self.bytes) }
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.bytes.clear();
     }
 }
 
@@ -456,6 +454,7 @@ mod tests {
         ArenaString,
         ArenaVec,
         Bump,
+        RegionVec,
     };
 
     #[test]
@@ -463,14 +462,14 @@ mod tests {
         let arena = Bump::new();
         for align in [1, 2, 4, 8, 16, 32, 64, 128, 4096] {
             let layout = Layout::from_size_align(7, align).unwrap();
-            let allocation = (&arena).allocate(layout).unwrap();
+            let allocation = arena.allocate(layout).unwrap();
             assert_eq!((allocation.as_ptr().cast::<u8>() as usize) % align, 0);
         }
         let unit = arena.alloc(());
         assert_eq!(*unit, ());
         let empty = arena.alloc_slice_copy::<u32>(&[]);
         assert_eq!(empty.len(), 0);
-        let zero = (&arena)
+        let zero = arena
             .allocate(Layout::from_size_align(0, 1024).unwrap())
             .unwrap();
         assert_eq!((zero.as_ptr().cast::<u8>() as usize) % 1024, 0);
@@ -528,21 +527,19 @@ mod tests {
         let arena = Bump::new();
         let old = Layout::from_size_align(8, 8).unwrap();
         let new = Layout::from_size_align(32, 8).unwrap();
-        let first = (&arena).allocate(old).unwrap().cast::<u8>();
+        let first = arena.allocate(old).unwrap().cast::<u8>();
         // SAFETY: the allocation has at least eight writable bytes.
         unsafe {
             first.as_ptr().write_bytes(0x5A, 8);
         }
         // SAFETY: `first` is live and `new` is larger.
-        let grown = unsafe { (&arena).grow(first, old, new) }
-            .unwrap()
-            .cast::<u8>();
+        let grown = unsafe { arena.grow(first, old, new) }.unwrap().cast::<u8>();
         assert_eq!(first, grown);
         // SAFETY: `grown` is live and has 32 initialized bytes at its start.
         assert_eq!(unsafe { *grown.as_ptr() }, 0x5A);
-        _ = (&arena).allocate(old).unwrap();
+        _ = arena.allocate(old).unwrap();
         // SAFETY: `grown` is still live and `new` is larger than `old`.
-        let copied = unsafe { (&arena).grow(grown, new, Layout::from_size_align(64, 8).unwrap()) }
+        let copied = unsafe { arena.grow(grown, new, Layout::from_size_align(64, 8).unwrap()) }
             .unwrap()
             .cast::<u8>();
         assert_ne!(grown, copied);
@@ -555,13 +552,13 @@ mod tests {
         let arena = Bump::new();
         let old = Layout::from_size_align(3 * 1024 * 1024, 64).unwrap();
         let new = Layout::from_size_align(5 * 1024 * 1024, 64).unwrap();
-        let first = (&arena).allocate(old).unwrap().cast::<u8>();
+        let first = arena.allocate(old).unwrap().cast::<u8>();
         // SAFETY: the first byte lies in the committed old allocation.
         unsafe {
             first.as_ptr().write(0xA5);
         }
         // SAFETY: `first` is live and `new` is larger and at least as aligned.
-        let grown = unsafe { (&arena).grow_zeroed(first, old, new) }
+        let grown = unsafe { arena.grow_zeroed(first, old, new) }
             .unwrap()
             .cast::<u8>();
         assert_eq!(grown, first);
@@ -581,16 +578,16 @@ mod tests {
         let arena = Bump::new();
         let large = Layout::from_size_align(64, 8).unwrap();
         let small = Layout::from_size_align(16, 8).unwrap();
-        let ptr = (&arena).allocate(large).unwrap().cast::<u8>();
+        let ptr = arena.allocate(large).unwrap().cast::<u8>();
         // SAFETY: `ptr` is live and the new layout is smaller.
-        let shrunk = unsafe { (&arena).shrink(ptr, large, small) }.unwrap();
+        let shrunk = unsafe { arena.shrink(ptr, large, small) }.unwrap();
         assert_eq!(shrunk.cast::<u8>(), ptr);
         // SAFETY: the returned block fits `small`, and `large` is larger.
-        let regrown = unsafe { (&arena).grow(ptr, small, large) }.unwrap();
+        let regrown = unsafe { arena.grow(ptr, small, large) }.unwrap();
         assert_eq!(regrown.cast::<u8>(), ptr);
         // SAFETY: the latest block is live and fits `small`.
         unsafe {
-            (&arena).deallocate(ptr, small);
+            arena.deallocate(ptr, small);
         }
         assert_eq!(arena.inner.borrow().used, 0);
     }
@@ -599,22 +596,22 @@ mod tests {
     fn deallocate_rolls_back_only_latest_and_reset_reuses_region() {
         let mut arena = Bump::new();
         let layout = Layout::new::<u64>();
-        let first = (&arena).allocate(layout).unwrap().cast::<u8>();
-        let second = (&arena).allocate(layout).unwrap().cast::<u8>();
+        let first = arena.allocate(layout).unwrap().cast::<u8>();
+        let second = arena.allocate(layout).unwrap().cast::<u8>();
         // SAFETY: both pointers came from this allocator with this layout.
         unsafe {
-            (&arena).deallocate(first, layout);
+            arena.deallocate(first, layout);
         }
         let used = arena.inner.borrow().used;
         assert_eq!(used, 16);
         // SAFETY: second is the most recent live allocation.
         unsafe {
-            (&arena).deallocate(second, layout);
+            arena.deallocate(second, layout);
         }
         assert_eq!(arena.inner.borrow().used, 8);
-        let reused = (&arena).allocate(layout).unwrap().cast::<u8>();
+        let reused = arena.allocate(layout).unwrap().cast::<u8>();
         assert_eq!(reused, second);
-        _ = (&arena)
+        _ = arena
             .allocate(Layout::from_size_align(8 * 1024 * 1024, 8).unwrap())
             .unwrap();
         let base = arena.inner.borrow().region.as_ptr();
@@ -622,7 +619,7 @@ mod tests {
         arena.reset();
         assert_eq!(arena.inner.borrow().used, 0);
         assert_eq!(arena.inner.borrow().region.committed(), committed);
-        let after = (&arena).allocate(layout).unwrap().cast::<u8>();
+        let after = arena.allocate(layout).unwrap().cast::<u8>();
         assert_eq!(after, base);
     }
 
@@ -659,5 +656,18 @@ mod tests {
         );
         assert_eq!(queue.pop_front().as_deref(), Some("two"));
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn owning_vector_grows_without_moving_its_elements() {
+        let mut values = RegionVec::new_in(Bump::new());
+        values.push(42_u64);
+        let first = values.as_ptr();
+        for value in 0..100_000 {
+            values.push(value);
+        }
+        assert_eq!(values.as_ptr(), first);
+        assert_eq!(values[0], 42);
+        assert_eq!(values[100_000], 99_999);
     }
 }

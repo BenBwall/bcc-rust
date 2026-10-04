@@ -40,6 +40,7 @@ use crate::{
             ArenaMap,
             ArenaVec,
             Bump,
+            RegionVec,
         },
         dedup_arena::DedupArena,
         string_cache::{
@@ -125,8 +126,8 @@ pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
     pub(crate) source_vectors: SourceVectorStack,
-    parser_token_vectors: ArenaVec<'tu, SourceVector>,
-    retained_vectors: ArenaVec<'tu, SourceVector>,
+    parser_token_vectors: RegionVec<SourceVector>,
+    retained_vectors: RegionVec<SourceVector>,
     pub(crate) string_cache: StringCache<'tu>,
     pub(crate) canonical_identifiers: ArenaMap<'tu, StringCacheId, StringCacheId>,
     literal_values: DedupArena<'tu, &'tu [LiteralUnit], FxBuildHasher>,
@@ -163,9 +164,9 @@ impl<'tu> Context<'tu> {
         Self {
             tu,
             configuration,
-            source_vectors: SourceVectorStack(Vec::new()),
-            parser_token_vectors: ArenaVec::new_in(tu),
-            retained_vectors: ArenaVec::new_in(tu),
+            source_vectors: SourceVectorStack(RegionVec::new_in(Bump::new())),
+            parser_token_vectors: RegionVec::new_in(Bump::new()),
+            retained_vectors: RegionVec::new_in(Bump::new()),
             string_cache,
             canonical_identifiers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             literal_values: DedupArena::new(tu),
@@ -320,7 +321,7 @@ impl<'tu> Context<'tu> {
         reason = "We already checked that it is in range before casting"
     )]
     pub(crate) fn duplicate_source_vectors(
-        self_source_vectors: &mut Vec<SourceVector>,
+        self_source_vectors: &mut RegionVec<SourceVector>,
         source_vectors: SourceVectors,
     ) -> u32 {
         let end = u32::try_from(source_vectors.length as usize + self_source_vectors.len())

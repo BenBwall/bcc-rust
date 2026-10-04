@@ -33,6 +33,10 @@ use crate::{
         provenance::source_offset,
     },
     util::{
+        bump::{
+            Bump,
+            RegionVec,
+        },
         byte_scan,
         string_cache::StringCacheId,
     },
@@ -352,11 +356,11 @@ enum LexDiagnostic {
 /// can exclude deleted splices without changing these shared boundaries.
 pub(super) struct LexedFile {
     pub(super) source_file_index: u32,
-    kinds: Vec<Option<PreprocessorTokenType>>,
-    contents: Vec<StringCacheId>,
-    indices: Vec<u32>,
-    lines: Vec<u32>,
-    columns: Vec<u32>,
+    kinds: RegionVec<Option<PreprocessorTokenType>>,
+    contents: RegionVec<StringCacheId>,
+    indices: RegionVec<u32>,
+    lines: RegionVec<u32>,
+    columns: RegionVec<u32>,
     /// Where the last entry ends.
     end_of_tokens: SourcePosition,
     /// Where reading past the last entry stands: past any trailing splices.
@@ -666,11 +670,11 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
             scratch: String::new(),
             file: LexedFile {
                 source_file_index: 0,
-                kinds: Vec::with_capacity(capacity),
-                contents: Vec::with_capacity(capacity),
-                indices: Vec::with_capacity(capacity),
-                lines: Vec::with_capacity(capacity),
-                columns: Vec::with_capacity(capacity),
+                kinds: RegionVec::with_capacity_in(capacity, Bump::new()),
+                contents: RegionVec::with_capacity_in(capacity, Bump::new()),
+                indices: RegionVec::with_capacity_in(capacity, Bump::new()),
+                lines: RegionVec::with_capacity_in(capacity, Bump::new()),
+                columns: RegionVec::with_capacity_in(capacity, Bump::new()),
                 end_of_tokens: SourcePosition::default(),
                 eof: SourcePosition::default(),
                 diagnostics: Vec::new(),

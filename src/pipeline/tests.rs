@@ -40,8 +40,8 @@ use crate::{
 fn with_preprocessed_with<R>(
     source: &str,
     configuration: CompilerConfiguration,
-    inspect: impl for<'tok> FnOnce(
-        allocator_api2::vec::IntoIter<Result<Token, TranslationError>, &'tok Bump>,
+    inspect: impl FnOnce(
+        allocator_api2::vec::IntoIter<Result<Token, TranslationError>, Bump>,
         &mut Context<'_>,
     ) -> R,
 ) -> R {
@@ -61,8 +61,8 @@ fn with_preprocessed_with<R>(
 
 fn with_preprocessed<R>(
     source: &str,
-    inspect: impl for<'tok> FnOnce(
-        allocator_api2::vec::IntoIter<Result<Token, TranslationError>, &'tok Bump>,
+    inspect: impl FnOnce(
+        allocator_api2::vec::IntoIter<Result<Token, TranslationError>, Bump>,
         &mut Context<'_>,
     ) -> R,
 ) -> R {

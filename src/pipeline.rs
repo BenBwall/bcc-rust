@@ -24,8 +24,8 @@ use crate::{
         },
     },
     util::bump::{
-        ArenaVec,
         Bump,
+        RegionVec,
     },
 };
 
@@ -92,17 +92,17 @@ pub(crate) fn parse_with_arena(
 /// Token provenance is copied to the token arena as each token is produced,
 /// and pending diagnostics keep theirs across preprocessor-arena compaction,
 /// so every item stays renderable afterwards.
-pub(crate) fn preprocess_with_diagnostics<'tok>(
+pub(crate) fn preprocess_with_diagnostics(
     mut preprocessor: Preprocessor,
     context: &mut Context<'_>,
-    tok: &'tok Bump,
-) -> ArenaVec<'tok, Result<Token, TranslationError>> {
-    let mut tokens = ArenaVec::new_in(tok);
+    _tok: &Bump,
+) -> RegionVec<Result<Token, TranslationError>> {
+    let mut tokens = RegionVec::new_in(Bump::new());
     while let Some(mut token) = preprocessor.next_iterator_item(context) {
         token.source_vectors = context.retain_token_source(token.source_vectors);
         tokens.push((token, context.pending_error_count()));
     }
-    let mut items = ArenaVec::new_in(tok);
+    let mut items = RegionVec::new_in(Bump::new());
     let mut reported = 0;
     for (token, errors_before) in tokens {
         while reported < errors_before {

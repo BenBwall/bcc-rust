@@ -16,15 +16,16 @@ use crate::{
         },
     },
     util::bump::{
-        ArenaVec,
         Bump,
+        RegionVec,
     },
 };
 
 /// The preprocessed translation unit that the parser reads.
 pub(super) struct Upstream<'tok> {
     /// Phase-6 output remains available until parsing ends.
-    tokens: ArenaVec<'tok, Token>,
+    tokens: RegionVec<Token>,
+    _token_arena: std::marker::PhantomData<&'tok Bump>,
     next_token: usize,
     /// Where the preprocessor stopped, used to locate end-of-input
     /// diagnostics.
@@ -47,6 +48,7 @@ impl<'tok> Upstream<'tok> {
             preprocessor.preprocess_into_arena(context, source_segment_limit, tok);
         Self {
             tokens,
+            _token_arena: std::marker::PhantomData,
             next_token: 0,
             end: preprocessor.position(context),
             source_file_index: preprocessor.source_file_index(),
