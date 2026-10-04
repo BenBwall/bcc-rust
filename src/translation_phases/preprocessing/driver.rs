@@ -1,7 +1,10 @@
 //! Tokenizer frame stack and the main preprocessing-token loop.
 
 use std::{
-    fmt::Debug,
+    fmt::{
+        Debug,
+        Write,
+    },
     mem::take,
     ops::ControlFlow,
     path::Path,
@@ -44,6 +47,10 @@ use crate::{
     },
     util::{
         HashMap,
+        bump::{
+            ArenaString,
+            Bump,
+        },
         string_cache::StringCacheId,
     },
 };
@@ -87,25 +94,26 @@ pub(crate) struct TokenizerFrame {
 
 /// The date and time of translation, spelled as C99 §6.10.8p1 requires.
 #[derive(Debug)]
-pub(super) struct TranslationTimestamp {
-    date: String,
-    time: String,
+pub(super) struct TranslationTimestamp<'pp> {
+    date: ArenaString<'pp>,
+    time: ArenaString<'pp>,
 }
 
-impl TranslationTimestamp {
+impl<'pp> TranslationTimestamp<'pp> {
     /// Honors `SOURCE_DATE_EPOCH` (reproducible-builds.org, also used by GCC
     /// and Clang) so builds can pin the expansion; otherwise uses local time.
-    fn now() -> Self {
+    fn now(pp: &'pp Bump) -> Self {
         let pinned = std::env::var("SOURCE_DATE_EPOCH")
             .ok()
             .and_then(|seconds| seconds.trim().parse::<i64>().ok())
             .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
             .map(|time| time.naive_utc());
         let time = pinned.unwrap_or_else(|| Local::now().naive_local());
-        Self {
-            date: time.format("%b %e %Y").to_string(),
-            time: time.format("%H:%M:%S").to_string(),
-        }
+        let mut date = ArenaString::new_in(pp);
+        let mut clock = ArenaString::new_in(pp);
+        write!(date, "{}", time.format("%b %e %Y")).expect("arena formatting cannot fail");
+        write!(clock, "{}", time.format("%H:%M:%S")).expect("arena formatting cannot fail");
+        Self { date, time: clock }
     }
 }
 
@@ -860,7 +868,7 @@ impl Preprocessor<'_, '_> {
                             let timestamp = self
                                 .state
                                 .translation_timestamp
-                                .get_or_insert_with(TranslationTimestamp::now);
+                                .get_or_insert_with(|| TranslationTimestamp::now(self.state.arena));
                             let spelling = string_literal_spelling(if is_date {
                                 &timestamp.date
                             } else {

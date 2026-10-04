@@ -108,7 +108,7 @@ struct PreprocessorState<'pp> {
     /// compacts temporary preprocessor provenance while groups remain open.
     open_conditionals:     ArenaVec<'pp, ConditionalGroup<'pp>>,
     /// Fixed on first use so every `__DATE__` and `__TIME__` agrees.
-    translation_timestamp: Option<TranslationTimestamp>,
+    translation_timestamp: Option<TranslationTimestamp<'pp>>,
 }
 
 impl Debug for PreprocessorState<'_> {
