@@ -47,188 +47,193 @@ use crate::translation_phases::{
 
 #[test]
 fn pure_external_garbage_yields_an_error_node_and_continues() {
-    let parsed = parse("}\nint after;\n");
-
-    assert!(matches!(
-        parsed.items.first(),
-        Some(ExternalDeclaration::Error(_))
-    ));
-    assert!(matches!(
-        parsed.items.get(1),
-        Some(ExternalDeclaration::Declaration(_))
-    ));
-    assert!(
-        parser_errors(&parsed)
-            .any(|error| matches!(error, ParserErrorType::EmptyDeclarationSpecifiers(..)))
-    );
+    with_parse("}\nint after;\n", |parsed| {
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(matches!(
+            parsed.items.get(1),
+            Some(ExternalDeclaration::Declaration(_))
+        ));
+        assert!(
+            parser_errors(parsed)
+                .any(|error| matches!(error, ParserErrorType::EmptyDeclarationSpecifiers(..)))
+        );
+    });
 }
 
 #[test]
 fn missing_declarators_skip_post_declarator_diagnostics() {
     for source in ["int", "int + int after;\n"] {
-        let parsed = parse(source);
-
-        assert!(
-            parser_errors(&parsed)
-                .any(|error| matches!(error, ParserErrorType::ExpectedDeclaratorInDeclaration(_)))
-        );
-        assert!(!parser_errors(&parsed).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
-        )));
+        with_parse(source, |parsed| {
+            assert!(
+                parser_errors(parsed).any(|error| matches!(
+                    error,
+                    ParserErrorType::ExpectedDeclaratorInDeclaration(_)
+                ))
+            );
+            assert!(!parser_errors(parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
+            )));
+        });
     }
 
-    let parsed = parse("int + int after;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("int + int after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 }
 
 #[test]
 fn malformed_parameter_recovery_stops_at_comma_and_keeps_the_next_parameter() {
-    let parsed = parse("int f(int x +, char y);\nint after;\n");
-
-    assert!(matches!(
-        parsed.items.first(),
-        Some(ExternalDeclaration::RecoveredDeclaration(_))
-    ));
-    assert!(matches!(
-        parsed.items.get(1),
-        Some(ExternalDeclaration::Declaration(_))
-    ));
-    assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 2);
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<ParameterDeclaration>()
-            .map(|parameter| sourced_text(&parsed, parameter.source_vectors))
-            .collect::<Vec<_>>(),
-        ["intx", "chary"]
-    );
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .nth::<ParameterDeclaration>(1)
-            .declaration_specifiers
-            .type_specifiers,
-        TypeSpecifiers::Char
-    );
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .nth::<ParameterDeclaration>(1)
-            .declarator
-            .and_then(|declarator| identifier_name(&parsed, declarator))
-            .as_deref(),
-        Some("y")
-    );
+    with_parse("int f(int x +, char y);\nint after;\n", |parsed| {
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::RecoveredDeclaration(_))
+        ));
+        assert!(matches!(
+            parsed.items.get(1),
+            Some(ExternalDeclaration::Declaration(_))
+        ));
+        assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 2);
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<ParameterDeclaration>()
+                .map(|parameter| sourced_text(parsed, parameter.source_vectors))
+                .collect::<Vec<_>>(),
+            ["intx", "chary"]
+        );
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .nth::<ParameterDeclaration>(1)
+                .declaration_specifiers
+                .type_specifiers,
+            TypeSpecifiers::Char
+        );
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .nth::<ParameterDeclaration>(1)
+                .declarator
+                .and_then(|declarator| identifier_name(parsed, declarator))
+                .as_deref(),
+            Some("y")
+        );
+    });
 }
 
 #[test]
 fn omitted_parameter_comma_reprocesses_the_next_declaration_starter() {
-    let parsed = parse("int f(int a int b);\n");
-
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(Some(
-            TokenType::Keyword(KeywordTokenType::Int)
-        ))
-    )));
-    assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 2);
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<ParameterDeclaration>()
-            .filter_map(|parameter| parameter
-                .declarator
-                .and_then(|declarator| identifier_name(&parsed, declarator)))
-            .collect::<Vec<_>>(),
-        ["a", "b"]
-    );
+    with_parse("int f(int a int b);\n", |parsed| {
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
+                Some(TokenType::Keyword(KeywordTokenType::Int))
+            )
+        )));
+        assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 2);
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<ParameterDeclaration>()
+                .filter_map(|parameter| parameter
+                    .declarator
+                    .and_then(|declarator| identifier_name(parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+    });
 }
 
 #[test]
 fn omitted_struct_member_semicolon_reprocesses_the_next_declaration_starter() {
-    let parsed = parse("struct S { int first int second; };\n");
-
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(Some(TokenType::Keyword(
-            KeywordTokenType::Int
-        )))
-    )));
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<StructDeclarator>()
-            .filter_map(|declarator| declarator
-                .declarator
-                .and_then(|declarator| identifier_name(&parsed, declarator)))
-            .collect::<Vec<_>>(),
-        ["first", "second"]
-    );
+    with_parse("struct S { int first int second; };\n", |parsed| {
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(Some(
+                TokenType::Keyword(KeywordTokenType::Int)
+            ))
+        )));
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<StructDeclarator>()
+                .filter_map(|declarator| declarator
+                    .declarator
+                    .and_then(|declarator| identifier_name(parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+    });
 }
 
 #[test]
 fn omitted_enumerator_comma_reprocesses_the_next_identifier() {
-    let parsed = parse("enum E { A B, C };\n");
-
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(TokenType::Identifier))
-    )));
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<Enumerator>()
-            .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
-            .collect::<Vec<_>>(),
-        ["A", "B", "C"]
-    );
+    with_parse("enum E { A B, C };\n", |parsed| {
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(
+                TokenType::Identifier
+            ))
+        )));
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<Enumerator>()
+                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>(),
+            ["A", "B", "C"]
+        );
+    });
 }
 
 #[test]
 fn named_parameter_declarators_retain_nested_k_and_r_identifier_lists() {
-    let parsed = parse("int outer(int callback(arg));\n");
-
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
-    );
-    let callback = parsed
-        .parser
-        .syntax
-        .nth::<ParameterDeclaration>(0)
-        .declarator
-        .expect("named callback declarator");
-    let parameters = parsed.parser.syntax[callback.kind]
-        .iter()
-        .find_map(|direct| match direct {
-            | DirectDeclarator::KAndRStyleFunction { parameters } => Some(*parameters),
-            | _ => None,
-        })
-        .expect("callback retains a K&R identifier-list suffix");
-    assert_eq!(parameters.length, 1);
-    assert_eq!(
-        parsed
-            .context
-            .string_cache
-            .at(parsed.parser.syntax[parameters][0].name),
-        "arg"
-    );
+    with_parse("int outer(int callback(arg));\n", |parsed| {
+        assert!(
+            parser_errors(parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        let callback = parsed
+            .parser
+            .syntax
+            .nth::<ParameterDeclaration>(0)
+            .declarator
+            .expect("named callback declarator");
+        let parameters = parsed.parser.syntax[callback.kind]
+            .iter()
+            .find_map(|direct| match direct {
+                | DirectDeclarator::KAndRStyleFunction { parameters } => Some(*parameters),
+                | _ => None,
+            })
+            .expect("callback retains a K&R identifier-list suffix");
+        assert_eq!(parameters.length, 1);
+        assert_eq!(
+            parsed
+                .context
+                .string_cache
+                .at(parsed.parser.syntax[parameters][0].name),
+            "arg"
+        );
+    });
 }
 
 #[test]
