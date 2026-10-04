@@ -150,10 +150,7 @@ impl ParameterListFrame {
     /// `(size_t n, int m)`, a bounded scan of the rest of the list looks for
     /// declaration syntax; without it, `(a b, c)` stays an identifier list with
     /// an omitted comma.
-    fn unknown_type_name_starts_prototype(
-        parser: &mut Parser<'_>,
-        context: &mut Context<'_>,
-    ) -> bool {
+    fn unknown_type_name_starts_prototype(parser: &mut Parser, context: &mut Context<'_>) -> bool {
         /// Tokens examined after two adjacent identifiers before the list is
         /// assumed to be an identifier list.
         const SCAN_LIMIT: usize = 64;
@@ -195,7 +192,7 @@ impl ParameterListFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,

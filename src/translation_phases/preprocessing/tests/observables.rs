@@ -44,7 +44,6 @@ fn token_description(token: Token, context: &Context<'_>) -> String {
 fn observe(source: &str) -> Vec<String> {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let tok = crate::util::bump::Bump::new();
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -54,7 +53,7 @@ fn observe(source: &str) -> Vec<String> {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let tokens = preprocessor.preprocess_all(&mut context, &tok);
+    let tokens = preprocessor.preprocess_all(&mut context);
     let mut events = Vec::new();
     while let Some(error) = context.pop_pending_error() {
         let sources = error.source_vectors(&mut context);

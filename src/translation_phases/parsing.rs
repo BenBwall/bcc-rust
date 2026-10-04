@@ -101,9 +101,9 @@ use crate::{
 /// C99: translation units and external declarations are specified by §6.9,
 /// p. 140; PDF p. 152: a translation unit “consists of a sequence of external
 /// declarations.” The diagnostic obligation is §5.1.1.3, p. 11; PDF p. 23.
-pub(crate) struct Parser<'tok> {
+pub(crate) struct Parser {
     /// Buffered parser-facing token stream.
-    cursor: TokenCursor<'tok>,
+    cursor: TokenCursor,
     /// Heap-backed grammar control stack; the final element is active.
     frames: Vec<ParseFrame>,
     /// Spare vectors lent to pushed frames and reclaimed when they pop.
@@ -153,8 +153,8 @@ pub(crate) struct Parser<'tok> {
 
 /// Fully preprocessed parser input. The preprocessor can be dropped before
 /// parser working memory is created.
-pub(crate) struct PreprocessedTranslationUnit<'tok> {
-    upstream: token_cursor::Upstream<'tok>,
+pub(crate) struct PreprocessedTranslationUnit {
+    upstream: token_cursor::Upstream,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -197,25 +197,25 @@ impl ParsedTranslationUnit {
     }
 }
 
-impl GetPosition for Parser<'_> {
+impl GetPosition for Parser {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.cursor.upstream.position(context)
     }
 }
 
-impl SetPosition for Parser<'_> {
+impl SetPosition for Parser {
     fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
         self.cursor.upstream.set_position(context, position);
     }
 }
 
-impl GetSourceFileIndex for Parser<'_> {
+impl GetSourceFileIndex for Parser {
     fn source_file_index(&self) -> u32 {
         self.cursor.upstream.source_file_index()
     }
 }
 
-impl SetSourceFileIndex for Parser<'_> {
+impl SetSourceFileIndex for Parser {
     fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
         self.cursor
             .upstream
@@ -223,7 +223,7 @@ impl SetSourceFileIndex for Parser<'_> {
     }
 }
 
-impl TranslationPhase<'_> for Parser<'_> {
+impl TranslationPhase<'_> for Parser {
     type Item = ExternalDeclaration;
 
     fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item> {

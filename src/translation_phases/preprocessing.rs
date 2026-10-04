@@ -441,11 +441,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
     /// Runs translation phases 4 through 6 without the parser's resource
     /// budget, for direct preprocessing tests.
     #[cfg(test)]
-    pub(crate) fn preprocess_all(
-        &mut self,
-        context: &mut Context<'tu>,
-        _tok: &Bump,
-    ) -> RegionVec<Token> {
+    pub(crate) fn preprocess_all(&mut self, context: &mut Context<'tu>) -> RegionVec<Token> {
         let mut tokens = RegionVec::new_in(Bump::new());
         let _ = self.preprocess_into_arena(context, usize::MAX, &mut tokens);
         tokens

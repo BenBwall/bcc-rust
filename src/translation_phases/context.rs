@@ -488,9 +488,9 @@ impl<'tu> Context<'tu> {
         anchor.source_file_index == start.source_file_index && anchor.index == start.index
     }
 
-    /// Copies a phase-6 output token's provenance into the token arena once,
-    /// so provenance of consecutive tokens is adjacent and survives
-    /// [`Self::compact_preprocessor_vectors`].
+    /// Copies a phase-6 output token's provenance into the parser-token
+    /// provenance once, so provenance of consecutive tokens is adjacent and
+    /// survives [`Self::compact_preprocessor_vectors`].
     pub(crate) fn retain_token_source(&mut self, source_vectors: SourceVectors) -> SourceVectors {
         if source_vectors.length == 0
             || SourceArena::decode(source_vectors).0 != SourceArena::Preprocessor

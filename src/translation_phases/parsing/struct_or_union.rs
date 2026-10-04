@@ -147,7 +147,7 @@ impl StructOrUnionSpecifierFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
@@ -518,7 +518,7 @@ impl StructOrUnionSpecifierFrame {
     /// `int f(struct S { int x ) int after;`, the `)` closes that
     /// parenthesis and the body's `}` is missing. The scan is bounded so
     /// repeated errors stay linear.
-    fn member_list_continues(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
+    fn member_list_continues(parser: &mut Parser, context: &mut Context<'_>) -> bool {
         const SCAN_LIMIT: usize = 64;
         // Parentheses and brackets, which never contain `;`.
         let mut groups = 0_u32;
@@ -603,7 +603,7 @@ impl StructOrUnionSpecifierFrame {
         false
     }
 
-    fn finish_member(&mut self, parser: &mut Parser<'_>) {
+    fn finish_member(&mut self, parser: &mut Parser) {
         // Commit all declarators for this shared specifier-qualifier-list as a
         // single member declaration with one stable arena slice.
         let start = parser.append_syntax(&mut self.member_declarators);
@@ -621,7 +621,7 @@ impl StructOrUnionSpecifierFrame {
         self.source_vectors.push(source_vectors);
     }
 
-    fn finish(&mut self, parser: &mut Parser<'_>, context: &mut Context<'_>) -> ParseAction {
+    fn finish(&mut self, parser: &mut Parser, context: &mut Context<'_>) -> ParseAction {
         let declaration_list = self
             .body_started
             .then(|| parser.append_syntax(&mut self.declarations));

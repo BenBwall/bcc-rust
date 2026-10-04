@@ -94,7 +94,6 @@ fn drain_errors(context: &mut Context<'_>, observation: &mut Observation) {
 fn observe(source: &str, path: &Path) -> Observation {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let tok = crate::util::bump::Bump::new();
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -105,7 +104,7 @@ fn observe(source: &str, path: &Path) -> Observation {
         SharedVec::default(),
     );
     let mut observation = Observation::default();
-    for token in preprocessor.preprocess_all(&mut context, &tok) {
+    for token in preprocessor.preprocess_all(&mut context) {
         observation
             .spellings
             .push(context.string_cache.at(token.contents).to_owned());

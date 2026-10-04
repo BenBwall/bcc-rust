@@ -27,13 +27,13 @@ use crate::translation_phases::{
     },
 };
 
-fn errors<'tu>(parsed: &Parsed<'_, 'tu, '_>) -> Vec<ParserErrorType<'tu>> {
+fn errors<'tu>(parsed: &Parsed<'_, 'tu>) -> Vec<ParserErrorType<'tu>> {
     parser_errors(parsed).cloned().collect()
 }
 
 /// Number of elements in the brace initializer of the first declarator of
 /// external declaration `item`.
-fn initializer_element_count(parsed: &Parsed<'_, '_, '_>, item: usize) -> u32 {
+fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> u32 {
     let declaration = declaration(parsed, item);
     let [init_declarator, ..] = init_declarators(parsed, declaration) else {
         panic!("expected an initialized declarator")
@@ -47,7 +47,7 @@ fn initializer_element_count(parsed: &Parsed<'_, '_, '_>, item: usize) -> u32 {
     elements.length
 }
 
-fn designated_element_count(parsed: &Parsed<'_, '_, '_>, item: usize) -> usize {
+fn designated_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let declaration = declaration(parsed, item);
     let [init_declarator, ..] = init_declarators(parsed, declaration) else {
         panic!("expected an initialized declarator")
@@ -346,7 +346,7 @@ fn deeply_nested_function_declarators_track_whether_they_are_named() {
     });
 }
 
-fn enumerator_counts(parsed: &Parsed<'_, '_, '_>) -> Vec<u32> {
+fn enumerator_counts(parsed: &Parsed<'_, '_>) -> Vec<u32> {
     parsed
         .parser
         .syntax
@@ -356,7 +356,7 @@ fn enumerator_counts(parsed: &Parsed<'_, '_, '_>) -> Vec<u32> {
         .collect()
 }
 
-fn member_counts(parsed: &Parsed<'_, '_, '_>) -> Vec<u32> {
+fn member_counts(parsed: &Parsed<'_, '_>) -> Vec<u32> {
     parsed
         .parser
         .syntax

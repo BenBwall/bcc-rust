@@ -21,7 +21,6 @@ use crate::{
 fn located_tree(source: &str) -> String {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let tok = crate::util::bump::Bump::new();
     let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -31,7 +30,7 @@ fn located_tree(source: &str) -> String {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor, &mut context, &tok).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     unit.syntax().inspect(
         unit.external_declarations(),
         &context,
@@ -86,7 +85,6 @@ fn missing_and_error_nodes_are_located_at_the_offending_token() {
 fn source_segments_after_parsing(source: &str) -> usize {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let tok = crate::util::bump::Bump::new();
     let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -96,7 +94,7 @@ fn source_segments_after_parsing(source: &str) -> usize {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let _unit = Parser::new(preprocessor, &mut context, &tok).parse_translation_unit(&mut context);
+    let _unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     context.source_segment_count()
 }
 
@@ -192,7 +190,6 @@ fn missing_semicolon_help_uses_macro_invocations_after_full_batch_preprocessing(
         );
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
-        let tok = crate::util::bump::Bump::new();
         let preprocess_arena = crate::util::bump::Bump::new();
         let preprocessor = Preprocessor::new(
             &preprocess_arena,
@@ -202,8 +199,7 @@ fn missing_semicolon_help_uses_macro_invocations_after_full_batch_preprocessing(
             SharedVec::default(),
             SharedVec::default(),
         );
-        let _unit =
-            Parser::new(preprocessor, &mut context, &tok).parse_translation_unit(&mut context);
+        let _unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
         let insertions: Vec<_> = context
             .take_pending_errors()
             .into_iter()

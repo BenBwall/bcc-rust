@@ -25,7 +25,7 @@ use crate::translation_phases::{
 };
 
 /// Returns the byte offsets of every parser error, in report order.
-fn error_offsets(parsed: &Parsed<'_, '_, '_>) -> Vec<usize> {
+fn error_offsets(parsed: &Parsed<'_, '_>) -> Vec<usize> {
     parsed
         .errors
         .iter()
@@ -37,7 +37,7 @@ fn error_offsets(parsed: &Parsed<'_, '_, '_>) -> Vec<usize> {
 }
 
 /// Returns the block items of the first function definition's body.
-fn body_items<'a>(parsed: &'a Parsed<'_, '_, '_>) -> &'a [BlockItem] {
+fn body_items<'a>(parsed: &'a Parsed<'_, '_>) -> &'a [BlockItem] {
     block_items(parsed, function_definition(parsed, 0).body)
 }
 
@@ -48,7 +48,7 @@ fn statement_item(items: &[BlockItem], index: usize) -> StatementIndex {
     statement
 }
 
-fn expression_statement_text(parsed: &Parsed<'_, '_, '_>, statement: StatementIndex) -> String {
+fn expression_statement_text(parsed: &Parsed<'_, '_>, statement: StatementIndex) -> String {
     let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
         parsed.parser.syntax[statement].kind
     else {
@@ -60,7 +60,7 @@ fn expression_statement_text(parsed: &Parsed<'_, '_, '_>, statement: StatementIn
     expression_text(parsed, expression)
 }
 
-fn assert_errors_only_at(parsed: &Parsed<'_, '_, '_>, offset: usize) {
+fn assert_errors_only_at(parsed: &Parsed<'_, '_>, offset: usize) {
     let offsets = error_offsets(parsed);
     assert!(!offsets.is_empty(), "expected a diagnostic");
     assert!(

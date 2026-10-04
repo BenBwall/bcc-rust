@@ -121,7 +121,7 @@ impl EnumSpecifierFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
@@ -467,11 +467,7 @@ impl EnumSpecifierFrame {
     /// enumerator position: a non-identifier, non-delimiter token followed by
     /// `,`, `=`, or `}`. Anything else keeps the malformed-body recovery that
     /// stops before a following declaration.
-    fn misplaced_enumerator(
-        parser: &mut Parser<'_>,
-        context: &mut Context<'_>,
-        token: Token,
-    ) -> bool {
+    fn misplaced_enumerator(parser: &mut Parser, context: &mut Context<'_>, token: Token) -> bool {
         token.kind != TokenType::Identifier
             && !matches!(
                 token.kind,
@@ -508,7 +504,7 @@ impl EnumSpecifierFrame {
     /// `int f(enum E { A ) int after;`, the `)` closes that parenthesis and
     /// the body's `}` is missing. The scan is bounded so repeated errors stay
     /// linear.
-    fn enumerator_list_continues(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
+    fn enumerator_list_continues(parser: &mut Parser, context: &mut Context<'_>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {
@@ -551,7 +547,7 @@ impl EnumSpecifierFrame {
 
     fn finish_enumerator(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser,
         expression: Option<ConstantExpressionIndex>,
     ) {
         let source_vectors = self.current_enumerator_source.take().unwrap_or_default();
@@ -567,7 +563,7 @@ impl EnumSpecifierFrame {
         }
     }
 
-    fn finish(&mut self, parser: &mut Parser<'_>, context: &mut Context<'_>) -> ParseAction {
+    fn finish(&mut self, parser: &mut Parser, context: &mut Context<'_>) -> ParseAction {
         let enumeration_list = self
             .body_started
             .then(|| parser.append_syntax(&mut self.enumerators));

@@ -62,7 +62,6 @@ fn with_directive_tokens_at_path<R>(
 ) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let tok = crate::util::bump::Bump::new();
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -72,7 +71,7 @@ fn with_directive_tokens_at_path<R>(
         SharedVec::default(),
         SharedVec::default(),
     );
-    let tokens = preprocessor.preprocess_all(&mut context, &tok);
+    let tokens = preprocessor.preprocess_all(&mut context);
     inspect(&tokens, &mut context)
 }
 
@@ -84,7 +83,6 @@ fn with_directive_tokens_with_system_directory<R>(
 ) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let tok = crate::util::bump::Bump::new();
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -94,7 +92,7 @@ fn with_directive_tokens_with_system_directory<R>(
         SharedVec::default(),
         SharedVec::from(vec![system_directory.to_path_buf()]),
     );
-    let tokens = preprocessor.preprocess_all(&mut context, &tok);
+    let tokens = preprocessor.preprocess_all(&mut context);
     inspect(&tokens, &mut context)
 }
 

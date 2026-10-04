@@ -23,7 +23,6 @@ use crate::{
 fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError<'_>]) -> R) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let tok = crate::util::bump::Bump::new();
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -33,7 +32,7 @@ fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError
         SharedVec::default(),
         SharedVec::default(),
     );
-    let tokens = preprocessor.preprocess_all(&mut context, &tok);
+    let tokens = preprocessor.preprocess_all(&mut context);
     let spellings: Vec<_> = tokens
         .iter()
         .map(|token| match token.kind {

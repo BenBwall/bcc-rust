@@ -192,7 +192,6 @@ fn print_preprocessor_output<'tu>(
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
 ) {
-    let tok = crate::util::bump::Bump::new();
     let mut reporter = DiagnosticReporter::new();
     let items = with_preprocessor(
         context,
@@ -200,7 +199,7 @@ fn print_preprocessor_output<'tu>(
         input_string,
         quote_include,
         system_include,
-        |preprocessor, context, _pp| preprocess_with_diagnostics(preprocessor, context, &tok),
+        |preprocessor, context, _pp| preprocess_with_diagnostics(preprocessor, context),
     );
     for item in items {
         match item {

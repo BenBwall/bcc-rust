@@ -57,7 +57,6 @@ fn record_errors(context: &mut Context<'_>, observation: &mut Observation) {
 fn observe(source: &str) -> Observation {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let tok = crate::util::bump::Bump::new();
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -71,7 +70,7 @@ fn observe(source: &str) -> Observation {
         tokens: Vec::new(),
         errors: Vec::new(),
     };
-    let tokens = preprocessor.preprocess_all(&mut context, &tok);
+    let tokens = preprocessor.preprocess_all(&mut context);
     record_errors(&mut context, &mut observation);
     for token in tokens {
         record_token(token, &context, &mut observation);

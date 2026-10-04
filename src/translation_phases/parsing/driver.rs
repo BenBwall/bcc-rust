@@ -80,13 +80,10 @@ use crate::{
             TokenType,
         },
     },
-    util::{
-        bump::Bump,
-        string_cache::StringCacheId,
-    },
+    util::string_cache::StringCacheId,
 };
 
-impl<'tok> Parser<'tok> {
+impl Parser {
     /// Preprocesses the whole translation unit, then creates an idle parser
     /// over the result. Every preprocessing diagnostic is pending in
     /// `context` before any parser diagnostic.
@@ -97,21 +94,18 @@ impl<'tok> Parser<'tok> {
     pub(crate) fn new<'tu>(
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
-        tok: &'tok Bump,
     ) -> Self {
-        Self::new_with_config(preprocessor, context, ParserLimits::default(), tok)
+        Self::new_with_config(preprocessor, context, ParserLimits::default())
     }
 
     pub(crate) fn preprocess<'tu>(
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
-        tok: &'tok Bump,
-    ) -> PreprocessedTranslationUnit<'tok> {
+    ) -> PreprocessedTranslationUnit {
         Self::preprocess_with_limit(
             preprocessor,
             context,
             ParserLimits::default().source_segments,
-            tok,
         )
     }
 
@@ -119,15 +113,14 @@ impl<'tok> Parser<'tok> {
         mut preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         source_segment_limit: usize,
-        tok: &'tok Bump,
-    ) -> PreprocessedTranslationUnit<'tok> {
+    ) -> PreprocessedTranslationUnit {
         preprocessor.prepare_for_parsing();
         PreprocessedTranslationUnit {
-            upstream: Upstream::preprocess_all(preprocessor, context, source_segment_limit, tok),
+            upstream: Upstream::preprocess_all(preprocessor, context, source_segment_limit),
         }
     }
 
-    pub(crate) fn from_preprocessed(preprocessed: PreprocessedTranslationUnit<'tok>) -> Self {
+    pub(crate) fn from_preprocessed(preprocessed: PreprocessedTranslationUnit) -> Self {
         Self::with_upstream(preprocessed.upstream)
     }
 
@@ -136,16 +129,15 @@ impl<'tok> Parser<'tok> {
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         limits: ParserLimits,
-        tok: &'tok Bump,
     ) -> Self {
         let preprocessed =
-            Self::preprocess_with_limit(preprocessor, context, limits.source_segments, tok);
+            Self::preprocess_with_limit(preprocessor, context, limits.source_segments);
         let mut parser = Self::from_preprocessed(preprocessed);
         parser.limits = limits;
         parser
     }
 
-    fn with_upstream(upstream: Upstream<'tok>) -> Self {
+    fn with_upstream(upstream: Upstream) -> Self {
         Self {
             cursor: TokenCursor::new(upstream),
             frames: Vec::new(),
@@ -179,9 +171,8 @@ impl<'tok> Parser<'tok> {
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         limits: ParserLimits,
-        tok: &'tok Bump,
     ) -> Self {
-        Self::new_with_config(preprocessor, context, limits, tok)
+        Self::new_with_config(preprocessor, context, limits)
     }
 
     #[cfg(test)]

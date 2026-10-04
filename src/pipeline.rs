@@ -29,8 +29,8 @@ use crate::{
     },
 };
 
-/// Completes preprocessing before constructing the parser. The token arena
-/// outlives phase 7 and is released before the translation-unit context.
+/// Completes preprocessing before constructing the parser. The parser-facing
+/// token stream owns its region and lives until phase 7 ends.
 pub(crate) fn parse_translation_unit<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
@@ -38,20 +38,16 @@ pub(crate) fn parse_translation_unit<'tu>(
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
 ) -> ParsedTranslationUnit {
-    let tok = Bump::new();
     let preprocessed = with_preprocessor(
         context,
         source_filename,
         source,
         quote_include,
         system_include,
-        |preprocessor, context, _pp| Parser::preprocess(preprocessor, context, &tok),
+        |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
     );
     let parse = Bump::new();
-    let unit = parse_with_arena(Parser::from_preprocessed(preprocessed), context, &parse);
-    drop(parse);
-    drop(tok);
-    unit
+    parse_with_arena(Parser::from_preprocessed(preprocessed), context, &parse)
 }
 
 /// Keeps phase-4 working storage within preprocessing. The arena is passed to
@@ -77,9 +73,10 @@ pub(crate) fn with_preprocessor<'tu, R>(
 }
 
 /// Keeps phase-7 working storage scoped to parsing. Stage 7 will allocate the
-/// parser's frames and scopes from this arena.
+/// parser's frames and scopes from this arena; until then it stays empty,
+/// and an empty arena reserves no memory.
 pub(crate) fn parse_with_arena(
-    parser: Parser<'_>,
+    parser: Parser,
     context: &mut Context<'_>,
     _parse: &Bump,
 ) -> ParsedTranslationUnit {
@@ -90,13 +87,12 @@ pub(crate) fn parse_with_arena(
 /// returns its parser-facing tokens with their diagnostics, each diagnostic
 /// before the token whose production reported it.
 ///
-/// Token provenance is copied to the token arena as each token is produced,
-/// and pending diagnostics keep theirs across preprocessor-arena compaction,
-/// so every item stays renderable afterwards.
+/// Token provenance is retained in the translation-unit context as each
+/// token is produced, and pending diagnostics keep theirs across
+/// preprocessor-arena compaction, so every item stays renderable afterwards.
 pub(crate) fn preprocess_with_diagnostics<'tu>(
     mut preprocessor: Preprocessor<'tu, '_>,
     context: &mut Context<'tu>,
-    _tok: &Bump,
 ) -> RegionVec<Result<Token, TranslationError<'tu>>> {
     let mut tokens = RegionVec::new_in(Bump::new());
     preprocessor.for_each_iterator_item(context, |context, mut token| {
