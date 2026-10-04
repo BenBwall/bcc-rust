@@ -11,6 +11,7 @@ use super::{
     parser_errors,
     return_expression,
     sourced_text,
+    with_parse,
 };
 use crate::translation_phases::{
     parsing::{
@@ -54,144 +55,155 @@ use crate::translation_phases::{
 
 #[test]
 fn adjacent_strings_merge_across_macro_expansion_and_preserve_width() {
-    let parsed =
-        parse("#define PREFIX \"a\"\nchar *ordinary = PREFIX \"b\"; char *wide = \"x\" L\"y\";\n");
-
-    assert_eq!(parsed.items.len(), 2);
-    let literal = |item: usize| {
-        let initializer = init_declarators(&parsed, declaration(&parsed, item))[0]
-            .initializer
-            .expect("string initializer");
-        let InitializerType::AssignmentExpression(expression) =
-            parsed.parser.syntax[initializer].kind
-        else {
-            panic!("expected scalar string initializer")
-        };
-        let expression = &parsed.parser.syntax[expression];
-        let ExpressionType::StringLiteral(literal) = expression.kind else {
-            panic!("expected string literal expression")
-        };
-        (literal, expression.source_vectors)
-    };
-    let (StringTokenType::String(ordinary), ordinary_source_vectors) = literal(0) else {
-        panic!("ordinary concatenation must remain ordinary")
-    };
-    let (StringTokenType::WideString(wide), wide_source_vectors) = literal(1) else {
-        panic!("a mixed concatenation must become wide")
-    };
-    assert_eq!(parsed.context.literal_text(ordinary, false).unwrap(), "ab");
-    assert_eq!(parsed.context.literal_text(wide, true).unwrap(), "xy");
-    assert_eq!(sourced_text(&parsed, ordinary_source_vectors), "\"a\"\"b\"");
-    assert_eq!(sourced_text(&parsed, wide_source_vectors), "\"x\"L\"y\"");
-    assert!(parser_errors(&parsed).next().is_none());
+    with_parse(
+        "#define PREFIX \"a\"\nchar *ordinary = PREFIX \"b\"; char *wide = \"x\" L\"y\";\n",
+        |parsed| {
+            assert_eq!(parsed.items.len(), 2);
+            let literal = |item: usize| {
+                let initializer = init_declarators(parsed, declaration(parsed, item))[0]
+                    .initializer
+                    .expect("string initializer");
+                let InitializerType::AssignmentExpression(expression) =
+                    parsed.parser.syntax[initializer].kind
+                else {
+                    panic!("expected scalar string initializer")
+                };
+                let expression = &parsed.parser.syntax[expression];
+                let ExpressionType::StringLiteral(literal) = expression.kind else {
+                    panic!("expected string literal expression")
+                };
+                (literal, expression.source_vectors)
+            };
+            let (StringTokenType::String(ordinary), ordinary_source_vectors) = literal(0) else {
+                panic!("ordinary concatenation must remain ordinary")
+            };
+            let (StringTokenType::WideString(wide), wide_source_vectors) = literal(1) else {
+                panic!("a mixed concatenation must become wide")
+            };
+            assert_eq!(parsed.context.literal_text(ordinary, false).unwrap(), "ab");
+            assert_eq!(parsed.context.literal_text(wide, true).unwrap(), "xy");
+            assert_eq!(sourced_text(parsed, ordinary_source_vectors), "\"a\"\"b\"");
+            assert_eq!(sourced_text(parsed, wide_source_vectors), "\"x\"L\"y\"");
+            assert!(parser_errors(parsed).next().is_none());
+        },
+    );
 }
 
 #[test]
 fn prefix_increment_accepts_a_compound_literal_postfix_operand() {
-    let parsed = parse("typedef struct { int x; } T; int f(void) { ++(T){1}.x; return 0; }\n");
-    let items = block_items(&parsed, function_definition(&parsed, 1).body);
-    let BlockItem::Statement(statement) = items[0] else {
-        panic!("expected expression statement")
-    };
-    let StatementType::Expression(ExpressionSlot::Parsed(root)) =
-        parsed.parser.syntax[statement].kind
-    else {
-        panic!("expected parsed prefix expression")
-    };
-    let ExpressionType::Unary {
-        operator: UnaryOperator::PreIncrement,
-        operand_expression,
-    } = parsed.parser.syntax[root].kind
-    else {
-        panic!("expected prefix increment")
-    };
-    assert!(matches!(
-        parsed.parser.syntax[operand_expression].kind,
-        ExpressionType::DirectMember { base_expression, .. }
-            if matches!(
-                parsed.parser.syntax[base_expression].kind,
-                ExpressionType::CompoundLiteral { .. }
-            )
-    ));
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
+    with_parse(
+        "typedef struct { int x; } T; int f(void) { ++(T){1}.x; return 0; }\n",
+        |parsed| {
+            let items = block_items(parsed, function_definition(parsed, 1).body);
+            let BlockItem::Statement(statement) = items[0] else {
+                panic!("expected expression statement")
+            };
+            let StatementType::Expression(ExpressionSlot::Parsed(root)) =
+                parsed.parser.syntax[statement].kind
+            else {
+                panic!("expected parsed prefix expression")
+            };
+            let ExpressionType::Unary {
+                operator: UnaryOperator::PreIncrement,
+                operand_expression,
+            } = parsed.parser.syntax[root].kind
+            else {
+                panic!("expected prefix increment")
+            };
+            assert!(matches!(
+                parsed.parser.syntax[operand_expression].kind,
+                ExpressionType::DirectMember { base_expression, .. }
+                    if matches!(
+                        parsed.parser.syntax[base_expression].kind,
+                        ExpressionType::CompoundLiteral { .. }
+                    )
+            ));
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+        },
     );
 }
 
 #[test]
 fn sizeof_owns_the_complete_compound_literal_postfix_operand() {
-    let parsed = parse("typedef struct { int x; } T; int f(void) { return sizeof (T){1}.x; }\n");
-    let [BlockItem::Statement(statement)] =
-        block_items(&parsed, function_definition(&parsed, 1).body)
-    else {
-        panic!("expected one return statement")
-    };
-    let StatementType::Return(Some(ExpressionSlot::Parsed(root))) =
-        parsed.parser.syntax[statement].kind
-    else {
-        panic!("expected parsed return expression")
-    };
-    let ExpressionType::SizeofExpr(operand) = parsed.parser.syntax[root].kind else {
-        panic!("expected sizeof expression")
-    };
-    let ExpressionType::DirectMember {
-        base_expression, ..
-    } = parsed.parser.syntax[operand].kind
-    else {
-        panic!("sizeof must own the member suffix")
-    };
-    assert!(matches!(
-        parsed.parser.syntax[base_expression].kind,
-        ExpressionType::CompoundLiteral { .. }
-    ));
-    assert_eq!(expression_text(&parsed, base_expression), "(T){1}");
-    assert_eq!(expression_text(&parsed, root), "sizeof(T){1}.x");
-    assert!(parser_errors(&parsed).next().is_none());
+    with_parse(
+        "typedef struct { int x; } T; int f(void) { return sizeof (T){1}.x; }\n",
+        |parsed| {
+            let [BlockItem::Statement(statement)] =
+                block_items(parsed, function_definition(parsed, 1).body)
+            else {
+                panic!("expected one return statement")
+            };
+            let StatementType::Return(Some(ExpressionSlot::Parsed(root))) =
+                parsed.parser.syntax[statement].kind
+            else {
+                panic!("expected parsed return expression")
+            };
+            let ExpressionType::SizeofExpr(operand) = parsed.parser.syntax[root].kind else {
+                panic!("expected sizeof expression")
+            };
+            let ExpressionType::DirectMember {
+                base_expression, ..
+            } = parsed.parser.syntax[operand].kind
+            else {
+                panic!("sizeof must own the member suffix")
+            };
+            assert!(matches!(
+                parsed.parser.syntax[base_expression].kind,
+                ExpressionType::CompoundLiteral { .. }
+            ));
+            assert_eq!(expression_text(parsed, base_expression), "(T){1}");
+            assert_eq!(expression_text(parsed, root), "sizeof(T){1}.x");
+            assert!(parser_errors(parsed).next().is_none());
+        },
+    );
 
     // The invalid call suffix stays in the expression, marked recovered.
-    let invalid = parse("int f(void) { return sizeof(int)(); }\n");
-    assert_eq!(parser_errors(&invalid).count(), 1, "{:#?}", invalid.errors);
-    assert!(
-        invalid
-            .parser
-            .syntax
-            .iter::<Expression>()
-            .filter(|expression| matches!(expression.kind, ExpressionType::Call { .. }))
-            .all(|expression| expression.recovered)
-    );
+    with_parse("int f(void) { return sizeof(int)(); }\n", |invalid| {
+        assert_eq!(parser_errors(invalid).count(), 1, "{:#?}", invalid.errors);
+        assert!(
+            invalid
+                .parser
+                .syntax
+                .iter::<Expression>()
+                .filter(|expression| matches!(expression.kind, ExpressionType::Call { .. }))
+                .all(|expression| expression.recovered)
+        );
+    });
 }
 
 #[test]
 fn repaired_expressions_and_designations_retain_recovery_metadata() {
-    let parsed = parse("int x[] = { [(1] = 1, [2] 3 }; int after;\n");
-
-    assert_eq!(parsed.items.len(), 2);
-    assert!(
-        parsed
+    with_parse("int x[] = { [(1] = 1, [2] 3 }; int after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .iter::<Expression>()
+                .any(|expression| expression.recovered
+                    && matches!(expression.kind, ExpressionType::Parenthesized { .. }))
+        );
+        let designations = parsed
             .parser
             .syntax
-            .iter::<Expression>()
-            .any(|expression| expression.recovered
-                && matches!(expression.kind, ExpressionType::Parenthesized { .. }))
-    );
-    let designations = parsed
-        .parser
-        .syntax
-        .iter::<Designation>()
-        .collect::<Vec<_>>();
-    let [first, second] = designations[..] else {
-        panic!("expected two designations")
-    };
-    assert!(first.recovered);
-    assert!(second.recovered);
-    let first_designator = parsed.parser.syntax[first.designators][0];
-    assert!(first_designator.recovered);
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedEqualsAfterInitializerDesignation(_)
-    )));
+            .iter::<Designation>()
+            .collect::<Vec<_>>();
+        let [first, second] = designations[..] else {
+            panic!("expected two designations")
+        };
+        assert!(first.recovered);
+        assert!(second.recovered);
+        let first_designator = parsed.parser.syntax[first.designators][0];
+        assert!(first_designator.recovered);
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedEqualsAfterInitializerDesignation(_)
+        )));
+    });
 }
 
 #[test]
