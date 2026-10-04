@@ -30,6 +30,7 @@ use crate::{
     pipeline::{
         parse_translation_unit,
         preprocess_with_diagnostics,
+        with_preprocessor,
     },
     translation_phases::{
         Context,
@@ -41,7 +42,6 @@ use crate::{
         preprocessing::{
             CharacterTokenType,
             IntegerTokenType,
-            Preprocessor,
             StringTokenType,
             Token,
             TokenType,
@@ -191,16 +191,17 @@ fn print_preprocessor_output<'tu>(
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
 ) {
-    let preprocessor = Preprocessor::new_with_arena_source(
+    let tok = crate::util::bump::Bump::new();
+    let mut reporter = DiagnosticReporter::new();
+    let items = with_preprocessor(
         context,
         source_filename,
         input_string,
         quote_include,
         system_include,
+        |preprocessor, context, _pp| preprocess_with_diagnostics(preprocessor, context, &tok),
     );
-    let tok = crate::util::bump::Bump::new();
-    let mut reporter = DiagnosticReporter::new();
-    for item in preprocess_with_diagnostics(preprocessor, context, &tok) {
+    for item in items {
         match item {
             | Ok(token) => {
                 reporter.flush(context);
@@ -280,14 +281,13 @@ fn print_parser_output<'tu>(
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
-    let preprocessor = Preprocessor::new_with_arena_source(
+    let unit = parse_translation_unit(
         context,
         source_filename,
         input_string,
         quote_include,
         system_include,
     );
-    let unit = parse_translation_unit(preprocessor, context);
     let mut reporter = DiagnosticReporter::new();
     while let Some(error) = context.pop_pending_error() {
         reporter.report(&error, context);

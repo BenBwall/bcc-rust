@@ -232,8 +232,13 @@ pub struct ParseBenchmarkSummary {
 pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let preprocessor = preprocessor(&mut context, input);
-    let unit = crate::pipeline::parse_translation_unit(preprocessor, &mut context);
+    let unit = crate::pipeline::parse_translation_unit(
+        &mut context,
+        Path::new("<input>"),
+        input.source(),
+        &[],
+        &[],
+    );
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
         diagnostics:           context.take_pending_errors().len(),

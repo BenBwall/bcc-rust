@@ -2,6 +2,11 @@
 //! source file is lexed completely when it is opened, the whole unit is
 //! preprocessed, and only then is it parsed.
 
+use std::path::{
+    Path,
+    PathBuf,
+};
+
 #[cfg(test)]
 mod tests;
 
@@ -26,12 +31,55 @@ use crate::{
 
 /// Completes preprocessing before constructing the parser. The token arena
 /// outlives phase 7 and is released before the translation-unit context.
-pub(crate) fn parse_translation_unit(
-    preprocessor: Preprocessor,
-    context: &mut Context<'_>,
+pub(crate) fn parse_translation_unit<'tu>(
+    context: &mut Context<'tu>,
+    source_filename: &Path,
+    source: &'tu str,
+    quote_include: &[PathBuf],
+    system_include: &[PathBuf],
 ) -> ParsedTranslationUnit {
     let tok = Bump::new();
-    let preprocessed = Parser::preprocess(preprocessor, context, &tok);
+    let preprocessed = with_preprocessor(
+        context,
+        source_filename,
+        source,
+        quote_include,
+        system_include,
+        |preprocessor, context, _pp| Parser::preprocess(preprocessor, context, &tok),
+    );
+    let parse = Bump::new();
+    let unit = parse_preprocessed(preprocessed, context, &parse);
+    drop(parse);
+    drop(tok);
+    unit
+}
+
+/// Keeps phase-4 working storage within preprocessing. The arena is passed to
+/// the phase callback so stage 6 can move its state without changing callers.
+pub(crate) fn with_preprocessor<'tu, R>(
+    context: &mut Context<'tu>,
+    source_filename: &Path,
+    source: &'tu str,
+    quote_include: &[PathBuf],
+    system_include: &[PathBuf],
+    run: impl FnOnce(Preprocessor, &mut Context<'tu>, &Bump) -> R,
+) -> R {
+    let pp = Bump::new();
+    let preprocessor = Preprocessor::new_with_arena_source(
+        context,
+        source_filename,
+        source,
+        quote_include,
+        system_include,
+    );
+    run(preprocessor, context, &pp)
+}
+
+fn parse_preprocessed(
+    preprocessed: crate::translation_phases::parsing::PreprocessedTranslationUnit<'_>,
+    context: &mut Context<'_>,
+    _parse: &Bump,
+) -> ParsedTranslationUnit {
     Parser::from_preprocessed(preprocessed).parse_translation_unit(context)
 }
 
