@@ -720,7 +720,8 @@ impl Renderer {
         gutter_width: usize,
         scratch: &Bump,
     ) {
-        let number = format!("{line:>gutter_width$}");
+        let mut number = ArenaString::new_in(scratch);
+        let _ = write!(number, "{line:>gutter_width$}");
         let visible = visible_source(source, scratch);
         let _ = writeln!(
             out,
