@@ -9,6 +9,7 @@ use super::{
     parse,
     parser_errors,
     sourced_text,
+    with_parse,
 };
 use crate::translation_phases::{
     ErrorSeverity,
@@ -1214,94 +1215,98 @@ fn struct_recovery_distinguishes_a_closing_parenthesis_from_eof() {
 
 #[test]
 fn missing_parameter_after_comma_avoids_specifier_cascade_diagnostics() {
-    let parsed = parse("int function(int,\n");
-    let errors = parser_errors(&parsed).collect::<Vec<_>>();
+    with_parse("int function(int,\n", |parsed| {
+        let errors = parser_errors(parsed).collect::<Vec<_>>();
 
-    assert_eq!(errors.len(), 2);
-    assert!(errors.iter().any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(None)
-    )));
-    assert!(errors.iter().any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(None, _)
-    )));
-    assert!(!errors.iter().any(|error| matches!(
-        error,
-        ParserErrorType::UnexpectedEndBeforeDeclarationSpecifier
-            | ParserErrorType::UnexpectedEndBeforeTypeSpecifier
-    )));
+        assert_eq!(errors.len(), 2);
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(None)
+        )));
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(None, _)
+        )));
+        assert!(!errors.iter().any(|error| matches!(
+            error,
+            ParserErrorType::UnexpectedEndBeforeDeclarationSpecifier
+                | ParserErrorType::UnexpectedEndBeforeTypeSpecifier
+        )));
+    });
 }
 
 #[test]
 fn pointer_without_direct_declarator_keeps_the_legacy_diagnostic() {
     for source in ["int *;\n", "int *\n"] {
-        let parsed = parse(source);
-
-        assert_eq!(
-            parser_errors(&parsed)
-                .filter(|error| matches!(error, ParserErrorType::TypeQualifiersWithoutDeclarator))
-                .count(),
-            1,
-            "missing pointer-without-declarator diagnostic for {source:?}"
-        );
-        assert_eq!(
-            parser_errors(&parsed)
-                .filter(|error| matches!(
+        with_parse(source, |parsed| {
+            assert_eq!(
+                parser_errors(parsed)
+                    .filter(|error| matches!(
+                        error,
+                        ParserErrorType::TypeQualifiersWithoutDeclarator
+                    ))
+                    .count(),
+                1,
+                "missing pointer-without-declarator diagnostic for {source:?}"
+            );
+            assert_eq!(
+                parser_errors(parsed)
+                    .filter(|error| matches!(
                     error,
                     ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
                         ..
                     )
                 ))
-                .count(),
-            1,
-            "generic direct-declarator diagnostic count changed for {source:?}"
-        );
+                    .count(),
+                1,
+                "generic direct-declarator diagnostic count changed for {source:?}"
+            );
+        });
     }
 }
 
 #[test]
 fn adjacent_array_stars_are_parsed_as_unary_indirection() {
-    let parsed = parse("int array[**];\n");
-
-    assert!(
-        parser_errors(&parsed)
-            .any(|error| matches!(error, ParserErrorType::ExpectedStatementExpression(..)))
-    );
-    assert!(
-        !parser_errors(&parsed)
-            .any(|error| matches!(error, ParserErrorType::PointerSpecifiedTwice))
-    );
+    with_parse("int array[**];\n", |parsed| {
+        assert!(
+            parser_errors(parsed)
+                .any(|error| matches!(error, ParserErrorType::ExpectedStatementExpression(..)))
+        );
+        assert!(
+            !parser_errors(parsed)
+                .any(|error| matches!(error, ParserErrorType::PointerSpecifiedTwice))
+        );
+    });
 }
 
 #[test]
 fn qualifiers_before_an_abstract_array_pointer_keep_their_legacy_diagnostic() {
-    let parsed = parse("int function(int [const *]);\n");
-
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
-    )));
+    with_parse("int function(int [const *]);\n", |parsed| {
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
+        )));
+    });
 }
 
 #[test]
 fn mixed_k_and_r_and_prototype_parameters_keep_their_legacy_diagnostic() {
-    let parsed = parse("int function(first, int second);\n");
-
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator
-    )));
+    with_parse("int function(first, int second);\n", |parsed| {
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator
+        )));
+    });
 }
 
 #[test]
 fn array_qualifiers_on_both_sides_of_static_keep_the_legacy_diagnostic() {
-    let parsed = parse("int values[const static volatile 4];\n");
-
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
-    )));
+    with_parse("int values[const static volatile 4];\n", |parsed| {
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
+        )));
+    });
 }
 
 #[test]
