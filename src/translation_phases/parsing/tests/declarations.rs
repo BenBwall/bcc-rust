@@ -5,7 +5,6 @@ use super::{
     declaration,
     function_definition,
     identifier_name,
-    init_declarators,
     parser_errors,
     sourced_text,
     with_parse,
@@ -30,12 +29,10 @@ use crate::{
             errors::ParserErrorType,
             syntax::{
                 BlockItem,
-                EnumSpecifierIndex,
                 ExternalDeclaration,
                 Identifier,
                 StatementType,
                 StorageClass,
-                StructOrUnionSpecifierIndex,
             },
         },
         preprocessing::{
@@ -55,7 +52,7 @@ fn specifier_only_declaration_runs_through_the_machine() {
             declaration.declaration_specifiers.type_specifiers,
             TypeSpecifiers::Int
         );
-        assert_eq!(declaration.init_declarators.length, 0);
+        assert_eq!(declaration.init_declarators.len(), 0);
         assert!(parser_errors(parsed).next().is_none());
         assert!(
             parsed.parser.trace.iter().any(|event| {
@@ -104,7 +101,7 @@ fn ordinary_pointer_and_typedef_declarations_are_reachable() {
                 .items
                 .iter()
                 .enumerate()
-                .flat_map(|(item, _)| init_declarators(parsed, declaration(parsed, item)))
+                .flat_map(|(item, _)| (declaration(parsed, item)).init_declarators)
                 .map(|init| identifier_name(parsed, init.declarator).expect("named declarator"))
                 .collect::<Vec<_>>();
             assert_eq!(names, ["x", "x2", "y", "p", "q", "T", "value"]);
@@ -124,7 +121,7 @@ fn ordinary_pointer_and_typedef_declarations_are_reachable() {
             );
 
             let pointer_declaration = declaration(parsed, 3);
-            let pointer = init_declarators(parsed, pointer_declaration)[0]
+            let pointer = pointer_declaration.init_declarators[0]
                 .declarator
                 .pointer
                 .type_qualifiers_list;
@@ -151,12 +148,12 @@ fn name_classification_is_published_after_each_declarator() {
         .parser
         .syntax
         .iter::<DirectDeclarator<'_>>()
-        .any(|direct| matches!(direct, DirectDeclarator::Function { parameter_list, .. } if parameter_list.length == 1)));
+        .any(|direct| matches!(direct, DirectDeclarator::Function { parameter_list, .. } if parameter_list.len() == 1)));
             assert!(parsed
         .parser
         .syntax
         .iter::<DirectDeclarator<'_>>()
-        .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 1)));
+        .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.len() == 1)));
             let t = parsed
                 .context
                 .string_cache
@@ -196,7 +193,7 @@ fn duplicate_storage_class_keeps_the_last_class_for_typedef_publication() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("x")
@@ -315,7 +312,7 @@ fn parenthesized_identifier_lists_preserve_typedef_shadowing() {
         assert_eq!(
             [declaration(parsed, 0), declaration(parsed, 1)]
                 .into_iter()
-                .flat_map(|declaration| init_declarators(parsed, declaration))
+                .flat_map(|declaration| declaration.init_declarators)
                 .filter_map(|declarator| identifier_name(parsed, declarator.declarator))
                 .collect::<Vec<_>>(),
             ["T", "T"]
@@ -376,7 +373,7 @@ fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
                     })
             );
             assert!(parsed.parser.syntax.iter::<DirectDeclarator<'_>>().any(|direct| {
-        matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 2)
+        matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.len() == 2)
     }));
         },
     );
@@ -408,7 +405,7 @@ fn union_kind_and_enum_arena_slice_are_correct() {
                 .find(|specifier| specifier.name.is_some())
                 .expect("named enum specifier");
             let enumeration_list = enum_specifier.enumeration_list.expect("enum body");
-            assert_eq!(enumeration_list.length, 2);
+            assert_eq!(enumeration_list.len(), 2);
             let names = parsed.parser.syntax[enumeration_list]
                 .iter()
                 .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
@@ -477,10 +474,19 @@ fn specifier_combinations_and_conflicts_keep_legacy_diagnostics() {
             );
             assert!(TypeSpecifiers::Long.is_long());
             assert!(TypeSpecifiers::LongDouble.is_long_double());
-            assert!(
-                TypeSpecifiers::StructOrUnion(StructOrUnionSpecifierIndex(0)).is_struct_or_union()
-            );
-            assert!(TypeSpecifiers::Enum(EnumSpecifierIndex(0)).is_enum());
+            let structure = StructOrUnionSpecifier {
+                struct_or_union:         StructOrUnion::Struct,
+                identifier:              None,
+                struct_declaration_list: None,
+                source_vectors:          VectorSlice::empty(),
+            };
+            assert!(TypeSpecifiers::StructOrUnion(&structure).is_struct_or_union());
+            let enumeration = EnumSpecifier {
+                name:             None,
+                enumeration_list: None,
+                source_vectors:   VectorSlice::empty(),
+            };
+            assert!(TypeSpecifiers::Enum(&enumeration).is_enum());
             let duplicate = parsed
                 .context
                 .string_cache
@@ -543,7 +549,7 @@ fn expression_dependent_positions_store_typed_syntax_children() {
             assert_eq!(
                 identifier_name(
                     parsed,
-                    init_declarators(parsed, declaration(parsed, 5))[0].declarator
+                    declaration(parsed, 5).init_declarators[0].declarator
                 )
                 .as_deref(),
                 Some("after")
@@ -565,7 +571,7 @@ fn assignments_are_rejected_in_constant_expression_owners() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -592,17 +598,13 @@ fn braced_declarators_retain_function_definition_syntax_before_constraint_checki
             panic!("expected the braced declarator to retain its compound body")
         };
         assert_eq!(
-            identifier_name(
-                parsed,
-                init_declarators(parsed, &parsed.parser.syntax[retained])[0].declarator
-            )
-            .as_deref(),
+            identifier_name(parsed, retained.init_declarators[0].declarator).as_deref(),
             Some("retained")
         );
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -619,11 +621,11 @@ fn braced_declarators_retain_function_definition_syntax_before_constraint_checki
                     _
                 )
             )));
-            assert_eq!(init_declarators(parsed, declaration(parsed, 0)).len(), 2);
+            assert_eq!(declaration(parsed, 0).init_declarators.len(), 2);
             assert_eq!(
                 identifier_name(
                     parsed,
-                    init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                    declaration(parsed, 1).init_declarators[0].declarator
                 )
                 .as_deref(),
                 Some("after")
@@ -645,7 +647,7 @@ fn declaration_lists_retain_constraint_invalid_function_definitions() {
             parsed.errors
         );
         let definition = function_definition(parsed, 0);
-        assert_eq!(definition.declaration_list.length(), 1);
+        assert_eq!(definition.declaration_list.length, 1);
         assert!(matches!(
             parsed.parser.syntax[definition.body].kind,
             StatementType::Compound { .. }
@@ -681,7 +683,7 @@ fn function_body_dispatch_follows_parenthesized_pointer_binding() {
             assert_eq!(
                 identifier_name(
                     pointer,
-                    init_declarators(pointer, declaration(pointer, 1))[0].declarator
+                    declaration(pointer, 1).init_declarators[0].declarator
                 )
                 .as_deref(),
                 Some("after")

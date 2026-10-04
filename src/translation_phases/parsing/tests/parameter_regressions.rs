@@ -6,7 +6,6 @@ use super::{
     block_items,
     declaration,
     function_definition,
-    init_declarators,
     parser_errors,
     with_parse,
 };
@@ -26,10 +25,9 @@ fn errors<'a, 'tu>(parsed: &'a Parsed<'_, 'tu>) -> Vec<&'a ParserErrorType<'tu>>
 /// The function suffix of the first declarator of the declaration at `item`.
 fn declared_suffix<'tu>(parsed: &Parsed<'_, 'tu>, item: usize) -> DirectDeclarator<'tu> {
     let declaration = declaration(parsed, item);
-    let declarator = init_declarators(parsed, declaration)[0].declarator;
-    parsed
-        .parser
-        .function_suffix(declarator)
+    let declarator = declaration.init_declarators[0].declarator;
+    declarator
+        .function_suffix()
         .expect("the declarator has a function suffix")
 }
 

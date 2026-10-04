@@ -24,7 +24,6 @@ use super::{
     declaration_syntax::{
         Declaration,
         Declarator,
-        InitDeclarator,
     },
     errors::ParserErrorType,
     syntax::{
@@ -53,7 +52,7 @@ use crate::{
 struct Parsed<'a, 'tu> {
     parser:  Parser<'tu, 'a>,
     context: &'a mut Context<'tu>,
-    items:   Vec<ExternalDeclaration>,
+    items:   Vec<ExternalDeclaration<'tu>>,
     errors:  Vec<TranslationError<'tu>>,
     source:  String,
 }
@@ -186,24 +185,19 @@ fn return_expression<'tu>(
     expression
 }
 
-fn block_items<'a>(parsed: &'a Parsed<'_, '_>, statement: StatementIndex) -> &'a [BlockItem] {
+fn block_items<'a, 'tu>(
+    parsed: &'a Parsed<'_, 'tu>,
+    statement: StatementIndex,
+) -> &'a [BlockItem<'tu>] {
     let StatementType::Compound { items } = parsed.parser.syntax[statement].kind else {
         panic!("expected a compound statement")
     };
     &parsed.parser.syntax[items]
 }
 
-fn init_declarators<'a, 'tu>(
-    parsed: &'a Parsed<'_, 'tu>,
-    declaration: &Declaration<'tu>,
-) -> &'a [InitDeclarator<'tu>] {
-    &parsed.parser.syntax[declaration.init_declarators]
-}
-
 fn identifier_name(parsed: &Parsed<'_, '_>, declarator: Declarator<'_>) -> Option<String> {
-    parsed
-        .parser
-        .declarator_identifier(declarator)
+    declarator
+        .identifier()
         .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
 }
 

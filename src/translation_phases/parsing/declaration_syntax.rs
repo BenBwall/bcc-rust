@@ -15,13 +15,9 @@ use super::{
     errors::ParserErrorType,
     syntax::{
         ConstantExpression,
-        EnumSpecifierIndex,
         Expression,
         Identifier,
-        ParenthesizedDeclaratorIndex,
         StorageClass,
-        StructOrUnionSpecifierIndex,
-        SyntaxList,
     },
 };
 use crate::{
@@ -46,9 +42,9 @@ use crate::{
     reason = "The C grammar's declaration-specifiers term is the precise field name."
 )]
 pub(crate) struct Declaration<'tu> {
-    pub(crate) declaration_specifiers:      DeclarationSpecifiers,
+    pub(crate) declaration_specifiers:      DeclarationSpecifiers<'tu>,
     /// init-declarator-list
-    pub(crate) init_declarators:            SyntaxList<InitDeclarator<'tu>>,
+    pub(crate) init_declarators:            &'tu [InitDeclarator<'tu>],
     pub(crate) source_vectors:              SourceVectors,
     /// Whether local syntax recovery repaired this declaration.
     pub(crate) recovered:                   bool,
@@ -164,8 +160,8 @@ bitflags::bitflags! {
 /// keyword by §6.4.1, p. 50; PDF p. 62, but is not a core type-specifier in
 /// the normative §6.7.2 grammar. Its central constraint is: “At least one type
 /// specifier shall be given”.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
-pub(crate) enum TypeSpecifiers {
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
+pub(crate) enum TypeSpecifiers<'tu> {
     #[default]
     Empty,
     Void,
@@ -204,12 +200,12 @@ pub(crate) enum TypeSpecifiers {
     ComplexDouble,
     ComplexLong,
     ComplexLongDouble,
-    StructOrUnion(StructOrUnionSpecifierIndex),
-    Enum(EnumSpecifierIndex),
+    StructOrUnion(&'tu StructOrUnionSpecifier<'tu>),
+    Enum(&'tu EnumSpecifier<'tu>),
     TypedefName(Identifier),
 }
 
-impl Display for TypeSpecifiers {
+impl Display for TypeSpecifiers<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             | TypeSpecifiers::Empty => write!(f, "<no type specifier>"),
@@ -290,7 +286,7 @@ macro_rules! map_fn {
     }
 }
 
-impl TypeSpecifiers {
+impl<'tu> TypeSpecifiers<'tu> {
     map_fn!(map_signed, make_signed, is_signed,
         | TypeSpecifiers::SignedChar
         | TypeSpecifiers::SignedShort
@@ -502,7 +498,7 @@ impl TypeSpecifiers {
         &mut self,
         parser: &mut Parser<'_, '_>,
         context: &mut Context<'_>,
-        index: StructOrUnionSpecifierIndex,
+        index: &'tu StructOrUnionSpecifier<'tu>,
         token: Token,
     ) {
         match self {
@@ -526,7 +522,7 @@ impl TypeSpecifiers {
         &mut self,
         parser: &mut Parser<'_, '_>,
         context: &mut Context<'_>,
-        index: EnumSpecifierIndex,
+        index: &'tu EnumSpecifier<'tu>,
         token: Token,
     ) {
         match self {
@@ -561,14 +557,14 @@ impl TypeSpecifiers {
 
     /// Reports `conflicting` against the accumulated specifiers using
     /// source spellings, so rendered diagnostics never expose arena handles.
-    fn report_conflict<'tu>(
+    fn report_conflict<'c>(
         self,
         parser: &mut Parser<'_, '_>,
-        context: &mut Context<'tu>,
+        context: &mut Context<'c>,
         conflicting: StringCacheId,
         token: Token,
     ) {
-        let tagged = |keyword: &str, tag: Option<Identifier>| -> &'tu str {
+        let tagged = |keyword: &str, tag: Option<Identifier>| -> &'c str {
             match tag {
                 | Some(tag) => context
                     .diagnostic_text(&format!("{keyword} {}", context.string_cache.at(tag.name))),
@@ -577,14 +573,14 @@ impl TypeSpecifiers {
         };
         let existing = match self {
             | TypeSpecifiers::StructOrUnion(index) => {
-                let specifier = parser.syntax[index];
+                let specifier = *index;
                 let keyword = match specifier.struct_or_union {
                     | StructOrUnion::Struct => "struct",
                     | StructOrUnion::Union => "union",
                 };
                 tagged(keyword, specifier.identifier)
             },
-            | TypeSpecifiers::Enum(index) => tagged("enum", parser.syntax[index].name),
+            | TypeSpecifiers::Enum(index) => tagged("enum", index.name),
             | TypeSpecifiers::TypedefName(name) =>
                 context.diagnostic_text(context.string_cache.at(name.name)),
             | type_specifiers => context.diagnostic_text(&type_specifiers.to_string()),
@@ -609,7 +605,7 @@ pub(crate) struct StructOrUnionSpecifier<'tu> {
     /// None indicates that the body is missing. An empty vector indicates an
     /// empty body. `struct Foo;` has no body. `struct Foo {};` has an empty
     /// body.
-    pub(crate) struct_declaration_list: Option<SyntaxList<StructDeclaration<'tu>>>,
+    pub(crate) struct_declaration_list: Option<&'tu [StructDeclaration<'tu>]>,
     pub(crate) source_vectors:          SourceVectors,
 }
 
@@ -633,8 +629,8 @@ pub(crate) enum StructOrUnion {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StructDeclaration<'tu> {
     pub(crate) type_qualifiers:        TypeQualifiers,
-    pub(crate) type_specifiers:        TypeSpecifiers,
-    pub(crate) struct_declarator_list: SyntaxList<StructDeclarator<'tu>>,
+    pub(crate) type_specifiers:        TypeSpecifiers<'tu>,
+    pub(crate) struct_declarator_list: &'tu [StructDeclarator<'tu>],
     pub(crate) source_vectors:         SourceVectors,
 }
 
@@ -659,7 +655,7 @@ pub(crate) struct StructDeclarator<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct EnumSpecifier<'tu> {
     pub(crate) name:             Option<Identifier>,
-    pub(crate) enumeration_list: Option<SyntaxList<Enumerator<'tu>>>,
+    pub(crate) enumeration_list: Option<&'tu [Enumerator<'tu>]>,
     pub(crate) source_vectors:   SourceVectors,
 }
 
@@ -696,24 +692,24 @@ pub(crate) struct FunctionSpecifiers {
 ///
 /// C99: §6.7, p. 97; PDF p. 109. The constituent specifier families are
 /// specified by §6.7.1-§6.7.4, pp. 98-113; PDF pp. 110-125.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct DeclarationSpecifiers {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct DeclarationSpecifiers<'tu> {
     /// `None` preserves the grammatical absence of a storage-class specifier;
     /// it is not equivalent to an explicitly written `auto`.
     pub(crate) storage_class:       Option<StorageClass>,
     pub(crate) type_qualifiers:     TypeQualifiers,
-    pub(crate) type_specifiers:     TypeSpecifiers,
+    pub(crate) type_specifiers:     TypeSpecifiers<'tu>,
     pub(crate) function_specifiers: FunctionSpecifiers,
     pub(crate) source_vectors:      SourceVectors,
 }
 
-impl Default for DeclarationSpecifiers {
+impl Default for DeclarationSpecifiers<'_> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl DeclarationSpecifiers {
+impl DeclarationSpecifiers<'_> {
     pub(super) fn new() -> Self {
         Self {
             storage_class:       None,
@@ -736,11 +732,11 @@ impl DeclarationSpecifiers {
 ///
 /// C99: §6.7.5, p. 114; PDF p. 126, and pointer derivation §6.7.5.1,
 /// p. 115; PDF p. 127.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct PointerDeclarator {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct PointerDeclarator<'tu> {
     /// Each element represents the type qualifiers for one level of
     /// indirection.
-    pub(crate) type_qualifiers_list: SyntaxList<TypeQualifiers>,
+    pub(crate) type_qualifiers_list: &'tu [TypeQualifiers],
 }
 
 /// declarator:
@@ -756,8 +752,8 @@ pub(crate) struct PointerDeclarator {
 /// §6.7.6, p. 122; PDF p. 134.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Declarator<'tu> {
-    pub(crate) pointer:        PointerDeclarator,
-    pub(crate) kind:           SyntaxList<DirectDeclarator<'tu>>,
+    pub(crate) pointer:        PointerDeclarator<'tu>,
+    pub(crate) kind:           &'tu [DirectDeclarator<'tu>],
     pub(crate) source_vectors: SourceVectors,
 }
 
@@ -790,9 +786,9 @@ pub(crate) struct Declarator<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum DirectDeclarator<'tu> {
     Identifier(Identifier),
-    Parenthesized(ParenthesizedDeclaratorIndex),
+    Parenthesized(&'tu ParenthesizedDeclarator<'tu>),
     KAndRStyleFunction {
-        parameters: SyntaxList<Identifier>,
+        parameters: &'tu [Identifier],
     },
     Array {
         type_qualifiers:       TypeQualifiers,
@@ -801,7 +797,7 @@ pub(crate) enum DirectDeclarator<'tu> {
         assignment_expression: Option<&'tu Expression<'tu>>,
     },
     Function {
-        parameter_list: SyntaxList<ParameterDeclaration<'tu>>,
+        parameter_list: &'tu [ParameterDeclaration<'tu>],
         is_variadic:    bool,
     },
 }
@@ -823,7 +819,7 @@ pub(crate) struct ParenthesizedDeclarator<'tu> {
 /// pp. 118-121; PDF pp. 130-133.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct ParameterDeclaration<'tu> {
-    pub(crate) declaration_specifiers: DeclarationSpecifiers,
+    pub(crate) declaration_specifiers: DeclarationSpecifiers<'tu>,
     /// Could be a declarator or an abstract declarator or neither.
     pub(crate) declarator:             Option<Declarator<'tu>>,
     pub(crate) source_vectors:         SourceVectors,
@@ -837,9 +833,113 @@ pub(crate) struct ParameterDeclaration<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct TypeName<'tu> {
     /// Specifiers and qualifiers that establish the base type.
-    pub(crate) declaration_specifiers: DeclarationSpecifiers,
+    pub(crate) declaration_specifiers: DeclarationSpecifiers<'tu>,
     /// Optional abstract declarator deriving pointer, array, or function shape.
     pub(crate) declarator:             Option<Declarator<'tu>>,
     pub(crate) source_vectors:         SourceVectors,
     pub(crate) recovered:              bool,
+}
+
+impl<'tu> Declaration<'tu> {
+    /// The declarator of a declaration that could head a function
+    /// definition: its only init-declarator, without an initializer.
+    pub(super) fn head_declarator(&self) -> Option<Declarator<'tu>> {
+        let [init] = self.init_declarators else {
+            return None;
+        };
+        init.initializer.is_none().then_some(init.declarator)
+    }
+
+    /// Whether this declaration-shaped prefix became the head of a function
+    /// definition.
+    pub(super) fn is_definition_head(&self) -> bool {
+        self.is_function_definition_head && self.head_declarator().is_some()
+    }
+
+    /// Whether any part of this declaration was written, as opposed to a
+    /// declaration that recovery produced from nothing.
+    pub(super) fn is_meaningful(&self) -> bool {
+        let specifiers = self.declaration_specifiers;
+        !self.init_declarators.is_empty()
+            || specifiers.storage_class.is_some()
+            || !specifiers.type_qualifiers.is_empty()
+            || specifiers.type_specifiers != TypeSpecifiers::Empty
+            || specifiers.function_specifiers.is_inline
+    }
+}
+
+impl<'tu> Declarator<'tu> {
+    /// Finds the identifier declared by nested parenthesized direct
+    /// declarators.
+    ///
+    /// C99: declarator binding is specified by §6.7.5 paragraph 4,
+    /// p. 114; PDF p. 126.
+    pub(crate) fn identifier(self) -> Option<Identifier> {
+        let mut declarator = self;
+        loop {
+            let mut nested = None;
+            for direct in declarator.kind {
+                match *direct {
+                    | DirectDeclarator::Identifier(identifier) => return Some(identifier),
+                    | DirectDeclarator::Parenthesized(parenthesized) =>
+                        nested = Some(parenthesized.declarator),
+                    | _ => {},
+                }
+            }
+            declarator = nested?;
+        }
+    }
+
+    /// The function suffix that applies to the declared identifier, looking
+    /// through parenthesized declarators.
+    pub(super) fn function_suffix(self) -> Option<DirectDeclarator<'tu>> {
+        let mut declarator = self;
+        let mut suffix = None;
+        loop {
+            let direct = declarator.kind;
+            if let Some(candidate) = direct.get(1).copied()
+                && matches!(
+                    candidate,
+                    DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
+                )
+            {
+                suffix = Some(candidate);
+            }
+            let Some(DirectDeclarator::Parenthesized(parenthesized)) = direct.first() else {
+                return suffix;
+            };
+            declarator = parenthesized.declarator;
+        }
+    }
+}
+
+impl TypeSpecifiers<'_> {
+    /// Adds the ordinary identifiers these specifiers declare, the
+    /// enumeration constants of nested enum bodies, to `names`.
+    pub(super) fn collect_bindings(self, names: &mut Vec<StringCacheId>) {
+        let mut pending = vec![self];
+        while let Some(type_specifiers) = pending.pop() {
+            match type_specifiers {
+                | TypeSpecifiers::Enum(specifier) => {
+                    if let Some(enumeration_list) = specifier.enumeration_list {
+                        names.extend(
+                            enumeration_list
+                                .iter()
+                                .map(|enumerator| enumerator.name.name),
+                        );
+                    }
+                },
+                | TypeSpecifiers::StructOrUnion(specifier) => {
+                    if let Some(declarations) = specifier.struct_declaration_list {
+                        pending.extend(
+                            declarations
+                                .iter()
+                                .map(|declaration| declaration.type_specifiers),
+                        );
+                    }
+                },
+                | _ => {},
+            }
+        }
+    }
 }

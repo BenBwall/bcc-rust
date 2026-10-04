@@ -6,7 +6,6 @@ use super::{
     expression_text,
     function_definition,
     identifier_name,
-    init_declarators,
     parser_errors,
     return_expression,
     sourced_text,
@@ -59,7 +58,7 @@ fn adjacent_strings_merge_across_macro_expansion_and_preserve_width() {
         |parsed| {
             assert_eq!(parsed.items.len(), 2);
             let literal = |item: usize| {
-                let initializer = init_declarators(parsed, declaration(parsed, item))[0]
+                let initializer = (declaration(parsed, item)).init_declarators[0]
                     .initializer
                     .expect("string initializer");
                 let InitializerType::AssignmentExpression(expression) =
@@ -518,7 +517,7 @@ fn array_designator_recovery_preserves_following_declarations() {
                         panic!("expected a declaration block item")
                     };
                     let declaration = &parsed.parser.syntax[index];
-                    identifier_name(parsed, init_declarators(parsed, declaration)[0].declarator)
+                    identifier_name(parsed, declaration.init_declarators[0].declarator)
                         .expect("named declarator")
                 })
                 .collect::<Vec<_>>();
@@ -535,7 +534,7 @@ fn array_designator_recovery_preserves_following_declarations() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")

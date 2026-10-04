@@ -45,8 +45,6 @@ use super::{
     syntax::{
         Expression,
         Identifier,
-        ParenthesizedDeclaratorIndex,
-        SyntaxList,
     },
 };
 use crate::{
@@ -328,9 +326,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let token = token.expect("closing-parenthesis token exists");
                     self.direct_declarators
-                        .push(DirectDeclarator::KAndRStyleFunction {
-                            parameters: SyntaxList::empty(),
-                        });
+                        .push(DirectDeclarator::KAndRStyleFunction { parameters: &[] });
                     self.has_direct_declarator = true;
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
@@ -645,12 +641,10 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 let allow_k_and_r = self.named;
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let direct = if allow_k_and_r {
-                        DirectDeclarator::KAndRStyleFunction {
-                            parameters: SyntaxList::empty(),
-                        }
+                        DirectDeclarator::KAndRStyleFunction { parameters: &[] }
                     } else {
                         DirectDeclarator::Function {
-                            parameter_list: SyntaxList::empty(),
+                            parameter_list: &[],
                             is_variadic:    false,
                         }
                     };
@@ -714,8 +708,8 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 // Commit both flat component lists atomically before
                 // returning the value that
                 // references their stable slices.
-                let pointer_start = parser.append_syntax(&mut self.pointer_qualifiers);
-                let direct_start = parser.append_syntax(&mut self.direct_declarators);
+                let pointer_start = parser.alloc_syntax_list(&mut self.pointer_qualifiers);
+                let direct_start = parser.alloc_syntax_list(&mut self.direct_declarators);
                 let declarator = Declarator {
                     pointer:        PointerDeclarator {
                         type_qualifiers_list: pointer_start,
@@ -776,7 +770,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         if let Some(token) = closing {
             nested.delimiters = context.merge_vectors(nested.delimiters, token.source_vectors);
         }
-        let parenthesized = ParenthesizedDeclaratorIndex(parser.push_syntax(nested));
+        let parenthesized = parser.alloc_syntax(nested);
         self.direct_declarators
             .push(DirectDeclarator::Parenthesized(parenthesized));
         if let Some(token) = closing {

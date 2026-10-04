@@ -1030,7 +1030,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("for declaration returned an unexpected value: {returned:?}");
                 };
-                let source = parser.syntax[declaration].source_vectors;
+                let source = declaration.source_vectors;
                 self.source_vectors = Some(
                     self.source_vectors
                         .map_or(source, |existing| context.merge_vectors(existing, source)),

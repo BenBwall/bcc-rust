@@ -7,7 +7,6 @@ use super::{
     expression_text,
     function_definition,
     identifier_name,
-    init_declarators,
     parser_errors,
     sourced_text,
     with_parse,
@@ -192,11 +191,8 @@ fn old_style_definition_keeps_its_parameter_declaration_list() {
             let names = parsed.parser.syntax[definition.declaration_list]
                 .iter()
                 .map(|index| {
-                    identifier_name(
-                        parsed,
-                        init_declarators(parsed, &parsed.parser.syntax[index])[0].declarator,
-                    )
-                    .expect("old-style declaration name")
+                    identifier_name(parsed, index.init_declarators[0].declarator)
+                        .expect("old-style declaration name")
                 })
                 .collect::<Vec<_>>();
             assert_eq!(names, ["left", "right"]);
@@ -273,14 +269,12 @@ fn function_definition_publishes_identifier_bound_parameters() {
             assert_eq!(
                 identifier_name(
                     nested,
-                    init_declarators(
-                        nested,
-                        &nested.parser.syntax[match items[0] {
-                            | BlockItem::Declaration(index) => index,
-                            | BlockItem::Statement(_) => unreachable!(),
-                        }],
-                    )[0]
-                    .declarator,
+                    match items[0] {
+                        | BlockItem::Declaration(index) => index,
+                        | BlockItem::Statement(_) => unreachable!(),
+                    }
+                    .init_declarators[0]
+                        .declarator,
                 )
                 .as_deref(),
                 Some("value")
@@ -565,7 +559,7 @@ fn stray_else_consumes_its_token_and_preserves_following_items() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator,
+                declaration(parsed, 1).init_declarators[0].declarator,
             )
             .as_deref(),
             Some("after")
@@ -740,7 +734,7 @@ fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
         "typedef int T; int value = T + 1; int product = T * ptr; int sum = 1 + T * ptr; int \
          f(void) { return T * ptr; }\n",
         |parsed| {
-            let initializer = init_declarators(parsed, declaration(parsed, 1))[0]
+            let initializer = declaration(parsed, 1).init_declarators[0]
                 .initializer
                 .expect("value must have an initializer");
             let InitializerType::AssignmentExpression(initializer_expression) =
@@ -750,7 +744,7 @@ fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
             };
             assert_eq!(expression_text(parsed, initializer_expression), "T+1");
 
-            let initializer = init_declarators(parsed, declaration(parsed, 2))[0]
+            let initializer = declaration(parsed, 2).init_declarators[0]
                 .initializer
                 .expect("product must have an initializer");
             let InitializerType::AssignmentExpression(initializer_expression) =
@@ -760,7 +754,7 @@ fn typedef_spellings_remain_primary_expressions_until_semantic_analysis() {
             };
             assert_eq!(expression_text(parsed, initializer_expression), "T*ptr");
 
-            let initializer = init_declarators(parsed, declaration(parsed, 3))[0]
+            let initializer = declaration(parsed, 3).init_declarators[0]
                 .initializer
                 .expect("sum must have an initializer");
             let InitializerType::AssignmentExpression(initializer_expression) =
@@ -1084,7 +1078,7 @@ fn block_brace_initializers_remain_in_the_declaration() {
         let BlockItem::Declaration(declaration) = items[0] else {
             panic!("expected a block declaration")
         };
-        let initializer = *init_declarators(parsed, &parsed.parser.syntax[declaration])[0]
+        let initializer = *declaration.init_declarators[0]
             .initializer
             .as_ref()
             .expect("parsed initializer");
@@ -1471,13 +1465,9 @@ fn malformed_for_initializer_recovery_preserves_the_header_close() {
             else {
                 panic!("expected a recovered declaration-form for statement")
             };
-            assert_eq!(parsed.parser.syntax[declaration].init_declarators.length, 1);
+            assert_eq!(parsed.parser.syntax[declaration].init_declarators.len(), 1);
             assert!(!parsed.parser.syntax[declaration].recovered);
-            assert!(
-                init_declarators(parsed, &parsed.parser.syntax[declaration],)[0]
-                    .initializer
-                    .is_some()
-            );
+            assert!(declaration.init_declarators[0].initializer.is_some());
             assert!(matches!(
                 parsed.parser.syntax[body_statement].kind,
                 StatementType::Null
@@ -1613,7 +1603,7 @@ fn malformed_statement_delimiters_recover_the_body_and_next_file_item() {
             assert_eq!(
                 identifier_name(
                     parsed,
-                    init_declarators(parsed, declaration(parsed, 1))[0].declarator,
+                    declaration(parsed, 1).init_declarators[0].declarator,
                 )
                 .as_deref(),
                 Some("after")

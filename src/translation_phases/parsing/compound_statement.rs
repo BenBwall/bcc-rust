@@ -44,9 +44,9 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(super) struct CompoundStatementFrame<'p> {
+pub(super) struct CompoundStatementFrame<'tu, 'p> {
     phase:                     CompoundStatementPhase,
-    pub(super) items:          ArenaVec<'p, BlockItem>,
+    pub(super) items:          ArenaVec<'p, BlockItem<'tu>>,
     pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     starting_error_count:      usize,
     entry_scope_depth:         Option<usize>,
@@ -67,7 +67,7 @@ pub(super) enum CompoundStatementPhase {
     reason = "Frame phases assert the typed driver protocol, whose mismatch already identifies \
               the invariant."
 )]
-impl<'tu, 'p> CompoundStatementFrame<'p> {
+impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump, starting_error_count: usize, function_body: bool) -> Self {
         Self {
             phase: CompoundStatementPhase::Start,
@@ -152,7 +152,7 @@ impl<'tu, 'p> CompoundStatementFrame<'p> {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("block declaration returned an unexpected value: {returned:?}");
                 };
-                let source = parser.syntax[declaration].source_vectors;
+                let source = declaration.source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Declaration(declaration));
                 self.phase = CompoundStatementPhase::ItemOrClose;

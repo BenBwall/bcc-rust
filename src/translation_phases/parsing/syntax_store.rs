@@ -19,8 +19,6 @@ use std::{
 use super::{
     declaration_syntax::{
         Declaration,
-        DeclarationSpecifiers,
-        Declarator,
         Designation,
         Designator,
         DirectDeclarator,
@@ -36,31 +34,22 @@ use super::{
         StructOrUnionSpecifier,
         TypeName,
         TypeQualifiers,
-        TypeSpecifiers,
     },
     syntax::{
         BlockItem,
-        DeclarationIndex,
-        EnumSpecifierIndex,
         Expression,
         ExternalDeclaration,
-        ForInitializer,
         FunctionDefinition,
         FunctionDefinitionIndex,
         Identifier,
-        ParenthesizedDeclaratorIndex,
         Statement,
         StatementIndex,
         StatementType,
-        StructOrUnionSpecifierIndex,
         SyntaxList,
     },
 };
 use crate::util::{
-    arena::{
-        Arena,
-        ArenaCheckpoint,
-    },
+    arena::Arena,
     bump::ArenaVec,
 };
 
@@ -94,22 +83,15 @@ macro_rules! stored_nodes {
 }
 
 stored_nodes! {
-    ParenthesizedDeclarator,
-    Declaration,
-    InitDeclarator,
     Statement,
     FunctionDefinition,
-    StructOrUnionSpecifier,
-    StructDeclaration,
-    StructDeclarator,
-    EnumSpecifier,
-    Enumerator,
-    DirectDeclarator,
-    ParameterDeclaration;
-    BlockItem,
-    DeclarationIndex,
-    TypeQualifiers,
-    Identifier,
+    BlockItem;
+}
+
+// SAFETY: `Erased` is the same reference type with `'tu` replaced by
+// `'static`.
+unsafe impl<'tu> StoredNode<'tu> for &'tu Declaration<'tu> {
+    type Erased = &'static Declaration<'static>;
 }
 
 /// Moves `node` into its lifetime-erased type.
@@ -161,6 +143,18 @@ pub(super) struct SyntaxLog<'tu> {
     initializer_elements: Vec<&'tu InitializerElement<'tu>>,
     designations:         Vec<&'tu Designation<'tu>>,
     designators:          Vec<&'tu Designator<'tu>>,
+    declarations:         Vec<&'tu Declaration<'tu>>,
+    init_declarators:     Vec<&'tu InitDeclarator<'tu>>,
+    direct_declarators:   Vec<&'tu DirectDeclarator<'tu>>,
+    parenthesized:        Vec<&'tu ParenthesizedDeclarator<'tu>>,
+    parameters:           Vec<&'tu ParameterDeclaration<'tu>>,
+    struct_or_unions:     Vec<&'tu StructOrUnionSpecifier<'tu>>,
+    struct_declarations:  Vec<&'tu StructDeclaration<'tu>>,
+    struct_declarators:   Vec<&'tu StructDeclarator<'tu>>,
+    enum_specifiers:      Vec<&'tu EnumSpecifier<'tu>>,
+    enumerators:          Vec<&'tu Enumerator<'tu>>,
+    type_qualifiers:      Vec<&'tu TypeQualifiers>,
+    identifiers:          Vec<&'tu Identifier>,
 }
 
 /// A node kind that tests can count and visit.
@@ -208,6 +202,43 @@ tree_nodes! {
     InitializerElement => initializer_elements,
     Designation => designations,
     Designator => designators,
+    Declaration => declarations,
+    InitDeclarator => init_declarators,
+    DirectDeclarator => direct_declarators,
+    ParenthesizedDeclarator => parenthesized,
+    ParameterDeclaration => parameters,
+    StructOrUnionSpecifier => struct_or_unions,
+    StructDeclaration => struct_declarations,
+    StructDeclarator => struct_declarators,
+    EnumSpecifier => enum_specifiers,
+    Enumerator => enumerators,
+}
+
+macro_rules! plain_tree_nodes {
+    ($($node:ident => $field:ident),* $(,)?) => {$(
+        #[cfg_attr(
+            not(test),
+            expect(single_use_lifetimes, reason = "Only the test log names the lifetime.")
+        )]
+        impl<'tu> TreeNode<'tu> for $node {
+            #[cfg(test)]
+            fn log(log: &mut SyntaxLog<'tu>, node: &'tu Self) {
+                log.$field.push(node);
+            }
+        }
+
+        #[cfg(test)]
+        impl<'tu> CountedNode<'tu> for $node {
+            fn nodes<'a>(store: &'a SyntaxStore<'tu>) -> Vec<&'a Self> {
+                store.log.$field.iter().map(|node| -> &'a Self { node }).collect()
+            }
+        }
+    )*};
+}
+
+plain_tree_nodes! {
+    TypeQualifiers => type_qualifiers,
+    Identifier => identifiers,
 }
 
 /// Call arguments are lists of expression references.
@@ -216,8 +247,11 @@ impl<'tu> TreeNode<'tu> for &'tu Expression<'tu> {
     fn log(_: &mut SyntaxLog<'tu>, _: &'tu Self) {}
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct SyntaxStoreCheckpoint(ArenaCheckpoint);
+/// Old-style declaration lists are lists of declaration references.
+impl<'tu> TreeNode<'tu> for &'tu Declaration<'tu> {
+    #[cfg(test)]
+    fn log(_: &mut SyntaxLog<'tu>, _: &'tu Self) {}
+}
 
 /// Typed handles resolve through the store like slice indices.
 macro_rules! syntax_handles {
@@ -241,12 +275,8 @@ macro_rules! syntax_handles {
 }
 
 syntax_handles! {
-    ParenthesizedDeclaratorIndex => ParenthesizedDeclarator,
-    DeclarationIndex => Declaration,
     StatementIndex => Statement,
     FunctionDefinitionIndex => FunctionDefinition,
-    StructOrUnionSpecifierIndex => StructOrUnionSpecifier,
-    EnumSpecifierIndex => EnumSpecifier,
 }
 
 impl<'tu, T: StoredNode<'tu> + 'tu> Index<SyntaxList<T>> for SyntaxStore<'tu> {
@@ -336,18 +366,6 @@ impl<'tu> SyntaxStore<'tu> {
         }
     }
 
-    /// Marks the store so [`Self::restore`] can discard later nodes.
-    pub(super) fn checkpoint(&mut self) -> SyntaxStoreCheckpoint {
-        SyntaxStoreCheckpoint(self.arena.checkpoint())
-    }
-
-    /// Discards every handle-arena node added since the most recent
-    /// checkpoint. Nodes in the translation-unit arena stay, and still
-    /// count.
-    pub(super) fn restore(&mut self, checkpoint: SyntaxStoreCheckpoint) {
-        self.arena.restore(checkpoint.0);
-    }
-
     /// Nodes of every kind.
     pub(super) fn node_count(&self) -> usize {
         self.arena.len() + self.tree_nodes
@@ -399,37 +417,13 @@ impl<'tu> Debug for SyntaxStore<'tu> {
             DebugNodes(store, PhantomData)
         }
         f.debug_struct("SyntaxStore")
-            .field("declarations", &nodes::<Declaration<'tu>>(self))
-            .field("init_declarators", &nodes::<InitDeclarator<'tu>>(self))
             .field("statements", &nodes::<Statement<'tu>>(self))
-            .field("block_items", &nodes::<BlockItem>(self))
+            .field("block_items", &nodes::<BlockItem<'tu>>(self))
             .field(
                 "function_definitions",
                 &nodes::<FunctionDefinition<'tu>>(self),
             )
-            .field("declaration_indices", &nodes::<DeclarationIndex>(self))
-            .field("type_qualifiers", &nodes::<TypeQualifiers>(self))
-            .field("direct_declarators", &nodes::<DirectDeclarator<'tu>>(self))
-            .field(
-                "parenthesized_declarators",
-                &nodes::<ParenthesizedDeclarator<'tu>>(self),
-            )
-            .field("identifiers", &nodes::<Identifier>(self))
-            .field(
-                "parameter_declarations",
-                &nodes::<ParameterDeclaration<'tu>>(self),
-            )
-            .field(
-                "struct_or_union_specifiers",
-                &nodes::<StructOrUnionSpecifier<'tu>>(self),
-            )
-            .field(
-                "struct_declarations",
-                &nodes::<StructDeclaration<'tu>>(self),
-            )
-            .field("struct_declarators", &nodes::<StructDeclarator<'tu>>(self))
-            .field("enum_specifiers", &nodes::<EnumSpecifier<'tu>>(self))
-            .field("enumerators", &nodes::<Enumerator<'tu>>(self))
+            .field("declaration_lists", &nodes::<&'tu Declaration<'tu>>(self))
             .finish()
     }
 }
@@ -445,40 +439,23 @@ pub(crate) struct SyntaxTree<'tu> {
 }
 
 impl<'tu> SyntaxTree<'tu> {
-    pub(super) fn new(store: SyntaxStore<'tu>, roots: &[ExternalDeclaration]) -> Self {
+    pub(super) fn new(store: SyntaxStore<'tu>, roots: &[ExternalDeclaration<'tu>]) -> Self {
         let tree = Self { store };
         tree.validate(roots);
         tree
     }
 
-    fn validate(&self, roots: &[ExternalDeclaration]) {
+    fn validate(&self, roots: &[ExternalDeclaration<'tu>]) {
         for root in roots {
-            match *root {
-                | ExternalDeclaration::Declaration(index)
-                | ExternalDeclaration::RecoveredDeclaration(index) => {
-                    let _ = self.declaration(index);
-                },
-                | ExternalDeclaration::FunctionDefinition(index)
-                | ExternalDeclaration::RecoveredFunctionDefinition(index) => {
-                    let _ = self.function_definition(index);
-                },
-                | ExternalDeclaration::Error(_) => {},
+            if let ExternalDeclaration::FunctionDefinition(index)
+            | ExternalDeclaration::RecoveredFunctionDefinition(index) = *root
+            {
+                let _ = self.function_definition(index);
             }
-        }
-        for declaration in self.store.stored::<Declaration<'tu>>() {
-            let _ = self.init_declarators(declaration.init_declarators);
-            self.validate_specifiers(declaration.declaration_specifiers);
         }
         for definition in self.store.stored::<FunctionDefinition<'tu>>() {
-            self.validate_declarator(definition.declarator);
-            for declaration in self.declaration_indices(definition.declaration_list) {
-                let _ = self.declaration(*declaration);
-            }
+            let _ = self.declaration_indices(definition.declaration_list);
             let _ = self.statement(definition.body);
-            self.validate_specifiers(definition.declaration_specifiers);
-        }
-        for init in self.store.stored::<InitDeclarator<'tu>>() {
-            self.validate_declarator(init.declarator);
         }
         for statement in self.store.stored::<Statement<'tu>>() {
             match statement.kind {
@@ -497,23 +474,12 @@ impl<'tu> SyntaxTree<'tu> {
                 },
                 | StatementType::Switch { body_statement, .. }
                 | StatementType::While { body_statement, .. }
-                | StatementType::DoWhile { body_statement, .. } => {
+                | StatementType::DoWhile { body_statement, .. }
+                | StatementType::For { body_statement, .. }
+                | StatementType::Label(_, body_statement)
+                | StatementType::Default(body_statement)
+                | StatementType::Case(_, body_statement) => {
                     let _ = self.statement(body_statement);
-                },
-                | StatementType::For {
-                    initializer,
-                    body_statement,
-                    ..
-                } => {
-                    if let Some(ForInitializer::Declaration(declaration)) = initializer {
-                        let _ = self.declaration(declaration);
-                    }
-                    let _ = self.statement(body_statement);
-                },
-                | StatementType::Label(_, child)
-                | StatementType::Default(child)
-                | StatementType::Case(_, child) => {
-                    let _ = self.statement(child);
                 },
                 | StatementType::Expression(_)
                 | StatementType::Return(_)
@@ -523,85 +489,10 @@ impl<'tu> SyntaxTree<'tu> {
                 | StatementType::Null => {},
             }
         }
-        for item in self.store.stored::<BlockItem>() {
-            match *item {
-                | BlockItem::Declaration(declaration) => {
-                    let _ = self.declaration(declaration);
-                },
-                | BlockItem::Statement(statement) => {
-                    let _ = self.statement(statement);
-                },
+        for item in self.store.stored::<BlockItem<'tu>>() {
+            if let BlockItem::Statement(statement) = *item {
+                let _ = self.statement(statement);
             }
-        }
-        for declaration in self.store.stored::<DeclarationIndex>() {
-            let _ = self.declaration(*declaration);
-        }
-        for direct in self.store.stored::<DirectDeclarator<'tu>>() {
-            match *direct {
-                | DirectDeclarator::Parenthesized(index) => {
-                    self.validate_declarator(self.store[index].declarator);
-                },
-                | DirectDeclarator::KAndRStyleFunction { parameters } => {
-                    let _ = self.identifiers(parameters);
-                },
-                | DirectDeclarator::Function { parameter_list, .. } => {
-                    let _ = self.parameter_declarations(parameter_list);
-                },
-                | DirectDeclarator::Identifier(_) | DirectDeclarator::Array { .. } => {},
-            }
-        }
-        for parameter in self.store.stored::<ParameterDeclaration<'tu>>() {
-            self.validate_specifiers(parameter.declaration_specifiers);
-            if let Some(declarator) = parameter.declarator {
-                self.validate_declarator(declarator);
-            }
-        }
-        for specifier in self.store.stored::<StructOrUnionSpecifier<'tu>>() {
-            if let Some(declarations) = specifier.struct_declaration_list {
-                let _ = self.struct_declarations(declarations);
-            }
-        }
-        for declaration in self.store.stored::<StructDeclaration<'tu>>() {
-            self.validate_type_specifiers(declaration.type_specifiers);
-            let _ = self.struct_declarators(declaration.struct_declarator_list);
-        }
-        for declarator in self.store.stored::<StructDeclarator<'tu>>() {
-            if let Some(syntax) = declarator.declarator {
-                self.validate_declarator(syntax);
-            }
-        }
-        for specifier in self.store.stored::<EnumSpecifier<'tu>>() {
-            if let Some(enumerators) = specifier.enumeration_list {
-                let _ = self.enumerators(enumerators);
-            }
-        }
-    }
-
-    fn validate_specifiers(&self, specifiers: DeclarationSpecifiers) {
-        self.validate_type_specifiers(specifiers.type_specifiers);
-    }
-
-    fn validate_type_specifiers(&self, specifiers: TypeSpecifiers) {
-        match specifiers {
-            | TypeSpecifiers::StructOrUnion(index) => {
-                let _ = self.struct_or_union_specifier(index);
-            },
-            | TypeSpecifiers::Enum(index) => {
-                let _ = self.enum_specifier(index);
-            },
-            | _ => {},
-        }
-    }
-
-    fn validate_declarator(&self, declarator: Declarator<'tu>) {
-        let _ = self.pointer_qualifiers(declarator.pointer.type_qualifiers_list);
-        let _ = self.direct_declarators(declarator.kind);
-    }
-
-    pub(crate) fn declaration(&self, index: DeclarationIndex) -> DeclarationView<'_, 'tu> {
-        DeclarationView {
-            tree:        self,
-            declaration: &self.store[index],
         }
     }
 
@@ -616,102 +507,18 @@ impl<'tu> SyntaxTree<'tu> {
         &self.store[index]
     }
 
-    pub(crate) fn struct_or_union_specifier(
-        &self,
-        index: StructOrUnionSpecifierIndex,
-    ) -> &StructOrUnionSpecifier<'tu> {
-        &self.store[index]
-    }
-
-    pub(crate) fn enum_specifier(&self, index: EnumSpecifierIndex) -> &EnumSpecifier<'tu> {
-        &self.store[index]
-    }
-
-    pub(crate) fn init_declarators(
-        &self,
-        range: SyntaxList<InitDeclarator<'tu>>,
-    ) -> &[InitDeclarator<'tu>] {
-        &self.store[range]
-    }
-
-    pub(crate) fn block_items(&self, range: SyntaxList<BlockItem>) -> &[BlockItem] {
+    pub(crate) fn block_items(&self, range: SyntaxList<BlockItem<'tu>>) -> &[BlockItem<'tu>] {
         &self.store[range]
     }
 
     pub(crate) fn declaration_indices(
         &self,
-        range: SyntaxList<DeclarationIndex>,
-    ) -> &[DeclarationIndex] {
-        &self.store[range]
-    }
-
-    pub(crate) fn pointer_qualifiers(
-        &self,
-        range: SyntaxList<TypeQualifiers>,
-    ) -> &[TypeQualifiers] {
-        &self.store[range]
-    }
-
-    pub(crate) fn parenthesized_declarator(
-        &self,
-        index: ParenthesizedDeclaratorIndex,
-    ) -> &ParenthesizedDeclarator<'tu> {
-        &self.store[index]
-    }
-
-    pub(crate) fn direct_declarators(
-        &self,
-        range: SyntaxList<DirectDeclarator<'tu>>,
-    ) -> &[DirectDeclarator<'tu>] {
-        &self.store[range]
-    }
-
-    pub(crate) fn identifiers(&self, range: SyntaxList<Identifier>) -> &[Identifier] {
-        &self.store[range]
-    }
-
-    pub(crate) fn parameter_declarations(
-        &self,
-        range: SyntaxList<ParameterDeclaration<'tu>>,
-    ) -> &[ParameterDeclaration<'tu>] {
-        &self.store[range]
-    }
-
-    pub(crate) fn struct_declarations(
-        &self,
-        range: SyntaxList<StructDeclaration<'tu>>,
-    ) -> &[StructDeclaration<'tu>] {
-        &self.store[range]
-    }
-
-    pub(crate) fn struct_declarators(
-        &self,
-        range: SyntaxList<StructDeclarator<'tu>>,
-    ) -> &[StructDeclarator<'tu>] {
-        &self.store[range]
-    }
-
-    pub(crate) fn enumerators(&self, range: SyntaxList<Enumerator<'tu>>) -> &[Enumerator<'tu>] {
+        range: SyntaxList<&'tu Declaration<'tu>>,
+    ) -> &[&'tu Declaration<'tu>] {
         &self.store[range]
     }
 
     pub(crate) fn raw_debug(&self) -> impl Debug + '_ {
         &self.store
-    }
-}
-
-pub(crate) struct DeclarationView<'a, 'tu> {
-    tree:        &'a SyntaxTree<'tu>,
-    declaration: &'a Declaration<'tu>,
-}
-
-impl<'a, 'tu> DeclarationView<'a, 'tu> {
-    pub(crate) fn syntax(&self) -> &'a Declaration<'tu> {
-        self.declaration
-    }
-
-    pub(crate) fn init_declarators(&self) -> &'a [InitDeclarator<'tu>] {
-        self.tree
-            .init_declarators(self.declaration.init_declarators)
     }
 }

@@ -11,6 +11,7 @@ use std::{
 };
 
 use super::declaration_syntax::{
+    Declaration,
     DeclarationSpecifiers,
     Declarator,
     Initializer,
@@ -96,14 +97,6 @@ impl<T> SyntaxList<T> {
     pub(super) fn empty() -> Self {
         Self::new(ArenaRun::EMPTY)
     }
-
-    pub(super) fn start_index(self) -> u32 {
-        self.start_index
-    }
-
-    pub(super) fn length(self) -> u32 {
-        self.length
-    }
 }
 
 /// One top-level parser result.
@@ -117,11 +110,11 @@ impl<T> SyntaxList<T> {
 /// p. 152. Retaining recovered syntax after diagnosis is permitted by
 /// §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum ExternalDeclaration {
+pub(crate) enum ExternalDeclaration<'tu> {
     /// Declaration parsed without a hard syntax diagnostic.
-    Declaration(DeclarationIndex),
+    Declaration(&'tu Declaration<'tu>),
     /// Repaired declaration produced after at least one hard syntax diagnostic.
-    RecoveredDeclaration(DeclarationIndex),
+    RecoveredDeclaration(&'tu Declaration<'tu>),
     /// Function definition parsed without a hard syntax diagnostic.
     FunctionDefinition(FunctionDefinitionIndex),
     /// Function definition containing locally recovered syntax.
@@ -130,19 +123,9 @@ pub(crate) enum ExternalDeclaration {
     Error(SourceVectors),
 }
 
-/// Typed handle into the declaration arena.
-///
-/// C99: declaration syntax is §6.7, pp. 97-130; PDF pp. 109-142.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct DeclarationIndex(pub(super) u32);
-
 /// Typed handle into the function-definition arena.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct FunctionDefinitionIndex(pub(super) u32);
-
-/// Typed handle for one parenthesized declarator and its delimiter span.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct ParenthesizedDeclaratorIndex(pub(super) u32);
 
 /// Expression whose grammar guarantees constant-expression syntax.
 ///
@@ -170,33 +153,21 @@ impl<'tu> From<ConstantExpression<'tu>> for &'tu Expression<'tu> {
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct StatementIndex(pub(super) u32);
 
-/// Typed handle into the struct/union-specifier arena.
-///
-/// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct StructOrUnionSpecifierIndex(pub(super) u32);
-
-/// Typed handle into the enum-specifier arena.
-///
-/// C99: §6.7.2.2, pp. 105-107; PDF pp. 117-119.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct EnumSpecifierIndex(pub(super) u32);
-
 /// Complete function-definition syntax produced at file scope.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct FunctionDefinition<'tu> {
-    pub(crate) declaration_specifiers: DeclarationSpecifiers,
+    pub(crate) declaration_specifiers: DeclarationSpecifiers<'tu>,
     pub(crate) declarator:             Declarator<'tu>,
-    pub(crate) declaration_list:       SyntaxList<DeclarationIndex>,
+    pub(crate) declaration_list:       SyntaxList<&'tu Declaration<'tu>>,
     pub(crate) body:                   StatementIndex,
     pub(crate) source_vectors:         SourceVectors,
     pub(crate) recovered:              bool,
 }
 
 /// One source-ordered item in a compound statement.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum BlockItem {
-    Declaration(DeclarationIndex),
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum BlockItem<'tu> {
+    Declaration(&'tu Declaration<'tu>),
     Statement(StatementIndex),
 }
 
@@ -234,7 +205,7 @@ pub(crate) struct Statement<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum StatementType<'tu> {
     Compound {
-        items: SyntaxList<BlockItem>,
+        items: SyntaxList<BlockItem<'tu>>,
     },
     Expression(ExpressionSlot<'tu>),
     If {
@@ -277,7 +248,7 @@ pub(crate) enum StatementType<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum ForInitializer<'tu> {
     Expression(ExpressionSlot<'tu>),
-    Declaration(DeclarationIndex),
+    Declaration(&'tu Declaration<'tu>),
 }
 
 /// Expression syntax node with exact source provenance.

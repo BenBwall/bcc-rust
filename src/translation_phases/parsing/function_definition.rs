@@ -9,7 +9,11 @@ use super::{
         DeclarationContext,
         DeclarationFrame,
     },
-    declaration_syntax::DirectDeclarator,
+    declaration_syntax::{
+        Declaration,
+        Declarator,
+        DirectDeclarator,
+    },
     errors::ParserErrorType,
     expression_operators::is_operator,
     machine::{
@@ -20,9 +24,9 @@ use super::{
     scope::{
         NameClass,
         ScopeKind,
+        list_key,
     },
     syntax::{
-        DeclarationIndex,
         FunctionDefinition,
         FunctionDefinitionIndex,
         Statement,
@@ -48,10 +52,10 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(super) struct FunctionDefinitionFrame<'p> {
+pub(super) struct FunctionDefinitionFrame<'tu, 'p> {
     phase: FunctionDefinitionPhase,
-    head: DeclarationIndex,
-    pub(super) declaration_list: ArenaVec<'p, DeclarationIndex>,
+    head: &'tu Declaration<'tu>,
+    pub(super) declaration_list: ArenaVec<'p, &'tu Declaration<'tu>>,
     body: Option<StatementIndex>,
     pub(super) source_vectors: Option<SourceVectors>,
     starting_error_count: usize,
@@ -76,10 +80,10 @@ pub(super) enum FunctionDefinitionPhase {
     reason = "Frame phases assert the typed driver protocol, whose mismatch already identifies \
               the invariant."
 )]
-impl<'tu, 'p> FunctionDefinitionFrame<'p> {
+impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
     pub(super) fn new(
         arena: &'p Bump,
-        head: DeclarationIndex,
+        head: &'tu Declaration<'tu>,
         starting_error_count: usize,
     ) -> Self {
         Self {
@@ -105,19 +109,20 @@ impl<'tu, 'p> FunctionDefinitionFrame<'p> {
         match self.phase {
             | FunctionDefinitionPhase::Start => {
                 debug_assert!(returned.is_none());
-                let declaration = parser.syntax[self.head];
-                let declarator = parser
-                    .declaration_head_declarator(self.head)
+                let declaration = *self.head;
+                let declarator = self
+                    .head
+                    .head_declarator()
                     .expect("a function definition has one uninitialized declarator");
                 self.source_vectors = Some(declaration.source_vectors);
                 self.entry_scope_depth = Some(parser.scopes.depth());
                 parser.scopes.enter_scope(ScopeKind::Function);
                 parser.label_scopes.enter();
 
-                if let Some(suffix) = parser.function_suffix(declarator) {
+                if let Some(suffix) = declarator.function_suffix() {
                     match suffix {
                         | DirectDeclarator::Function { parameter_list, .. } => {
-                            if parameter_list.length() == 0 {
+                            if parameter_list.is_empty() {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                                 return ParseAction::Reprocess;
                             }
@@ -128,22 +133,22 @@ impl<'tu, 'p> FunctionDefinitionFrame<'p> {
                             // body. The parameter list retained those
                             // bindings when it saw names its declarators alone
                             // cannot rebuild.
-                            if parser.scopes.publish_retained_bindings((
-                                parameter_list.start_index,
-                                parameter_list.length,
-                            )) {
+                            if parser
+                                .scopes
+                                .publish_retained_bindings(list_key(parameter_list))
+                            {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                                 return ParseAction::Reprocess;
                             }
                             let mut names = Vec::new();
-                            for parameter in &parser.syntax[parameter_list] {
-                                parser.collect_type_specifier_bindings(
-                                    parameter.declaration_specifiers.type_specifiers,
-                                    &mut names,
-                                );
+                            for parameter in parameter_list {
+                                parameter
+                                    .declaration_specifiers
+                                    .type_specifiers
+                                    .collect_bindings(&mut names);
                                 if let Some(name) = parameter
                                     .declarator
-                                    .and_then(|declarator| parser.declarator_identifier(declarator))
+                                    .and_then(Declarator::identifier)
                                     .map(|identifier| identifier.name)
                                 {
                                     names.push(name);
@@ -154,11 +159,11 @@ impl<'tu, 'p> FunctionDefinitionFrame<'p> {
                             }
                         },
                         | DirectDeclarator::KAndRStyleFunction { parameters } => {
-                            if parameters.length() == 0 {
+                            if parameters.is_empty() {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                                 return ParseAction::Reprocess;
                             }
-                            let names = parser.syntax[parameters]
+                            let names = parameters
                                 .iter()
                                 .map(|identifier| identifier.name)
                                 .collect::<Vec<_>>();
@@ -182,9 +187,10 @@ impl<'tu, 'p> FunctionDefinitionFrame<'p> {
                         true,
                     )))
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
-                    let has_parameter_type_list = parser
-                        .declaration_head_declarator(self.head)
-                        .and_then(|declarator| parser.function_suffix(declarator))
+                    let has_parameter_type_list = self
+                        .head
+                        .head_declarator()
+                        .and_then(Declarator::function_suffix)
                         .is_some_and(|suffix| matches!(suffix, DirectDeclarator::Function { .. }));
                     if has_parameter_type_list && !self.diagnosed_prototype_declaration_list {
                         self.diagnosed_prototype_declaration_list = true;
@@ -209,13 +215,14 @@ impl<'tu, 'p> FunctionDefinitionFrame<'p> {
                     // A head that is not a function declarator only became a
                     // definition because a declaration followed it; the usual
                     // cause is a missing `;` after it.
-                    let head_is_function = parser
-                        .declaration_head_declarator(self.head)
-                        .and_then(|declarator| parser.function_suffix(declarator))
+                    let head_is_function = self
+                        .head
+                        .head_declarator()
+                        .and_then(Declarator::function_suffix)
                         .is_some();
                     if !self.suggested_missing_semicolon
                         && !head_is_function
-                        && let Some(declarator) = parser.declaration_head_declarator(self.head)
+                        && let Some(declarator) = self.head.head_declarator()
                     {
                         self.suggested_missing_semicolon = true;
                         parser.suggest_semicolon_after(context, declarator.source_vectors);
@@ -228,7 +235,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'p> {
                     // would swallow every later declaration, so end it here
                     // and let the token start the next external declaration.
                     let head_is_doubtful = !self.declaration_list.is_empty()
-                        && (!head_is_function || parser.syntax[self.head].recovered);
+                        && (!head_is_function || self.head.recovered);
                     if token.is_none() || head_is_doubtful {
                         let body_source = parser.missing_syntax_source(context);
                         let body = parser.push_syntax(Statement {
@@ -257,7 +264,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'p> {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("old-style declaration returned an unexpected value: {returned:?}");
                 };
-                let source = parser.syntax[declaration].source_vectors;
+                let source = declaration.source_vectors;
                 self.source_vectors = Some(
                     self.source_vectors
                         .map_or(source, |existing| context.merge_vectors(existing, source)),
@@ -269,14 +276,14 @@ impl<'tu, 'p> FunctionDefinitionFrame<'p> {
                 // missing `;` after the head: say so on its diagnostic,
                 // unless that diagnostic already proposes its own insertion
                 // point (a `;` missing after this declaration as well).
-                if parser.syntax[declaration].recovered
+                if declaration.recovered
                     && !self.suggested_missing_semicolon
                     && matches!(
                         context.pending_errors.back(),
                         Some(TranslationError::Parsing(error)) if error.insertion_point.is_none()
                     )
-                    && let Some(declarator) = parser.declaration_head_declarator(self.head)
-                    && parser.function_suffix(declarator).is_none()
+                    && let Some(declarator) = self.head.head_declarator()
+                    && declarator.function_suffix().is_none()
                 {
                     self.suggested_missing_semicolon = true;
                     parser.suggest_semicolon_after(context, declarator.source_vectors);
@@ -299,9 +306,10 @@ impl<'tu, 'p> FunctionDefinitionFrame<'p> {
             },
             | FunctionDefinitionPhase::Finish => {
                 debug_assert!(returned.is_none());
-                let head = parser.syntax[self.head];
-                let declarator = parser
-                    .declaration_head_declarator(self.head)
+                let head = *self.head;
+                let declarator = self
+                    .head
+                    .head_declarator()
                     .expect("function definition head remains available");
                 let declaration_start = parser.append_syntax(&mut self.declaration_list);
                 let recovered = parser.hard_error_count > self.starting_error_count;

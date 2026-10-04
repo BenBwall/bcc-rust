@@ -94,11 +94,9 @@ fn complete_translation_unit_retains_roots_already_streamed() {
             let ExternalDeclaration::Declaration(index) = *root else {
                 panic!("expected a declaration root")
             };
-            let declaration = unit.syntax().declaration(index);
-            let declarator = declaration.init_declarators()[0].declarator;
-            let identifier = unit
-                .syntax()
-                .direct_declarators(declarator.kind)
+            let declarator = index.init_declarators[0].declarator;
+            let identifier = declarator
+                .kind
                 .iter()
                 .find_map(|direct| match direct {
                     | DirectDeclarator::Identifier(identifier) => Some(*identifier),
@@ -141,9 +139,9 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
             let ExternalDeclaration::Declaration(index) = *root else {
                 panic!("expected a declaration root")
             };
-            let declarator = unit.syntax().declaration(index).init_declarators()[0].declarator;
-            unit.syntax()
-                .direct_declarators(declarator.kind)
+            let declarator = index.init_declarators[0].declarator;
+            declarator
+                .kind
                 .iter()
                 .find_map(|direct| match direct {
                     | DirectDeclarator::Identifier(identifier) => Some(*identifier),

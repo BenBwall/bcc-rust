@@ -18,6 +18,7 @@ use std::{
 
 use super::{
     declaration_syntax::{
+        Declaration,
         DirectDeclarator,
         Enumerator,
         InitDeclarator,
@@ -37,7 +38,6 @@ use super::{
     struct_or_union::StructOrUnionSpecifierFrame,
     syntax::{
         BlockItem,
-        DeclarationIndex,
         Identifier,
     },
 };
@@ -131,14 +131,14 @@ pub(super) struct FramePools<'tu, 'p> {
     pub(super) pointer_qualifiers: VecPool<'p, TypeQualifiers>,
     pub(super) direct_declarators: VecPool<'p, DirectDeclarator<'tu>>,
     pub(super) init_declarators: VecPool<'p, InitDeclarator<'tu>>,
-    pub(super) block_items: VecPool<'p, BlockItem>,
+    pub(super) block_items: VecPool<'p, BlockItem<'tu>>,
     pub(super) initializers: VecPool<'p, InitializerElement<'tu>>,
     pub(super) parameters: VecPool<'p, ParameterDeclaration<'tu>>,
     pub(super) identifiers: VecPool<'p, Identifier>,
     pub(super) struct_members: VecPool<'p, StructDeclaration<'tu>>,
     pub(super) struct_declarators: VecPool<'p, StructDeclarator<'tu>>,
     pub(super) enumerators: VecPool<'p, Enumerator<'tu>>,
-    pub(super) declarations: VecPool<'p, DeclarationIndex>,
+    pub(super) declarations: VecPool<'p, &'tu Declaration<'tu>>,
     /// Call states, reused with the capacity of their lists.
     pub(super) calls: BoxPool<'p, CallState<'tu, 'p>>,
     /// Designation states, reused with the capacity of their lists.

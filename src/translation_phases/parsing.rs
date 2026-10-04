@@ -131,7 +131,7 @@ pub(crate) struct Parser<'tu, 'p> {
     /// [`Self::push_syntax`] and [`Self::append_syntax`].
     syntax_nodes: usize,
     /// Roots already returned through the streaming adapter.
-    emitted_roots: Vec<ExternalDeclaration>,
+    emitted_roots: Vec<ExternalDeclaration<'tu>>,
     /// Parser-visible ordinary-name classification used for typedef ambiguity.
     scopes: ScopeStack<'p>,
     /// Function-local label namespaces, independent of ordinary identifiers.
@@ -196,12 +196,12 @@ impl Default for ParserLimits {
 /// semantic-analysis phase. Parser-machine state is deliberately not exposed.
 #[derive(Debug)]
 pub(crate) struct ParsedTranslationUnit<'tu> {
-    roots:  Box<[ExternalDeclaration]>,
+    roots:  Box<[ExternalDeclaration<'tu>]>,
     syntax: SyntaxTree<'tu>,
 }
 
 impl<'tu> ParsedTranslationUnit<'tu> {
-    pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration] {
+    pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration<'tu>] {
         &self.roots
     }
 
@@ -236,8 +236,8 @@ impl SetSourceFileIndex for Parser<'_, '_> {
     }
 }
 
-impl TranslationPhase<'_> for Parser<'_, '_> {
-    type Item = ExternalDeclaration;
+impl<'tu> TranslationPhase<'_> for Parser<'tu, '_> {
+    type Item = ExternalDeclaration<'tu>;
 
     fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item> {
         let root = self.drive(context)?;

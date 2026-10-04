@@ -94,7 +94,7 @@ impl<'tu, 'p> ExternalDeclarationFrame {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("declaration frame returned an unexpected value: {returned:?}");
                 };
-                let is_definition = parser.declaration_is_definition_head(declaration)
+                let is_definition = declaration.is_definition_head()
                     && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                         || token.is_some_and(|token| parser.declaration_starter(token)));
                 if is_definition {
@@ -108,8 +108,8 @@ impl<'tu, 'p> ExternalDeclarationFrame {
                     ));
                 }
                 if parser.hard_error_count > self.starting_error_count {
-                    if !parser.declaration_is_meaningful(declaration) {
-                        let declaration_source = parser.syntax[declaration].source_vectors;
+                    if !declaration.is_meaningful() {
+                        let declaration_source = declaration.source_vectors;
                         let source = if declaration_source.length == 0 {
                             token.map_or(declaration_source, |token| token.source_vectors)
                         } else {

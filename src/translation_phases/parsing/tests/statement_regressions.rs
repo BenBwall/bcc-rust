@@ -37,11 +37,11 @@ fn error_offsets(parsed: &Parsed<'_, '_>) -> Vec<usize> {
 }
 
 /// Returns the block items of the first function definition's body.
-fn body_items<'a>(parsed: &'a Parsed<'_, '_>) -> &'a [BlockItem] {
+fn body_items<'a, 'tu>(parsed: &'a Parsed<'_, 'tu>) -> &'a [BlockItem<'tu>] {
     block_items(parsed, function_definition(parsed, 0).body)
 }
 
-fn statement_item(items: &[BlockItem], index: usize) -> StatementIndex {
+fn statement_item(items: &[BlockItem<'_>], index: usize) -> StatementIndex {
     let BlockItem::Statement(statement) = items[index] else {
         panic!("expected a statement block item: {items:?}");
     };

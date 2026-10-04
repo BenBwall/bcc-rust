@@ -10,6 +10,7 @@ use super::{
     },
     declaration_syntax::{
         DeclarationSpecifiers,
+        Declarator,
         DirectDeclarator,
         ParameterDeclaration,
     },
@@ -33,6 +34,7 @@ use super::{
     scope::{
         NameClass,
         ScopeKind,
+        list_key,
     },
     syntax::Identifier,
 };
@@ -74,7 +76,7 @@ pub(super) struct ParameterListFrame<'tu, 'p> {
     /// K&R identifiers accumulated before arena insertion.
     pub(super) identifiers: ArenaVec<'p, Identifier>,
     /// Specifiers retained while an optional parameter declarator runs.
-    pending_specifiers: Option<DeclarationSpecifiers>,
+    pending_specifiers: Option<DeclarationSpecifiers<'tu>>,
     /// Specifier provenance retained for parameter-source construction.
     pending_source: Option<SourceVectors>,
     /// Whether `...` terminated the prototype parameter list.
@@ -458,8 +460,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 // Parameter names enter prototype scope as soon as
                 // their declarator completes
                 // and may hide typedefs in later entries.
-                if let Some(identifier) =
-                    declarator.and_then(|declarator| parser.declarator_identifier(declarator))
+                if let Some(identifier) = declarator.and_then(Declarator::identifier)
                     && parser
                         .scopes
                         .publish_reporting_new(identifier.name, NameClass::Ordinary)
@@ -677,7 +678,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     self.entry_scope_depth
                         .expect("parameter list entered prototype scope"),
                 );
-                let start = parser.append_syntax(&mut self.identifiers);
+                let start = parser.alloc_syntax_list(&mut self.identifiers);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {
                     direct_declarator: DirectDeclarator::KAndRStyleFunction { parameters: start },
                     source_vectors:    context.merge_vector_list(&self.source_vectors),
@@ -698,13 +699,11 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 let entry_scope_depth = self
                     .entry_scope_depth
                     .expect("parameter list entered prototype scope");
-                let start = parser.append_syntax(&mut self.parameters);
+                let start = parser.alloc_syntax_list(&mut self.parameters);
                 if entry_scope_depth == 0
                     && parser.scopes.innermost_binding_count() > self.parameter_name_bindings
                 {
-                    parser
-                        .scopes
-                        .retain_innermost_bindings((start.start_index, start.length));
+                    parser.scopes.retain_innermost_bindings(list_key(start));
                 }
                 parser.scopes.restore_depth(entry_scope_depth);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {

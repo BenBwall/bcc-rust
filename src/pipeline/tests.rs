@@ -243,7 +243,7 @@ fn parser_yields_declarations_and_exposes_the_syntax_store() {
         ));
         assert!(parser.next_item(context).is_none());
         assert!(
-            format!("{:#?}", parser.syntax_debug()).contains("declarations:"),
+            format!("{:#?}", parser.syntax_debug()).contains("SyntaxStore"),
             "the debug view should expose the arena referenced by parser output"
         );
     });
@@ -286,11 +286,8 @@ fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
     let ExternalDeclaration::Declaration(second) = unit.external_declarations()[1] else {
         panic!("expected the second root to be a declaration")
     };
-    assert_eq!(unit.syntax().declaration(first).init_declarators().len(), 1);
-    assert_eq!(
-        unit.syntax().declaration(second).init_declarators().len(),
-        1
-    );
+    assert_eq!(first.init_declarators.len(), 1);
+    assert_eq!(second.init_declarators.len(), 1);
 }
 
 #[test]
@@ -363,42 +360,36 @@ fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
     );
     let unit = LanguageParser::new(preprocessor, &mut context, &parse_arena)
         .parse_translation_unit(&mut context);
-    let tree = unit.syntax();
 
     let ExternalDeclaration::Declaration(struct_root) = unit.external_declarations()[0] else {
         panic!("expected struct declaration")
     };
-    let TypeSpecifiers::StructOrUnion(struct_index) = tree
-        .declaration(struct_root)
-        .syntax()
-        .declaration_specifiers
-        .type_specifiers
+    let TypeSpecifiers::StructOrUnion(specifier) =
+        struct_root.declaration_specifiers.type_specifiers
     else {
         panic!("expected struct type specifier")
     };
-    let members = tree.struct_declarations(
-        tree.struct_or_union_specifier(struct_index)
-            .struct_declaration_list
-            .expect("struct definition has members"),
-    );
+    let members = specifier
+        .struct_declaration_list
+        .expect("struct definition has members");
     assert_eq!(members[0].type_specifiers, TypeSpecifiers::Int);
-    let member_declarators = tree.struct_declarators(members[0].struct_declarator_list);
+    let member_declarators = members[0].struct_declarator_list;
     assert!(member_declarators[0].declarator.is_some());
     assert!(member_declarators[0].bitfield_width.is_some());
 
     let ExternalDeclaration::Declaration(function_root) = unit.external_declarations()[1] else {
         panic!("expected function declaration")
     };
-    let declarator = tree.declaration(function_root).init_declarators()[0].declarator;
-    let parameter_list = tree
-        .direct_declarators(declarator.kind)
+    let declarator = function_root.init_declarators[0].declarator;
+    let parameter_list = declarator
+        .kind
         .iter()
         .find_map(|direct| match direct {
             | DirectDeclarator::Function { parameter_list, .. } => Some(*parameter_list),
             | _ => None,
         })
         .expect("function declarator has a parameter list");
-    let parameters = tree.parameter_declarations(parameter_list);
+    let parameters = parameter_list;
     assert_eq!(
         parameters[0].declaration_specifiers.type_specifiers,
         TypeSpecifiers::Int

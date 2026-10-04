@@ -38,10 +38,7 @@ use super::{
     },
     scope::NameClass,
     statement::is_statement_keyword,
-    syntax::{
-        DeclarationIndex,
-        StorageClass,
-    },
+    syntax::StorageClass,
 };
 use crate::{
     translation_phases::{
@@ -69,7 +66,7 @@ pub(super) struct DeclarationFrame<'tu, 'p> {
     /// Current declaration transition.
     phase: DeclarationPhase,
     /// Specifiers shared by every init-declarator in this declaration.
-    declaration_specifiers: Option<DeclarationSpecifiers>,
+    declaration_specifiers: Option<DeclarationSpecifiers<'tu>>,
     /// Init-declarators parsed so far, stored as one list when the
     /// declaration reduces.
     pub(super) init_declarators: ArenaVec<'p, InitDeclarator<'tu>>,
@@ -256,7 +253,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 // before its initializer or a
                 // later comma-separated declarator. Publish
                 // now so typedef shadowing affects the very next token.
-                if let Some(identifier) = parser.declarator_identifier(declarator) {
+                if let Some(identifier) = declarator.identifier() {
                     let class = if self.declaration_specifiers.is_some_and(|specifiers| {
                         specifiers.storage_class == Some(StorageClass::Typedef)
                     }) {
@@ -320,10 +317,10 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 {
                     self.init_declarators
                         .first()
-                        .and_then(|init| parser.function_suffix(init.declarator))
+                        .and_then(|init| init.declarator.function_suffix())
                         .and_then(|suffix| match suffix {
                             | DirectDeclarator::KAndRStyleFunction { parameters } => Some(
-                                parser.syntax[parameters]
+                                parameters
                                     .iter()
                                     .map(|parameter| parameter.name)
                                     .collect::<Vec<_>>(),
@@ -536,8 +533,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 // slices and source ranges are
                 // stable before the handle is returned.
                 let source_vectors = context.merge_vector_list(&self.source_vectors);
-                let init_declarators = parser.append_syntax(&mut self.init_declarators);
-                let index = parser.push_syntax(Declaration {
+                let init_declarators = parser.alloc_syntax_list(&mut self.init_declarators);
+                let declaration = parser.alloc_syntax(Declaration {
                     declaration_specifiers: self
                         .declaration_specifiers
                         .expect("a declaration cannot finish without specifiers"),
@@ -546,7 +543,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     recovered: parser.hard_error_count > self.starting_error_count,
                     is_function_definition_head: self.is_function_definition_head,
                 });
-                ParseAction::Reduce(ParseValue::Declaration(DeclarationIndex(index)))
+                ParseAction::Reduce(ParseValue::Declaration(declaration))
             },
         }
     }

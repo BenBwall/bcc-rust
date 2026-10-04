@@ -310,7 +310,7 @@ fn prototype_declaration_list_is_retained_in_one_recovered_function() {
             ParserErrorType::DeclarationListAfterParameterTypeList
         )));
         let definition = function_definition(parsed, 0);
-        assert_eq!(definition.declaration_list.length(), 1);
+        assert_eq!(definition.declaration_list.length, 1);
         assert!(matches!(
             parsed.parser.syntax[definition.body].kind,
             StatementType::Compound { .. }

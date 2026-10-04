@@ -6,14 +6,12 @@ use super::{
     declaration,
     function_definition,
     identifier_name,
-    init_declarators,
     parser_errors,
     with_parse,
 };
 use crate::translation_phases::{
     TranslationError,
     parsing::{
-        declaration_syntax::TypeSpecifiers,
         errors::ParserErrorType,
         syntax::ExternalDeclaration,
     },
@@ -87,7 +85,9 @@ fn every_ordering_of_every_c99_type_specifier_multiset_is_accepted() {
     ];
     let mut failures = Vec::new();
     for multiset in multisets {
-        let mut canonical: Option<TypeSpecifiers> = None;
+        // Each parse has its own tree, so the normalized specifiers are
+        // compared by their (reference-free) debug form.
+        let mut canonical: Option<String> = None;
         for ordering in orderings(multiset) {
             let source = format!("{} x;\n", ordering.join(" "));
             with_parse(&source, |parsed| {
@@ -96,13 +96,16 @@ fn every_ordering_of_every_c99_type_specifier_multiset_is_accepted() {
                     failures.push(format!("{source:?}: {errors:?}"));
                     return;
                 }
-                let type_specifiers = declaration(parsed, 0)
-                    .declaration_specifiers
-                    .type_specifiers;
-                match canonical {
+                let type_specifiers = format!(
+                    "{:?}",
+                    declaration(parsed, 0)
+                        .declaration_specifiers
+                        .type_specifiers
+                );
+                match &canonical {
                     | None => canonical = Some(type_specifiers),
-                    | Some(expected) if expected != type_specifiers => failures.push(format!(
-                        "{source:?}: normalized to {type_specifiers:?}, expected {expected:?}"
+                    | Some(expected) if *expected != type_specifiers => failures.push(format!(
+                        "{source:?}: normalized to {type_specifiers}, expected {expected}"
                     )),
                     | Some(_) => {},
                 }
@@ -213,8 +216,7 @@ fn old_style_head_with_recovered_error_keeps_its_declaration_list_and_body() {
             );
             let definition = function_definition(parsed, 0);
             assert_eq!(
-                definition.declaration_list.length(),
-                list_length,
+                definition.declaration_list.length, list_length,
                 "{source:?}"
             );
             assert_eq!(block_items(parsed, definition.body).len(), 1, "{source:?}");
@@ -232,7 +234,7 @@ fn old_style_head_with_recovered_error_keeps_its_declaration_list_and_body() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("y")
@@ -348,7 +350,7 @@ fn unknown_type_name_is_reported_once() {
                 assert_eq!(
                     identifier_name(
                         parsed,
-                        init_declarators(parsed, declaration(parsed, 0))[0].declarator
+                        declaration(parsed, 0).init_declarators[0].declarator
                     )
                     .as_deref(),
                     Some(name),
@@ -396,7 +398,7 @@ fn unknown_type_name_before_specifier_keyword_is_reported_once() {
                 assert_eq!(
                     identifier_name(
                         parsed,
-                        init_declarators(parsed, declaration(parsed, 0))[0].declarator
+                        declaration(parsed, 0).init_declarators[0].declarator
                     )
                     .as_deref(),
                     Some(name),

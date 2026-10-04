@@ -58,13 +58,13 @@ pub(super) enum SpecifierMode {
     clippy::struct_excessive_bools,
     reason = "The booleans record independent facts about the specifier sequence."
 )]
-pub(super) struct DeclarationSpecifiersFrame {
+pub(super) struct DeclarationSpecifiersFrame<'tu> {
     /// Current collection/child-wait transition.
     phase:                  DeclarationSpecifiersPhase,
     /// Grammar context limiting legal specifier families.
     mode:                   SpecifierMode,
     /// Accumulated normalized specifier result.
-    specifiers:             DeclarationSpecifiers,
+    specifiers:             DeclarationSpecifiers<'tu>,
     /// Whether at least one legal specifier has been consumed.
     consumed:               bool,
     /// Whether a storage-class specifier has already appeared.
@@ -97,7 +97,7 @@ pub(super) enum DeclarationSpecifiersPhase {
     AwaitEnum,
 }
 
-impl<'tu, 'p> DeclarationSpecifiersFrame {
+impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
     pub(super) fn new(mode: SpecifierMode) -> Self {
         Self {
             phase: DeclarationSpecifiersPhase::Collect,
@@ -137,7 +137,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame {
                     .type_specifiers
                     .make_struct_or_union(parser, context, index, token);
                 {
-                    let source_vectors = parser.syntax[index].source_vectors;
+                    let source_vectors = index.source_vectors;
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
                             context.merge_vectors(existing, source_vectors)
@@ -166,7 +166,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame {
                     .type_specifiers
                     .make_enum(parser, context, index, token);
                 {
-                    let source_vectors = parser.syntax[index].source_vectors;
+                    let source_vectors = index.source_vectors;
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
                             context.merge_vectors(existing, source_vectors)

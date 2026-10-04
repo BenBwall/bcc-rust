@@ -5,7 +5,6 @@ use super::{
     declaration,
     function_definition,
     identifier_name,
-    init_declarators,
     parser_errors,
     sourced_text,
     with_parse,
@@ -83,7 +82,7 @@ fn missing_declarators_skip_post_declarator_diagnostics() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -223,7 +222,7 @@ fn named_parameter_declarators_retain_nested_k_and_r_identifier_lists() {
                 | _ => None,
             })
             .expect("callback retains a K&R identifier-list suffix");
-        assert_eq!(parameters.length, 1);
+        assert_eq!(parameters.len(), 1);
         assert_eq!(
             parsed
                 .context
@@ -307,7 +306,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -343,7 +342,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -355,7 +354,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -367,7 +366,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -379,7 +378,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -391,7 +390,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 0))[0].declarator
+                declaration(parsed, 0).init_declarators[0].declarator
             )
             .as_deref(),
             Some("f")
@@ -399,7 +398,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -418,7 +417,7 @@ fn nested_recovery_stops_before_grammar_starters() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -460,7 +459,7 @@ fn malformed_parameter_after_ellipsis_terminates() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -482,7 +481,7 @@ fn malformed_array_bound_recovery_stops_at_the_owning_bracket() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -510,7 +509,7 @@ fn malformed_children_stop_at_unambiguous_owning_delimiters() {
             assert_eq!(
                 identifier_name(
                     parsed,
-                    init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                    declaration(parsed, 1).init_declarators[0].declarator
                 )
                 .as_deref(),
                 Some("after"),
@@ -531,7 +530,7 @@ fn malformed_initializer_recovery_preserves_the_next_declaration() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -550,7 +549,7 @@ fn malformed_array_bound_recovery_preserves_the_next_declaration() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -630,7 +629,7 @@ fn declaration_recovery_keeps_semicolons_inside_nested_braces() {
             assert_eq!(
                 identifier_name(
                     parsed,
-                    init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                    declaration(parsed, 1).init_declarators[0].declarator
                 )
                 .as_deref(),
                 Some("after")
@@ -657,7 +656,7 @@ fn initializer_recovery_unwinds_at_a_top_level_closing_brace() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -676,7 +675,7 @@ fn initializer_recovery_preserves_an_enclosing_brace_despite_unbalanced_children
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -701,7 +700,7 @@ fn array_recovery_unwinds_at_the_enclosing_declaration_semicolon() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -760,7 +759,7 @@ fn array_recovery_preserves_an_enclosing_closing_parenthesis() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -779,7 +778,7 @@ fn struct_recovery_preserves_an_enclosing_closing_parenthesis() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -798,7 +797,7 @@ fn array_recovery_unwinds_at_semicolons_despite_unbalanced_children() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -823,7 +822,7 @@ fn parameter_recovery_unwinds_at_the_enclosing_declaration_semicolon() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -842,7 +841,7 @@ fn parameter_recovery_unwinds_at_semicolons_despite_unbalanced_children() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -867,7 +866,7 @@ fn parameter_recovery_preserves_an_enclosing_closing_brace() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -893,7 +892,7 @@ fn enum_recovery_unwinds_at_the_enclosing_declaration_semicolon() {
             assert_eq!(
                 identifier_name(
                     parsed,
-                    init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                    declaration(parsed, 1).init_declarators[0].declarator
                 )
                 .as_deref(),
                 Some("after"),
@@ -914,7 +913,7 @@ fn enum_recovery_preserves_an_enclosing_closing_parenthesis() {
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -1047,7 +1046,7 @@ fn prototype_enumerators_stop_hiding_file_scope_typedefs_at_the_closing_parenthe
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 2))[0].declarator
+                declaration(parsed, 2).init_declarators[0].declarator
             )
             .as_deref(),
             Some("y")
@@ -1157,7 +1156,7 @@ fn parameter_recovery_consumes_nested_parentheses_before_the_owning_separator() 
         assert_eq!(
             identifier_name(
                 parsed,
-                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                declaration(parsed, 1).init_declarators[0].declarator
             )
             .as_deref(),
             Some("after")
@@ -1212,13 +1211,13 @@ fn hard_syntax_errors_retain_an_explicitly_recovered_declaration() {
         };
 
         let declaration = &parsed.parser.syntax[index];
-        assert_eq!(declaration.init_declarators.length, 1);
+        assert_eq!(declaration.init_declarators.len(), 1);
         assert!(parser_errors(parsed).any(|error| {
             matches!(error, ParserErrorType::ExpectedStatementExpression(..))
                 && error.severity() == ErrorSeverity::Error
         }));
         assert_eq!(
-            identifier_name(parsed, init_declarators(parsed, declaration)[0].declarator).as_deref(),
+            identifier_name(parsed, declaration.init_declarators[0].declarator).as_deref(),
             Some("array")
         );
     });
@@ -1352,7 +1351,7 @@ fn migrated_nodes_retain_their_exact_owned_token_provenance() {
         "int (*value);\nint function(const char *name, unsigned count);\nstruct S { int first, \
          *second; unsigned bits:3; };\n",
         |parsed| {
-            let parenthesized = init_declarators(parsed, declaration(parsed, 0))[0].declarator;
+            let parenthesized = declaration(parsed, 0).init_declarators[0].declarator;
             let parenthesized_source = parenthesized.source_vectors;
             assert_eq!(sourced_text(parsed, parenthesized_source), "(*value)");
             assert_eq!(

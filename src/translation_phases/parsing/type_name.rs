@@ -35,7 +35,7 @@ use crate::translation_phases::{
 #[derive(Debug, Clone, Copy)]
 pub(super) struct TypeNameFrame<'tu> {
     phase:                  TypeNamePhase<'tu>,
-    declaration_specifiers: Option<DeclarationSpecifiers>,
+    declaration_specifiers: Option<DeclarationSpecifiers<'tu>>,
     starting_error_count:   usize,
 }
 

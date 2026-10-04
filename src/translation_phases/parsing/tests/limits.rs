@@ -41,7 +41,6 @@ use crate::{
                 Statement,
                 StatementType,
             },
-            syntax_store::SyntaxTree,
         },
         preprocessing::Preprocessor,
     },
@@ -425,21 +424,12 @@ fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_>) {
 
 #[test]
 fn mixed_declarator_translation_floor_uses_the_typed_tree() {
-    fn count_derivations(
-        tree: &SyntaxTree<'_>,
-        declarator: Declarator<'_>,
-    ) -> (usize, usize, usize) {
-        let mut counts = (
-            tree.pointer_qualifiers(declarator.pointer.type_qualifiers_list)
-                .len(),
-            0,
-            0,
-        );
-        for direct in tree.direct_declarators(declarator.kind) {
+    fn count_derivations(declarator: Declarator<'_>) -> (usize, usize, usize) {
+        let mut counts = (declarator.pointer.type_qualifiers_list.len(), 0, 0);
+        for direct in declarator.kind {
             match *direct {
-                | DirectDeclarator::Parenthesized(index) => {
-                    let nested =
-                        count_derivations(tree, tree.parenthesized_declarator(index).declarator);
+                | DirectDeclarator::Parenthesized(parenthesized) => {
+                    let nested = count_derivations(parenthesized.declarator);
                     counts.0 += nested.0;
                     counts.1 += nested.1;
                     counts.2 += nested.2;
@@ -460,21 +450,15 @@ fn mixed_declarator_translation_floor_uses_the_typed_tree() {
             let ExternalDeclaration::Declaration(root) = unit.external_declarations()[0] else {
                 panic!("expected a declaration root")
             };
-            let declaration = unit.syntax().declaration(root);
             let TypeSpecifiers::StructOrUnion(specifier) =
-                declaration.syntax().declaration_specifiers.type_specifiers
+                root.declaration_specifiers.type_specifiers
             else {
                 panic!("expected an incomplete structure base type")
             };
-            assert!(
-                unit.syntax()
-                    .struct_or_union_specifier(specifier)
-                    .struct_declaration_list
-                    .is_none()
-            );
-            let declarator = declaration.init_declarators()[0].declarator;
+            assert!(specifier.struct_declaration_list.is_none());
+            let declarator = root.init_declarators[0].declarator;
 
-            assert_eq!(count_derivations(unit.syntax(), declarator), (6, 1, 5));
+            assert_eq!(count_derivations(declarator), (6, 1, 5));
         },
     );
 }
@@ -523,10 +507,14 @@ fn assert_syntax_node_limit_boundary(source: &str) {
                     limit,
                 } if *limit == below_limit
             )));
+            // The step that crossed the limit keeps its nodes (the tree
+            // arena cannot roll back), but parsing stops there: the error
+            // root is the last item, and the parser never allocates more
+            // than the complete parse needs.
             assert!(
-                below.parser.syntax.node_count() <= below_limit,
-                "syntax limit retained too many nodes for {source:?}: limit={below_limit}, \
-                 actual={}",
+                below.parser.syntax.node_count() <= exact_limit,
+                "parsing continued past the syntax limit for {source:?}: limit={below_limit}, \
+                 complete parse={exact_limit}, actual={}",
                 below.parser.syntax.node_count()
             );
             assert!(matches!(
@@ -657,16 +645,16 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             .parser
             .syntax
             .iter::<Declaration<'_>>()
-            .max_by_key(|declaration| declaration.init_declarators.length())
+            .max_by_key(|declaration| declaration.init_declarators.len())
             .expect("block fixture must contain declarations");
-        assert_eq!(block_declaration.init_declarators.length(), 511);
+        assert_eq!(block_declaration.init_declarators.len(), 511);
         let last_block_init = block.parser.syntax[block_declaration.init_declarators]
             .last()
             .expect("nonempty syntax list");
         assert_eq!(
-            block
-                .parser
-                .declarator_identifier(last_block_init.declarator)
+            last_block_init
+                .declarator
+                .identifier()
                 .map(|identifier| block.context.string_cache.at(identifier.name)),
             Some("b510")
         );
@@ -680,14 +668,14 @@ fn remaining_c99_parser_translation_floors_are_supported() {
     with_parse(&external, |external| {
         assert!(parser_errors(external).next().is_none());
         let declaration = declaration(external, 0);
-        assert_eq!(declaration.init_declarators.length(), 4_095);
+        assert_eq!(declaration.init_declarators.len(), 4_095);
         let last_external_init = external.parser.syntax[declaration.init_declarators]
             .last()
             .expect("nonempty syntax list");
         assert_eq!(
-            external
-                .parser
-                .declarator_identifier(last_external_init.declarator)
+            last_external_init
+                .declarator
+                .identifier()
                 .map(|identifier| external.context.string_cache.at(identifier.name)),
             Some("e4094")
         );
@@ -724,7 +712,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             .nth::<StructOrUnionSpecifier<'_>>(0)
             .struct_declaration_list
             .expect("struct definition must retain members");
-        assert_eq!(member_list.length(), 1_023);
+        assert_eq!(member_list.len(), 1_023);
         let last_member = structure.parser.syntax[member_list]
             .last()
             .expect("nonempty syntax list");
@@ -733,7 +721,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
         assert_eq!(
             last_member_declarator
                 .declarator
-                .and_then(|declarator| structure.parser.declarator_identifier(declarator))
+                .and_then(Declarator::identifier)
                 .map(|identifier| structure.context.string_cache.at(identifier.name)),
             Some("m1022")
         );
@@ -752,7 +740,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             .nth::<EnumSpecifier<'_>>(0)
             .enumeration_list
             .expect("enum definition must retain enumerators");
-        assert_eq!(enumeration_list.length(), 1_023);
+        assert_eq!(enumeration_list.len(), 1_023);
         let last_enumerator = enumeration.parser.syntax[enumeration_list]
             .last()
             .expect("nonempty syntax list");

@@ -31,7 +31,6 @@ use super::{
     statement::is_statement_keyword,
     syntax::{
         ConstantExpression,
-        EnumSpecifierIndex,
         Identifier,
     },
 };
@@ -580,14 +579,14 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
     ) -> ParseAction<'tu, 'p> {
         let enumeration_list = self
             .body_started
-            .then(|| parser.append_syntax(&mut self.enumerators));
-        let index = parser.push_syntax(EnumSpecifier {
+            .then(|| parser.alloc_syntax_list(&mut self.enumerators));
+        let index = parser.alloc_syntax(EnumSpecifier {
             name: self.name,
             enumeration_list,
             source_vectors: context.merge_vector_list(&self.source_vectors),
         });
         ParseAction::Reduce(ParseValue::EnumSpecifier(EnumSpecifierResult {
-            index: EnumSpecifierIndex(index),
+            index,
             stopped_before_declaration: self.stopped_before_declaration,
         }))
     }

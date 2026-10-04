@@ -14,11 +14,13 @@ use std::{
 
 use super::{
     declaration_syntax::{
+        Declaration,
         Declarator,
         Designation,
         Designator,
         DesignatorType,
         DirectDeclarator,
+        EnumSpecifier,
         Enumerator,
         InitDeclarator,
         Initializer,
@@ -28,6 +30,7 @@ use super::{
         StructDeclaration,
         StructDeclarator,
         StructOrUnion,
+        StructOrUnionSpecifier,
         TypeName,
         TypeQualifiers,
         TypeSpecifiers,
@@ -37,8 +40,6 @@ use super::{
         BlockItem,
         Constant,
         ConstantExpressionSlot,
-        DeclarationIndex,
-        EnumSpecifierIndex,
         Expression,
         ExpressionSlot,
         ExpressionType,
@@ -49,7 +50,6 @@ use super::{
         StatementIndex,
         StatementType,
         StorageClass,
-        StructOrUnionSpecifierIndex,
         UnaryOperator,
     },
     syntax_store::SyntaxTree,
@@ -74,18 +74,18 @@ pub(crate) struct InspectionOptions {
 }
 
 enum Work<'tu> {
-    Root(ExternalDeclaration, usize),
-    Declaration(DeclarationIndex, usize, &'static str),
+    Root(ExternalDeclaration<'tu>, usize),
+    Declaration(&'tu Declaration<'tu>, usize, &'static str),
     InitDeclarator(InitDeclarator<'tu>, usize),
     Function(FunctionDefinitionIndex, usize, &'static str),
     Declarator(Declarator<'tu>, usize, &'static str),
     DirectDeclarator(DirectDeclarator<'tu>, usize),
     Identifier(Identifier, usize, &'static str),
     Parameter(ParameterDeclaration<'tu>, usize),
-    StructOrUnion(StructOrUnionSpecifierIndex, usize),
+    StructOrUnion(&'tu StructOrUnionSpecifier<'tu>, usize),
     StructDeclaration(StructDeclaration<'tu>, usize),
     StructDeclarator(StructDeclarator<'tu>, usize),
-    Enum(EnumSpecifierIndex, usize),
+    Enum(&'tu EnumSpecifier<'tu>, usize),
     Enumerator(Enumerator<'tu>, usize),
     Statement(StatementIndex, usize, &'static str),
     Expression(&'tu Expression<'tu>, usize, &'static str),
@@ -104,7 +104,7 @@ impl<'tu> SyntaxTree<'tu> {
     )]
     pub(crate) fn inspect(
         &self,
-        roots: &[ExternalDeclaration],
+        roots: &[ExternalDeclaration<'tu>],
         context: &Context<'_>,
         options: InspectionOptions,
     ) -> String {
@@ -117,6 +117,7 @@ impl<'tu> SyntaxTree<'tu> {
             .map(|(ordinal, root)| Work::Root(root, ordinal))
             .collect::<Vec<_>>();
         let mut seen = HashSet::new();
+        let mut seen_declarators = HashSet::new();
         // Nodes reached through references, keyed by kind and address, with
         // the order in which each was first visited.
         let mut visited = HashMap::new();
@@ -144,21 +145,19 @@ impl<'tu> SyntaxTree<'tu> {
                         options,
                     ),
                 },
-                | Work::Declaration(index, indent, role) => {
-                    if !seen.insert((0_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Declaration(declaration, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 0, declaration) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "declaration",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let view = self.declaration(index);
-                    let declaration = view.syntax();
                     Self::line(
                         &mut output,
                         indent,
@@ -174,7 +173,7 @@ impl<'tu> SyntaxTree<'tu> {
                                 .declaration_specifiers
                                 .storage_class
                                 .map_or("none", StorageClass::spelling),
-                            self.type_label(
+                            Self::type_label(
                                 declaration.declaration_specifiers.type_specifiers,
                                 context,
                             ),
@@ -193,7 +192,7 @@ impl<'tu> SyntaxTree<'tu> {
                         context,
                         options,
                     );
-                    for init in view.init_declarators().iter().rev() {
+                    for init in declaration.init_declarators.iter().rev() {
                         work.push(Work::InitDeclarator(*init, indent + 1));
                     }
                     Self::push_type_details(
@@ -203,8 +202,9 @@ impl<'tu> SyntaxTree<'tu> {
                     );
                 },
                 | Work::InitDeclarator(init, indent) => {
-                    let name = self
-                        .declarator_identifier(init.declarator)
+                    let name = init
+                        .declarator
+                        .identifier()
                         .map_or("<abstract>", |identifier| {
                             context.string_cache.at(identifier.name)
                         });
@@ -235,8 +235,9 @@ impl<'tu> SyntaxTree<'tu> {
                         continue;
                     }
                     let function = self.function_definition(index);
-                    let name = self
-                        .declarator_identifier(function.declarator)
+                    let name = function
+                        .declarator
+                        .identifier()
                         .map_or("<anonymous>", |identifier| {
                             context.string_cache.at(identifier.name)
                         });
@@ -247,7 +248,7 @@ impl<'tu> SyntaxTree<'tu> {
                             "{role} {name}{} type={} storage={} qualifiers={} \
                              function-specifiers={}",
                             if function.recovered { " recovered" } else { "" },
-                            self.type_label(
+                            Self::type_label(
                                 function.declaration_specifiers.type_specifiers,
                                 context
                             ),
@@ -277,7 +278,7 @@ impl<'tu> SyntaxTree<'tu> {
                         .rev()
                     {
                         work.push(Work::Declaration(
-                            *declaration,
+                            declaration,
                             indent + 1,
                             "declaration-list",
                         ));
@@ -294,14 +295,7 @@ impl<'tu> SyntaxTree<'tu> {
                     );
                 },
                 | Work::Declarator(declarator, indent, role) => {
-                    let key = (
-                        6_u8,
-                        declarator.kind.start_index(),
-                        declarator.kind.length(),
-                        declarator.pointer.type_qualifiers_list.start_index(),
-                        declarator.pointer.type_qualifiers_list.length(),
-                    );
-                    if !seen.insert(key) {
+                    if !seen_declarators.insert(declarator_key(declarator)) {
                         Self::line(
                             &mut output,
                             indent,
@@ -312,7 +306,7 @@ impl<'tu> SyntaxTree<'tu> {
                         );
                         continue;
                     }
-                    let pointers = self.pointer_qualifiers(declarator.pointer.type_qualifiers_list);
+                    let pointers = declarator.pointer.type_qualifiers_list;
                     Self::line(
                         &mut output,
                         indent,
@@ -331,7 +325,7 @@ impl<'tu> SyntaxTree<'tu> {
                             options,
                         );
                     }
-                    for direct in self.direct_declarators(declarator.kind).iter().rev() {
+                    for direct in declarator.kind.iter().rev() {
                         work.push(Work::DirectDeclarator(*direct, indent + 1));
                     }
                 },
@@ -339,8 +333,7 @@ impl<'tu> SyntaxTree<'tu> {
                     | DirectDeclarator::Identifier(identifier) => {
                         work.push(Work::Identifier(identifier, indent, "identifier"));
                     },
-                    | DirectDeclarator::Parenthesized(index) => {
-                        let parenthesized = self.parenthesized_declarator(index);
+                    | DirectDeclarator::Parenthesized(parenthesized) => {
                         let declarator = parenthesized.declarator;
                         let delimiters = parenthesized.delimiters;
                         Self::line(
@@ -362,7 +355,7 @@ impl<'tu> SyntaxTree<'tu> {
                             context,
                             options,
                         );
-                        for identifier in self.identifiers(parameters).iter().rev() {
+                        for identifier in parameters.iter().rev() {
                             work.push(Work::Identifier(*identifier, indent + 1, "parameter"));
                         }
                     },
@@ -400,7 +393,7 @@ impl<'tu> SyntaxTree<'tu> {
                             context,
                             options,
                         );
-                        for parameter in self.parameter_declarations(parameter_list).iter().rev() {
+                        for parameter in parameter_list.iter().rev() {
                             work.push(Work::Parameter(*parameter, indent + 1));
                         }
                     },
@@ -419,7 +412,7 @@ impl<'tu> SyntaxTree<'tu> {
                         indent,
                         &format!(
                             "parameter type={} storage={} qualifiers={} function-specifiers={}",
-                            self.type_label(
+                            Self::type_label(
                                 parameter.declaration_specifiers.type_specifiers,
                                 context,
                             ),
@@ -451,11 +444,10 @@ impl<'tu> SyntaxTree<'tu> {
                         indent + 1,
                     );
                 },
-                | Work::StructOrUnion(index, indent) => {
-                    if !seen.insert((7_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::StructOrUnion(specifier, indent) => {
+                    if first_visit(&mut visited, 7, specifier).is_some() {
                         continue;
                     }
-                    let specifier = self.struct_or_union_specifier(index);
                     let kind = match specifier.struct_or_union {
                         | StructOrUnion::Struct => "struct",
                         | StructOrUnion::Union => "union",
@@ -472,7 +464,7 @@ impl<'tu> SyntaxTree<'tu> {
                         options,
                     );
                     if let Some(declarations) = specifier.struct_declaration_list {
-                        for declaration in self.struct_declarations(declarations).iter().rev() {
+                        for declaration in declarations.iter().rev() {
                             work.push(Work::StructDeclaration(*declaration, indent + 1));
                         }
                     }
@@ -483,18 +475,14 @@ impl<'tu> SyntaxTree<'tu> {
                         indent,
                         &format!(
                             "member-declaration type={} qualifiers={}",
-                            self.type_label(declaration.type_specifiers, context),
+                            Self::type_label(declaration.type_specifiers, context),
                             qualifier_list(declaration.type_qualifiers),
                         ),
                         Some(declaration.source_vectors),
                         context,
                         options,
                     );
-                    for declarator in self
-                        .struct_declarators(declaration.struct_declarator_list)
-                        .iter()
-                        .rev()
-                    {
+                    for declarator in declaration.struct_declarator_list.iter().rev() {
                         work.push(Work::StructDeclarator(*declarator, indent + 1));
                     }
                     Self::push_type_details(&mut work, declaration.type_specifiers, indent + 1);
@@ -519,11 +507,10 @@ impl<'tu> SyntaxTree<'tu> {
                         work.push(Work::Declarator(declarator, indent + 1, "declarator"));
                     }
                 },
-                | Work::Enum(index, indent) => {
-                    if !seen.insert((8_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Enum(specifier, indent) => {
+                    if first_visit(&mut visited, 8, specifier).is_some() {
                         continue;
                     }
-                    let specifier = self.enum_specifier(index);
                     let name = specifier.name.map_or("<anonymous>", |identifier| {
                         context.string_cache.at(identifier.name)
                     });
@@ -536,7 +523,7 @@ impl<'tu> SyntaxTree<'tu> {
                         options,
                     );
                     if let Some(enumerators) = specifier.enumeration_list {
-                        for enumerator in self.enumerators(enumerators).iter().rev() {
+                        for enumerator in enumerators.iter().rev() {
                             work.push(Work::Enumerator(*enumerator, indent + 1));
                         }
                     }
@@ -761,7 +748,7 @@ impl<'tu> SyntaxTree<'tu> {
                             } else {
                                 ""
                             },
-                            self.type_label(
+                            Self::type_label(
                                 type_name.declaration_specifiers.type_specifiers,
                                 context,
                             ),
@@ -785,7 +772,11 @@ impl<'tu> SyntaxTree<'tu> {
         output
     }
 
-    fn push_type_details(work: &mut Vec<Work<'tu>>, specifiers: TypeSpecifiers, indent: usize) {
+    fn push_type_details(
+        work: &mut Vec<Work<'tu>>,
+        specifiers: TypeSpecifiers<'tu>,
+        indent: usize,
+    ) {
         match specifiers {
             | TypeSpecifiers::StructOrUnion(index) => work.push(Work::StructOrUnion(index, indent)),
             | TypeSpecifiers::Enum(index) => work.push(Work::Enum(index, indent)),
@@ -793,13 +784,12 @@ impl<'tu> SyntaxTree<'tu> {
         }
     }
 
-    fn type_label(&self, specifiers: TypeSpecifiers, context: &Context<'_>) -> String {
+    fn type_label(specifiers: TypeSpecifiers<'_>, context: &Context<'_>) -> String {
         match specifiers {
             | TypeSpecifiers::TypedefName(identifier) => {
                 format!("typedef {}", context.string_cache.at(identifier.name))
             },
-            | TypeSpecifiers::StructOrUnion(index) => {
-                let specifier = self.struct_or_union_specifier(index);
+            | TypeSpecifiers::StructOrUnion(specifier) => {
                 let kind = match specifier.struct_or_union {
                     | StructOrUnion::Struct => "struct",
                     | StructOrUnion::Union => "union",
@@ -809,38 +799,11 @@ impl<'tu> SyntaxTree<'tu> {
                     |identifier| format!("{kind} {}", context.string_cache.at(identifier.name)),
                 )
             },
-            | TypeSpecifiers::Enum(index) => {
-                let specifier = self.enum_specifier(index);
-                specifier.name.map_or_else(
-                    || "enum <anonymous>".to_owned(),
-                    |identifier| format!("enum {}", context.string_cache.at(identifier.name)),
-                )
-            },
+            | TypeSpecifiers::Enum(specifier) => specifier.name.map_or_else(
+                || "enum <anonymous>".to_owned(),
+                |identifier| format!("enum {}", context.string_cache.at(identifier.name)),
+            ),
             | _ => specifiers.to_string(),
-        }
-    }
-
-    fn declarator_identifier(&self, mut declarator: Declarator<'tu>) -> Option<Identifier> {
-        let mut seen = HashSet::new();
-        loop {
-            if !seen.insert((
-                declarator.kind.start_index(),
-                declarator.kind.length(),
-                declarator.pointer.type_qualifiers_list.start_index(),
-                declarator.pointer.type_qualifiers_list.length(),
-            )) {
-                return None;
-            }
-            let mut nested = None;
-            for direct in self.direct_declarators(declarator.kind) {
-                match *direct {
-                    | DirectDeclarator::Identifier(identifier) => return Some(identifier),
-                    | DirectDeclarator::Parenthesized(index) =>
-                        nested = Some(self.parenthesized_declarator(index).declarator),
-                    | _ => {},
-                }
-            }
-            declarator = nested?;
         }
     }
 
@@ -1260,4 +1223,16 @@ fn first_visit<T>(visited: &mut HashMap<(u8, usize), usize>, kind: u8, node: &T)
             None
         },
     }
+}
+
+/// Identifies a declarator by its two lists: where each lives in the
+/// translation-unit arena and its length. Every empty list of one kind
+/// shares an address, as every empty handle list shared one handle.
+fn declarator_key(declarator: Declarator<'_>) -> (usize, usize, usize, usize) {
+    (
+        declarator.kind.as_ptr().addr(),
+        declarator.kind.len(),
+        declarator.pointer.type_qualifiers_list.as_ptr().addr(),
+        declarator.pointer.type_qualifiers_list.len(),
+    )
 }

@@ -62,7 +62,7 @@ struct Binding {
 /// by the parameter list they belong to.
 #[derive(Debug)]
 struct RetainedPrototype {
-    key:   (u32, u32),
+    key:   (usize, usize),
     start: usize,
     end:   usize,
 }
@@ -266,7 +266,7 @@ impl<'p> ScopeStack<'p> {
     /// C99: identifiers declared in a function definition's parameter
     /// declarations have block scope ending with the body, §6.2.1p4, p. 30;
     /// PDF p. 42.
-    pub(super) fn retain_innermost_bindings(&mut self, key: (u32, u32)) {
+    pub(super) fn retain_innermost_bindings(&mut self, key: (usize, usize)) {
         let Some(scope) = self.nested_scopes.last() else {
             return;
         };
@@ -301,7 +301,7 @@ impl<'p> ScopeStack<'p> {
 
     /// Publishes the bindings retained under `key` in the innermost scope and
     /// discards every retained record. Returns whether `key` was retained.
-    pub(super) fn publish_retained_bindings(&mut self, key: (u32, u32)) -> bool {
+    pub(super) fn publish_retained_bindings(&mut self, key: (usize, usize)) -> bool {
         let found = self
             .retained_prototypes
             .iter()
@@ -389,4 +389,12 @@ impl<'p> LabelScopes<'p> {
 #[derive(Debug, Default)]
 pub(super) struct SwitchScope {
     pub(super) has_default: bool,
+}
+
+/// Identifies a parameter list by where its slice lives in the
+/// translation-unit arena and its length, so a definition can find the
+/// bindings its prototype scope retained. Every empty list shares one key,
+/// as every empty handle list did.
+pub(super) fn list_key<T>(list: &[T]) -> (usize, usize) {
+    (list.as_ptr().addr(), list.len())
 }

@@ -4,7 +4,6 @@
 use super::{
     Parsed,
     declaration,
-    init_declarators,
     parser_errors,
     with_parse,
 };
@@ -35,7 +34,7 @@ fn errors<'tu>(parsed: &Parsed<'_, 'tu>) -> Vec<ParserErrorType<'tu>> {
 /// external declaration `item`.
 fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let declaration = declaration(parsed, item);
-    let [init_declarator, ..] = init_declarators(parsed, declaration) else {
+    let [init_declarator, ..] = declaration.init_declarators else {
         panic!("expected an initialized declarator")
     };
     let initializer = init_declarator
@@ -49,7 +48,7 @@ fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
 
 fn designated_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let declaration = declaration(parsed, item);
-    let [init_declarator, ..] = init_declarators(parsed, declaration) else {
+    let [init_declarator, ..] = declaration.init_declarators else {
         panic!("expected an initialized declarator")
     };
     let initializer = init_declarator
@@ -320,7 +319,7 @@ fn deeply_nested_function_declarators_track_whether_they_are_named() {
     with_parse(&source, |parsed| {
         assert_eq!(errors(parsed), []);
         let declaration = declaration(parsed, 0);
-        let [init_declarator] = init_declarators(parsed, declaration) else {
+        let [init_declarator] = declaration.init_declarators else {
             panic!("expected one declarator")
         };
         let directs = &parsed.parser.syntax[init_declarator.declarator.kind];
@@ -346,23 +345,23 @@ fn deeply_nested_function_declarators_track_whether_they_are_named() {
     });
 }
 
-fn enumerator_counts(parsed: &Parsed<'_, '_>) -> Vec<u32> {
+fn enumerator_counts(parsed: &Parsed<'_, '_>) -> Vec<usize> {
     parsed
         .parser
         .syntax
         .iter::<EnumSpecifier<'_>>()
         .filter_map(|specifier| specifier.enumeration_list)
-        .map(|list| list.length)
+        .map(<[_]>::len)
         .collect()
 }
 
-fn member_counts(parsed: &Parsed<'_, '_>) -> Vec<u32> {
+fn member_counts(parsed: &Parsed<'_, '_>) -> Vec<usize> {
     parsed
         .parser
         .syntax
         .iter::<StructOrUnionSpecifier<'_>>()
         .filter_map(|specifier| specifier.struct_declaration_list)
-        .map(|list| list.length)
+        .map(<[_]>::len)
         .collect()
 }
 

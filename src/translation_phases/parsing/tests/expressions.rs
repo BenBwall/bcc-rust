@@ -6,7 +6,6 @@ use super::{
     declaration,
     expression_text,
     function_definition,
-    init_declarators,
     parser_errors,
     return_expression,
     sourced_text,
@@ -282,7 +281,7 @@ fn conditional_middle_recovery_honors_enclosing_boundaries() {
     );
     with_parse("int values[] = { 1 ? , 2 };\n", |initializer| {
         let declaration = declaration(initializer, 0);
-        let [init_declarator] = init_declarators(initializer, declaration) else {
+        let [init_declarator] = declaration.init_declarators else {
             panic!("expected one initialized declarator")
         };
         let outer = init_declarator
@@ -446,8 +445,7 @@ fn declarator_binding_shadows_a_typedef_inside_its_own_initializer() {
             let BlockItem::Declaration(declaration) = items[0] else {
                 panic!("expected a block declaration")
             };
-            let [init_declarator] = init_declarators(parsed, &parsed.parser.syntax[declaration])
-            else {
+            let [init_declarator] = declaration.init_declarators else {
                 panic!("expected one initialized declarator")
             };
             let initializer = init_declarator.initializer.expect("parsed initializer");
@@ -790,7 +788,7 @@ fn typedef_spelled_expressions_remain_inside_braced_initializers() {
                         ExternalDeclaration::Declaration(_)
                     ]
                 ));
-                let [init_declarator] = init_declarators(parsed, declaration(parsed, 1)) else {
+                let [init_declarator] = declaration(parsed, 1).init_declarators else {
                     panic!("expected one initialized declarator")
                 };
                 let initializer = init_declarator.initializer.expect("braced initializer");
@@ -829,7 +827,7 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
          5 };\n",
         |parsed| {
             let declaration = declaration(parsed, 1);
-            let [init_declarator] = init_declarators(parsed, declaration) else {
+            let [init_declarator] = declaration.init_declarators else {
                 panic!("expected one initialized declarator");
             };
             let initializer = init_declarator
@@ -951,7 +949,7 @@ fn chained_designators_retain_their_order_and_initializer() {
         "struct S { int member[2][2]; }; struct S value = { .member[0][1] = 3 };\n",
         |parsed| {
             let declaration = declaration(parsed, 1);
-            let [init_declarator] = init_declarators(parsed, declaration) else {
+            let [init_declarator] = declaration.init_declarators else {
                 panic!("expected one initialized declarator")
             };
             let initializer = init_declarator
@@ -1012,7 +1010,7 @@ fn array_designators_accept_conditional_and_parenthesized_comma_expressions() {
         "int values[] = { [x ? y : z] = 1, [(x, y)] = 2 };\n",
         |parsed| {
             let declaration = declaration(parsed, 0);
-            let [init_declarator] = init_declarators(parsed, declaration) else {
+            let [init_declarator] = declaration.init_declarators else {
                 panic!("expected one initialized declarator")
             };
             let initializer = init_declarator.initializer.expect("parsed initializer");

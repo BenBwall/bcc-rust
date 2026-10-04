@@ -10,11 +10,6 @@ use super::{
     Parser,
     ParserLimits,
     PreprocessedTranslationUnit,
-    declaration_syntax::{
-        Declarator,
-        DirectDeclarator,
-        TypeSpecifiers,
-    },
     errors::{
         ParserError,
         ParserErrorType,
@@ -45,18 +40,15 @@ use super::{
     },
     statement::is_statement_keyword,
     syntax::{
-        DeclarationIndex,
         Expression,
         ExpressionType,
         ExternalDeclaration,
-        Identifier,
         StatementIndex,
         SyntaxList,
     },
     syntax_store::{
         StoredNode,
         SyntaxStore,
-        SyntaxStoreCheckpoint,
         SyntaxTree,
         TreeNode,
     },
@@ -238,7 +230,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
     ///
     /// C99: translation-unit is a nonempty sequence of external-declaration
     /// values under §6.9, p. 140; PDF p. 152.
-    pub(super) fn drive(&mut self, context: &mut Context<'_>) -> Option<ExternalDeclaration> {
+    pub(super) fn drive(&mut self, context: &mut Context<'_>) -> Option<ExternalDeclaration<'tu>> {
         // A resource failure is terminal: the remaining input is neither
         // fetched nor parsed, so it cannot grow the exhausted storage.
         if self.resource_limit_reported {
@@ -316,7 +308,6 @@ impl<'tu, 'p> Parser<'tu, 'p> {
 
             let token = self.cursor.current(context);
             let returned = self.returned.take();
-            let syntax_checkpoint = self.syntax.checkpoint();
             // Step the active frame in place. Frames never inspect the control
             // stack, so it is detached while the frame borrows the parser.
             let mut frames = std::mem::replace(&mut self.frames, ArenaVec::new_in(self.arena));
@@ -333,7 +324,6 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                 .expect("pending syntax count matches the frame stack")
                 .saturating_add(retained_after);
             if context.source_segment_count() > self.limits.source_segments {
-                self.restore_syntax(syntax_checkpoint);
                 return self.resource_failure(
                     context,
                     ParserResource::SourceSegments,
@@ -354,10 +344,13 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                 self.syntax.node_count(),
                 "the running syntax-node total matches the arenas"
             );
+            // A step that crosses a limit keeps the nodes it allocated: the
+            // translation-unit arena cannot take memory back while
+            // references into it may exist. Parsing stops here, so those
+            // nodes are freed with the arena.
             if self.syntax_nodes.saturating_add(self.retained_frame_nodes)
                 > self.limits.syntax_nodes
             {
-                self.restore_syntax(syntax_checkpoint);
                 return self.resource_failure(
                     context,
                     ParserResource::SyntaxNodes,
@@ -472,12 +465,6 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         list
     }
 
-    /// Truncates the arenas to `checkpoint` and resynchronizes the total.
-    fn restore_syntax(&mut self, checkpoint: SyntaxStoreCheckpoint) {
-        self.syntax.restore(checkpoint);
-        self.syntax_nodes = self.syntax.node_count();
-    }
-
     fn push_frame(&mut self, mut frame: ParseFrame<'tu, 'p>) {
         frame.lend_pooled(&mut self.pools);
         self.retained_frame_nodes = self
@@ -500,7 +487,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         context: &mut Context<'_>,
         resource: ParserResource,
         limit: usize,
-    ) -> Option<ExternalDeclaration> {
+    ) -> Option<ExternalDeclaration<'tu>> {
         self.resource_failure_at(context, resource, limit, None)
     }
 
@@ -510,7 +497,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         resource: ParserResource,
         limit: usize,
         token_override: Option<Token>,
-    ) -> Option<ExternalDeclaration> {
+    ) -> Option<ExternalDeclaration<'tu>> {
         if self.resource_limit_reported {
             return None;
         }
@@ -1038,105 +1025,6 @@ impl<'tu, 'p> Parser<'tu, 'p> {
             self.cursor.lookahead(context, index),
             OperatorTokenType::Asterisk,
         )
-    }
-
-    /// Finds the identifier declared by nested parenthesized direct
-    /// declarators.
-    ///
-    /// C99: declarator binding is specified by §6.7.5 paragraph 4,
-    /// p. 114; PDF p. 126.
-    pub(super) fn declarator_identifier(&self, declarator: Declarator<'tu>) -> Option<Identifier> {
-        let mut declarator = declarator;
-        loop {
-            let mut nested = None;
-            for direct in &self.syntax[declarator.kind] {
-                match *direct {
-                    | DirectDeclarator::Identifier(identifier) => return Some(identifier),
-                    | DirectDeclarator::Parenthesized(index) =>
-                        nested = Some(self.syntax[index].declarator),
-                    | _ => {},
-                }
-            }
-            declarator = nested?;
-        }
-    }
-
-    pub(super) fn declaration_head_declarator(
-        &self,
-        declaration: DeclarationIndex,
-    ) -> Option<Declarator<'tu>> {
-        let [init] = &self.syntax[self.syntax[declaration].init_declarators] else {
-            return None;
-        };
-        init.initializer.is_none().then_some(init.declarator)
-    }
-
-    pub(super) fn declaration_is_definition_head(&self, declaration: DeclarationIndex) -> bool {
-        self.syntax[declaration].is_function_definition_head
-            && self.declaration_head_declarator(declaration).is_some()
-    }
-
-    pub(super) fn declaration_is_meaningful(&self, declaration: DeclarationIndex) -> bool {
-        let declaration = &self.syntax[declaration];
-        let specifiers = declaration.declaration_specifiers;
-        declaration.init_declarators.length() > 0
-            || specifiers.storage_class.is_some()
-            || !specifiers.type_qualifiers.is_empty()
-            || specifiers.type_specifiers != TypeSpecifiers::Empty
-            || specifiers.function_specifiers.is_inline
-    }
-
-    pub(super) fn function_suffix(
-        &self,
-        mut declarator: Declarator<'tu>,
-    ) -> Option<DirectDeclarator<'tu>> {
-        let mut suffix = None;
-        loop {
-            let direct = &self.syntax[declarator.kind];
-            if let Some(candidate) = direct.get(1).copied()
-                && matches!(
-                    candidate,
-                    DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
-                )
-            {
-                suffix = Some(candidate);
-            }
-            let Some(DirectDeclarator::Parenthesized(index)) = direct.first() else {
-                return suffix;
-            };
-            declarator = self.syntax[*index].declarator;
-        }
-    }
-
-    pub(super) fn collect_type_specifier_bindings(
-        &self,
-        type_specifiers: TypeSpecifiers,
-        names: &mut Vec<StringCacheId>,
-    ) {
-        let mut pending = vec![type_specifiers];
-        while let Some(type_specifiers) = pending.pop() {
-            match type_specifiers {
-                | TypeSpecifiers::Enum(index) => {
-                    if let Some(enumeration_list) = self.syntax[index].enumeration_list {
-                        names.extend(
-                            self.syntax[enumeration_list]
-                                .iter()
-                                .map(|enumerator| enumerator.name.name),
-                        );
-                    }
-                },
-                | TypeSpecifiers::StructOrUnion(index) => {
-                    if let Some(declarations) = self.syntax[index].struct_declaration_list {
-                        pending.extend(
-                            self.syntax[declarations]
-                                .iter()
-                                .map(|declaration| declaration.type_specifiers),
-                        );
-                    }
-                },
-                | _ => {},
-            }
-        }
     }
 
     pub(super) fn statement_source(&self, index: StatementIndex) -> SourceVectors {

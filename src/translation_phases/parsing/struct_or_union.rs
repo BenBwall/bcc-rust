@@ -39,10 +39,7 @@ use super::{
         SynchronizationSet,
     },
     statement::is_statement_keyword,
-    syntax::{
-        Identifier,
-        StructOrUnionSpecifierIndex,
-    },
+    syntax::Identifier,
 };
 use crate::{
     translation_phases::{
@@ -79,7 +76,7 @@ pub(super) struct StructOrUnionSpecifierFrame<'tu, 'p> {
     /// Declarators belonging to the member declaration in progress.
     pub(super) member_declarators: ArenaVec<'p, StructDeclarator<'tu>>,
     /// Specifiers shared by the member declarators in progress.
-    member_specifiers: Option<DeclarationSpecifiers>,
+    member_specifiers: Option<DeclarationSpecifiers<'tu>>,
     /// Named declarator waiting for an optional bit-field width.
     member_declarator: Option<Declarator<'tu>>,
     /// Whether `{` was consumed, distinguishing a reference from a definition.
@@ -613,7 +610,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     fn finish_member(&mut self, parser: &mut Parser<'tu, 'p>) {
         // Commit all declarators for this shared specifier-qualifier-list as a
         // single member declaration with one stable arena slice.
-        let start = parser.append_syntax(&mut self.member_declarators);
+        let start = parser.alloc_syntax_list(&mut self.member_declarators);
         let specifiers = self
             .member_specifiers
             .take()
@@ -635,15 +632,13 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     ) -> ParseAction<'tu, 'p> {
         let declaration_list = self
             .body_started
-            .then(|| parser.append_syntax(&mut self.declarations));
-        let index = parser.push_syntax(StructOrUnionSpecifier {
+            .then(|| parser.alloc_syntax_list(&mut self.declarations));
+        let index = parser.alloc_syntax(StructOrUnionSpecifier {
             struct_or_union:         self.kind.unwrap_or(StructOrUnion::Struct),
             identifier:              self.identifier,
             struct_declaration_list: declaration_list,
             source_vectors:          context.merge_vector_list(&self.source_vectors),
         });
-        ParseAction::Reduce(ParseValue::StructOrUnionSpecifier(
-            StructOrUnionSpecifierIndex(index),
-        ))
+        ParseAction::Reduce(ParseValue::StructOrUnionSpecifier(index))
     }
 }

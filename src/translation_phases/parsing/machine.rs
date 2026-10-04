@@ -8,10 +8,13 @@ use super::{
     declaration::DeclarationFrame,
     declaration_specifiers::DeclarationSpecifiersFrame,
     declaration_syntax::{
+        Declaration,
         DeclarationSpecifiers,
         Declarator,
         DirectDeclarator,
+        EnumSpecifier,
         Initializer,
+        StructOrUnionSpecifier,
         TypeName,
     },
     declarator::DeclaratorFrame,
@@ -30,13 +33,10 @@ use super::{
     struct_or_union::StructOrUnionSpecifierFrame,
     syntax::{
         ConstantExpression,
-        DeclarationIndex,
-        EnumSpecifierIndex,
         Expression,
         ExternalDeclaration,
         FunctionDefinitionIndex,
         StatementIndex,
-        StructOrUnionSpecifierIndex,
     },
     type_name::TypeNameFrame,
 };
@@ -137,27 +137,27 @@ pub(super) enum ParseAction<'tu, 'p> {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ParseValue<'tu> {
     /// Result of a declaration-specifier child.
-    DeclarationSpecifiers(DeclarationSpecifiers),
+    DeclarationSpecifiers(DeclarationSpecifiers<'tu>),
     /// Declarator result; `None` records a recoverable missing declarator.
     Declarator(Option<Declarator<'tu>>),
     /// Completed function or K&R parameter-list suffix.
     ParameterList(ParameterListResult<'tu>),
     /// Arena handle for a completed struct or union specifier.
-    StructOrUnionSpecifier(StructOrUnionSpecifierIndex),
+    StructOrUnionSpecifier(&'tu StructOrUnionSpecifier<'tu>),
     /// Completed enum specifier and its recovery handoff.
-    EnumSpecifier(EnumSpecifierResult),
+    EnumSpecifier(EnumSpecifierResult<'tu>),
     /// Arena handle for a completed type name.
     TypeName(&'tu TypeName<'tu>),
     Expression(ExpressionResult<'tu>),
     ConstantExpression(ConstantExpressionResult<'tu>),
     Initializer(InitializerResult<'tu>),
     /// Arena handle for a completed declaration.
-    Declaration(DeclarationIndex),
+    Declaration(&'tu Declaration<'tu>),
     FunctionDefinition(FunctionDefinitionIndex),
     CompoundStatement(StatementIndex),
     Statement(StatementIndex),
     /// External item ready to be yielded by the translation-phase seam.
-    ExternalDeclaration(ExternalDeclaration),
+    ExternalDeclaration(ExternalDeclaration<'tu>),
 }
 
 /// Parameter-list child result before it is appended to a declarator frame.
@@ -175,9 +175,9 @@ pub(super) struct ParameterListResult<'tu> {
 
 /// Enum child result before its type specifier is merged into the parent.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct EnumSpecifierResult {
+pub(super) struct EnumSpecifierResult<'tu> {
     /// Arena handle for the completed enum specifier.
-    pub(super) index: EnumSpecifierIndex,
+    pub(super) index: &'tu EnumSpecifier<'tu>,
     /// Whether recovery stopped before a following declaration.
     pub(super) stopped_before_declaration: bool,
 }
@@ -208,7 +208,7 @@ pub(super) struct InitializerResult<'tu> {
 pub(super) enum ParseFrame<'tu, 'p> {
     ExternalDeclaration(ExternalDeclarationFrame),
     Declaration(DeclarationFrame<'tu, 'p>),
-    DeclarationSpecifiers(DeclarationSpecifiersFrame),
+    DeclarationSpecifiers(DeclarationSpecifiersFrame<'tu>),
     Declarator(DeclaratorFrame<'tu, 'p>),
     // Parameter lists and struct/union bodies already own growing lists, so
     // boxing them keeps every other frame push small. The boxes are pooled,
@@ -219,8 +219,8 @@ pub(super) enum ParseFrame<'tu, 'p> {
     TypeName(TypeNameFrame<'tu>),
     Expression(ExpressionFrame<'tu, 'p>),
     Initializer(InitializerFrame<'tu, 'p>),
-    FunctionDefinition(FunctionDefinitionFrame<'p>),
-    CompoundStatement(CompoundStatementFrame<'p>),
+    FunctionDefinition(FunctionDefinitionFrame<'tu, 'p>),
+    CompoundStatement(CompoundStatementFrame<'tu, 'p>),
     Statement(StatementFrame<'tu>),
 }
 
