@@ -444,126 +444,137 @@ fn missing_member_names_retain_the_consumed_operator_provenance() {
 
 #[test]
 fn unterminated_initializer_list_stops_before_a_following_declaration() {
-    let parsed = parse("int x = {1 int after;\n");
-
-    assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
-    assert!(matches!(
-        parsed.items[0],
-        ExternalDeclaration::RecoveredDeclaration(_)
-    ));
-    assert!(matches!(
-        parsed.items[1],
-        ExternalDeclaration::Declaration(_)
-    ));
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(_)
-    )));
+    with_parse("int x = {1 int after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
+        assert!(matches!(
+            parsed.items[0],
+            ExternalDeclaration::RecoveredDeclaration(_)
+        ));
+        assert!(matches!(
+            parsed.items[1],
+            ExternalDeclaration::Declaration(_)
+        ));
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(_)
+        )));
+    });
 }
 
 #[test]
 fn array_designator_recovery_synchronizes_to_its_closing_bracket() {
-    let parsed = parse("int x[] = { [1 2] = 3, 4 }; int after;\n");
-
-    assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
-    assert!(matches!(
-        parsed.items[1],
-        ExternalDeclaration::Declaration(_)
-    ));
-    assert_eq!(parsed.parser.syntax.count::<Designator>(), 1);
-    assert!(parsed.parser.syntax.nth::<Designator>(0).recovered);
-    assert_eq!(parsed.parser.syntax.count::<InitializerElement>(), 2);
-    // One stray run inside the brackets is one diagnostic.
-    assert_eq!(parser_errors(&parsed).count(), 1, "{:#?}", parsed.errors);
+    with_parse("int x[] = { [1 2] = 3, 4 }; int after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
+        assert!(matches!(
+            parsed.items[1],
+            ExternalDeclaration::Declaration(_)
+        ));
+        assert_eq!(parsed.parser.syntax.count::<Designator>(), 1);
+        assert!(parsed.parser.syntax.nth::<Designator>(0).recovered);
+        assert_eq!(parsed.parser.syntax.count::<InitializerElement>(), 2);
+        // One stray run inside the brackets is one diagnostic.
+        assert_eq!(parser_errors(parsed).count(), 1, "{:#?}", parsed.errors);
+    });
 }
 
 #[test]
 fn array_designator_recovery_ignores_nested_commas() {
-    let parsed = parse("int a[] = { [1 junk (2,3)] = 4, 5 }; int after;\n");
-
-    assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
-    assert!(matches!(
-        parsed.items[1],
-        ExternalDeclaration::Declaration(_)
-    ));
-    assert_eq!(parsed.parser.syntax.count::<Designator>(), 1);
-    assert!(parsed.parser.syntax.nth::<Designator>(0).recovered);
-    assert_eq!(parsed.parser.syntax.count::<InitializerElement>(), 2);
-    // One stray run inside the brackets is one diagnostic.
-    assert_eq!(parser_errors(&parsed).count(), 1, "{:#?}", parsed.errors);
-}
-
-#[test]
-fn array_designator_recovery_preserves_following_declarations() {
-    let parsed = parse("int f(void) { int x = { [1 + int after; int later; }\n");
-    let items = block_items(&parsed, function_definition(&parsed, 0).body);
-
-    assert_eq!(items.len(), 3, "{items:#?}");
-    let names = items
-        .iter()
-        .map(|item| {
-            let BlockItem::Declaration(index) = item else {
-                panic!("expected a declaration block item")
-            };
-            let declaration = &parsed.parser.syntax[index];
-            identifier_name(
-                &parsed,
-                init_declarators(&parsed, declaration)[0].declarator,
-            )
-            .expect("named declarator")
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(names, ["x", "after", "later"]);
-
-    let parsed = parse("int x[] = { [1 foo [ 2 } ; int after;\n");
-    assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
-    assert!(matches!(
-        parsed.items[0],
-        ExternalDeclaration::RecoveredDeclaration(_)
-    ));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
+    with_parse(
+        "int a[] = { [1 junk (2,3)] = 4, 5 }; int after;\n",
+        |parsed| {
+            assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
+            assert!(matches!(
+                parsed.items[1],
+                ExternalDeclaration::Declaration(_)
+            ));
+            assert_eq!(parsed.parser.syntax.count::<Designator>(), 1);
+            assert!(parsed.parser.syntax.nth::<Designator>(0).recovered);
+            assert_eq!(parsed.parser.syntax.count::<InitializerElement>(), 2);
+            // One stray run inside the brackets is one diagnostic.
+            assert_eq!(parser_errors(parsed).count(), 1, "{:#?}", parsed.errors);
+        },
     );
 }
 
 #[test]
-fn array_designator_recovery_consumes_parentheses_not_owned_by_the_caller() {
-    let parsed = parse("int f(){ int a[] = {[1 + )] = 2}; int after; return 0; }\n");
+fn array_designator_recovery_preserves_following_declarations() {
+    with_parse(
+        "int f(void) { int x = { [1 + int after; int later; }\n",
+        |parsed| {
+            let items = block_items(parsed, function_definition(parsed, 0).body);
 
-    assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
-    let items = block_items(&parsed, function_definition(&parsed, 0).body);
-    assert_eq!(items.len(), 3, "{items:#?}");
-    assert!(matches!(items[0], BlockItem::Declaration(_)));
-    assert!(matches!(items[1], BlockItem::Declaration(_)));
-    assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax[index].kind,
-        StatementType::Return(Some(ExpressionSlot::Parsed(_)))
-    )));
+            assert_eq!(items.len(), 3, "{items:#?}");
+            let names = items
+                .iter()
+                .map(|item| {
+                    let BlockItem::Declaration(index) = item else {
+                        panic!("expected a declaration block item")
+                    };
+                    let declaration = &parsed.parser.syntax[index];
+                    identifier_name(parsed, init_declarators(parsed, declaration)[0].declarator)
+                        .expect("named declarator")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(names, ["x", "after", "later"]);
+        },
+    );
+
+    with_parse("int x[] = { [1 foo [ 2 } ; int after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
+        assert!(matches!(
+            parsed.items[0],
+            ExternalDeclaration::RecoveredDeclaration(_)
+        ));
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
+}
+
+#[test]
+fn array_designator_recovery_consumes_parentheses_not_owned_by_the_caller() {
+    with_parse(
+        "int f(){ int a[] = {[1 + )] = 2}; int after; return 0; }\n",
+        |parsed| {
+            assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
+            let items = block_items(parsed, function_definition(parsed, 0).body);
+            assert_eq!(items.len(), 3, "{items:#?}");
+            assert!(matches!(items[0], BlockItem::Declaration(_)));
+            assert!(matches!(items[1], BlockItem::Declaration(_)));
+            assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+                parsed.parser.syntax[index].kind,
+                StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+            )));
+        },
+    );
 }
 
 #[test]
 fn array_designator_recovery_preserves_a_for_header_parenthesis() {
-    let parsed = parse("int f(void) { for (int a[] = {[1 + ) ; return; }\n");
-
-    assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
-    let items = block_items(&parsed, function_definition(&parsed, 0).body);
-    assert_eq!(items.len(), 2, "{items:#?}");
-    let BlockItem::Statement(for_statement) = items[0] else {
-        panic!("expected recovered for statement")
-    };
-    assert!(matches!(
-        parsed.parser.syntax[for_statement].kind,
-        StatementType::For { .. }
-    ));
-    assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax[index].kind,
-        StatementType::Return(None)
-    )));
+    with_parse(
+        "int f(void) { for (int a[] = {[1 + ) ; return; }\n",
+        |parsed| {
+            assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
+            let items = block_items(parsed, function_definition(parsed, 0).body);
+            assert_eq!(items.len(), 2, "{items:#?}");
+            let BlockItem::Statement(for_statement) = items[0] else {
+                panic!("expected recovered for statement")
+            };
+            assert!(matches!(
+                parsed.parser.syntax[for_statement].kind,
+                StatementType::For { .. }
+            ));
+            assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+                parsed.parser.syntax[index].kind,
+                StatementType::Return(None)
+            )));
+        },
+    );
 }
 
 #[test]
