@@ -7,7 +7,6 @@ use super::{
     function_definition,
     identifier_name,
     init_declarators,
-    parse,
     parser_errors,
     return_expression,
     sourced_text,
@@ -248,9 +247,37 @@ fn adjacent_precedence_levels_and_parentheses_have_explicit_tree_tests() {
         ),
     ];
     for (source, outer, inner) in cases {
-        let parsed = parse(&format!("int f(void) {{ {source}; }}\n"));
+        with_parse(&format!("int f(void) {{ {source}; }}\n"), |parsed| {
+            let [BlockItem::Statement(statement)] =
+                block_items(parsed, function_definition(parsed, 0).body)
+            else {
+                panic!("expected one expression statement")
+            };
+            let StatementType::Expression(ExpressionSlot::Parsed(root)) =
+                parsed.parser.syntax[statement].kind
+            else {
+                panic!("expected parsed expression")
+            };
+            let ExpressionType::Binary {
+                operator,
+                left_expression,
+                ..
+            } = parsed.parser.syntax[root].kind
+            else {
+                panic!("expected binary root for {source}")
+            };
+            assert_eq!(operator, outer, "wrong outer operator for {source}");
+            assert!(matches!(
+                parsed.parser.syntax[left_expression].kind,
+                ExpressionType::Binary { operator, .. } if operator == inner
+            ));
+            assert!(parser_errors(parsed).next().is_none());
+        });
+    }
+
+    with_parse("int f(void) { (a+b)*c; }\n", |parsed| {
         let [BlockItem::Statement(statement)] =
-            block_items(&parsed, function_definition(&parsed, 0).body)
+            block_items(parsed, function_definition(parsed, 0).body)
         else {
             panic!("expected one expression statement")
         };
@@ -259,51 +286,25 @@ fn adjacent_precedence_levels_and_parentheses_have_explicit_tree_tests() {
         else {
             panic!("expected parsed expression")
         };
-        let ExpressionType::Binary {
-            operator,
-            left_expression,
-            ..
-        } = parsed.parser.syntax[root].kind
-        else {
-            panic!("expected binary root for {source}")
-        };
-        assert_eq!(operator, outer, "wrong outer operator for {source}");
         assert!(matches!(
-            parsed.parser.syntax[left_expression].kind,
-            ExpressionType::Binary { operator, .. } if operator == inner
+            parsed.parser.syntax[root].kind,
+            ExpressionType::Binary {
+                operator: BinaryOperator::Multiplication,
+                left_expression,
+                ..
+            } if matches!(
+                parsed.parser.syntax[left_expression].kind,
+                ExpressionType::Parenthesized { expression }
+                    if matches!(
+                        parsed.parser.syntax[expression].kind,
+                        ExpressionType::Binary {
+                            operator: BinaryOperator::Addition,
+                            ..
+                        }
+                    )
+            )
         ));
-        assert!(parser_errors(&parsed).next().is_none());
-    }
-
-    let parsed = parse("int f(void) { (a+b)*c; }\n");
-    let [BlockItem::Statement(statement)] =
-        block_items(&parsed, function_definition(&parsed, 0).body)
-    else {
-        panic!("expected one expression statement")
-    };
-    let StatementType::Expression(ExpressionSlot::Parsed(root)) =
-        parsed.parser.syntax[statement].kind
-    else {
-        panic!("expected parsed expression")
-    };
-    assert!(matches!(
-        parsed.parser.syntax[root].kind,
-        ExpressionType::Binary {
-            operator: BinaryOperator::Multiplication,
-            left_expression,
-            ..
-        } if matches!(
-            parsed.parser.syntax[left_expression].kind,
-            ExpressionType::Parenthesized { expression }
-                if matches!(
-                    parsed.parser.syntax[expression].kind,
-                    ExpressionType::Binary {
-                        operator: BinaryOperator::Addition,
-                        ..
-                    }
-                )
-        )
-    ));
+    });
 }
 
 #[test]
@@ -580,268 +581,275 @@ fn array_designator_recovery_preserves_a_for_header_parenthesis() {
 #[test]
 fn initializer_recovery_consumes_unowned_closing_delimiters() {
     for closer in [")", "]"] {
-        let parsed = parse(&format!(
-            "int f(void) {{ int a[] = {{1 + {closer} }}; int after; return; }}\n"
-        ));
-
-        assert_eq!(parsed.items.len(), 1, "{closer}: {:#?}", parsed.items);
-        let items = block_items(&parsed, function_definition(&parsed, 0).body);
-        assert_eq!(items.len(), 3, "{closer}: {items:#?}");
-        assert!(matches!(items[0], BlockItem::Declaration(_)));
-        assert!(matches!(items[1], BlockItem::Declaration(_)));
-        assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-            parsed.parser.syntax[index].kind,
-            StatementType::Return(None)
-        )));
+        with_parse(
+            &format!("int f(void) {{ int a[] = {{1 + {closer} }}; int after; return; }}\n"),
+            |parsed| {
+                assert_eq!(parsed.items.len(), 1, "{closer}: {:#?}", parsed.items);
+                let items = block_items(parsed, function_definition(parsed, 0).body);
+                assert_eq!(items.len(), 3, "{closer}: {items:#?}");
+                assert!(matches!(items[0], BlockItem::Declaration(_)));
+                assert!(matches!(items[1], BlockItem::Declaration(_)));
+                assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
+                    parsed.parser.syntax[index].kind,
+                    StatementType::Return(None)
+                )));
+            },
+        );
     }
 }
 
 #[test]
 fn initializer_recovery_preserves_an_enclosing_subscript_bracket() {
-    let parsed = parse("int f(void) { return values[(int[]){1 + ]; return 0; }\n");
-
-    assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
-    let items = block_items(&parsed, function_definition(&parsed, 0).body);
-    assert_eq!(items.len(), 2, "{items:#?}");
-    assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax[index].kind,
-        StatementType::Return(Some(ExpressionSlot::Parsed(_)))
-    )));
-    assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-        parsed.parser.syntax[index].kind,
-        StatementType::Return(Some(ExpressionSlot::Parsed(_)))
-    )));
+    with_parse(
+        "int f(void) { return values[(int[]){1 + ]; return 0; }\n",
+        |parsed| {
+            assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
+            let items = block_items(parsed, function_definition(parsed, 0).body);
+            assert_eq!(items.len(), 2, "{items:#?}");
+            assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
+                parsed.parser.syntax[index].kind,
+                StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+            )));
+            assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
+                parsed.parser.syntax[index].kind,
+                StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+            )));
+        },
+    );
 }
 
 #[test]
 fn imaginary_type_specifiers_are_diagnosed_in_type_names() {
-    let parsed = parse("int f(void) { return sizeof(_Imaginary); }\n");
-
-    assert!(
-        parser_errors(&parsed)
-            .any(|error| matches!(error, ParserErrorType::UnsupportedImaginaryTypeSpecifier))
-    );
-    assert!(matches!(
-        parsed.items[0],
-        ExternalDeclaration::RecoveredFunctionDefinition(_)
-    ));
-    assert!(parsed.parser.syntax.nth::<TypeName>(0).recovered);
+    with_parse("int f(void) { return sizeof(_Imaginary); }\n", |parsed| {
+        assert!(
+            parser_errors(parsed)
+                .any(|error| matches!(error, ParserErrorType::UnsupportedImaginaryTypeSpecifier))
+        );
+        assert!(matches!(
+            parsed.items[0],
+            ExternalDeclaration::RecoveredFunctionDefinition(_)
+        ));
+        assert!(parsed.parser.syntax.nth::<TypeName>(0).recovered);
+    });
 }
 
 #[test]
 fn imaginary_type_specifier_does_not_cascade_into_missing_type() {
-    let parsed = parse("_Imaginary value; int after;\n");
-    let errors = parser_errors(&parsed).collect::<Vec<_>>();
+    with_parse("_Imaginary value; int after;\n", |parsed| {
+        let errors = parser_errors(parsed).collect::<Vec<_>>();
 
-    assert_eq!(
-        errors
-            .iter()
-            .filter(|error| matches!(error, ParserErrorType::UnsupportedImaginaryTypeSpecifier))
-            .count(),
-        1
-    );
-    assert!(errors.iter().all(|error| !matches!(
-        error,
-        ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(_)
-            | ParserErrorType::UnexpectedEndBeforeTypeSpecifier
-    )));
-    assert!(matches!(
-        parsed.items.as_slice(),
-        [
-            ExternalDeclaration::RecoveredDeclaration(_),
-            ExternalDeclaration::Declaration(_)
-        ]
-    ));
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| matches!(error, ParserErrorType::UnsupportedImaginaryTypeSpecifier))
+                .count(),
+            1
+        );
+        assert!(errors.iter().all(|error| !matches!(
+            error,
+            ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(_)
+                | ParserErrorType::UnexpectedEndBeforeTypeSpecifier
+        )));
+        assert!(matches!(
+            parsed.items.as_slice(),
+            [
+                ExternalDeclaration::RecoveredDeclaration(_),
+                ExternalDeclaration::Declaration(_)
+            ]
+        ));
+    });
 }
 
 #[test]
 fn recovered_expression_children_mark_every_composite_parent() {
-    let parsed = parse("int f(void) { return foo(1 + ) + 2; }\n");
-
-    let call = parsed
-        .parser
-        .syntax
-        .iter::<Expression>()
-        .find(|expression| matches!(expression.kind, ExpressionType::Call { .. }))
-        .expect("expected the recovered call expression");
-    assert!(call.recovered);
-    assert!(
-        parsed
+    with_parse("int f(void) { return foo(1 + ) + 2; }\n", |parsed| {
+        let call = parsed
             .parser
             .syntax
             .iter::<Expression>()
-            .filter(|expression| matches!(expression.kind, ExpressionType::Error))
-            .all(|expression| expression.recovered)
-    );
+            .find(|expression| matches!(expression.kind, ExpressionType::Call { .. }))
+            .expect("expected the recovered call expression");
+        assert!(call.recovered);
+        assert!(
+            parsed
+                .parser
+                .syntax
+                .iter::<Expression>()
+                .filter(|expression| matches!(expression.kind, ExpressionType::Error))
+                .all(|expression| expression.recovered)
+        );
+    });
 }
 
 #[test]
 fn composite_expressions_retain_exact_operator_provenance() {
-    let parsed = parse(
+    with_parse(
         "typedef struct { int m; } T;\nint f(void) {\n(a); sizeof a; sizeof(int); (int)a; \
          (T){1}.m; p->m++; foo(a,b); a[0]; return -a+b ? c : d;\n}\n",
-    );
-
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
-    );
-    for expression in parsed.parser.syntax.iter::<Expression>() {
-        if matches!(
-            expression.kind,
-            ExpressionType::Identifier(..)
-                | ExpressionType::Constant(..)
-                | ExpressionType::StringLiteral(..)
-                | ExpressionType::Error
-        ) {
-            continue;
-        }
-        assert!(
-            expression.operator_source_vectors.is_some(),
-            "missing operator provenance for {expression:#?}"
-        );
-    }
-
-    let addition = parsed
-        .parser
-        .syntax
-        .iter::<Expression>()
-        .find(|expression| {
-            matches!(
-                expression.kind,
-                ExpressionType::Binary {
-                    operator: BinaryOperator::Addition,
-                    ..
+        |parsed| {
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            for expression in parsed.parser.syntax.iter::<Expression>() {
+                if matches!(
+                    expression.kind,
+                    ExpressionType::Identifier(..)
+                        | ExpressionType::Constant(..)
+                        | ExpressionType::StringLiteral(..)
+                        | ExpressionType::Error
+                ) {
+                    continue;
                 }
-            )
-        })
-        .expect("expected addition expression");
-    assert_eq!(
-        sourced_text(
-            &parsed,
-            addition
-                .operator_source_vectors
-                .expect("addition operator provenance")
-        ),
-        "+"
-    );
-    let conditional = parsed
-        .parser
-        .syntax
-        .iter::<Expression>()
-        .find(|expression| matches!(expression.kind, ExpressionType::Conditional { .. }))
-        .expect("expected conditional expression");
-    assert_eq!(
-        sourced_text(
-            &parsed,
-            conditional
-                .operator_source_vectors
-                .expect("conditional operator provenance")
-        ),
-        "?:"
+                assert!(
+                    expression.operator_source_vectors.is_some(),
+                    "missing operator provenance for {expression:#?}"
+                );
+            }
+
+            let addition = parsed
+                .parser
+                .syntax
+                .iter::<Expression>()
+                .find(|expression| {
+                    matches!(
+                        expression.kind,
+                        ExpressionType::Binary {
+                            operator: BinaryOperator::Addition,
+                            ..
+                        }
+                    )
+                })
+                .expect("expected addition expression");
+            assert_eq!(
+                sourced_text(
+                    parsed,
+                    addition
+                        .operator_source_vectors
+                        .expect("addition operator provenance")
+                ),
+                "+"
+            );
+            let conditional = parsed
+                .parser
+                .syntax
+                .iter::<Expression>()
+                .find(|expression| matches!(expression.kind, ExpressionType::Conditional { .. }))
+                .expect("expected conditional expression");
+            assert_eq!(
+                sourced_text(
+                    parsed,
+                    conditional
+                        .operator_source_vectors
+                        .expect("conditional operator provenance")
+                ),
+                "?:"
+            );
+        },
     );
 }
 
 #[test]
 fn phase_05_syntax_facts_preserve_absence_and_identifier_provenance() {
-    let parsed = parse(
+    with_parse(
         "int implicit; auto int explicit; typedef int T; struct S { int member; }; enum E { VALUE \
          }; int f(void) { label: goto label; explicit.member; T designated = { .member = VALUE }; \
          return designated.member; }\n",
-    );
+        |parsed| {
+            assert_eq!(
+                declaration(parsed, 0).declaration_specifiers.storage_class,
+                None
+            );
+            assert_eq!(
+                declaration(parsed, 1).declaration_specifiers.storage_class,
+                Some(StorageClass::Auto)
+            );
 
-    assert_eq!(
-        declaration(&parsed, 0).declaration_specifiers.storage_class,
-        None
-    );
-    assert_eq!(
-        declaration(&parsed, 1).declaration_specifiers.storage_class,
-        Some(StorageClass::Auto)
-    );
-
-    let mut identifiers = Vec::new();
-    for direct in parsed.parser.syntax.iter::<DirectDeclarator>() {
-        if let DirectDeclarator::Identifier(identifier) = direct {
-            identifiers.push(*identifier);
-        }
-    }
-    identifiers.extend(parsed.parser.syntax.iter::<Identifier>().copied());
-    for specifier in parsed.parser.syntax.iter::<StructOrUnionSpecifier>() {
-        identifiers.extend(specifier.identifier);
-    }
-    for specifier in parsed.parser.syntax.iter::<EnumSpecifier>() {
-        identifiers.extend(specifier.name);
-    }
-    identifiers.extend(
-        parsed
-            .parser
-            .syntax
-            .iter::<Enumerator>()
-            .map(|enumerator| enumerator.name),
-    );
-    for expression in parsed.parser.syntax.iter::<Expression>() {
-        match expression.kind {
-            | ExpressionType::Identifier(identifier)
-            | ExpressionType::DirectMember {
-                member: identifier, ..
+            let mut identifiers = Vec::new();
+            for direct in parsed.parser.syntax.iter::<DirectDeclarator>() {
+                if let DirectDeclarator::Identifier(identifier) = direct {
+                    identifiers.push(*identifier);
+                }
             }
-            | ExpressionType::IndirectMember {
-                member: identifier, ..
-            } => identifiers.push(identifier),
-            | _ => {},
-        }
-    }
-    for designator in parsed.parser.syntax.iter::<Designator>() {
-        if let DesignatorType::Field(identifier) = designator.kind {
-            identifiers.push(identifier);
-        }
-    }
-    for statement in parsed.parser.syntax.iter::<Statement>() {
-        match statement.kind {
-            | StatementType::Goto(identifier) | StatementType::Label(identifier, _) => {
-                identifiers.push(identifier);
-            },
-            | _ => {},
-        }
-    }
-    for specifiers in parsed
-        .parser
-        .syntax
-        .iter::<Declaration>()
-        .map(|declaration| declaration.declaration_specifiers.type_specifiers)
-        .chain(
-            parsed
+            identifiers.extend(parsed.parser.syntax.iter::<Identifier>().copied());
+            for specifier in parsed.parser.syntax.iter::<StructOrUnionSpecifier>() {
+                identifiers.extend(specifier.identifier);
+            }
+            for specifier in parsed.parser.syntax.iter::<EnumSpecifier>() {
+                identifiers.extend(specifier.name);
+            }
+            identifiers.extend(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<Enumerator>()
+                    .map(|enumerator| enumerator.name),
+            );
+            for expression in parsed.parser.syntax.iter::<Expression>() {
+                match expression.kind {
+                    | ExpressionType::Identifier(identifier)
+                    | ExpressionType::DirectMember {
+                        member: identifier, ..
+                    }
+                    | ExpressionType::IndirectMember {
+                        member: identifier, ..
+                    } => identifiers.push(identifier),
+                    | _ => {},
+                }
+            }
+            for designator in parsed.parser.syntax.iter::<Designator>() {
+                if let DesignatorType::Field(identifier) = designator.kind {
+                    identifiers.push(identifier);
+                }
+            }
+            for statement in parsed.parser.syntax.iter::<Statement>() {
+                match statement.kind {
+                    | StatementType::Goto(identifier) | StatementType::Label(identifier, _) => {
+                        identifiers.push(identifier);
+                    },
+                    | _ => {},
+                }
+            }
+            for specifiers in parsed
                 .parser
                 .syntax
-                .iter::<TypeName>()
-                .map(|type_name| type_name.declaration_specifiers.type_specifiers),
-        )
-        .chain(
-            parsed
-                .parser
-                .syntax
-                .iter::<ParameterDeclaration>()
-                .map(|parameter| parameter.declaration_specifiers.type_specifiers),
-        )
-        .chain(
-            parsed
-                .parser
-                .syntax
-                .iter::<StructDeclaration>()
-                .map(|declaration| declaration.type_specifiers),
-        )
-    {
-        if let TypeSpecifiers::TypedefName(identifier) = specifiers {
-            identifiers.push(identifier);
-        }
-    }
-    assert_ne!(identifiers, []);
-    for identifier in identifiers {
-        assert!(identifier.source_vectors.length > 0, "{identifier:?}");
-        assert_eq!(
-            sourced_text(&parsed, identifier.source_vectors),
-            parsed.context.string_cache.at(identifier.name)
-        );
-    }
+                .iter::<Declaration>()
+                .map(|declaration| declaration.declaration_specifiers.type_specifiers)
+                .chain(
+                    parsed
+                        .parser
+                        .syntax
+                        .iter::<TypeName>()
+                        .map(|type_name| type_name.declaration_specifiers.type_specifiers),
+                )
+                .chain(
+                    parsed
+                        .parser
+                        .syntax
+                        .iter::<ParameterDeclaration>()
+                        .map(|parameter| parameter.declaration_specifiers.type_specifiers),
+                )
+                .chain(
+                    parsed
+                        .parser
+                        .syntax
+                        .iter::<StructDeclaration>()
+                        .map(|declaration| declaration.type_specifiers),
+                )
+            {
+                if let TypeSpecifiers::TypedefName(identifier) = specifiers {
+                    identifiers.push(identifier);
+                }
+            }
+            assert_ne!(identifiers, []);
+            for identifier in identifiers {
+                assert!(identifier.source_vectors.length > 0, "{identifier:?}");
+                assert_eq!(
+                    sourced_text(parsed, identifier.source_vectors),
+                    parsed.context.string_cache.at(identifier.name)
+                );
+            }
+        },
+    );
 }
