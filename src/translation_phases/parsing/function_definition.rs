@@ -76,7 +76,7 @@ pub(super) enum FunctionDefinitionPhase {
     reason = "Frame phases assert the typed driver protocol, whose mismatch already identifies \
               the invariant."
 )]
-impl<'p> FunctionDefinitionFrame<'p> {
+impl<'tu, 'p> FunctionDefinitionFrame<'p> {
     pub(super) fn new(
         arena: &'p Bump,
         head: DeclarationIndex,
@@ -97,11 +97,11 @@ impl<'p> FunctionDefinitionFrame<'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | FunctionDefinitionPhase::Start => {
                 debug_assert!(returned.is_none());

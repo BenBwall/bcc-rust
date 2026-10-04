@@ -107,23 +107,26 @@ use crate::{
 /// C99: translation units and external declarations are specified by §6.9,
 /// p. 140; PDF p. 152: a translation unit “consists of a sequence of external
 /// declarations.” The diagnostic obligation is §5.1.1.3, p. 11; PDF p. 23.
-pub(crate) struct Parser<'p> {
+pub(crate) struct Parser<'tu, 'p> {
     /// The parse arena, which holds the parser's working memory until
     /// parsing ends.
     arena: &'p Bump,
+    /// The translation-unit arena, which holds the syntax tree until the
+    /// translation unit ends.
+    tree: &'tu Bump,
     /// Buffered parser-facing token stream.
     cursor: TokenCursor,
     /// Grammar control stack in the parse arena; the final element is
     /// active.
-    frames: ArenaVec<'p, ParseFrame<'p>>,
+    frames: ArenaVec<'p, ParseFrame<'tu, 'p>>,
     /// Spare storage lent to pushed frames and reclaimed when they pop.
-    pools: frame_pool::FramePools<'p>,
+    pools: frame_pool::FramePools<'tu, 'p>,
     /// Syntax nodes retained by the pending frames, updated on push/pop.
     retained_frame_nodes: usize,
     /// Completed child value waiting for its parent frame.
-    returned: Option<ParseValue>,
+    returned: Option<ParseValue<'tu>>,
     /// Arenas owning every syntax node produced by this parser.
-    syntax: SyntaxStore,
+    syntax: SyntaxStore<'tu>,
     /// Running total of the nodes in `syntax`, maintained by
     /// [`Self::push_syntax`] and [`Self::append_syntax`].
     syntax_nodes: usize,
@@ -192,40 +195,40 @@ impl Default for ParserLimits {
 /// This is the shared boundary for callers, inspection, tests, and the future
 /// semantic-analysis phase. Parser-machine state is deliberately not exposed.
 #[derive(Debug)]
-pub(crate) struct ParsedTranslationUnit {
+pub(crate) struct ParsedTranslationUnit<'tu> {
     roots:  Box<[ExternalDeclaration]>,
-    syntax: SyntaxTree,
+    syntax: SyntaxTree<'tu>,
 }
 
-impl ParsedTranslationUnit {
+impl<'tu> ParsedTranslationUnit<'tu> {
     pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration] {
         &self.roots
     }
 
-    pub(crate) fn syntax(&self) -> &SyntaxTree {
+    pub(crate) fn syntax(&self) -> &SyntaxTree<'tu> {
         &self.syntax
     }
 }
 
-impl GetPosition for Parser<'_> {
+impl GetPosition for Parser<'_, '_> {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.cursor.upstream.position(context)
     }
 }
 
-impl SetPosition for Parser<'_> {
+impl SetPosition for Parser<'_, '_> {
     fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
         self.cursor.upstream.set_position(context, position);
     }
 }
 
-impl GetSourceFileIndex for Parser<'_> {
+impl GetSourceFileIndex for Parser<'_, '_> {
     fn source_file_index(&self) -> u32 {
         self.cursor.upstream.source_file_index()
     }
 }
 
-impl SetSourceFileIndex for Parser<'_> {
+impl SetSourceFileIndex for Parser<'_, '_> {
     fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
         self.cursor
             .upstream
@@ -233,7 +236,7 @@ impl SetSourceFileIndex for Parser<'_> {
     }
 }
 
-impl TranslationPhase<'_> for Parser<'_> {
+impl TranslationPhase<'_> for Parser<'_, '_> {
     type Item = ExternalDeclaration;
 
     fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item> {

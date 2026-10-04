@@ -123,33 +123,33 @@ impl<'p, T> BoxPool<'p, T> {
 }
 
 /// Spare frame storage in the parse arena, one pool per element type.
-pub(super) struct FramePools<'p> {
+pub(super) struct FramePools<'tu, 'p> {
     arena: &'p Bump,
     pub(super) source_vectors: VecPool<'p, SourceVectors>,
-    pub(super) operands: VecPool<'p, ExpressionOperand>,
-    pub(super) operators: VecPool<'p, LanguageExpressionOperator>,
+    pub(super) operands: VecPool<'p, ExpressionOperand<'tu>>,
+    pub(super) operators: VecPool<'p, LanguageExpressionOperator<'tu>>,
     pub(super) pointer_qualifiers: VecPool<'p, TypeQualifiers>,
-    pub(super) direct_declarators: VecPool<'p, DirectDeclarator>,
-    pub(super) init_declarators: VecPool<'p, InitDeclarator>,
+    pub(super) direct_declarators: VecPool<'p, DirectDeclarator<'tu>>,
+    pub(super) init_declarators: VecPool<'p, InitDeclarator<'tu>>,
     pub(super) block_items: VecPool<'p, BlockItem>,
     pub(super) initializers: VecPool<'p, InitializerElement>,
-    pub(super) parameters: VecPool<'p, ParameterDeclaration>,
+    pub(super) parameters: VecPool<'p, ParameterDeclaration<'tu>>,
     pub(super) identifiers: VecPool<'p, Identifier>,
-    pub(super) struct_members: VecPool<'p, StructDeclaration>,
-    pub(super) struct_declarators: VecPool<'p, StructDeclarator>,
-    pub(super) enumerators: VecPool<'p, Enumerator>,
+    pub(super) struct_members: VecPool<'p, StructDeclaration<'tu>>,
+    pub(super) struct_declarators: VecPool<'p, StructDeclarator<'tu>>,
+    pub(super) enumerators: VecPool<'p, Enumerator<'tu>>,
     pub(super) declarations: VecPool<'p, DeclarationIndex>,
     /// Call states, reused with the capacity of their lists.
-    pub(super) calls: BoxPool<'p, CallState<'p>>,
+    pub(super) calls: BoxPool<'p, CallState<'tu, 'p>>,
     /// Designation states, reused with the capacity of their lists.
-    pub(super) designations: BoxPool<'p, DesignationState<'p>>,
-    pub(super) parameter_lists: BoxPool<'p, ParameterListFrame<'p>>,
-    pub(super) struct_or_union_specifiers: BoxPool<'p, StructOrUnionSpecifierFrame<'p>>,
+    pub(super) designations: BoxPool<'p, DesignationState<'tu, 'p>>,
+    pub(super) parameter_lists: BoxPool<'p, ParameterListFrame<'tu, 'p>>,
+    pub(super) struct_or_union_specifiers: BoxPool<'p, StructOrUnionSpecifierFrame<'tu, 'p>>,
     /// Flags shared along a chain of parenthesized declarators.
     chain_flags: ArenaVec<'p, &'p Cell<bool>>,
 }
 
-impl<'p> FramePools<'p> {
+impl<'tu, 'p> FramePools<'tu, 'p> {
     pub(super) fn new_in(arena: &'p Bump) -> Self {
         Self {
             arena,
@@ -176,13 +176,13 @@ impl<'p> FramePools<'p> {
     }
 
     /// An emptied call state.
-    pub(super) fn take_call(&mut self) -> PoolBox<'p, CallState<'p>> {
+    pub(super) fn take_call(&mut self) -> PoolBox<'p, CallState<'tu, 'p>> {
         let arena = self.arena;
         self.calls.take(arena, || CallState::new_in(arena))
     }
 
     /// A designation state with no designation under way.
-    pub(super) fn take_designation(&mut self) -> PoolBox<'p, DesignationState<'p>> {
+    pub(super) fn take_designation(&mut self) -> PoolBox<'p, DesignationState<'tu, 'p>> {
         let arena = self.arena;
         self.designations
             .take(arena, || DesignationState::new_in(arena))
@@ -190,15 +190,15 @@ impl<'p> FramePools<'p> {
 
     pub(super) fn parameter_list(
         &mut self,
-        frame: ParameterListFrame<'p>,
-    ) -> PoolBox<'p, ParameterListFrame<'p>> {
+        frame: ParameterListFrame<'tu, 'p>,
+    ) -> PoolBox<'p, ParameterListFrame<'tu, 'p>> {
         self.parameter_lists.boxed(self.arena, frame)
     }
 
     pub(super) fn struct_or_union_specifier(
         &mut self,
-        frame: StructOrUnionSpecifierFrame<'p>,
-    ) -> PoolBox<'p, StructOrUnionSpecifierFrame<'p>> {
+        frame: StructOrUnionSpecifierFrame<'tu, 'p>,
+    ) -> PoolBox<'p, StructOrUnionSpecifierFrame<'tu, 'p>> {
         self.struct_or_union_specifiers.boxed(self.arena, frame)
     }
 

@@ -33,8 +33,8 @@ use super::{
     syntax::{
         BinaryOperator,
         Constant,
-        ConstantExpressionIndex,
-        ExpressionIndex,
+        ConstantExpression,
+        Expression,
         ExpressionType,
         Identifier,
         TypeNameIndex,
@@ -89,25 +89,25 @@ pub(super) enum ExpressionBoundary {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ExpressionOperand {
-    index:              ExpressionIndex,
+pub(super) struct ExpressionOperand<'tu> {
+    expression:         &'tu Expression<'tu>,
     unary_expression:   bool,
     postfix_expression: bool,
 }
 
 #[derive(Debug)]
-pub(super) struct ExpressionFrame<'p> {
+pub(super) struct ExpressionFrame<'tu, 'p> {
     mode:                  ExpressionMode,
     boundary:              ExpressionBoundary,
     recovery_boundary:     ExpressionBoundary,
-    phase:                 ExpressionPhase,
-    operators:             ArenaVec<'p, LanguageExpressionOperator>,
-    operands:              ArenaVec<'p, ExpressionOperand>,
+    phase:                 ExpressionPhase<'tu>,
+    operators:             ArenaVec<'p, LanguageExpressionOperator<'tu>>,
+    operands:              ArenaVec<'p, ExpressionOperand<'tu>>,
     state:                 ExpressionParserState,
     starting_error_count:  usize,
     /// Postfix call under construction, boxed because most expression frames
     /// never parse a call. The box comes from and returns to the frame pools.
-    pub(super) call:       Option<PoolBox<'p, CallState<'p>>>,
+    pub(super) call:       Option<PoolBox<'p, CallState<'tu, 'p>>>,
     pending_sizeof_prefix: Option<SourceVectors>,
     /// The top operand is an error operand that replaced a stray token
     /// already diagnosed, so the tokens after it need no second report.
@@ -117,13 +117,13 @@ pub(super) struct ExpressionFrame<'p> {
 /// Arguments and provenance of the postfix call an expression frame is
 /// building.
 #[derive(Debug)]
-pub(super) struct CallState<'p> {
-    pub(super) arguments: ArenaVec<'p, ExpressionIndex>,
+pub(super) struct CallState<'tu, 'p> {
+    pub(super) arguments: ArenaVec<'p, &'tu Expression<'tu>>,
     source_vectors:       ArenaVec<'p, SourceVectors>,
     operator_sources:     ArenaVec<'p, SourceVectors>,
 }
 
-impl<'p> CallState<'p> {
+impl<'p> CallState<'_, 'p> {
     pub(super) fn new_in(arena: &'p Bump) -> Self {
         Self {
             arguments:        ArenaVec::new_in(arena),
@@ -134,21 +134,21 @@ impl<'p> CallState<'p> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ExpressionPhase {
+pub(super) enum ExpressionPhase<'tu> {
     Parse,
     Finish,
     RecoverUnexpectedBrace(u32, SourceVectors),
     PushGrouped(SourceVectors),
     AwaitGrouped(SourceVectors),
-    CloseGrouped(SourceVectors, ExpressionIndex),
-    PushSubscript(ExpressionIndex, SourceVectors),
-    AwaitSubscript(ExpressionIndex, SourceVectors),
-    CloseSubscript(ExpressionIndex, SourceVectors, ExpressionIndex),
-    CallStart(ExpressionIndex, SourceVectors),
-    PushCallArgument(ExpressionIndex),
-    AwaitCallArgument(ExpressionIndex),
-    CallSeparator(ExpressionIndex),
-    ExpectMember(ExpressionIndex, bool, SourceVectors),
+    CloseGrouped(SourceVectors, &'tu Expression<'tu>),
+    PushSubscript(&'tu Expression<'tu>, SourceVectors),
+    AwaitSubscript(&'tu Expression<'tu>, SourceVectors),
+    CloseSubscript(&'tu Expression<'tu>, SourceVectors, &'tu Expression<'tu>),
+    CallStart(&'tu Expression<'tu>, SourceVectors),
+    PushCallArgument(&'tu Expression<'tu>),
+    AwaitCallArgument(&'tu Expression<'tu>),
+    CallSeparator(&'tu Expression<'tu>),
+    ExpectMember(&'tu Expression<'tu>, bool, SourceVectors),
     PushPrefix(UnaryOperator, SourceVectors, ExpressionMode),
     AwaitPrefix(UnaryOperator, SourceVectors),
     SizeofStart(SourceVectors),
@@ -163,7 +163,7 @@ pub(super) enum ExpressionPhase {
     AwaitCastOperand(TypeNameIndex, SourceVectors),
     PushConditionalMiddle,
     AwaitConditionalMiddle,
-    ExpectConditionalColon(ExpressionIndex),
+    ExpectConditionalColon(&'tu Expression<'tu>),
     PushConditionalElse,
     AwaitConditionalElse,
     /// Discards this many already-diagnosed tokens before the closer that
@@ -200,7 +200,7 @@ const BRACE_GROUP_LOOKAHEAD: usize = 256;
 /// C99: recovery serves §5.1.1.3, p. 11; PDF p. 23. An expression never
 /// contains `;` or a statement keyword (§6.5, pp. 67-94; PDF pp. 79-106).
 pub(super) fn closer_follows_stray_run(
-    parser: &mut Parser<'_>,
+    parser: &mut Parser<'_, '_>,
     context: &mut Context<'_>,
     closer: fn(TokenType) -> bool,
     stop_at_declarations: bool,
@@ -263,7 +263,7 @@ pub(super) fn closer_follows_stray_run(
 /// Returns whether the brace group starting at the current `{` reads as a
 /// statement block rather than a misplaced initializer list: it contains a
 /// `;` or a statement keyword, is empty, or does not close within reach.
-fn brace_group_is_block(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
+fn brace_group_is_block(parser: &mut Parser<'_, '_>, context: &mut Context<'_>) -> bool {
     let mut depth = 0_usize;
     for index in 0..BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
@@ -305,7 +305,7 @@ const PARENTHESIZED_BRACE_GROUP_LOOKAHEAD: usize = 4096;
 /// so the whole group is skipped as one diagnosed operand (§5.1.1.3, p. 11;
 /// PDF p. 23).
 fn brace_group_closes_before_parenthesis(
-    parser: &mut Parser<'_>,
+    parser: &mut Parser<'_, '_>,
     context: &mut Context<'_>,
 ) -> bool {
     let mut depth = 0_usize;
@@ -338,7 +338,10 @@ fn brace_group_closes_before_parenthesis(
 /// reach and is followed by `)`, `]`, or `,`: the group then sits inside an
 /// expression, as in `if (x == {}) ...`, rather than being a statement body
 /// left after a missing `)`.
-fn brace_group_continues_expression(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
+fn brace_group_continues_expression(
+    parser: &mut Parser<'_, '_>,
+    context: &mut Context<'_>,
+) -> bool {
     let mut depth = 0_usize;
     for index in 0..PARENTHESIZED_BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
@@ -372,7 +375,7 @@ fn brace_group_continues_expression(parser: &mut Parser<'_>, context: &mut Conte
     false
 }
 
-impl<'p> ExpressionFrame<'p> {
+impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     pub(super) fn new(
         arena: &'p Bump,
         mode: ExpressionMode,
@@ -421,13 +424,13 @@ impl<'p> ExpressionFrame<'p> {
     }
 
     /// Gives the operator and operand stacks spare allocations.
-    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'p>) {
+    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         pools.operators.lend(&mut self.operators);
         pools.operands.lend(&mut self.operands);
     }
 
     /// Returns the operator and operand stacks' allocations to the pools.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'p>) {
+    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         pools.operators.reclaim(&mut self.operators);
         pools.operands.reclaim(&mut self.operands);
         if let Some(mut call) = self.call.take() {
@@ -472,11 +475,11 @@ impl<'p> ExpressionFrame<'p> {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | ExpressionPhase::RecoverUnexpectedBrace(depth, source_vectors) => {
                 debug_assert!(returned.is_none());
@@ -517,8 +520,7 @@ impl<'p> ExpressionFrame<'p> {
             | ExpressionPhase::CloseGrouped(opening, child) => {
                 debug_assert!(returned.is_none());
                 let mut operator_source = opening;
-                let mut source =
-                    context.merge_vectors(opening, parser.syntax[child].source_vectors);
+                let mut source = context.merge_vectors(opening, child.source_vectors);
                 let consume = if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                 {
@@ -568,8 +570,8 @@ impl<'p> ExpressionFrame<'p> {
             | ExpressionPhase::CloseSubscript(base, opening, child) => {
                 debug_assert!(returned.is_none());
                 let mut operator_source = opening;
-                let mut source = context.merge_vectors(parser.syntax[base].source_vectors, opening);
-                source = context.merge_vectors(source, parser.syntax[child].source_vectors);
+                let mut source = context.merge_vectors(base.source_vectors, opening);
+                source = context.merge_vectors(source, child.source_vectors);
                 let consume = if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
                 {
@@ -606,7 +608,7 @@ impl<'p> ExpressionFrame<'p> {
             },
             | ExpressionPhase::CallStart(base, opening) => {
                 debug_assert!(returned.is_none());
-                let base_source = parser.syntax[base].source_vectors;
+                let base_source = base.source_vectors;
                 let call = self.call_state(&mut parser.pools);
                 call.source_vectors.clear();
                 call.source_vectors.extend([base_source, opening]);
@@ -637,7 +639,7 @@ impl<'p> ExpressionFrame<'p> {
             | ExpressionPhase::AwaitCallArgument(base) => {
                 let argument = expression_value(returned);
                 self.call_state(&mut parser.pools).arguments.push(argument);
-                self.merge_call_source(&mut parser.pools, parser.syntax[argument].source_vectors);
+                self.merge_call_source(&mut parser.pools, argument.source_vectors);
                 self.phase = ExpressionPhase::CallSeparator(base);
                 return ParseAction::Continue;
             },
@@ -703,14 +705,12 @@ impl<'p> ExpressionFrame<'p> {
                         ParserErrorType::ExpectedMemberIdentifier(token.map(|token| token.kind)),
                         token,
                     );
-                    let source =
-                        context.merge_vectors(parser.syntax[base].source_vectors, operator_source);
+                    let source = context.merge_vectors(base.source_vectors, operator_source);
                     self.push_error_with_source(parser, source, Some(operator_source));
                     self.phase = ExpressionPhase::Parse;
                     return ParseAction::Reprocess;
                 };
-                let source =
-                    context.merge_vectors(parser.syntax[base].source_vectors, operator_source);
+                let source = context.merge_vectors(base.source_vectors, operator_source);
                 let source = context.merge_vectors(source, member_token.source_vectors);
                 let kind = if indirect {
                     ExpressionType::IndirectMember {
@@ -745,8 +745,7 @@ impl<'p> ExpressionFrame<'p> {
             },
             | ExpressionPhase::AwaitPrefix(operator, operator_source) => {
                 let operand = expression_value(returned);
-                let source =
-                    context.merge_vectors(operator_source, parser.syntax[operand].source_vectors);
+                let source = context.merge_vectors(operator_source, operand.source_vectors);
                 let index = parser.store_expression(
                     ExpressionType::Unary {
                         operator,
@@ -787,8 +786,7 @@ impl<'p> ExpressionFrame<'p> {
             },
             | ExpressionPhase::AwaitSizeofExpression(sizeof_source) => {
                 let operand = expression_value(returned);
-                let source =
-                    context.merge_vectors(sizeof_source, parser.syntax[operand].source_vectors);
+                let source = context.merge_vectors(sizeof_source, operand.source_vectors);
                 let index = parser.store_expression(
                     ExpressionType::SizeofExpr(operand),
                     source,
@@ -945,8 +943,7 @@ impl<'p> ExpressionFrame<'p> {
             },
             | ExpressionPhase::AwaitCastOperand(type_name, type_source) => {
                 let operand = expression_value(returned);
-                let source =
-                    context.merge_vectors(type_source, parser.syntax[operand].source_vectors);
+                let source = context.merge_vectors(type_source, operand.source_vectors);
                 let index = parser.store_expression(
                     ExpressionType::Cast {
                         target_type:        type_name,
@@ -1036,14 +1033,12 @@ impl<'p> ExpressionFrame<'p> {
                 else {
                     panic!("conditional final operand must retain its completed marker");
                 };
-                let condition = self.pop_operand().index;
-                let source =
-                    context.merge_vectors(parser.syntax[condition].source_vectors, question_source);
-                let source = context.merge_vectors(source, parser.syntax[middle].source_vectors);
+                let condition = self.pop_operand().expression;
+                let source = context.merge_vectors(condition.source_vectors, question_source);
+                let source = context.merge_vectors(source, middle.source_vectors);
                 let source =
                     colon_source.map_or(source, |colon| context.merge_vectors(source, colon));
-                let source =
-                    context.merge_vectors(source, parser.syntax[final_expression].source_vectors);
+                let source = context.merge_vectors(source, final_expression.source_vectors);
                 let index = parser.store_expression(
                     ExpressionType::Conditional {
                         condition_expression: condition,
@@ -1079,13 +1074,12 @@ impl<'p> ExpressionFrame<'p> {
             && self.pending_sizeof_prefix.is_some()
             && !token.is_some_and(|token| is_postfix_starter(token.kind))
         {
-            let operand = self.pop_operand().index;
+            let operand = self.pop_operand().expression;
             let sizeof_source = self
                 .pending_sizeof_prefix
                 .take()
                 .expect("pending sizeof operand has an operator source");
-            let source =
-                context.merge_vectors(sizeof_source, parser.syntax[operand].source_vectors);
+            let source = context.merge_vectors(sizeof_source, operand.source_vectors);
             let index = parser.store_expression(
                 ExpressionType::SizeofExpr(operand),
                 source,
@@ -1284,8 +1278,8 @@ impl<'p> ExpressionFrame<'p> {
                 })
                 && !brace_group_is_block(parser, context)
             {
-                let operand = self.pop_operand().index;
-                if !parser.syntax[operand].recovered {
+                let operand = self.pop_operand().expression;
+                if !operand.recovered {
                     parser.report(
                         context,
                         ParserErrorType::ExpectedStatementExpression(
@@ -1295,8 +1289,7 @@ impl<'p> ExpressionFrame<'p> {
                         Some(token),
                     );
                 }
-                let source = context
-                    .merge_vectors(parser.syntax[operand].source_vectors, token.source_vectors);
+                let source = context.merge_vectors(operand.source_vectors, token.source_vectors);
                 self.phase = ExpressionPhase::RecoverUnexpectedBrace(1, source);
                 return ParseAction::Consume;
             }
@@ -1320,12 +1313,12 @@ impl<'p> ExpressionFrame<'p> {
             }
             match token.kind {
                 | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
-                    let base = self.pop_operand().index;
+                    let base = self.pop_operand().expression;
                     self.phase = ExpressionPhase::PushSubscript(base, token.source_vectors);
                     return ParseAction::Consume;
                 },
                 | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
-                    let base = self.pop_operand().index;
+                    let base = self.pop_operand().expression;
                     if let Some(call) = &mut self.call {
                         call.arguments.clear();
                         call.source_vectors.clear();
@@ -1334,7 +1327,7 @@ impl<'p> ExpressionFrame<'p> {
                     return ParseAction::Consume;
                 },
                 | TokenType::Operator(OperatorTokenType::Period | OperatorTokenType::Arrow) => {
-                    let base = self.pop_operand().index;
+                    let base = self.pop_operand().expression;
                     self.phase = ExpressionPhase::ExpectMember(
                         base,
                         token.kind == TokenType::Operator(OperatorTokenType::Arrow),
@@ -1345,9 +1338,8 @@ impl<'p> ExpressionFrame<'p> {
                 | TokenType::Operator(
                     OperatorTokenType::PlusPlus | OperatorTokenType::MinusMinus,
                 ) => {
-                    let base = self.pop_operand().index;
-                    let source = context
-                        .merge_vectors(parser.syntax[base].source_vectors, token.source_vectors);
+                    let base = self.pop_operand().expression;
+                    let source = context.merge_vectors(base.source_vectors, token.source_vectors);
                     let operator = if token.kind == TokenType::Operator(OperatorTokenType::PlusPlus)
                     {
                         UnaryOperator::PostIncrement
@@ -1510,7 +1502,10 @@ impl<'p> ExpressionFrame<'p> {
     /// Returns whether the current `(` opens a type name: a type-name starter
     /// follows, or a storage-class or `inline` keyword that a type-name frame
     /// diagnoses as not allowed before one, as in `(static int)x`.
-    fn parenthesized_type_name_follows(parser: &mut Parser<'p>, context: &mut Context<'_>) -> bool {
+    fn parenthesized_type_name_follows(
+        parser: &mut Parser<'tu, 'p>,
+        context: &mut Context<'_>,
+    ) -> bool {
         let Some(following) = parser.cursor.following(context) else {
             return false;
         };
@@ -1533,12 +1528,12 @@ impl<'p> ExpressionFrame<'p> {
 
     fn push_operand(
         &mut self,
-        index: ExpressionIndex,
+        expression: &'tu Expression<'tu>,
         unary_expression: bool,
         postfix_expression: bool,
     ) {
         self.operands.push(ExpressionOperand {
-            index,
+            expression,
             unary_expression,
             postfix_expression,
         });
@@ -1546,7 +1541,7 @@ impl<'p> ExpressionFrame<'p> {
         self.stray_error_operand = false;
     }
 
-    fn pop_operand(&mut self) -> ExpressionOperand {
+    fn pop_operand(&mut self) -> ExpressionOperand<'tu> {
         self.operands
             .pop()
             .expect("operator state has an expression operand")
@@ -1554,9 +1549,9 @@ impl<'p> ExpressionFrame<'p> {
 
     fn pop_operand_or_error(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
-    ) -> ExpressionOperand {
+    ) -> ExpressionOperand<'tu> {
         if let Some(operand) = self.operands.pop() {
             return operand;
         }
@@ -1566,27 +1561,30 @@ impl<'p> ExpressionFrame<'p> {
             .expect("error expression supplies one operand")
     }
 
-    fn call_state(&mut self, pools: &mut FramePools<'p>) -> &mut CallState<'p> {
+    fn call_state(&mut self, pools: &mut FramePools<'tu, 'p>) -> &mut CallState<'tu, 'p> {
         self.call.get_or_insert_with(|| pools.take_call())
     }
 
-    fn merge_call_source(&mut self, pools: &mut FramePools<'p>, source: SourceVectors) {
+    fn merge_call_source(&mut self, pools: &mut FramePools<'tu, 'p>, source: SourceVectors) {
         self.call_state(pools).source_vectors.push(source);
     }
 
-    fn merge_call_operator_source(&mut self, pools: &mut FramePools<'p>, source: SourceVectors) {
+    fn merge_call_operator_source(
+        &mut self,
+        pools: &mut FramePools<'tu, 'p>,
+        source: SourceVectors,
+    ) {
         self.call_state(pools).operator_sources.push(source);
     }
 
     fn finish_call(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
-        base: ExpressionIndex,
+        base: &'tu Expression<'tu>,
     ) {
         let call = self.call.as_mut().expect("a call is being finished");
-        let start = parser.append_syntax(&mut call.arguments);
-        let arguments = start;
+        let arguments = parser.alloc_syntax_list(&mut call.arguments);
         let index = parser.store_expression(
             ExpressionType::Call {
                 function_expression: base,
@@ -1601,7 +1599,7 @@ impl<'p> ExpressionFrame<'p> {
         self.push_operand(index, true, true);
     }
 
-    fn reduce_one(&mut self, parser: &mut Parser<'p>, context: &mut Context<'_>) {
+    fn reduce_one(&mut self, parser: &mut Parser<'tu, 'p>, context: &mut Context<'_>) {
         let operator = self
             .operators
             .pop()
@@ -1611,11 +1609,10 @@ impl<'p> ExpressionFrame<'p> {
                 operator,
                 source_vectors,
             } => {
-                let right = self.pop_operand_or_error(parser, context).index;
-                let left = self.pop_operand_or_error(parser, context).index;
-                let source =
-                    context.merge_vectors(parser.syntax[left].source_vectors, source_vectors);
-                let source = context.merge_vectors(source, parser.syntax[right].source_vectors);
+                let right = self.pop_operand_or_error(parser, context).expression;
+                let left = self.pop_operand_or_error(parser, context).expression;
+                let source = context.merge_vectors(left.source_vectors, source_vectors);
+                let source = context.merge_vectors(source, right.source_vectors);
                 let index = parser.store_expression(
                     ExpressionType::Binary {
                         operator,
@@ -1769,7 +1766,7 @@ impl<'p> ExpressionFrame<'p> {
 
     fn is_strong_grammar_boundary(
         &self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Token,
     ) -> bool {
@@ -1802,7 +1799,7 @@ impl<'p> ExpressionFrame<'p> {
     }
 
     pub(super) fn is_strong_grammar_boundary_for(
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Token,
         boundary: ExpressionBoundary,
@@ -1882,7 +1879,7 @@ impl<'p> ExpressionFrame<'p> {
 
     fn push_error(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         anchor: Option<Token>,
     ) {
@@ -1909,7 +1906,7 @@ impl<'p> ExpressionFrame<'p> {
 
     fn push_error_with_source(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         source_vectors: SourceVectors,
         operator_source_vectors: Option<SourceVectors>,
     ) {
@@ -1922,15 +1919,19 @@ impl<'p> ExpressionFrame<'p> {
         // An error operand stands for whatever was meant, so operators that
         // need a unary or postfix operand do not diagnose it a second time.
         self.operands.push(ExpressionOperand {
-            index,
-            unary_expression: true,
+            expression:         index,
+            unary_expression:   true,
             postfix_expression: true,
         });
         self.state = ExpressionParserState::Operator;
         self.stray_error_operand = false;
     }
 
-    fn finish(&mut self, parser: &mut Parser<'p>, context: &mut Context<'_>) -> ParseAction<'p> {
+    fn finish(
+        &mut self,
+        parser: &mut Parser<'tu, 'p>,
+        context: &mut Context<'_>,
+    ) -> ParseAction<'tu, 'p> {
         while !self.operators.is_empty() {
             self.reduce_one(parser, context);
         }
@@ -1941,15 +1942,19 @@ impl<'p> ExpressionFrame<'p> {
                 .expect("error expression supplies one operand")
         });
         let recovered = parser.hard_error_count > self.starting_error_count;
-        parser.syntax[operand.index].recovered |= recovered;
+        let expression = if recovered {
+            parser.mark_expression_recovered(operand.expression)
+        } else {
+            operand.expression
+        };
         if self.mode == ExpressionMode::ConstantExpression {
             ParseAction::Reduce(ParseValue::ConstantExpression(ConstantExpressionResult {
-                index: ConstantExpressionIndex(operand.index.0),
+                expression: ConstantExpression(expression),
                 recovered,
             }))
         } else {
             ParseAction::Reduce(ParseValue::Expression(ExpressionResult {
-                index: operand.index,
+                expression,
                 recovered,
             }))
         }

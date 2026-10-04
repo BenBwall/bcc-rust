@@ -67,7 +67,7 @@ pub(super) enum CompoundStatementPhase {
     reason = "Frame phases assert the typed driver protocol, whose mismatch already identifies \
               the invariant."
 )]
-impl<'p> CompoundStatementFrame<'p> {
+impl<'tu, 'p> CompoundStatementFrame<'p> {
     pub(super) fn new(arena: &'p Bump, starting_error_count: usize, function_body: bool) -> Self {
         Self {
             phase: CompoundStatementPhase::Start,
@@ -81,11 +81,11 @@ impl<'p> CompoundStatementFrame<'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | CompoundStatementPhase::Start => {
                 debug_assert!(returned.is_none());

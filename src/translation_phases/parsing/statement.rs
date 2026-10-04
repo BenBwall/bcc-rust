@@ -69,9 +69,9 @@ pub(super) enum HeaderKind {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum LabelPrefix {
+pub(super) enum LabelPrefix<'tu> {
     Identifier(Identifier),
-    Case(ConstantExpressionSlot),
+    Case(ConstantExpressionSlot<'tu>),
     Default,
 }
 
@@ -82,81 +82,81 @@ pub(super) enum SimpleJump {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum StatementPhase {
+pub(super) enum StatementPhase<'tu> {
     Start,
     AwaitCompound,
     AwaitExpression,
-    ExpressionSemicolon(ExpressionSlot),
+    ExpressionSemicolon(ExpressionSlot<'tu>),
     ReturnStart,
     AwaitReturnExpression,
-    ReturnSemicolon(Option<ExpressionSlot>),
+    ReturnSemicolon(Option<ExpressionSlot<'tu>>),
     SimpleJumpSemicolon(SimpleJump),
     GotoIdentifier,
     GotoSemicolon(Identifier),
     IdentifierLabelColon(Identifier),
     CaseExpression,
     AwaitCaseExpression,
-    CaseColon(ConstantExpressionSlot),
+    CaseColon(ConstantExpressionSlot<'tu>),
     DefaultColon,
-    PushLabeled(LabelPrefix),
-    AwaitLabeled(LabelPrefix),
+    PushLabeled(LabelPrefix<'tu>),
+    AwaitLabeled(LabelPrefix<'tu>),
     HeaderOpening(HeaderKind),
     HeaderExpression(HeaderKind),
     AwaitHeaderExpression(HeaderKind),
-    HeaderClosing(HeaderKind, ExpressionSlot),
-    PushHeaderBody(HeaderKind, ExpressionSlot),
-    AwaitHeaderBody(HeaderKind, ExpressionSlot),
-    IfAfterThen(ExpressionSlot, StatementIndex),
-    PushElse(ExpressionSlot, StatementIndex),
-    AwaitElse(ExpressionSlot, StatementIndex),
+    HeaderClosing(HeaderKind, ExpressionSlot<'tu>),
+    PushHeaderBody(HeaderKind, ExpressionSlot<'tu>),
+    AwaitHeaderBody(HeaderKind, ExpressionSlot<'tu>),
+    IfAfterThen(ExpressionSlot<'tu>, StatementIndex),
+    PushElse(ExpressionSlot<'tu>, StatementIndex),
+    AwaitElse(ExpressionSlot<'tu>, StatementIndex),
     DoPushBody,
     DoAwaitBody,
     DoWhileKeyword(StatementIndex),
     DoOpening(StatementIndex),
     DoExpression(StatementIndex),
     DoAwaitExpression(StatementIndex),
-    DoClosing(StatementIndex, ExpressionSlot),
-    DoSemicolon(StatementIndex, ExpressionSlot),
+    DoClosing(StatementIndex, ExpressionSlot<'tu>),
+    DoSemicolon(StatementIndex, ExpressionSlot<'tu>),
     ForOpening,
     ForInitializer,
     AwaitForInitializerExpression,
     AwaitForInitializerDeclaration,
-    ForInitializerSemicolon(ExpressionSlot),
-    ForCondition(Option<ForInitializer>),
-    AwaitForCondition(Option<ForInitializer>),
-    ForConditionSemicolon(Option<ForInitializer>, ExpressionSlot),
-    ForIteration(Option<ForInitializer>, Option<ExpressionSlot>),
-    AwaitForIteration(Option<ForInitializer>, Option<ExpressionSlot>),
+    ForInitializerSemicolon(ExpressionSlot<'tu>),
+    ForCondition(Option<ForInitializer<'tu>>),
+    AwaitForCondition(Option<ForInitializer<'tu>>),
+    ForConditionSemicolon(Option<ForInitializer<'tu>>, ExpressionSlot<'tu>),
+    ForIteration(Option<ForInitializer<'tu>>, Option<ExpressionSlot<'tu>>),
+    AwaitForIteration(Option<ForInitializer<'tu>>, Option<ExpressionSlot<'tu>>),
     ForClosing(
-        Option<ForInitializer>,
-        Option<ExpressionSlot>,
-        Option<ExpressionSlot>,
+        Option<ForInitializer<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+        Option<ExpressionSlot<'tu>>,
     ),
     /// Consumes the counted remaining tokens of a malformed `for` header,
     /// which include an extra `;` clause, before its closing parenthesis.
     ForSkipHeader(
-        Option<ForInitializer>,
-        Option<ExpressionSlot>,
-        Option<ExpressionSlot>,
+        Option<ForInitializer<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+        Option<ExpressionSlot<'tu>>,
         u16,
     ),
     ForPushBody(
-        Option<ForInitializer>,
-        Option<ExpressionSlot>,
-        Option<ExpressionSlot>,
+        Option<ForInitializer<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+        Option<ExpressionSlot<'tu>>,
     ),
     ForAwaitBody(
-        Option<ForInitializer>,
-        Option<ExpressionSlot>,
-        Option<ExpressionSlot>,
+        Option<ForInitializer<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+        Option<ExpressionSlot<'tu>>,
     ),
     Recovered,
-    Finish(StatementType),
+    Finish(StatementType<'tu>),
 }
 
 #[derive(Debug)]
-pub(super) struct StatementFrame {
-    phase:                     StatementPhase,
+pub(super) struct StatementFrame<'tu> {
+    phase:                     StatementPhase<'tu>,
     pub(super) source_vectors: Option<SourceVectors>,
     starting_error_count:      usize,
     entry_scope_depth:         Option<usize>,
@@ -188,7 +188,7 @@ impl HeaderKind {
     reason = "The single iterative statement grammar dispatcher keeps all phase transitions and \
               delimiter ownership visible in one frame implementation."
 )]
-impl<'p> StatementFrame {
+impl<'tu, 'p> StatementFrame<'tu> {
     pub(super) fn new(starting_error_count: usize, implicit_scope: Option<ScopeKind>) -> Self {
         Self {
             phase: StatementPhase::Start,
@@ -218,11 +218,11 @@ impl<'p> StatementFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         if self.entry_scope_depth.is_none() {
             self.entry_scope_depth = Some(parser.scopes.depth());
             if let Some(kind) = self.implicit_scope {
@@ -431,7 +431,7 @@ impl<'p> StatementFrame {
             },
             | StatementPhase::AwaitExpression => {
                 let slot = Self::parsed_slot(returned);
-                self.merge_slot(parser, context, slot);
+                self.merge_slot(context, slot);
                 self.phase = StatementPhase::ExpressionSemicolon(slot);
                 ParseAction::Continue
             },
@@ -479,7 +479,7 @@ impl<'p> StatementFrame {
             },
             | StatementPhase::AwaitReturnExpression => {
                 let slot = Self::parsed_slot(returned);
-                self.merge_slot(parser, context, slot);
+                self.merge_slot(context, slot);
                 self.phase = StatementPhase::ReturnSemicolon(Some(slot));
                 ParseAction::Reprocess
             },
@@ -578,7 +578,7 @@ impl<'p> StatementFrame {
             },
             | StatementPhase::AwaitCaseExpression => {
                 let slot = Self::parsed_constant_slot(returned);
-                self.merge_constant_slot(parser, context, slot);
+                self.merge_constant_slot(context, slot);
                 self.phase = StatementPhase::CaseColon(slot);
                 ParseAction::Reprocess
             },
@@ -700,7 +700,7 @@ impl<'p> StatementFrame {
             },
             | StatementPhase::AwaitHeaderExpression(kind) => {
                 let slot = Self::parsed_slot(returned);
-                self.merge_slot(parser, context, slot);
+                self.merge_slot(context, slot);
                 self.phase = StatementPhase::HeaderClosing(kind, slot);
                 ParseAction::Continue
             },
@@ -920,7 +920,7 @@ impl<'p> StatementFrame {
             },
             | StatementPhase::DoAwaitExpression(body) => {
                 let expression = Self::parsed_slot(returned);
-                self.merge_slot(parser, context, expression);
+                self.merge_slot(context, expression);
                 self.phase = StatementPhase::DoClosing(body, expression);
                 ParseAction::Reprocess
             },
@@ -1022,7 +1022,7 @@ impl<'p> StatementFrame {
             },
             | StatementPhase::AwaitForInitializerExpression => {
                 let expression = Self::parsed_slot(returned);
-                self.merge_slot(parser, context, expression);
+                self.merge_slot(context, expression);
                 self.phase = StatementPhase::ForInitializerSemicolon(expression);
                 ParseAction::Reprocess
             },
@@ -1094,7 +1094,7 @@ impl<'p> StatementFrame {
             },
             | StatementPhase::AwaitForCondition(initializer) => {
                 let expression = Self::parsed_slot(returned);
-                self.merge_slot(parser, context, expression);
+                self.merge_slot(context, expression);
                 self.phase = StatementPhase::ForConditionSemicolon(initializer, expression);
                 ParseAction::Reprocess
             },
@@ -1145,7 +1145,7 @@ impl<'p> StatementFrame {
             },
             | StatementPhase::AwaitForIteration(initializer, condition) => {
                 let expression = Self::parsed_slot(returned);
-                self.merge_slot(parser, context, expression);
+                self.merge_slot(context, expression);
                 self.phase = StatementPhase::ForClosing(initializer, condition, Some(expression));
                 ParseAction::Reprocess
             },
@@ -1259,7 +1259,7 @@ impl<'p> StatementFrame {
         }
     }
 
-    fn enter_construct_scope(parser: &mut Parser<'p>, kind: ScopeKind) {
+    fn enter_construct_scope(parser: &mut Parser<'tu, 'p>, kind: ScopeKind) {
         parser.scopes.enter_scope(kind);
     }
 
@@ -1278,7 +1278,7 @@ impl<'p> StatementFrame {
     /// starter outside parentheses), at the end of input, or after
     /// [`HEADER_RECOVERY_LOOKAHEAD`] tokens.
     fn for_header_closer_distance(
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
     ) -> Option<u16> {
         let mut depth = 0_usize;
@@ -1306,24 +1306,27 @@ impl<'p> StatementFrame {
         None
     }
 
-    fn missing_slot(parser: &mut Parser<'p>, context: &mut Context<'_>) -> ExpressionSlot {
+    fn missing_slot(
+        parser: &mut Parser<'tu, 'p>,
+        context: &mut Context<'_>,
+    ) -> ExpressionSlot<'tu> {
         ExpressionSlot::Missing(parser.missing_syntax_source(context))
     }
 
     fn missing_constant_slot(
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
-    ) -> ConstantExpressionSlot {
+    ) -> ConstantExpressionSlot<'tu> {
         ConstantExpressionSlot::Missing(parser.missing_syntax_source(context))
     }
 
-    fn merge_token(&mut self, parser: &Parser<'p>, context: &mut Context<'_>, token: Token) {
+    fn merge_token(&mut self, parser: &Parser<'tu, 'p>, context: &mut Context<'_>, token: Token) {
         parser.merge_source(context, &mut self.source_vectors, token);
     }
 
     fn merge_statement(
         &mut self,
-        parser: &Parser<'p>,
+        parser: &Parser<'tu, 'p>,
         context: &mut Context<'_>,
         statement: StatementIndex,
     ) {
@@ -1334,17 +1337,23 @@ impl<'p> StatementFrame {
         );
     }
 
-    fn parsed_slot(returned: Option<ParseValue>) -> ExpressionSlot {
-        let Some(ParseValue::Expression(ExpressionResult { index, recovered })) = returned else {
+    fn parsed_slot(returned: Option<ParseValue<'tu>>) -> ExpressionSlot<'tu> {
+        let Some(ParseValue::Expression(ExpressionResult {
+            expression: index,
+            recovered,
+        })) = returned
+        else {
             panic!("expression frame returned an unexpected value: {returned:?}");
         };
         let _ = recovered;
         ExpressionSlot::Parsed(index)
     }
 
-    fn parsed_constant_slot(returned: Option<ParseValue>) -> ConstantExpressionSlot {
-        let Some(ParseValue::ConstantExpression(ConstantExpressionResult { index, recovered })) =
-            returned
+    fn parsed_constant_slot(returned: Option<ParseValue<'tu>>) -> ConstantExpressionSlot<'tu> {
+        let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
+            expression: index,
+            recovered,
+        })) = returned
         else {
             panic!("constant-expression frame returned an unexpected value: {returned:?}");
         };
@@ -1352,9 +1361,9 @@ impl<'p> StatementFrame {
         ConstantExpressionSlot::Parsed(index)
     }
 
-    fn merge_slot(&mut self, parser: &Parser<'p>, context: &mut Context<'_>, slot: ExpressionSlot) {
+    fn merge_slot(&mut self, context: &mut Context<'_>, slot: ExpressionSlot<'tu>) {
         let source = match slot {
-            | ExpressionSlot::Parsed(index) => parser.syntax[index].source_vectors,
+            | ExpressionSlot::Parsed(index) => index.source_vectors,
             | ExpressionSlot::Missing(source) => source,
         };
         if source.length > 0 {
@@ -1367,12 +1376,11 @@ impl<'p> StatementFrame {
 
     fn merge_constant_slot(
         &mut self,
-        parser: &Parser<'p>,
         context: &mut Context<'_>,
-        slot: ConstantExpressionSlot,
+        slot: ConstantExpressionSlot<'tu>,
     ) {
         let source = match slot {
-            | ConstantExpressionSlot::Parsed(index) => parser.syntax[index].source_vectors,
+            | ConstantExpressionSlot::Parsed(index) => index.expression().source_vectors,
             | ConstantExpressionSlot::Missing(source) => source,
         };
         if source.length > 0 {
@@ -1385,7 +1393,7 @@ impl<'p> StatementFrame {
 
     fn own_semicolon_or_report(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         position: &'static str,
@@ -1406,7 +1414,7 @@ impl<'p> StatementFrame {
 
     fn own_colon_or_report(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         position: &'static str,
@@ -1424,19 +1432,19 @@ impl<'p> StatementFrame {
 
     fn finish_existing(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         statement: StatementIndex,
-    ) -> ParseAction<'p> {
+    ) -> ParseAction<'tu, 'p> {
         self.restore_scopes(parser);
         ParseAction::Reduce(ParseValue::Statement(statement))
     }
 
     fn finish(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
-        kind: StatementType,
-    ) -> ParseAction<'p> {
+        kind: StatementType<'tu>,
+    ) -> ParseAction<'tu, 'p> {
         let source_vectors = self
             .source_vectors
             .unwrap_or_else(|| parser.missing_syntax_source(context));
@@ -1449,7 +1457,7 @@ impl<'p> StatementFrame {
         ParseAction::Reduce(ParseValue::Statement(StatementIndex(index)))
     }
 
-    fn restore_scopes(&mut self, parser: &mut Parser<'p>) {
+    fn restore_scopes(&mut self, parser: &mut Parser<'tu, 'p>) {
         if self.owns_switch_scope {
             let _switch_scope = parser
                 .switch_scopes

@@ -191,6 +191,10 @@ impl Arena {
     /// # Panics
     ///
     /// If `handle` does not address a value of type `T` in this arena.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Syntax nodes never change once stored.")
+    )]
     pub(crate) fn get_mut<T: 'static>(&mut self, handle: u32) -> &mut T {
         let mut ptr = self.inner.get_mut().locate::<T>(handle, 1);
         // SAFETY: As in `get`; the exclusive borrow of `self` guarantees no
@@ -222,6 +226,10 @@ impl Arena {
     /// # Panics
     ///
     /// If `run` is not a run of `T` values in this arena.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Syntax nodes never change once stored.")
+    )]
     pub(crate) fn slice_mut<T: 'static>(&mut self, run: ArenaRun) -> &mut [T] {
         if run.length == 0 {
             return &mut [];

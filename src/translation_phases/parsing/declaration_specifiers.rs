@@ -97,7 +97,7 @@ pub(super) enum DeclarationSpecifiersPhase {
     AwaitEnum,
 }
 
-impl<'p> DeclarationSpecifiersFrame {
+impl<'tu, 'p> DeclarationSpecifiersFrame {
     pub(super) fn new(mode: SpecifierMode) -> Self {
         Self {
             phase: DeclarationSpecifiersPhase::Collect,
@@ -115,11 +115,11 @@ impl<'p> DeclarationSpecifiersFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | DeclarationSpecifiersPhase::AwaitStructOrUnion => {
                 let Some(ParseValue::StructOrUnionSpecifier(index)) = returned else {
@@ -382,7 +382,7 @@ impl<'p> DeclarationSpecifiersFrame {
     ///
     /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112 lists only
     /// `float _Complex`, `double _Complex`, and `long double _Complex`.
-    fn report_incomplete_complex(&self, parser: &mut Parser<'p>, context: &mut Context<'_>) {
+    fn report_incomplete_complex(&self, parser: &mut Parser<'tu, 'p>, context: &mut Context<'_>) {
         if !self.invalid_type_seen
             && !self.type_conflict_seen
             && matches!(
@@ -400,7 +400,7 @@ impl<'p> DeclarationSpecifiersFrame {
 
     fn apply_type_specifier(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Token,
         specifier: PrimitiveTypeSpecifier,
@@ -504,7 +504,7 @@ pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
 }
 
 pub(super) fn report_duplicate_type_qualifier(
-    parser: &mut Parser<'_>,
+    parser: &mut Parser<'_, '_>,
     context: &mut Context<'_>,
     token: Token,
     qualifier: TypeQualifiers,

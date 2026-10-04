@@ -64,13 +64,13 @@ use crate::{
     reason = "The flags are independent recovery facts of one parameter list, not a hidden state \
               machine."
 )]
-pub(super) struct ParameterListFrame<'p> {
+pub(super) struct ParameterListFrame<'tu, 'p> {
     /// Current prototype/K&R transition.
     phase: ParameterListPhase,
     /// Whether this syntactic position permits a K&R identifier list.
     allow_k_and_r: bool,
     /// Prototype parameters accumulated before arena insertion.
-    pub(super) parameters: ArenaVec<'p, ParameterDeclaration>,
+    pub(super) parameters: ArenaVec<'p, ParameterDeclaration<'tu>>,
     /// K&R identifiers accumulated before arena insertion.
     pub(super) identifiers: ArenaVec<'p, Identifier>,
     /// Specifiers retained while an optional parameter declarator runs.
@@ -128,7 +128,7 @@ pub(super) enum ParameterListPhase {
     FinishPrototype,
 }
 
-impl<'p> ParameterListFrame<'p> {
+impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump, allow_k_and_r: bool) -> Self {
         Self {
             phase: ParameterListPhase::Start,
@@ -157,7 +157,7 @@ impl<'p> ParameterListFrame<'p> {
     /// declaration syntax; without it, `(a b, c)` stays an identifier list with
     /// an omitted comma.
     fn unknown_type_name_starts_prototype(
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
     ) -> bool {
         /// Tokens examined after two adjacent identifiers before the list is
@@ -201,11 +201,11 @@ impl<'p> ParameterListFrame<'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | ParameterListPhase::Start => {
                 debug_assert!(

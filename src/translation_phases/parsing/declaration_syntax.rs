@@ -14,10 +14,10 @@ use super::{
     Parser,
     errors::ParserErrorType,
     syntax::{
-        ConstantExpressionIndex,
+        ConstantExpression,
         DesignationIndex,
         EnumSpecifierIndex,
-        ExpressionIndex,
+        Expression,
         Identifier,
         InitializerIndex,
         ParenthesizedDeclaratorIndex,
@@ -47,10 +47,10 @@ use crate::{
     clippy::struct_field_names,
     reason = "The C grammar's declaration-specifiers term is the precise field name."
 )]
-pub(crate) struct Declaration {
+pub(crate) struct Declaration<'tu> {
     pub(crate) declaration_specifiers:      DeclarationSpecifiers,
     /// init-declarator-list
-    pub(crate) init_declarators:            SyntaxList<InitDeclarator>,
+    pub(crate) init_declarators:            SyntaxList<InitDeclarator<'tu>>,
     pub(crate) source_vectors:              SourceVectors,
     /// Whether local syntax recovery repaired this declaration.
     pub(crate) recovered:                   bool,
@@ -64,9 +64,9 @@ pub(crate) struct Declaration {
 /// - declarator = initializer
 ///
 /// C99: §6.7, p. 97; PDF p. 109.
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct InitDeclarator {
-    pub(crate) declarator:     Declarator,
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct InitDeclarator<'tu> {
+    pub(crate) declarator:     Declarator<'tu>,
     pub(crate) initializer:    Option<InitializerIndex>,
     pub(crate) source_vectors: SourceVectors,
 }
@@ -77,9 +77,9 @@ pub(crate) struct InitDeclarator {
 /// - { initializer-list , }
 ///
 /// C99: §6.7.8, p. 125; PDF p. 137.
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Initializer {
-    pub(crate) kind: InitializerType,
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct Initializer<'tu> {
+    pub(crate) kind: InitializerType<'tu>,
     pub(crate) source_vectors: SourceVectors,
     pub(crate) opening_brace_source_vectors: Option<SourceVectors>,
     pub(crate) closing_brace_source_vectors: Option<SourceVectors>,
@@ -87,8 +87,8 @@ pub(crate) struct Initializer {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum InitializerType {
-    AssignmentExpression(ExpressionIndex),
+pub(crate) enum InitializerType<'tu> {
+    AssignmentExpression(&'tu Expression<'tu>),
     InitializerList(SyntaxList<InitializerElement>),
 }
 
@@ -101,16 +101,16 @@ pub(crate) struct InitializerElement {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct Designation {
-    pub(crate) designators:           SyntaxList<Designator>,
+pub(crate) struct Designation<'tu> {
+    pub(crate) designators:           SyntaxList<Designator<'tu>>,
     pub(crate) equals_source_vectors: Option<SourceVectors>,
     pub(crate) source_vectors:        SourceVectors,
     pub(crate) recovered:             bool,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct Designator {
-    pub(crate) kind: DesignatorType,
+pub(crate) struct Designator<'tu> {
+    pub(crate) kind: DesignatorType<'tu>,
     pub(crate) operator_source_vectors: SourceVectors,
     pub(crate) closing_bracket_source_vectors: Option<SourceVectors>,
     pub(crate) source_vectors: SourceVectors,
@@ -118,8 +118,8 @@ pub(crate) struct Designator {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum DesignatorType {
-    Array(ConstantExpressionIndex),
+pub(crate) enum DesignatorType<'tu> {
+    Array(ConstantExpression<'tu>),
     Field(Identifier),
     Error,
 }
@@ -280,7 +280,7 @@ macro_rules! map_fn {
 
         pub(super) fn $make_fn_name(
             &mut self,
-            parser: &mut Parser<'_>,
+            parser: &mut Parser<'_, '_>,
             context: &mut Context<'_>,
             token: Token,
         ) {
@@ -502,7 +502,7 @@ impl TypeSpecifiers {
 
     pub(super) fn make_struct_or_union(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'_, '_>,
         context: &mut Context<'_>,
         index: StructOrUnionSpecifierIndex,
         token: Token,
@@ -526,7 +526,7 @@ impl TypeSpecifiers {
 
     pub(super) fn make_enum(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'_, '_>,
         context: &mut Context<'_>,
         index: EnumSpecifierIndex,
         token: Token,
@@ -550,7 +550,7 @@ impl TypeSpecifiers {
 
     pub(super) fn make_typedef_name(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'_, '_>,
         context: &mut Context<'_>,
         name: Identifier,
         token: Token,
@@ -565,7 +565,7 @@ impl TypeSpecifiers {
     /// source spellings, so rendered diagnostics never expose arena handles.
     fn report_conflict<'tu>(
         self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'_, '_>,
         context: &mut Context<'tu>,
         conflicting: StringCacheId,
         token: Token,
@@ -604,14 +604,14 @@ impl TypeSpecifiers {
 /// - struct-or-union identifier
 ///
 /// C99: §6.7.2.1, p. 101; PDF p. 113.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct StructOrUnionSpecifier {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct StructOrUnionSpecifier<'tu> {
     pub(crate) struct_or_union:         StructOrUnion,
     pub(crate) identifier:              Option<Identifier>,
     /// None indicates that the body is missing. An empty vector indicates an
     /// empty body. `struct Foo;` has no body. `struct Foo {};` has an empty
     /// body.
-    pub(crate) struct_declaration_list: Option<SyntaxList<StructDeclaration>>,
+    pub(crate) struct_declaration_list: Option<SyntaxList<StructDeclaration<'tu>>>,
     pub(crate) source_vectors:          SourceVectors,
 }
 
@@ -632,11 +632,11 @@ pub(crate) enum StructOrUnion {
 /// `type_qualifiers` and `type_specifiers` are split into two fields.
 ///
 /// C99: §6.7.2.1, p. 101; PDF p. 113.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct StructDeclaration {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct StructDeclaration<'tu> {
     pub(crate) type_qualifiers:        TypeQualifiers,
     pub(crate) type_specifiers:        TypeSpecifiers,
-    pub(crate) struct_declarator_list: SyntaxList<StructDeclarator>,
+    pub(crate) struct_declarator_list: SyntaxList<StructDeclarator<'tu>>,
     pub(crate) source_vectors:         SourceVectors,
 }
 
@@ -645,10 +645,10 @@ pub(crate) struct StructDeclaration {
 /// - declarator? : constant-expression
 ///
 /// C99: §6.7.2.1, p. 101; PDF p. 113.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct StructDeclarator {
-    pub(crate) declarator:     Option<Declarator>,
-    pub(crate) bitfield_width: Option<ConstantExpressionIndex>,
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct StructDeclarator<'tu> {
+    pub(crate) declarator:     Option<Declarator<'tu>>,
+    pub(crate) bitfield_width: Option<ConstantExpression<'tu>>,
     pub(crate) source_vectors: SourceVectors,
 }
 
@@ -658,10 +658,10 @@ pub(crate) struct StructDeclarator {
 /// - enum identifier
 ///
 /// C99: §6.7.2.2, p. 105; PDF p. 117.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct EnumSpecifier {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct EnumSpecifier<'tu> {
     pub(crate) name:             Option<Identifier>,
-    pub(crate) enumeration_list: Option<SyntaxList<Enumerator>>,
+    pub(crate) enumeration_list: Option<SyntaxList<Enumerator<'tu>>>,
     pub(crate) source_vectors:   SourceVectors,
 }
 
@@ -670,10 +670,10 @@ pub(crate) struct EnumSpecifier {
 /// - enumeration-constant = constant-expression
 ///
 /// C99: §6.7.2.2, p. 105; PDF p. 117.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct Enumerator {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct Enumerator<'tu> {
     pub(crate) name:           Identifier,
-    pub(crate) expression:     Option<ConstantExpressionIndex>,
+    pub(crate) expression:     Option<ConstantExpression<'tu>>,
     pub(crate) source_vectors: SourceVectors,
 }
 
@@ -756,10 +756,10 @@ pub(crate) struct PointerDeclarator {
 ///
 /// C99: declarators are §6.7.5, p. 114; PDF p. 126. Abstract declarators are
 /// §6.7.6, p. 122; PDF p. 134.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct Declarator {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct Declarator<'tu> {
     pub(crate) pointer:        PointerDeclarator,
-    pub(crate) kind:           SyntaxList<DirectDeclarator>,
+    pub(crate) kind:           SyntaxList<DirectDeclarator<'tu>>,
     pub(crate) source_vectors: SourceVectors,
 }
 
@@ -789,8 +789,8 @@ pub(crate) struct Declarator {
 /// C99: direct declarators are §6.7.5, p. 114; PDF p. 126, with array and
 /// function derivation in §6.7.5.2-§6.7.5.3, pp. 116-121; PDF pp. 128-133.
 /// Direct abstract declarators are §6.7.6, p. 122; PDF p. 134.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum DirectDeclarator {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum DirectDeclarator<'tu> {
     Identifier(Identifier),
     Parenthesized(ParenthesizedDeclaratorIndex),
     KAndRStyleFunction {
@@ -800,19 +800,19 @@ pub(crate) enum DirectDeclarator {
         type_qualifiers:       TypeQualifiers,
         is_static:             bool,
         is_pointer:            bool,
-        assignment_expression: Option<ExpressionIndex>,
+        assignment_expression: Option<&'tu Expression<'tu>>,
     },
     Function {
-        parameter_list: SyntaxList<ParameterDeclaration>,
+        parameter_list: SyntaxList<ParameterDeclaration<'tu>>,
         is_variadic:    bool,
     },
 }
 
 /// Grouping syntax lives in the arena so its child and delimiter span do not
 /// enlarge every direct-declarator variant.
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) struct ParenthesizedDeclarator {
-    pub(crate) declarator: Declarator,
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct ParenthesizedDeclarator<'tu> {
+    pub(crate) declarator: Declarator<'tu>,
     /// Only the parentheses; child provenance stays on the child.
     pub(crate) delimiters: SourceVectors,
 }
@@ -823,11 +823,11 @@ pub(crate) struct ParenthesizedDeclarator {
 ///
 /// C99: §6.7.5, p. 114; PDF p. 126, and function declarators §6.7.5.3,
 /// pp. 118-121; PDF pp. 130-133.
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct ParameterDeclaration {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct ParameterDeclaration<'tu> {
     pub(crate) declaration_specifiers: DeclarationSpecifiers,
     /// Could be a declarator or an abstract declarator or neither.
-    pub(crate) declarator:             Option<Declarator>,
+    pub(crate) declarator:             Option<Declarator<'tu>>,
     pub(crate) source_vectors:         SourceVectors,
 }
 
@@ -836,12 +836,12 @@ pub(crate) struct ParameterDeclaration {
 /// A parsed type-name syntax node.
 ///
 /// C99: §6.7.6, p. 122; PDF p. 134.
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct TypeName {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct TypeName<'tu> {
     /// Specifiers and qualifiers that establish the base type.
     pub(crate) declaration_specifiers: DeclarationSpecifiers,
     /// Optional abstract declarator deriving pointer, array, or function shape.
-    pub(crate) declarator:             Option<Declarator>,
+    pub(crate) declarator:             Option<Declarator<'tu>>,
     pub(crate) source_vectors:         SourceVectors,
     pub(crate) recovered:              bool,
 }

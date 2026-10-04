@@ -72,7 +72,7 @@ fn with_preprocessed<R>(
 
 fn with_parser<R>(
     source: &str,
-    inspect: impl FnOnce(&mut LanguageParser<'_>, &mut Context<'_>) -> R,
+    inspect: impl FnOnce(&mut LanguageParser<'_, '_>, &mut Context<'_>) -> R,
 ) -> R {
     let tu = Bump::new();
     let mut context = Context::new(&tu);

@@ -34,21 +34,21 @@ use crate::translation_phases::{
 };
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct TypeNameFrame {
-    phase:                  TypeNamePhase,
+pub(super) struct TypeNameFrame<'tu> {
+    phase:                  TypeNamePhase<'tu>,
     declaration_specifiers: Option<DeclarationSpecifiers>,
     starting_error_count:   usize,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum TypeNamePhase {
+pub(super) enum TypeNamePhase<'tu> {
     Start,
     AwaitSpecifiers,
     AwaitDeclarator,
-    Finish(Option<Declarator>),
+    Finish(Option<Declarator<'tu>>),
 }
 
-impl<'p> TypeNameFrame {
+impl<'tu, 'p> TypeNameFrame<'tu> {
     pub(super) fn new(starting_error_count: usize) -> Self {
         Self {
             phase: TypeNamePhase::Start,
@@ -63,11 +63,11 @@ impl<'p> TypeNameFrame {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | TypeNamePhase::Start => {
                 debug_assert!(returned.is_none());

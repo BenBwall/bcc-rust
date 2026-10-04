@@ -154,21 +154,22 @@ pub(crate) struct InitializerIndex(pub(super) u32);
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct DesignationIndex(pub(super) u32);
 
-/// Typed handle into the expression arena.
-///
-/// C99: expressions are §6.5-§6.5.17, pp. 67-94; PDF pp. 79-106.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct ExpressionIndex(pub(super) u32);
-
-/// Expression handle whose grammar guarantees constant-expression syntax.
+/// Expression whose grammar guarantees constant-expression syntax.
 ///
 /// C99: constant-expression is §6.6, pp. 95-96; PDF pp. 107-108.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct ConstantExpressionIndex(pub(super) u32);
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct ConstantExpression<'tu>(pub(super) &'tu Expression<'tu>);
 
-impl From<ConstantExpressionIndex> for ExpressionIndex {
-    fn from(index: ConstantExpressionIndex) -> Self {
-        Self(index.0)
+impl<'tu> ConstantExpression<'tu> {
+    /// The expression this constant expression is.
+    pub(crate) fn expression(self) -> &'tu Expression<'tu> {
+        self.0
+    }
+}
+
+impl<'tu> From<ConstantExpression<'tu>> for &'tu Expression<'tu> {
+    fn from(expression: ConstantExpression<'tu>) -> Self {
+        expression.0
     }
 }
 
@@ -193,9 +194,9 @@ pub(crate) struct EnumSpecifierIndex(pub(super) u32);
 
 /// Complete function-definition syntax produced at file scope.
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct FunctionDefinition {
+pub(crate) struct FunctionDefinition<'tu> {
     pub(crate) declaration_specifiers: DeclarationSpecifiers,
-    pub(crate) declarator:             Declarator,
+    pub(crate) declarator:             Declarator<'tu>,
     pub(crate) declaration_list:       SyntaxList<DeclarationIndex>,
     pub(crate) body:                   StatementIndex,
     pub(crate) source_vectors:         SourceVectors,
@@ -211,27 +212,27 @@ pub(crate) enum BlockItem {
 
 /// A statement expression is parsed or missing because recovery repaired a
 /// required position.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum ExpressionSlot {
-    Parsed(ExpressionIndex),
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum ExpressionSlot<'tu> {
+    Parsed(&'tu Expression<'tu>),
     Missing(SourceVectors),
 }
 
 /// A statement constant-expression preserves its narrower grammar type while
 /// parsed or synthesized during recovery.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum ConstantExpressionSlot {
-    Parsed(ConstantExpressionIndex),
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum ConstantExpressionSlot<'tu> {
+    Parsed(ConstantExpression<'tu>),
     Missing(SourceVectors),
 }
 
 /// Statement syntax node constructed by the statement frame.
 ///
 /// C99: §6.8-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) struct Statement {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct Statement<'tu> {
     /// Grammar form and child handles of this statement.
-    pub(crate) kind:           StatementType,
+    pub(crate) kind:           StatementType<'tu>,
     pub(crate) source_vectors: SourceVectors,
     pub(crate) recovered:      bool,
 }
@@ -240,41 +241,41 @@ pub(crate) struct Statement {
 ///
 /// C99: statement alternatives are §6.8, p. 131; PDF p. 143; their detailed
 /// productions are §6.8.1-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum StatementType {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum StatementType<'tu> {
     Compound {
         items: SyntaxList<BlockItem>,
     },
-    Expression(ExpressionSlot),
+    Expression(ExpressionSlot<'tu>),
     If {
-        condition_expression: ExpressionSlot,
+        condition_expression: ExpressionSlot<'tu>,
         then_statement:       StatementIndex,
         else_statement:       Option<StatementIndex>,
     },
     Switch {
-        condition_expression: ExpressionSlot,
+        condition_expression: ExpressionSlot<'tu>,
         body_statement:       StatementIndex,
     },
     While {
-        condition_expression: ExpressionSlot,
+        condition_expression: ExpressionSlot<'tu>,
         body_statement:       StatementIndex,
     },
     DoWhile {
-        condition_expression: ExpressionSlot,
+        condition_expression: ExpressionSlot<'tu>,
         body_statement:       StatementIndex,
     },
     For {
-        initializer:          Option<ForInitializer>,
-        condition_expression: Option<ExpressionSlot>,
-        iteration_expression: Option<ExpressionSlot>,
+        initializer:          Option<ForInitializer<'tu>>,
+        condition_expression: Option<ExpressionSlot<'tu>>,
+        iteration_expression: Option<ExpressionSlot<'tu>>,
         body_statement:       StatementIndex,
     },
-    Return(Option<ExpressionSlot>),
+    Return(Option<ExpressionSlot<'tu>>),
     Break,
     Continue,
     Goto(Identifier),
     Label(Identifier, StatementIndex),
-    Case(ConstantExpressionSlot, StatementIndex),
+    Case(ConstantExpressionSlot<'tu>, StatementIndex),
     Default(StatementIndex),
     Null,
 }
@@ -283,19 +284,19 @@ pub(crate) enum StatementType {
 /// expression or a declaration.
 ///
 /// C99: iteration-statement is §6.8.5, p. 135; PDF p. 147.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum ForInitializer {
-    Expression(ExpressionSlot),
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum ForInitializer<'tu> {
+    Expression(ExpressionSlot<'tu>),
     Declaration(DeclarationIndex),
 }
 
 /// Expression syntax node with exact source provenance.
 ///
 /// C99: §6.5-§6.5.17, pp. 67-94; PDF pp. 79-106.
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Expression {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct Expression<'tu> {
     /// Operator/operand grammar form.
-    pub(crate) kind:                    ExpressionType,
+    pub(crate) kind:                    ExpressionType<'tu>,
     /// Original-source segments contributing to the expression.
     pub(crate) source_vectors:          SourceVectors,
     /// Exact operator or owned-delimiter provenance for this expression form.
@@ -304,39 +305,39 @@ pub(crate) struct Expression {
     pub(crate) recovered:               bool,
 }
 
-/// C expression grammar forms represented through arena handles.
+/// C expression grammar forms represented through child references.
 ///
 /// C99: primary through comma expressions are §6.5.1-§6.5.17,
 /// pp. 69-94; PDF pp. 81-106.
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum ExpressionType {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum ExpressionType<'tu> {
     Parenthesized {
-        expression: ExpressionIndex,
+        expression: &'tu Expression<'tu>,
     },
     Conditional {
-        condition_expression: ExpressionIndex,
-        then_expression:      ExpressionIndex,
-        else_expression:      ExpressionIndex,
+        condition_expression: &'tu Expression<'tu>,
+        then_expression:      &'tu Expression<'tu>,
+        else_expression:      &'tu Expression<'tu>,
     },
     Binary {
         operator:         BinaryOperator,
-        left_expression:  ExpressionIndex,
-        right_expression: ExpressionIndex,
+        left_expression:  &'tu Expression<'tu>,
+        right_expression: &'tu Expression<'tu>,
     },
     Unary {
         operator:           UnaryOperator,
-        operand_expression: ExpressionIndex,
+        operand_expression: &'tu Expression<'tu>,
     },
     Call {
-        function_expression: ExpressionIndex,
-        arguments:           SyntaxList<ExpressionIndex>,
+        function_expression: &'tu Expression<'tu>,
+        arguments:           &'tu [&'tu Expression<'tu>],
     },
     DirectMember {
-        base_expression: ExpressionIndex,
+        base_expression: &'tu Expression<'tu>,
         member:          Identifier,
     },
     IndirectMember {
-        base_expression: ExpressionIndex,
+        base_expression: &'tu Expression<'tu>,
         member:          Identifier,
     },
     CompoundLiteral {
@@ -347,10 +348,10 @@ pub(crate) enum ExpressionType {
     Constant(Constant),
     StringLiteral(StringTokenType),
     SizeofType(TypeNameIndex),
-    SizeofExpr(ExpressionIndex),
+    SizeofExpr(&'tu Expression<'tu>),
     Cast {
         target_type:        TypeNameIndex,
-        operand_expression: ExpressionIndex,
+        operand_expression: &'tu Expression<'tu>,
     },
     Error,
 }
@@ -359,7 +360,7 @@ pub(crate) enum ExpressionType {
 ///
 /// C99: primary-expression is §6.5.1, p. 69; PDF p. 81; constants are §6.4.4,
 /// pp. 54-62; PDF pp. 66-74.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum Constant {
     Integer(IntegerTokenType),
     Float(FloatTokenType),

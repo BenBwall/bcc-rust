@@ -37,9 +37,8 @@ use super::{
     recovery::DelimiterDepth,
     statement::is_statement_keyword,
     syntax::{
-        ConstantExpressionIndex,
+        ConstantExpression,
         DesignationIndex,
-        ExpressionIndex,
         ExpressionType,
         Identifier,
         InitializerIndex,
@@ -62,8 +61,8 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(super) struct InitializerFrame<'p> {
-    phase: InitializerPhase,
+pub(super) struct InitializerFrame<'tu, 'p> {
+    phase: InitializerPhase<'tu>,
     pub(super) elements: ArenaVec<'p, InitializerElement>,
     pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     opening_brace_source_vectors: Option<SourceVectors>,
@@ -71,7 +70,7 @@ pub(super) struct InitializerFrame<'p> {
     /// Designation under construction, boxed because scalar initializers and
     /// undesignated elements never use it. The pools lend a box when the
     /// frame is pushed and take it back, reset, when the frame pops.
-    pub(super) designation: Option<PoolBox<'p, DesignationState<'p>>>,
+    pub(super) designation: Option<PoolBox<'p, DesignationState<'tu, 'p>>>,
     starting_error_count: usize,
     /// Whether `)` belongs to an enclosing expression or `for` header.
     closing_parenthesis_is_caller_boundary: bool,
@@ -82,20 +81,20 @@ pub(super) struct InitializerFrame<'p> {
 /// Designators and provenance of the designation preceding one initializer
 /// element.
 #[derive(Debug)]
-pub(super) struct DesignationState<'p> {
-    pub(super) current_designators:    ArenaVec<'p, Designator>,
+pub(super) struct DesignationState<'tu, 'p> {
+    pub(super) current_designators:    ArenaVec<'p, Designator<'tu>>,
     current_designation:               Option<DesignationIndex>,
     designation_source_vectors:        Option<SourceVectors>,
     designation_equals_source_vectors: Option<SourceVectors>,
     current_designator_source:         Option<SourceVectors>,
     current_designation_recovered:     bool,
-    synchronized_designator:           Option<SynchronizedDesignator>,
+    synchronized_designator:           Option<SynchronizedDesignator<'tu>>,
 }
 
 /// Recovery state for an array designator whose `]` was not where expected.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct SynchronizedDesignator {
-    expression:              ConstantExpressionIndex,
+pub(super) struct SynchronizedDesignator<'tu> {
+    expression:              ConstantExpression<'tu>,
     source_vectors:          SourceVectors,
     depth:                   DelimiterDepth,
     /// Whether lookahead found this designator's `]` later, so a top-level
@@ -104,7 +103,7 @@ pub(super) struct SynchronizedDesignator {
     closing_bracket_follows: bool,
 }
 
-impl<'p> DesignationState<'p> {
+impl<'p> DesignationState<'_, 'p> {
     pub(super) fn new_in(arena: &'p Bump) -> Self {
         Self {
             current_designators:               ArenaVec::new_in(arena),
@@ -129,7 +128,7 @@ impl<'p> DesignationState<'p> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum InitializerPhase {
+pub(super) enum InitializerPhase<'tu> {
     Start,
     PushScalar,
     AwaitScalar,
@@ -138,7 +137,7 @@ pub(super) enum InitializerPhase {
     FieldDesignator,
     PushArrayDesignator,
     AwaitArrayDesignator,
-    CloseArrayDesignator(ConstantExpressionIndex, bool),
+    CloseArrayDesignator(ConstantExpression<'tu>, bool),
     SynchronizeArrayDesignator,
     DesignationEquals,
     PushElement,
@@ -164,7 +163,7 @@ enum ListBoundary {
     MalformedElement,
 }
 
-impl<'p> InitializerFrame<'p> {
+impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     pub(super) fn new(
         arena: &'p Bump,
         starting_error_count: usize,
@@ -190,11 +189,11 @@ impl<'p> InitializerFrame<'p> {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | InitializerPhase::Start => {
                 debug_assert!(returned.is_none());
@@ -222,7 +221,7 @@ impl<'p> InitializerFrame<'p> {
             },
             | InitializerPhase::AwaitScalar => {
                 let expression = expression_value(returned);
-                let source_vectors = parser.syntax[expression].source_vectors;
+                let source_vectors = expression.source_vectors;
                 let index = self.store_initializer(
                     parser,
                     InitializerType::AssignmentExpression(expression),
@@ -395,7 +394,7 @@ impl<'p> InitializerFrame<'p> {
             },
             | InitializerPhase::AwaitArrayDesignator => {
                 let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
-                    index,
+                    expression: index,
                     recovered,
                 })) = returned
                 else {
@@ -406,8 +405,7 @@ impl<'p> InitializerFrame<'p> {
             },
             | InitializerPhase::CloseArrayDesignator(expression, expression_recovered) => {
                 debug_assert!(returned.is_none());
-                let expression_source =
-                    parser.syntax[ExpressionIndex::from(expression)].source_vectors;
+                let expression_source = expression.expression().source_vectors;
                 let operator_source_vectors = self
                     .designation_state()
                     .current_designator_source
@@ -710,7 +708,7 @@ impl<'p> InitializerFrame<'p> {
     /// Appends one element, with any designation that preceded it.
     fn push_element(
         &mut self,
-        parser: &Parser<'p>,
+        parser: &Parser<'tu, 'p>,
         context: &mut Context<'_>,
         index: InitializerIndex,
     ) {
@@ -735,7 +733,7 @@ impl<'p> InitializerFrame<'p> {
     }
 
     /// An unstarted child frame for one element of this list.
-    fn element_frame(&self, parser: &Parser<'p>) -> ParseFrame<'p> {
+    fn element_frame(&self, parser: &Parser<'tu, 'p>) -> ParseFrame<'tu, 'p> {
         ParseFrame::Initializer(InitializerFrame::new(
             parser.arena,
             parser.hard_error_count,
@@ -744,14 +742,14 @@ impl<'p> InitializerFrame<'p> {
         ))
     }
 
-    fn designation_state(&mut self) -> &mut DesignationState<'p> {
+    fn designation_state(&mut self) -> &mut DesignationState<'tu, 'p> {
         self.designation
             .as_mut()
             .expect("a pushed initializer frame holds a designation state")
     }
 
     /// Returns this popped frame's lists and designation state to the pools.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'p>) {
+    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         pools.initializers.reclaim(&mut self.elements);
         pools.source_vectors.reclaim(&mut self.source_vectors);
         if let Some(mut designation) = self.designation.take() {
@@ -772,7 +770,7 @@ impl<'p> InitializerFrame<'p> {
 
     fn push_array_designator(
         &mut self,
-        expression: ConstantExpressionIndex,
+        expression: ConstantExpression<'tu>,
         source_vectors: SourceVectors,
         closing_bracket_source_vectors: Option<SourceVectors>,
         recovered: bool,
@@ -793,7 +791,7 @@ impl<'p> InitializerFrame<'p> {
 
     fn at_array_designator_sync_boundary(
         &self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         depth: DelimiterDepth,
@@ -837,7 +835,7 @@ impl<'p> InitializerFrame<'p> {
     /// `{ [1 = 2 }`, the `,` or `=` is where the bracket went missing. The
     /// scan is bounded so repeated errors in one long list stay linear.
     fn closing_bracket_follows(
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
     ) -> bool {
@@ -895,7 +893,7 @@ impl<'p> InitializerFrame<'p> {
         false
     }
 
-    fn finish_designation(&mut self, parser: &mut Parser<'p>) {
+    fn finish_designation(&mut self, parser: &mut Parser<'tu, 'p>) {
         let designation = self.designation_state();
         let recovered = designation.current_designation_recovered
             || designation
@@ -939,7 +937,7 @@ impl<'p> InitializerFrame<'p> {
 
     fn list_boundary(
         &self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
     ) -> ListBoundary {
@@ -990,7 +988,7 @@ impl<'p> InitializerFrame<'p> {
     /// otherwise start a following declaration or statement is a malformed
     /// element when the list's own `}` comes first, as in `{ 1, int 0 }`.
     /// The scan is bounded so repeated errors in one long list stay linear.
-    fn closing_brace_follows(parser: &mut Parser<'p>, context: &mut Context<'_>) -> bool {
+    fn closing_brace_follows(parser: &mut Parser<'tu, 'p>, context: &mut Context<'_>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {
@@ -1027,8 +1025,8 @@ impl<'p> InitializerFrame<'p> {
 
     fn store_initializer(
         &self,
-        parser: &mut Parser<'p>,
-        kind: InitializerType,
+        parser: &mut Parser<'tu, 'p>,
+        kind: InitializerType<'tu>,
         source_vectors: SourceVectors,
     ) -> InitializerIndex {
         InitializerIndex(parser.push_syntax(Initializer {

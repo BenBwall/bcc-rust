@@ -40,7 +40,6 @@ use super::{
     },
     statement::is_statement_keyword,
     syntax::{
-        ExpressionIndex,
         Identifier,
         StructOrUnionSpecifierIndex,
     },
@@ -68,7 +67,7 @@ use crate::{
 /// C99: structure and union specifiers, member declarations, and bit-fields
 /// are §6.7.2.1, pp. 101-104; PDF pp. 113-116.
 #[derive(Debug)]
-pub(super) struct StructOrUnionSpecifierFrame<'p> {
+pub(super) struct StructOrUnionSpecifierFrame<'tu, 'p> {
     /// Current tag/member transition.
     phase: StructOrUnionPhase,
     /// Keyword-selected aggregate kind.
@@ -76,13 +75,13 @@ pub(super) struct StructOrUnionSpecifierFrame<'p> {
     /// Optional tag identifier.
     identifier: Option<Identifier>,
     /// Completed member declarations before arena insertion.
-    pub(super) declarations: ArenaVec<'p, StructDeclaration>,
+    pub(super) declarations: ArenaVec<'p, StructDeclaration<'tu>>,
     /// Declarators belonging to the member declaration in progress.
-    pub(super) member_declarators: ArenaVec<'p, StructDeclarator>,
+    pub(super) member_declarators: ArenaVec<'p, StructDeclarator<'tu>>,
     /// Specifiers shared by the member declarators in progress.
     member_specifiers: Option<DeclarationSpecifiers>,
     /// Named declarator waiting for an optional bit-field width.
-    member_declarator: Option<Declarator>,
+    member_declarator: Option<Declarator<'tu>>,
     /// Whether `{` was consumed, distinguishing a reference from a definition.
     body_started: bool,
     /// Whether member synchronization just ran after a reported malformed
@@ -132,7 +131,7 @@ pub(super) enum StructOrUnionPhase {
     FinishBody,
 }
 
-impl<'p> StructOrUnionSpecifierFrame<'p> {
+impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump) -> Self {
         Self {
             phase: StructOrUnionPhase::Start,
@@ -153,11 +152,11 @@ impl<'p> StructOrUnionSpecifierFrame<'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | StructOrUnionPhase::Start => {
                 debug_assert!(
@@ -377,14 +376,14 @@ impl<'p> StructOrUnionSpecifierFrame<'p> {
             },
             | StructOrUnionPhase::AwaitBitFieldWidth => {
                 let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
-                    index,
+                    expression: index,
                     recovered,
                 })) = returned
                 else {
                     panic!("bit-field frame returned an unexpected value: {returned:?}");
                 };
                 self.width_recovered = recovered;
-                let source_vectors = parser.syntax[ExpressionIndex::from(index)].source_vectors;
+                let source_vectors = index.expression().source_vectors;
                 self.member_source = Some(self.member_source.map_or(source_vectors, |existing| {
                     context.merge_vectors(existing, source_vectors)
                 }));
@@ -526,7 +525,7 @@ impl<'p> StructOrUnionSpecifierFrame<'p> {
     /// `int f(struct S { int x ) int after;`, the `)` closes that
     /// parenthesis and the body's `}` is missing. The scan is bounded so
     /// repeated errors stay linear.
-    fn member_list_continues(parser: &mut Parser<'p>, context: &mut Context<'_>) -> bool {
+    fn member_list_continues(parser: &mut Parser<'tu, 'p>, context: &mut Context<'_>) -> bool {
         const SCAN_LIMIT: usize = 64;
         // Parentheses and brackets, which never contain `;`.
         let mut groups = 0_u32;
@@ -611,7 +610,7 @@ impl<'p> StructOrUnionSpecifierFrame<'p> {
         false
     }
 
-    fn finish_member(&mut self, parser: &mut Parser<'p>) {
+    fn finish_member(&mut self, parser: &mut Parser<'tu, 'p>) {
         // Commit all declarators for this shared specifier-qualifier-list as a
         // single member declaration with one stable arena slice.
         let start = parser.append_syntax(&mut self.member_declarators);
@@ -629,7 +628,11 @@ impl<'p> StructOrUnionSpecifierFrame<'p> {
         self.source_vectors.push(source_vectors);
     }
 
-    fn finish(&mut self, parser: &mut Parser<'p>, context: &mut Context<'_>) -> ParseAction<'p> {
+    fn finish(
+        &mut self,
+        parser: &mut Parser<'tu, 'p>,
+        context: &mut Context<'_>,
+    ) -> ParseAction<'tu, 'p> {
         let declaration_list = self
             .body_started
             .then(|| parser.append_syntax(&mut self.declarations));

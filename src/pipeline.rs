@@ -38,7 +38,7 @@ pub(crate) fn parse_translation_unit<'tu>(
     source: &'tu str,
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
-) -> ParsedTranslationUnit {
+) -> ParsedTranslationUnit<'tu> {
     let preprocessed = with_preprocessor(
         context,
         source_filename,
@@ -75,13 +75,15 @@ pub(crate) fn with_preprocessor<'tu, R>(
 
 /// Keeps phase-7 working storage scoped to parsing: the parser's frames,
 /// their pools, its scopes, and its recovery state come from `parse`, which
-/// the caller frees when parsing ends.
-pub(crate) fn parse_with_arena(
+/// the caller frees when parsing ends. The syntax tree goes into the
+/// translation-unit arena.
+pub(crate) fn parse_with_arena<'tu>(
     preprocessed: PreprocessedTranslationUnit,
-    context: &mut Context<'_>,
+    context: &mut Context<'tu>,
     parse: &Bump,
-) -> ParsedTranslationUnit {
-    Parser::from_preprocessed(preprocessed, parse).parse_translation_unit(context)
+) -> ParsedTranslationUnit<'tu> {
+    Parser::from_preprocessed(preprocessed, context.tu_arena(), parse)
+        .parse_translation_unit(context)
 }
 
 /// Runs translation phases 4 through 6 over the whole translation unit and

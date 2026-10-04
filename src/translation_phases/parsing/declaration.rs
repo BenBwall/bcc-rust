@@ -65,14 +65,14 @@ use crate::{
 /// C99: declaration, init-declarator-list, and init-declarator are §6.7,
 /// p. 97; PDF p. 109.
 #[derive(Debug)]
-pub(super) struct DeclarationFrame<'p> {
+pub(super) struct DeclarationFrame<'tu, 'p> {
     /// Current declaration transition.
     phase: DeclarationPhase,
     /// Specifiers shared by every init-declarator in this declaration.
     declaration_specifiers: Option<DeclarationSpecifiers>,
     /// Init-declarators parsed so far, stored as one list when the
     /// declaration reduces.
-    pub(super) init_declarators: ArenaVec<'p, InitDeclarator>,
+    pub(super) init_declarators: ArenaVec<'p, InitDeclarator<'tu>>,
     /// Provenance accumulated across specifiers, declarators, and separators.
     pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     /// Hard-error count on entry, used to scope recovery to this declaration.
@@ -121,7 +121,7 @@ pub(super) enum DeclarationPhase {
     Finish,
 }
 
-impl<'p> DeclarationFrame<'p> {
+impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
     pub(super) fn new(
         arena: &'p Bump,
         context: DeclarationContext,
@@ -173,11 +173,11 @@ impl<'p> DeclarationFrame<'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | DeclarationPhase::Start => {
                 debug_assert!(

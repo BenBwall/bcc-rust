@@ -1,8 +1,15 @@
 //! Deterministic, source-oriented syntax-tree inspection.
 
 use std::{
-    collections::HashSet,
-    fmt::Write,
+    collections::{
+        HashMap,
+        HashSet,
+        hash_map::Entry,
+    },
+    fmt::{
+        Display,
+        Write,
+    },
 };
 
 use super::{
@@ -30,7 +37,7 @@ use super::{
         DeclarationIndex,
         DesignationIndex,
         EnumSpecifierIndex,
-        ExpressionIndex,
+        Expression,
         ExpressionSlot,
         ExpressionType,
         ExternalDeclaration,
@@ -66,31 +73,31 @@ pub(crate) struct InspectionOptions {
     pub(crate) show_locations: bool,
 }
 
-enum Work {
+enum Work<'tu> {
     Root(ExternalDeclaration, usize),
     Declaration(DeclarationIndex, usize, &'static str),
-    InitDeclarator(InitDeclarator, usize),
+    InitDeclarator(InitDeclarator<'tu>, usize),
     Function(FunctionDefinitionIndex, usize, &'static str),
-    Declarator(Declarator, usize, &'static str),
-    DirectDeclarator(DirectDeclarator, usize),
+    Declarator(Declarator<'tu>, usize, &'static str),
+    DirectDeclarator(DirectDeclarator<'tu>, usize),
     Identifier(Identifier, usize, &'static str),
-    Parameter(ParameterDeclaration, usize),
+    Parameter(ParameterDeclaration<'tu>, usize),
     StructOrUnion(StructOrUnionSpecifierIndex, usize),
-    StructDeclaration(StructDeclaration, usize),
-    StructDeclarator(StructDeclarator, usize),
+    StructDeclaration(StructDeclaration<'tu>, usize),
+    StructDeclarator(StructDeclarator<'tu>, usize),
     Enum(EnumSpecifierIndex, usize),
-    Enumerator(Enumerator, usize),
+    Enumerator(Enumerator<'tu>, usize),
     Statement(StatementIndex, usize, &'static str),
-    Expression(ExpressionIndex, usize, &'static str),
+    Expression(&'tu Expression<'tu>, usize, &'static str),
     Missing(SourceVectors, usize, &'static str),
     Initializer(InitializerIndex, usize, &'static str),
     InitializerElement(InitializerElement, usize),
     Designation(DesignationIndex, usize),
-    Designator(Designator, usize),
+    Designator(Designator<'tu>, usize),
     TypeName(TypeNameIndex, usize, &'static str),
 }
 
-impl SyntaxTree {
+impl<'tu> SyntaxTree<'tu> {
     #[expect(
         clippy::too_many_lines,
         reason = "One iterative dispatcher keeps traversal order and cycle handling centralized."
@@ -110,6 +117,9 @@ impl SyntaxTree {
             .map(|(ordinal, root)| Work::Root(root, ordinal))
             .collect::<Vec<_>>();
         let mut seen = HashSet::new();
+        // Nodes reached through references, keyed by kind and address, with
+        // the order in which each was first visited.
+        let mut visited = HashMap::new();
 
         while let Some(item) = work.pop() {
             match item {
@@ -184,7 +194,7 @@ impl SyntaxTree {
                         options,
                     );
                     for init in view.init_declarators().iter().rev() {
-                        work.push(Work::InitDeclarator(init.clone(), indent + 1));
+                        work.push(Work::InitDeclarator(*init, indent + 1));
                     }
                     Self::push_type_details(
                         &mut work,
@@ -391,7 +401,7 @@ impl SyntaxTree {
                             options,
                         );
                         for parameter in self.parameter_declarations(parameter_list).iter().rev() {
-                            work.push(Work::Parameter(parameter.clone(), indent + 1));
+                            work.push(Work::Parameter(*parameter, indent + 1));
                         }
                     },
                 },
@@ -579,20 +589,19 @@ impl SyntaxTree {
                     );
                     self.push_statement_children(&mut work, &statement.kind, indent + 1);
                 },
-                | Work::Expression(index, indent, role) => {
-                    if !seen.insert((3_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Expression(expression, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 3, expression) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "expression",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let expression = self.expression(index);
                     Self::line(
                         &mut output,
                         indent,
@@ -609,7 +618,7 @@ impl SyntaxTree {
                         context,
                         options,
                     );
-                    self.push_expression_children(&mut work, &expression.kind, indent + 1);
+                    Self::push_expression_children(&mut work, &expression.kind, indent + 1);
                 },
                 | Work::Missing(source, indent, role) => Self::line(
                     &mut output,
@@ -782,7 +791,7 @@ impl SyntaxTree {
         output
     }
 
-    fn push_type_details(work: &mut Vec<Work>, specifiers: TypeSpecifiers, indent: usize) {
+    fn push_type_details(work: &mut Vec<Work<'tu>>, specifiers: TypeSpecifiers, indent: usize) {
         match specifiers {
             | TypeSpecifiers::StructOrUnion(index) => work.push(Work::StructOrUnion(index, indent)),
             | TypeSpecifiers::Enum(index) => work.push(Work::Enum(index, indent)),
@@ -817,7 +826,7 @@ impl SyntaxTree {
         }
     }
 
-    fn declarator_identifier(&self, mut declarator: Declarator) -> Option<Identifier> {
+    fn declarator_identifier(&self, mut declarator: Declarator<'tu>) -> Option<Identifier> {
         let mut seen = HashSet::new();
         loop {
             if !seen.insert((
@@ -841,7 +850,12 @@ impl SyntaxTree {
         }
     }
 
-    fn push_statement_children(&self, work: &mut Vec<Work>, kind: &StatementType, indent: usize) {
+    fn push_statement_children(
+        &self,
+        work: &mut Vec<Work<'tu>>,
+        kind: &StatementType<'tu>,
+        indent: usize,
+    ) {
         match *kind {
             | StatementType::Compound { items } => {
                 for item in self.block_items(items).iter().rev() {
@@ -936,7 +950,7 @@ impl SyntaxTree {
         }
     }
 
-    fn statement_label(kind: &StatementType, context: &Context<'_>) -> String {
+    fn statement_label(kind: &StatementType<'tu>, context: &Context<'_>) -> String {
         match kind {
             | StatementType::Label(identifier, _) => {
                 format!("label {}", context.string_cache.at(identifier.name))
@@ -960,7 +974,7 @@ impl SyntaxTree {
         }
     }
 
-    fn expression_label(kind: &ExpressionType, context: &Context<'_>) -> String {
+    fn expression_label(kind: &ExpressionType<'tu>, context: &Context<'_>) -> String {
         match kind {
             | ExpressionType::Parenthesized { .. } => "parenthesized".to_owned(),
             | ExpressionType::Conditional { .. } => "conditional ?:".to_owned(),
@@ -996,14 +1010,23 @@ impl SyntaxTree {
         }
     }
 
-    fn push_slot(work: &mut Vec<Work>, slot: ExpressionSlot, indent: usize, role: &'static str) {
+    fn push_slot(
+        work: &mut Vec<Work<'tu>>,
+        slot: ExpressionSlot<'tu>,
+        indent: usize,
+        role: &'static str,
+    ) {
         match slot {
             | ExpressionSlot::Parsed(index) => work.push(Work::Expression(index, indent, role)),
             | ExpressionSlot::Missing(source) => work.push(Work::Missing(source, indent, role)),
         }
     }
 
-    fn push_expression_children(&self, work: &mut Vec<Work>, kind: &ExpressionType, indent: usize) {
+    fn push_expression_children(
+        work: &mut Vec<Work<'tu>>,
+        kind: &ExpressionType<'tu>,
+        indent: usize,
+    ) {
         match kind {
             | ExpressionType::Parenthesized { expression }
             | ExpressionType::Unary {
@@ -1011,33 +1034,33 @@ impl SyntaxTree {
                 ..
             }
             | ExpressionType::SizeofExpr(expression) => {
-                work.push(Work::Expression(*expression, indent, "operand"));
+                work.push(Work::Expression(expression, indent, "operand"));
             },
             | ExpressionType::Conditional {
                 condition_expression,
                 then_expression,
                 else_expression,
             } => {
-                work.push(Work::Expression(*else_expression, indent, "else"));
-                work.push(Work::Expression(*then_expression, indent, "then"));
-                work.push(Work::Expression(*condition_expression, indent, "condition"));
+                work.push(Work::Expression(else_expression, indent, "else"));
+                work.push(Work::Expression(then_expression, indent, "then"));
+                work.push(Work::Expression(condition_expression, indent, "condition"));
             },
             | ExpressionType::Binary {
                 left_expression,
                 right_expression,
                 ..
             } => {
-                work.push(Work::Expression(*right_expression, indent, "rhs"));
-                work.push(Work::Expression(*left_expression, indent, "lhs"));
+                work.push(Work::Expression(right_expression, indent, "rhs"));
+                work.push(Work::Expression(left_expression, indent, "lhs"));
             },
             | ExpressionType::Call {
                 function_expression,
                 arguments,
             } => {
-                for argument in self.expression_indices(*arguments).iter().rev() {
-                    work.push(Work::Expression(*argument, indent, "argument"));
+                for argument in arguments.iter().rev() {
+                    work.push(Work::Expression(argument, indent, "argument"));
                 }
-                work.push(Work::Expression(*function_expression, indent, "callee"));
+                work.push(Work::Expression(function_expression, indent, "callee"));
             },
             | ExpressionType::DirectMember {
                 base_expression, ..
@@ -1045,7 +1068,7 @@ impl SyntaxTree {
             | ExpressionType::IndirectMember {
                 base_expression, ..
             } => {
-                work.push(Work::Expression(*base_expression, indent, "base"));
+                work.push(Work::Expression(base_expression, indent, "base"));
             },
             | ExpressionType::CompoundLiteral {
                 type_name,
@@ -1058,7 +1081,7 @@ impl SyntaxTree {
                 target_type,
                 operand_expression,
             } => {
-                work.push(Work::Expression(*operand_expression, indent, "operand"));
+                work.push(Work::Expression(operand_expression, indent, "operand"));
                 work.push(Work::TypeName(*target_type, indent, "target-type"));
             },
             | ExpressionType::SizeofType(type_name) => {
@@ -1076,7 +1099,7 @@ impl SyntaxTree {
         indent: usize,
         role: &str,
         kind: &str,
-        index: u32,
+        index: impl Display,
         context: &Context<'_>,
         options: InspectionOptions,
     ) {
@@ -1228,5 +1251,19 @@ fn constant_label(constant: &Constant) -> String {
         ),
         | Constant::Char(CharacterTokenType::MultiChar(value)) =>
             format!("{value} (int, multi-character)"),
+    }
+}
+
+/// Records a node reached through a reference. Returns `None` on the first
+/// visit, or the order in which the node was first visited when it is
+/// reached again through another parent.
+fn first_visit<T>(visited: &mut HashMap<(u8, usize), usize>, kind: u8, node: &T) -> Option<usize> {
+    let ordinal = visited.len();
+    match visited.entry((kind, std::ptr::from_ref(node).addr())) {
+        | Entry::Occupied(first) => Some(*first.get()),
+        | Entry::Vacant(slot) => {
+            let _ = slot.insert(ordinal);
+            None
+        },
     }
 }

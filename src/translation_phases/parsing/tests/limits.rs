@@ -425,7 +425,10 @@ fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_>) {
 
 #[test]
 fn mixed_declarator_translation_floor_uses_the_typed_tree() {
-    fn count_derivations(tree: &SyntaxTree, declarator: Declarator) -> (usize, usize, usize) {
+    fn count_derivations(
+        tree: &SyntaxTree<'_>,
+        declarator: Declarator<'_>,
+    ) -> (usize, usize, usize) {
         let mut counts = (
             tree.pointer_qualifiers(declarator.pointer.type_qualifiers_list)
                 .len(),
@@ -629,7 +632,11 @@ fn remaining_c99_parser_translation_floors_are_supported() {
     let derived = format!("int value{};\n", "[1]".repeat(12));
     with_parse(&derived, |derived| {
         assert!(parser_errors(derived).next().is_none());
-        let derived_declarator = &derived.parser.syntax.nth::<InitDeclarator>(0).declarator;
+        let derived_declarator = &derived
+            .parser
+            .syntax
+            .nth::<InitDeclarator<'_>>(0)
+            .declarator;
         assert_eq!(
             derived.parser.syntax[derived_declarator.kind]
                 .iter()
@@ -649,7 +656,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
         let block_declaration = block
             .parser
             .syntax
-            .iter::<Declaration>()
+            .iter::<Declaration<'_>>()
             .max_by_key(|declaration| declaration.init_declarators.length())
             .expect("block fixture must contain declarations");
         assert_eq!(block_declaration.init_declarators.length(), 511);
@@ -697,7 +704,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             switch
                 .parser
                 .syntax
-                .iter::<Statement>()
+                .iter::<Statement<'_>>()
                 .filter(|statement| matches!(statement.kind, StatementType::Case(..)))
                 .count(),
             1_023
@@ -714,7 +721,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
         let member_list = structure
             .parser
             .syntax
-            .nth::<StructOrUnionSpecifier>(0)
+            .nth::<StructOrUnionSpecifier<'_>>(0)
             .struct_declaration_list
             .expect("struct definition must retain members");
         assert_eq!(member_list.length(), 1_023);
@@ -742,7 +749,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
         let enumeration_list = enumeration
             .parser
             .syntax
-            .nth::<EnumSpecifier>(0)
+            .nth::<EnumSpecifier<'_>>(0)
             .enumeration_list
             .expect("enum definition must retain enumerators");
         assert_eq!(enumeration_list.length(), 1_023);
@@ -765,12 +772,15 @@ fn remaining_c99_parser_translation_floors_are_supported() {
     let nested = format!("struct Outer {{ {nested} }};\n");
     with_parse(&nested, |nested| {
         assert!(parser_errors(nested).next().is_none());
-        assert_eq!(nested.parser.syntax.count::<StructOrUnionSpecifier>(), 64);
+        assert_eq!(
+            nested.parser.syntax.count::<StructOrUnionSpecifier<'_>>(),
+            64
+        );
         assert_eq!(
             nested
                 .parser
                 .syntax
-                .iter::<StructOrUnionSpecifier>()
+                .iter::<StructOrUnionSpecifier<'_>>()
                 .last()
                 .and_then(|specifier| specifier.identifier)
                 .map(|identifier| nested.context.string_cache.at(identifier.name)),

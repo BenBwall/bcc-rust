@@ -166,45 +166,50 @@ fn strict_c99_compatibility_corpus_matches_reviewed_parser_boundaries() {
                         parsed.items.as_slice(),
                         [ExternalDeclaration::RecoveredFunctionDefinition(_)]
                     ));
-                    assert!(parsed.parser.syntax.iter::<Expression>().any(|expression| {
-                        matches!(expression.kind, ExpressionType::Error) && expression.recovered
-                    }));
-                    assert!(parsed.parser.syntax.iter::<Expression>().all(|expression| {
-                        !matches!(expression.kind, ExpressionType::CompoundLiteral { .. })
-                    }));
-                },
-                | "constraint-invalid-lvalue.c" => {
                     assert!(
                         parsed
                             .parser
                             .syntax
-                            .iter::<Expression>()
-                            .any(|expression| matches!(
-                                expression.kind,
-                                ExpressionType::Binary {
-                                    operator: BinaryOperator::Assignment,
-                                    ..
-                                }
-                            ))
+                            .iter::<Expression<'_>>()
+                            .any(|expression| {
+                                matches!(expression.kind, ExpressionType::Error)
+                                    && expression.recovered
+                            })
                     );
+                    assert!(
+                        parsed
+                            .parser
+                            .syntax
+                            .iter::<Expression<'_>>()
+                            .all(|expression| {
+                                !matches!(expression.kind, ExpressionType::CompoundLiteral { .. })
+                            })
+                    );
+                },
+                | "constraint-invalid-lvalue.c" => {
+                    assert!(parsed.parser.syntax.iter::<Expression<'_>>().any(
+                        |expression| matches!(
+                            expression.kind,
+                            ExpressionType::Binary {
+                                operator: BinaryOperator::Assignment,
+                                ..
+                            }
+                        )
+                    ));
                     assert!(matches!(
                         parsed.items.as_slice(),
                         [ExternalDeclaration::FunctionDefinition(_)]
                     ));
                 },
                 | "typedef-parameter-preference.c" => {
-                    assert!(
-                        parsed
-                            .parser
-                            .syntax
-                            .iter::<ParameterDeclaration>()
-                            .any(|parameter| {
-                                matches!(
-                                    parameter.declaration_specifiers.type_specifiers,
-                                    TypeSpecifiers::TypedefName(_)
-                                )
-                            })
-                    );
+                    assert!(parsed.parser.syntax.iter::<ParameterDeclaration<'_>>().any(
+                        |parameter| {
+                            matches!(
+                                parameter.declaration_specifiers.type_specifiers,
+                                TypeSpecifiers::TypedefName(_)
+                            )
+                        }
+                    ));
                     assert!(parsed.items.iter().all(|item| matches!(
                         item,
                         ExternalDeclaration::Declaration(_)

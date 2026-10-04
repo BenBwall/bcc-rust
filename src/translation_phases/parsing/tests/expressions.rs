@@ -28,7 +28,6 @@ use crate::translation_phases::{
             BlockItem,
             Constant,
             Expression,
-            ExpressionIndex,
             ExpressionSlot,
             ExpressionType,
             ExternalDeclaration,
@@ -165,7 +164,7 @@ fn function_arguments_keep_binary_operators_inside_each_argument() {
             assert_eq!(
                 arguments
                     .iter()
-                    .map(|expression| expression_text(parsed, *expression))
+                    .map(|expression| expression_text(parsed, expression))
                     .collect::<Vec<_>>(),
                 ["1+2", "3-4", "5*6", "7&8"]
             );
@@ -336,14 +335,18 @@ fn unary_cast_and_sizeof_forms_use_parsed_type_names() {
             else {
                 panic!(
                     "expected parsed return expression: {:#?}",
-                    parsed.parser.syntax.iter::<Statement>().collect::<Vec<_>>()
+                    parsed
+                        .parser
+                        .syntax
+                        .iter::<Statement<'_>>()
+                        .collect::<Vec<_>>()
                 );
             };
             assert!(matches!(
                 parsed.parser.syntax[expression].kind,
                 ExpressionType::SizeofType(_)
             ));
-            assert_eq!(parsed.parser.syntax.count::<TypeName>(), 2);
+            assert_eq!(parsed.parser.syntax.count::<TypeName<'_>>(), 2);
             assert!(parser_errors(parsed).next().is_none());
         },
     );
@@ -358,18 +361,18 @@ fn type_names_retain_typedef_specifiers_after_primitive_specifiers() {
             let definition = function_definition(parsed, 1);
             let items = block_items(parsed, definition.body);
             assert_eq!(items.len(), 1, "{items:#?}");
-            assert_eq!(parsed.parser.syntax.count::<TypeName>(), 2);
+            assert_eq!(parsed.parser.syntax.count::<TypeName<'_>>(), 2);
             assert_eq!(
                 sourced_text(
                     parsed,
-                    parsed.parser.syntax.nth::<TypeName>(0).source_vectors
+                    parsed.parser.syntax.nth::<TypeName<'_>>(0).source_vectors
                 ),
                 "intT"
             );
             assert_eq!(
                 sourced_text(
                     parsed,
-                    parsed.parser.syntax.nth::<TypeName>(1).source_vectors
+                    parsed.parser.syntax.nth::<TypeName<'_>>(1).source_vectors
                 ),
                 "Tint"
             );
@@ -513,7 +516,7 @@ fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
             let argument_lengths = roots[2..]
                 .iter()
                 .map(|root| match parsed.parser.syntax[root].kind {
-                    | ExpressionType::Call { arguments, .. } => arguments.length,
+                    | ExpressionType::Call { arguments, .. } => arguments.len(),
                     | _ => panic!("expected call expression"),
                 })
                 .collect::<Vec<_>>();
@@ -577,7 +580,7 @@ fn missing_call_argument_comma_preserves_later_arguments() {
         assert_eq!(
             parsed.parser.syntax[arguments]
                 .iter()
-                .map(|expression| expression_text(parsed, *expression))
+                .map(|expression| expression_text(parsed, expression))
                 .collect::<Vec<_>>(),
             ["a", "b", "c"]
         );
@@ -1040,7 +1043,7 @@ fn array_designators_accept_conditional_and_parenthesized_comma_expressions() {
                         ),
                         "]"
                     );
-                    ExpressionIndex::from(expression)
+                    expression.expression()
                 })
                 .collect::<Vec<_>>();
 
@@ -1118,7 +1121,7 @@ fn every_c99_expression_operator_is_represented_by_the_syntax_model() {
                     parsed
                         .parser
                         .syntax
-                        .iter::<Expression>()
+                        .iter::<Expression<'_>>()
                         .any(|expression| matches!(
                             expression.kind,
                             ExpressionType::Binary { operator, .. } if operator == expected
@@ -1143,7 +1146,7 @@ fn every_c99_expression_operator_is_represented_by_the_syntax_model() {
                     parsed
                         .parser
                         .syntax
-                        .iter::<Expression>()
+                        .iter::<Expression<'_>>()
                         .any(|expression| matches!(
                             expression.kind,
                             ExpressionType::Unary { operator, .. } if operator == expected
@@ -1155,7 +1158,7 @@ fn every_c99_expression_operator_is_represented_by_the_syntax_model() {
                 parsed
                     .parser
                     .syntax
-                    .iter::<Expression>()
+                    .iter::<Expression<'_>>()
                     .any(|expression| matches!(
                         expression.kind,
                         ExpressionType::Conditional { .. }
@@ -1165,21 +1168,21 @@ fn every_c99_expression_operator_is_represented_by_the_syntax_model() {
                 parsed
                     .parser
                     .syntax
-                    .iter::<Expression>()
+                    .iter::<Expression<'_>>()
                     .any(|expression| matches!(expression.kind, ExpressionType::Cast { .. }))
             );
             assert!(
                 parsed
                     .parser
                     .syntax
-                    .iter::<Expression>()
+                    .iter::<Expression<'_>>()
                     .any(|expression| matches!(expression.kind, ExpressionType::SizeofExpr(_)))
             );
             assert!(
                 parsed
                     .parser
                     .syntax
-                    .iter::<Expression>()
+                    .iter::<Expression<'_>>()
                     .any(|expression| matches!(expression.kind, ExpressionType::SizeofType(_)))
             );
             assert!(
@@ -1287,17 +1290,17 @@ fn call_argument_and_initializer_nesting_translation_floors_are_heap_backed() {
             parsed
                 .parser
                 .syntax
-                .iter::<Expression>()
+                .iter::<Expression<'_>>()
                 .any(|expression| matches!(
                     expression.kind,
-                    ExpressionType::Call { arguments, .. } if arguments.length == 127
+                    ExpressionType::Call { arguments, .. } if arguments.len() == 127
                 ))
         );
         assert!(
             parsed
                 .parser
                 .syntax
-                .iter::<Initializer>()
+                .iter::<Initializer<'_>>()
                 .filter(|initializer| matches!(
                     initializer.kind,
                     InitializerType::InitializerList(_)
@@ -1314,12 +1317,12 @@ fn abstract_type_names_cover_pointer_array_function_and_parenthesized_forms() {
         "int f(int *p) { (int *)p; sizeof(int [4]); sizeof(int (*)(int)); return sizeof(int \
          (*)[4]); }\n",
         |parsed| {
-            assert_eq!(parsed.parser.syntax.count::<TypeName>(), 4);
+            assert_eq!(parsed.parser.syntax.count::<TypeName<'_>>(), 4);
             assert!(
                 parsed
                     .parser
                     .syntax
-                    .iter::<TypeName>()
+                    .iter::<TypeName<'_>>()
                     .all(|type_name| type_name.declarator.is_some())
             );
             assert!(
@@ -1337,7 +1340,7 @@ fn repeated_qualifiers_are_coalesced_in_type_names_and_abstract_declarators() {
         "int f(void) { sizeof(const const int); sizeof(int *volatile volatile); sizeof(int \
          [restrict restrict 4]); return; }\n",
         |parsed| {
-            assert_eq!(parsed.parser.syntax.count::<TypeName>(), 3);
+            assert_eq!(parsed.parser.syntax.count::<TypeName<'_>>(), 3);
             assert!(
                 parser_errors(parsed).next().is_none(),
                 "{:#?}",

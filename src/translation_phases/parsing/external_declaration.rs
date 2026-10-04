@@ -61,7 +61,7 @@ pub(super) enum ExternalDeclarationPhase {
     AwaitFunctionDefinition,
 }
 
-impl<'p> ExternalDeclarationFrame {
+impl<'tu, 'p> ExternalDeclarationFrame {
     pub(super) fn new(starting_error_count: usize, starting_diagnostic_count: usize) -> Self {
         Self {
             phase: ExternalDeclarationPhase::Start,
@@ -72,11 +72,11 @@ impl<'p> ExternalDeclarationFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | ExternalDeclarationPhase::Start => {
                 debug_assert!(

@@ -147,6 +147,12 @@ pub(crate) struct Context<'tu> {
 }
 
 impl<'tu> Context<'tu> {
+    /// The translation-unit arena, which holds everything that lives until
+    /// the translation unit ends, the syntax tree included.
+    pub(crate) fn tu_arena(&self) -> &'tu Bump {
+        self.tu
+    }
+
     pub(crate) fn diagnostic_text(&self, text: &str) -> &'tu str {
         self.tu.alloc_str(text)
     }

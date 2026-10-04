@@ -933,7 +933,7 @@ fn typedef_spelled_struct_member_declarators_are_not_consumed_as_specifiers() {
                 parsed
                     .parser
                     .syntax
-                    .iter::<StructDeclarator>()
+                    .iter::<StructDeclarator<'_>>()
                     .filter_map(|member| member
                         .declarator
                         .and_then(|declarator| identifier_name(parsed, declarator)))
@@ -1843,7 +1843,10 @@ fn blocks_and_definition_parameters_meet_the_c99_translation_floor() {
                     parsed.items.first(),
                     Some(ExternalDeclaration::FunctionDefinition(_))
                 ));
-                assert_eq!(parsed.parser.syntax.count::<ParameterDeclaration>(), 127);
+                assert_eq!(
+                    parsed.parser.syntax.count::<ParameterDeclaration<'_>>(),
+                    127
+                );
                 assert!(
                     parser_errors(parsed).next().is_none(),
                     "{:#?}",

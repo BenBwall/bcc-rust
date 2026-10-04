@@ -29,8 +29,8 @@ use super::{
     errors::ParserErrorType,
     syntax::{
         BlockItem,
-        ConstantExpressionIndex,
-        ExpressionIndex,
+        ConstantExpression,
+        Expression,
         ExpressionSlot,
         ExternalDeclaration,
         FunctionDefinition,
@@ -51,7 +51,7 @@ use crate::{
 };
 
 struct Parsed<'a, 'tu> {
-    parser:  Parser<'a>,
+    parser:  Parser<'tu, 'a>,
     context: &'a mut Context<'tu>,
     items:   Vec<ExternalDeclaration>,
     errors:  Vec<TranslationError<'tu>>,
@@ -85,7 +85,7 @@ fn with_parse_limits<R>(
 
 fn with_parsed<R>(
     source: &str,
-    inspect: impl FnOnce(&ParsedTranslationUnit, &mut Context<'_>) -> R,
+    inspect: impl FnOnce(&ParsedTranslationUnit<'_>, &mut Context<'_>) -> R,
 ) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
@@ -151,7 +151,7 @@ fn with_parse_with<R>(
     })
 }
 
-fn declaration<'a>(parsed: &'a Parsed<'_, '_>, item: usize) -> &'a Declaration {
+fn declaration<'a, 'tu>(parsed: &'a Parsed<'_, 'tu>, item: usize) -> &'a Declaration<'tu> {
     let index = match parsed.items[item] {
         | ExternalDeclaration::Declaration(index)
         | ExternalDeclaration::RecoveredDeclaration(index) => index,
@@ -162,7 +162,10 @@ fn declaration<'a>(parsed: &'a Parsed<'_, '_>, item: usize) -> &'a Declaration {
     &parsed.parser.syntax[index]
 }
 
-fn function_definition<'a>(parsed: &'a Parsed<'_, '_>, item: usize) -> &'a FunctionDefinition {
+fn function_definition<'a, 'tu>(
+    parsed: &'a Parsed<'_, 'tu>,
+    item: usize,
+) -> &'a FunctionDefinition<'tu> {
     let (ExternalDeclaration::FunctionDefinition(index)
     | ExternalDeclaration::RecoveredFunctionDefinition(index)) = parsed.items[item]
     else {
@@ -171,7 +174,10 @@ fn function_definition<'a>(parsed: &'a Parsed<'_, '_>, item: usize) -> &'a Funct
     &parsed.parser.syntax[index]
 }
 
-fn return_expression(parsed: &Parsed<'_, '_>, statement: StatementIndex) -> ExpressionIndex {
+fn return_expression<'tu>(
+    parsed: &Parsed<'_, 'tu>,
+    statement: StatementIndex,
+) -> &'tu Expression<'tu> {
     let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
         parsed.parser.syntax[statement].kind
     else {
@@ -187,14 +193,14 @@ fn block_items<'a>(parsed: &'a Parsed<'_, '_>, statement: StatementIndex) -> &'a
     &parsed.parser.syntax[items]
 }
 
-fn init_declarators<'a>(
-    parsed: &'a Parsed<'_, '_>,
-    declaration: &Declaration,
-) -> &'a [InitDeclarator] {
+fn init_declarators<'a, 'tu>(
+    parsed: &'a Parsed<'_, 'tu>,
+    declaration: &Declaration<'tu>,
+) -> &'a [InitDeclarator<'tu>] {
     &parsed.parser.syntax[declaration.init_declarators]
 }
 
-fn identifier_name(parsed: &Parsed<'_, '_>, declarator: Declarator) -> Option<String> {
+fn identifier_name(parsed: &Parsed<'_, '_>, declarator: Declarator<'_>) -> Option<String> {
     parsed
         .parser
         .declarator_identifier(declarator)
@@ -219,13 +225,10 @@ fn sourced_text(parsed: &Parsed<'_, '_>, source_vectors: SourceVectors) -> Strin
         .collect()
 }
 
-fn expression_text(parsed: &Parsed<'_, '_>, expression: ExpressionIndex) -> String {
-    sourced_text(parsed, parsed.parser.syntax[expression].source_vectors)
+fn expression_text(parsed: &Parsed<'_, '_>, expression: &Expression<'_>) -> String {
+    sourced_text(parsed, expression.source_vectors)
 }
 
-fn constant_expression_text(
-    parsed: &Parsed<'_, '_>,
-    expression: ConstantExpressionIndex,
-) -> String {
+fn constant_expression_text(parsed: &Parsed<'_, '_>, expression: ConstantExpression<'_>) -> String {
     expression_text(parsed, expression.into())
 }

@@ -43,7 +43,7 @@ use super::{
         SynchronizationSet,
     },
     syntax::{
-        ExpressionIndex,
+        Expression,
         Identifier,
         ParenthesizedDeclaratorIndex,
         SyntaxList,
@@ -89,7 +89,7 @@ pub(super) enum DeclaratorMode {
 ///
 /// C99: declarator and direct-declarator are §6.7.5, pp. 114-121; PDF
 /// pp. 126-133. Abstract forms are §6.7.6, p. 122; PDF p. 134.
-pub(super) struct DeclaratorFrame<'p> {
+pub(super) struct DeclaratorFrame<'tu, 'p> {
     /// Current pointer/base/suffix transition.
     phase: DeclaratorPhase,
     /// Whether the declarator requires or permits an identifier.
@@ -97,7 +97,7 @@ pub(super) struct DeclaratorFrame<'p> {
     /// Qualifiers for completed pointer levels, outermost first.
     pub(super) pointer_qualifiers: ArenaVec<'p, TypeQualifiers>,
     /// Direct base and suffixes accumulated before arena insertion.
-    pub(super) direct_declarators: ArenaVec<'p, DirectDeclarator>,
+    pub(super) direct_declarators: ArenaVec<'p, DirectDeclarator<'tu>>,
     /// Qualifiers being collected for the current pointer level.
     current_qualifiers: TypeQualifiers,
     /// Whether at least one pointer level has been parsed.
@@ -126,11 +126,14 @@ pub(super) struct DeclaratorFrame<'p> {
     /// Whether the active array suffix uses the `[*]` form.
     array_is_pointer: bool,
     /// Parsed assignment-expression bound for the active array suffix.
-    array_assignment_expression: Option<ExpressionIndex>,
+    array_assignment_expression: Option<&'tu Expression<'tu>>,
     /// Provenance accumulated across every declarator component.
     pub(super) source_vectors: Option<SourceVectors>,
     /// Opening delimiter of the active parenthesized declarator.
     nested_open: Option<SourceVectors>,
+    /// Parenthesized declarator waiting for its `)`. It is stored once its
+    /// delimiters are complete, because stored syntax never changes.
+    pub(super) nested: Option<ParenthesizedDeclarator<'tu>>,
 }
 
 /// State transitions for pointer, base, and suffix portions of a declarator.
@@ -169,7 +172,7 @@ pub(super) enum DeclaratorPhase {
     Finish,
 }
 
-impl<'p> DeclaratorFrame<'p> {
+impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump, mode: DeclaratorMode) -> Self {
         Self {
             phase: DeclaratorPhase::PointerOrBase,
@@ -189,16 +192,17 @@ impl<'p> DeclaratorFrame<'p> {
             array_assignment_expression: None,
             source_vectors: None,
             nested_open: None,
+            nested: None,
         }
     }
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | DeclaratorPhase::PointerOrBase => {
                 debug_assert!(
@@ -359,13 +363,10 @@ impl<'p> DeclaratorFrame<'p> {
                     Some(self.source_vectors.map_or(source_vectors, |existing| {
                         context.merge_vectors(existing, source_vectors)
                     }));
-                let parenthesized =
-                    ParenthesizedDeclaratorIndex(parser.push_syntax(ParenthesizedDeclarator {
-                        declarator,
-                        delimiters: self.nested_open.take().unwrap_or_default(),
-                    }));
-                self.direct_declarators
-                    .push(DirectDeclarator::Parenthesized(parenthesized));
+                self.nested = Some(ParenthesizedDeclarator {
+                    declarator,
+                    delimiters: self.nested_open.take().unwrap_or_default(),
+                });
                 self.has_direct_declarator = true;
                 self.named = self
                     .chain_named
@@ -379,27 +380,7 @@ impl<'p> DeclaratorFrame<'p> {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                self.phase = DeclaratorPhase::Suffix;
-                if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    let token = token.expect("closing-parenthesis token exists");
-                    if let Some(DirectDeclarator::Parenthesized(index)) =
-                        self.direct_declarators.last()
-                    {
-                        let delimiters = &mut parser.syntax[*index].delimiters;
-                        *delimiters = context.merge_vectors(*delimiters, token.source_vectors);
-                    }
-                    parser.merge_source(context, &mut self.source_vectors, token);
-                    ParseAction::Consume
-                } else {
-                    parser.report(
-                        context,
-                        ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(
-                            token.map(|token| token.kind),
-                        ),
-                        token,
-                    );
-                    ParseAction::Reprocess
-                }
+                self.close_nested(parser, context, token)
             },
             | DeclaratorPhase::Suffix => {
                 debug_assert!(
@@ -584,10 +565,13 @@ impl<'p> DeclaratorFrame<'p> {
                 // input. Merge a child only
                 // when one actually returned.
                 if let Some(returned) = returned {
-                    let ParseValue::Expression(ExpressionResult { index, .. }) = returned else {
+                    let ParseValue::Expression(ExpressionResult {
+                        expression: index, ..
+                    }) = returned
+                    else {
                         panic!("array-bound frame returned an unexpected value: {returned:?}");
                     };
-                    let source_vectors = parser.syntax[index].source_vectors;
+                    let source_vectors = index.source_vectors;
                     self.array_assignment_expression = Some(index);
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
@@ -759,7 +743,10 @@ impl<'p> DeclaratorFrame<'p> {
     }
 
     /// Pushes a parameter-list child in a pooled box.
-    fn push_parameter_list(parser: &mut Parser<'p>, allow_k_and_r: bool) -> ParseAction<'p> {
+    fn push_parameter_list(
+        parser: &mut Parser<'tu, 'p>,
+        allow_k_and_r: bool,
+    ) -> ParseAction<'tu, 'p> {
         let frame = ParameterListFrame::new(parser.arena, allow_k_and_r);
         ParseAction::Push(ParseFrame::ParameterList(
             parser.pools.parameter_list(frame),
@@ -769,7 +756,45 @@ impl<'p> DeclaratorFrame<'p> {
     /// Creates the declarator nested inside this one's `(`, sharing the
     /// chain flag through which it reports an identifier. Abstract
     /// declarators never declare one, so they take no flag.
-    fn nested_frame(&mut self, parser: &mut Parser<'p>) -> Self {
+    /// Completes the parenthesized declarator waiting for its `)` and stores
+    /// it, with the `)` among its delimiters when present.
+    ///
+    /// C99: parenthesized direct-declarator is §6.7.5, p. 114; PDF p. 126.
+    fn close_nested(
+        &mut self,
+        parser: &mut Parser<'tu, 'p>,
+        context: &mut Context<'_>,
+        token: Option<Token>,
+    ) -> ParseAction<'tu, 'p> {
+        self.phase = DeclaratorPhase::Suffix;
+        let mut nested = self
+            .nested
+            .take()
+            .expect("a parenthesized declarator waits for its closing parenthesis");
+        let closing =
+            token.filter(|token| is_operator(Some(*token), OperatorTokenType::ClosingParenthesis));
+        if let Some(token) = closing {
+            nested.delimiters = context.merge_vectors(nested.delimiters, token.source_vectors);
+        }
+        let parenthesized = ParenthesizedDeclaratorIndex(parser.push_syntax(nested));
+        self.direct_declarators
+            .push(DirectDeclarator::Parenthesized(parenthesized));
+        if let Some(token) = closing {
+            parser.merge_source(context, &mut self.source_vectors, token);
+            ParseAction::Consume
+        } else {
+            parser.report(
+                context,
+                ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(
+                    token.map(|token| token.kind),
+                ),
+                token,
+            );
+            ParseAction::Reprocess
+        }
+    }
+
+    fn nested_frame(&mut self, parser: &mut Parser<'tu, 'p>) -> Self {
         let mut nested = Self::new(parser.arena, self.mode);
         if self.mode != DeclaratorMode::Abstract {
             let chain_named = *self.chain_named.get_or_insert_with(|| {
@@ -783,7 +808,7 @@ impl<'p> DeclaratorFrame<'p> {
 
     /// Returns this popped frame's lists and, if it began its chain, the
     /// chain flag. Every nested declarator of the chain has popped by then.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'p>) {
+    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         pools
             .pointer_qualifiers
             .reclaim(&mut self.pointer_qualifiers);

@@ -47,7 +47,6 @@ use super::{
     syntax::{
         DeclarationIndex,
         Expression,
-        ExpressionIndex,
         ExpressionType,
         ExternalDeclaration,
         Identifier,
@@ -55,9 +54,11 @@ use super::{
         SyntaxList,
     },
     syntax_store::{
+        StoredNode,
         SyntaxStore,
         SyntaxStoreCheckpoint,
         SyntaxTree,
+        TreeNode,
     },
     token_cursor::{
         TokenCursor,
@@ -92,7 +93,7 @@ use crate::{
     },
 };
 
-impl<'p> Parser<'p> {
+impl<'tu, 'p> Parser<'tu, 'p> {
     /// Preprocesses the whole translation unit, then creates an idle parser
     /// over the result. Every preprocessing diagnostic is pending in
     /// `context` before any parser diagnostic.
@@ -100,7 +101,7 @@ impl<'p> Parser<'p> {
     /// C99: the input is the translation unit produced after phase 7 under
     /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
     #[cfg(test)]
-    pub(crate) fn new<'tu>(
+    pub(crate) fn new(
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         arena: &'p Bump,
@@ -108,9 +109,9 @@ impl<'p> Parser<'p> {
         Self::new_with_config(preprocessor, context, ParserLimits::default(), arena)
     }
 
-    pub(crate) fn preprocess<'tu>(
-        preprocessor: Preprocessor<'tu, '_>,
-        context: &mut Context<'tu>,
+    pub(crate) fn preprocess<'c>(
+        preprocessor: Preprocessor<'c, '_>,
+        context: &mut Context<'c>,
     ) -> PreprocessedTranslationUnit {
         Self::preprocess_with_limit(
             preprocessor,
@@ -119,9 +120,9 @@ impl<'p> Parser<'p> {
         )
     }
 
-    fn preprocess_with_limit<'tu>(
-        mut preprocessor: Preprocessor<'tu, '_>,
-        context: &mut Context<'tu>,
+    fn preprocess_with_limit<'c>(
+        mut preprocessor: Preprocessor<'c, '_>,
+        context: &mut Context<'c>,
         source_segment_limit: usize,
     ) -> PreprocessedTranslationUnit {
         preprocessor.prepare_for_parsing();
@@ -134,13 +135,14 @@ impl<'p> Parser<'p> {
     /// from the parse arena.
     pub(crate) fn from_preprocessed(
         preprocessed: PreprocessedTranslationUnit,
+        tree: &'tu Bump,
         arena: &'p Bump,
     ) -> Self {
-        Self::with_upstream(preprocessed.upstream, arena)
+        Self::with_upstream(preprocessed.upstream, tree, arena)
     }
 
     #[cfg(test)]
-    fn new_with_config<'tu>(
+    fn new_with_config(
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         limits: ParserLimits,
@@ -148,15 +150,16 @@ impl<'p> Parser<'p> {
     ) -> Self {
         let preprocessed =
             Self::preprocess_with_limit(preprocessor, context, limits.source_segments);
-        let mut parser = Self::from_preprocessed(preprocessed, arena);
+        let mut parser = Self::from_preprocessed(preprocessed, context.tu_arena(), arena);
         parser.limits = limits;
         parser
     }
 
-    fn with_upstream(upstream: Upstream, arena: &'p Bump) -> Self {
+    fn with_upstream(upstream: Upstream, tree: &'tu Bump, arena: &'p Bump) -> Self {
         Self {
             cursor: TokenCursor::new(upstream),
             arena,
+            tree,
             frames: ArenaVec::new_in(arena),
             pools: FramePools::new_in(arena),
             retained_frame_nodes: 0,
@@ -184,7 +187,7 @@ impl<'p> Parser<'p> {
     }
 
     #[cfg(test)]
-    pub(super) fn new_with_limits<'tu>(
+    pub(super) fn new_with_limits(
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         limits: ParserLimits,
@@ -220,7 +223,7 @@ impl<'p> Parser<'p> {
     pub(crate) fn parse_translation_unit(
         mut self,
         context: &mut Context<'_>,
-    ) -> ParsedTranslationUnit {
+    ) -> ParsedTranslationUnit<'tu> {
         let mut roots = std::mem::take(&mut self.emitted_roots);
         while let Some(root) = self.drive(context) {
             roots.push(root);
@@ -429,18 +432,44 @@ impl<'p> Parser<'p> {
 
     /// Adds one node to the syntax arena, counts it toward the node limit,
     /// and returns its raw handle.
-    pub(super) fn push_syntax<T: 'static>(&mut self, node: T) -> u32 {
+    pub(super) fn push_syntax<T: StoredNode<'tu>>(&mut self, node: T) -> u32 {
         self.syntax_nodes += 1;
         self.syntax.push(node)
     }
 
     /// Moves frame-retained nodes into one syntax list and counts them.
-    pub(super) fn append_syntax<T: 'static>(
+    pub(super) fn append_syntax<T: StoredNode<'tu>>(
         &mut self,
         nodes: &mut ArenaVec<'_, T>,
     ) -> SyntaxList<T> {
         self.syntax_nodes += nodes.len();
         self.syntax.append(nodes)
+    }
+
+    /// Allocates one node in the translation-unit arena and counts it toward
+    /// the node limit.
+    pub(super) fn alloc_syntax<T: TreeNode<'tu>>(&mut self, node: T) -> &'tu T {
+        let node = &*self.tree.alloc(node);
+        self.syntax_nodes += 1;
+        self.syntax.record(node);
+        node
+    }
+
+    /// Copies frame-retained nodes into one list in the translation-unit
+    /// arena, counts them, and empties `nodes` for reuse.
+    pub(super) fn alloc_syntax_list<T: TreeNode<'tu> + Copy>(
+        &mut self,
+        nodes: &mut ArenaVec<'_, T>,
+    ) -> &'tu [T] {
+        let list: &'tu [T] = if nodes.is_empty() {
+            &[]
+        } else {
+            self.tree.alloc_slice_copy(nodes)
+        };
+        nodes.clear();
+        self.syntax_nodes += list.len();
+        self.syntax.record_list(list);
+        list
     }
 
     /// Truncates the arenas to `checkpoint` and resynchronizes the total.
@@ -449,7 +478,7 @@ impl<'p> Parser<'p> {
         self.syntax_nodes = self.syntax.node_count();
     }
 
-    fn push_frame(&mut self, mut frame: ParseFrame<'p>) {
+    fn push_frame(&mut self, mut frame: ParseFrame<'tu, 'p>) {
         frame.lend_pooled(&mut self.pools);
         self.retained_frame_nodes = self
             .retained_frame_nodes
@@ -457,7 +486,7 @@ impl<'p> Parser<'p> {
         self.frames.push(frame);
     }
 
-    fn pop_frame(&mut self) -> ParseFrame<'p> {
+    fn pop_frame(&mut self) -> ParseFrame<'tu, 'p> {
         let frame = self.frames.pop().expect("parser frame stack is nonempty");
         self.retained_frame_nodes = self
             .retained_frame_nodes
@@ -714,10 +743,10 @@ impl<'p> Parser<'p> {
     /// C99: syntax-rule and constraint violations require at least one
     /// diagnostic under §5.1.1.3, p. 11; PDF p. 23: implementations must
     /// “produce at least one diagnostic message”.
-    pub(super) fn report<'tu>(
+    pub(super) fn report<'c>(
         &mut self,
-        context: &mut Context<'tu>,
-        error_type: ParserErrorType<'tu>,
+        context: &mut Context<'c>,
+        error_type: ParserErrorType<'c>,
         token: Option<Token>,
     ) {
         let warning_group = error_type.warning_group();
@@ -1016,7 +1045,7 @@ impl<'p> Parser<'p> {
     ///
     /// C99: declarator binding is specified by §6.7.5 paragraph 4,
     /// p. 114; PDF p. 126.
-    pub(super) fn declarator_identifier(&self, declarator: Declarator) -> Option<Identifier> {
+    pub(super) fn declarator_identifier(&self, declarator: Declarator<'tu>) -> Option<Identifier> {
         let mut declarator = declarator;
         loop {
             let mut nested = None;
@@ -1035,7 +1064,7 @@ impl<'p> Parser<'p> {
     pub(super) fn declaration_head_declarator(
         &self,
         declaration: DeclarationIndex,
-    ) -> Option<Declarator> {
+    ) -> Option<Declarator<'tu>> {
         let [init] = &self.syntax[self.syntax[declaration].init_declarators] else {
             return None;
         };
@@ -1057,7 +1086,10 @@ impl<'p> Parser<'p> {
             || specifiers.function_specifiers.is_inline
     }
 
-    pub(super) fn function_suffix(&self, mut declarator: Declarator) -> Option<DirectDeclarator> {
+    pub(super) fn function_suffix(
+        &self,
+        mut declarator: Declarator<'tu>,
+    ) -> Option<DirectDeclarator<'tu>> {
         let mut suffix = None;
         loop {
             let direct = &self.syntax[declarator.kind];
@@ -1113,57 +1145,74 @@ impl<'p> Parser<'p> {
 
     pub(super) fn store_expression(
         &mut self,
-        kind: ExpressionType,
+        kind: ExpressionType<'tu>,
         source_vectors: SourceVectors,
         operator_source_vectors: Option<SourceVectors>,
         recovered: bool,
-    ) -> ExpressionIndex {
+    ) -> &'tu Expression<'tu> {
         let recovered = recovered || self.expression_children_recovered(&kind);
-        ExpressionIndex(self.push_syntax(Expression {
+        self.alloc_syntax(Expression {
             kind,
             source_vectors,
             operator_source_vectors,
             recovered,
-        }))
+        })
     }
 
-    fn expression_children_recovered(&self, kind: &ExpressionType) -> bool {
-        let expression_recovered = |index: ExpressionIndex| self.syntax[index].recovered;
+    /// Marks `expression` as recovered. Tree nodes never change, so a copy
+    /// that says so takes its place; the copy is not a new node.
+    pub(super) fn mark_expression_recovered(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+    ) -> &'tu Expression<'tu> {
+        if expression.recovered {
+            return expression;
+        }
+        let marked = &*self.tree.alloc(Expression {
+            recovered: true,
+            ..*expression
+        });
+        #[cfg(test)]
+        self.syntax.replace_expression(expression, marked);
+        marked
+    }
+
+    fn expression_children_recovered(&self, kind: &ExpressionType<'tu>) -> bool {
+        let expression_recovered = |expression: &Expression<'_>| expression.recovered;
         match kind {
             | ExpressionType::Parenthesized { expression }
             | ExpressionType::Unary {
                 operand_expression: expression,
                 ..
             }
-            | ExpressionType::SizeofExpr(expression) => expression_recovered(*expression),
+            | ExpressionType::SizeofExpr(expression) => expression_recovered(expression),
             | ExpressionType::Conditional {
                 condition_expression,
                 then_expression,
                 else_expression,
             } =>
-                expression_recovered(*condition_expression)
-                    || expression_recovered(*then_expression)
-                    || expression_recovered(*else_expression),
+                expression_recovered(condition_expression)
+                    || expression_recovered(then_expression)
+                    || expression_recovered(else_expression),
             | ExpressionType::Binary {
                 left_expression,
                 right_expression,
                 ..
-            } => expression_recovered(*left_expression) || expression_recovered(*right_expression),
+            } => expression_recovered(left_expression) || expression_recovered(right_expression),
             | ExpressionType::Call {
                 function_expression,
                 arguments,
             } =>
-                expression_recovered(*function_expression)
-                    || self.syntax[*arguments]
+                expression_recovered(function_expression)
+                    || arguments
                         .iter()
-                        .copied()
-                        .any(expression_recovered),
+                        .any(|argument| expression_recovered(argument)),
             | ExpressionType::DirectMember {
                 base_expression, ..
             }
             | ExpressionType::IndirectMember {
                 base_expression, ..
-            } => expression_recovered(*base_expression),
+            } => expression_recovered(base_expression),
             | ExpressionType::CompoundLiteral {
                 type_name,
                 initializer,
@@ -1172,7 +1221,7 @@ impl<'p> Parser<'p> {
             | ExpressionType::Cast {
                 target_type,
                 operand_expression,
-            } => self.syntax[*target_type].recovered || expression_recovered(*operand_expression),
+            } => self.syntax[*target_type].recovered || expression_recovered(operand_expression),
             | ExpressionType::Error => true,
             | ExpressionType::Identifier(..)
             | ExpressionType::Constant(..)

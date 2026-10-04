@@ -350,7 +350,7 @@ fn enumerator_counts(parsed: &Parsed<'_, '_>) -> Vec<u32> {
     parsed
         .parser
         .syntax
-        .iter::<EnumSpecifier>()
+        .iter::<EnumSpecifier<'_>>()
         .filter_map(|specifier| specifier.enumeration_list)
         .map(|list| list.length)
         .collect()
@@ -360,7 +360,7 @@ fn member_counts(parsed: &Parsed<'_, '_>) -> Vec<u32> {
     parsed
         .parser
         .syntax
-        .iter::<StructOrUnionSpecifier>()
+        .iter::<StructOrUnionSpecifier<'_>>()
         .filter_map(|specifier| specifier.struct_declaration_list)
         .map(|list| list.length)
         .collect()

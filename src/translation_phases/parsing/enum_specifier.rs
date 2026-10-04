@@ -30,9 +30,8 @@ use super::{
     scope::NameClass,
     statement::is_statement_keyword,
     syntax::{
-        ConstantExpressionIndex,
+        ConstantExpression,
         EnumSpecifierIndex,
-        ExpressionIndex,
         Identifier,
     },
 };
@@ -59,13 +58,13 @@ use crate::{
 /// C99: enumeration specifiers and enumerators are §6.7.2.2,
 /// pp. 105-107; PDF pp. 117-119.
 #[derive(Debug)]
-pub(super) struct EnumSpecifierFrame<'p> {
+pub(super) struct EnumSpecifierFrame<'tu, 'p> {
     /// Current tag/enumerator transition.
     phase: EnumPhase,
     /// Optional enum tag.
     name: Option<Identifier>,
     /// Completed enumerators before arena insertion.
-    pub(super) enumerators: ArenaVec<'p, Enumerator>,
+    pub(super) enumerators: ArenaVec<'p, Enumerator<'tu>>,
     /// Enumerator name waiting for an optional explicit value.
     current_enumerator: Option<Identifier>,
     /// Whether `{` was consumed, distinguishing a reference from a definition.
@@ -109,7 +108,7 @@ pub(super) enum EnumPhase {
     FinishBody,
 }
 
-impl<'p> EnumSpecifierFrame<'p> {
+impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump) -> Self {
         Self {
             phase: EnumPhase::Start,
@@ -127,11 +126,11 @@ impl<'p> EnumSpecifierFrame<'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction<'p> {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | EnumPhase::Start => {
                 debug_assert!(
@@ -333,14 +332,14 @@ impl<'p> EnumSpecifierFrame<'p> {
             },
             | EnumPhase::AwaitEnumeratorValue => {
                 let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
-                    index,
+                    expression: index,
                     recovered,
                 })) = returned
                 else {
                     panic!("enumerator-value frame returned an unexpected value: {returned:?}");
                 };
                 self.resuming_after_error = recovered;
-                let source_vectors = parser.syntax[ExpressionIndex::from(index)].source_vectors;
+                let source_vectors = index.expression().source_vectors;
                 self.source_vectors.push(source_vectors);
                 self.current_enumerator_source = Some(
                     self.current_enumerator_source
@@ -475,7 +474,7 @@ impl<'p> EnumSpecifierFrame<'p> {
     /// `,`, `=`, or `}`. Anything else keeps the malformed-body recovery that
     /// stops before a following declaration.
     fn misplaced_enumerator(
-        parser: &mut Parser<'p>,
+        parser: &mut Parser<'tu, 'p>,
         context: &mut Context<'_>,
         token: Token,
     ) -> bool {
@@ -515,7 +514,7 @@ impl<'p> EnumSpecifierFrame<'p> {
     /// `int f(enum E { A ) int after;`, the `)` closes that parenthesis and
     /// the body's `}` is missing. The scan is bounded so repeated errors stay
     /// linear.
-    fn enumerator_list_continues(parser: &mut Parser<'p>, context: &mut Context<'_>) -> bool {
+    fn enumerator_list_continues(parser: &mut Parser<'tu, 'p>, context: &mut Context<'_>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {
@@ -558,8 +557,8 @@ impl<'p> EnumSpecifierFrame<'p> {
 
     fn finish_enumerator(
         &mut self,
-        parser: &mut Parser<'p>,
-        expression: Option<ConstantExpressionIndex>,
+        parser: &mut Parser<'tu, 'p>,
+        expression: Option<ConstantExpression<'tu>>,
     ) {
         let source_vectors = self.current_enumerator_source.take().unwrap_or_default();
         if let Some(name) = self.current_enumerator.take() {
@@ -574,7 +573,11 @@ impl<'p> EnumSpecifierFrame<'p> {
         }
     }
 
-    fn finish(&mut self, parser: &mut Parser<'p>, context: &mut Context<'_>) -> ParseAction<'p> {
+    fn finish(
+        &mut self,
+        parser: &mut Parser<'tu, 'p>,
+        context: &mut Context<'_>,
+    ) -> ParseAction<'tu, 'p> {
         let enumeration_list = self
             .body_started
             .then(|| parser.append_syntax(&mut self.enumerators));

@@ -150,12 +150,12 @@ fn name_classification_is_published_after_each_declarator() {
             assert!(parsed
         .parser
         .syntax
-        .iter::<DirectDeclarator>()
+        .iter::<DirectDeclarator<'_>>()
         .any(|direct| matches!(direct, DirectDeclarator::Function { parameter_list, .. } if parameter_list.length == 1)));
             assert!(parsed
         .parser
         .syntax
-        .iter::<DirectDeclarator>()
+        .iter::<DirectDeclarator<'_>>()
         .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 1)));
             let t = parsed
                 .context
@@ -293,7 +293,7 @@ fn conflicting_typedef_names_remain_specifiers_and_preserve_following_declaratio
                 parsed
                     .parser
                     .syntax
-                    .iter::<InitDeclarator>()
+                    .iter::<InitDeclarator<'_>>()
                     .filter_map(|declarator| identifier_name(parsed, declarator.declarator))
                     .collect::<Vec<_>>(),
                 ["T", "x", "pointer", "nested", "y"]
@@ -349,7 +349,7 @@ fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
                 parsed
                     .parser
                     .syntax
-                    .iter::<DirectDeclarator>()
+                    .iter::<DirectDeclarator<'_>>()
                     .any(|direct| {
                         matches!(
                             direct,
@@ -364,7 +364,7 @@ fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
                 parsed
                     .parser
                     .syntax
-                    .iter::<DirectDeclarator>()
+                    .iter::<DirectDeclarator<'_>>()
                     .any(|direct| {
                         matches!(
                             direct,
@@ -375,7 +375,7 @@ fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
                         )
                     })
             );
-            assert!(parsed.parser.syntax.iter::<DirectDeclarator>().any(|direct| {
+            assert!(parsed.parser.syntax.iter::<DirectDeclarator<'_>>().any(|direct| {
         matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 2)
     }));
         },
@@ -398,13 +398,13 @@ fn union_kind_and_enum_arena_slice_are_correct() {
                 parsed
                     .parser
                     .syntax
-                    .iter::<StructOrUnionSpecifier>()
+                    .iter::<StructOrUnionSpecifier<'_>>()
                     .any(|specifier| specifier.struct_or_union == StructOrUnion::Union)
             );
             let enum_specifier = parsed
                 .parser
                 .syntax
-                .iter::<EnumSpecifier>()
+                .iter::<EnumSpecifier<'_>>()
                 .find(|specifier| specifier.name.is_some())
                 .expect("named enum specifier");
             let enumeration_list = enum_specifier.enumeration_list.expect("enum body");
@@ -418,20 +418,20 @@ fn union_kind_and_enum_arena_slice_are_correct() {
                 parsed
                     .parser
                     .syntax
-                    .iter::<Enumerator>()
+                    .iter::<Enumerator<'_>>()
                     .all(|enumerator| enumerator.source_vectors.length > 0)
             );
             assert!(
                 parsed
                     .parser
                     .syntax
-                    .iter::<StructDeclaration>()
+                    .iter::<StructDeclaration<'_>>()
                     .map(|declaration| declaration.source_vectors)
                     .chain(
                         parsed
                             .parser
                             .syntax
-                            .iter::<StructDeclarator>()
+                            .iter::<StructDeclarator<'_>>()
                             .map(|declarator| declarator.source_vectors)
                     )
                     .all(|source_vectors| source_vectors.length > 0)
@@ -505,7 +505,7 @@ fn expression_dependent_positions_store_typed_syntax_children() {
                 parsed
                     .parser
                     .syntax
-                    .iter::<DirectDeclarator>()
+                    .iter::<DirectDeclarator<'_>>()
                     .any(|direct| matches!(
                         direct,
                         DirectDeclarator::Array {
@@ -518,21 +518,21 @@ fn expression_dependent_positions_store_typed_syntax_children() {
                 parsed
                     .parser
                     .syntax
-                    .iter::<StructDeclarator>()
+                    .iter::<StructDeclarator<'_>>()
                     .any(|declarator| declarator.bitfield_width.is_some())
             );
             assert!(
                 parsed
                     .parser
                     .syntax
-                    .iter::<Enumerator>()
+                    .iter::<Enumerator<'_>>()
                     .any(|enumerator| enumerator.expression.is_some())
             );
             assert!(
                 parsed
                     .parser
                     .syntax
-                    .iter::<InitDeclarator>()
+                    .iter::<InitDeclarator<'_>>()
                     .any(|declarator| declarator.initializer.is_some())
             );
             assert!(
