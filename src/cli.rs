@@ -27,17 +27,17 @@ use crate::{
         ToDiagnostic,
         count_of,
     },
-    pipeline::preprocess_with_diagnostics,
+    pipeline::{
+        parse_translation_unit,
+        preprocess_with_diagnostics,
+    },
     translation_phases::{
         Context,
         ErrorSeverity,
         GetSourceVectors,
         SourceVector,
         TranslationError,
-        parsing::{
-            InspectionOptions,
-            Parser as LanguageParser,
-        },
+        parsing::InspectionOptions,
         preprocessing::{
             CharacterTokenType,
             IntegerTokenType,
@@ -280,7 +280,6 @@ fn print_parser_output<'tu>(
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
-    let tok = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new_with_arena_source(
         context,
         source_filename,
@@ -288,8 +287,7 @@ fn print_parser_output<'tu>(
         quote_include,
         system_include,
     );
-    let preprocessed = LanguageParser::preprocess(preprocessor, context, &tok);
-    let unit = LanguageParser::from_preprocessed(preprocessed).parse_translation_unit(context);
+    let unit = parse_translation_unit(preprocessor, context);
     let mut reporter = DiagnosticReporter::new();
     while let Some(error) = context.pop_pending_error() {
         reporter.report(&error, context);

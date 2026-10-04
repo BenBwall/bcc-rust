@@ -231,9 +231,13 @@ pub struct ParseBenchmarkSummary {
 #[must_use]
 pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
     let tu = crate::util::bump::Bump::new();
-    let tok = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    prepare_parse_in_context(&mut context, input, &tok).parse()
+    let preprocessor = preprocessor(&mut context, input);
+    let unit = crate::pipeline::parse_translation_unit(preprocessor, &mut context);
+    ParseBenchmarkSummary {
+        external_declarations: unit.external_declarations().len(),
+        diagnostics:           context.take_pending_errors().len(),
+    }
 }
 
 /// A translation unit preprocessed through phase 6 and ready to parse, so a

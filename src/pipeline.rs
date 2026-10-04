@@ -9,6 +9,10 @@ use crate::{
     translation_phases::{
         Context,
         TranslationError,
+        parsing::{
+            ParsedTranslationUnit,
+            Parser,
+        },
         preprocessing::{
             Preprocessor,
             Token,
@@ -19,6 +23,17 @@ use crate::{
         Bump,
     },
 };
+
+/// Completes preprocessing before constructing the parser. The token arena
+/// outlives phase 7 and is released before the translation-unit context.
+pub(crate) fn parse_translation_unit(
+    preprocessor: Preprocessor,
+    context: &mut Context<'_>,
+) -> ParsedTranslationUnit {
+    let tok = Bump::new();
+    let preprocessed = Parser::preprocess(preprocessor, context, &tok);
+    Parser::from_preprocessed(preprocessed).parse_translation_unit(context)
+}
 
 /// Runs translation phases 4 through 6 over the whole translation unit and
 /// returns its parser-facing tokens with their diagnostics, each diagnostic
