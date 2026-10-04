@@ -21,22 +21,30 @@ use crate::{
 /// The preprocessed translation unit that the parser reads.
 pub(super) struct Upstream {
     /// Tokens not yet read; chunks are freed as the parser reads them.
-    tokens:            ChunkedQueue<Token>,
+    tokens: ChunkedQueue<Token>,
     /// Where the preprocessor stopped, used to locate end-of-input
     /// diagnostics.
-    end:               SourcePosition,
+    end: SourcePosition,
     source_file_index: u32,
+    /// The first output token that exceeded the source-provenance budget.
+    pub(super) preprocessing_limit_token: Option<Token>,
 }
 
 impl Upstream {
     /// Runs the whole of `preprocessor`, so parsing never interleaves with
     /// preprocessing.
-    pub(super) fn preprocess_all(mut preprocessor: Preprocessor, context: &mut Context) -> Self {
-        let tokens = preprocessor.preprocess_all(context);
+    pub(super) fn preprocess_all(
+        mut preprocessor: Preprocessor,
+        context: &mut Context,
+        source_segment_limit: usize,
+    ) -> Self {
+        let (tokens, preprocessing_limit_token) =
+            preprocessor.preprocess_all_with_limit(context, source_segment_limit);
         Self {
             tokens,
             end: preprocessor.position(context),
             source_file_index: preprocessor.source_file_index(),
+            preprocessing_limit_token,
         }
     }
 }

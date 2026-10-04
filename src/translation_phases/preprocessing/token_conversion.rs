@@ -69,6 +69,13 @@ impl Preprocessor {
             let next = self.next_parser_token(context);
             let generated_errors = context.take_pending_errors();
 
+            if context.source_segment_count() > self.source_segment_limit {
+                context.append_pending_errors(existing_errors);
+                self.pending_parser_token = next;
+                self.pending_parser_errors.extend(generated_errors);
+                break;
+            }
+
             let Some(next) = next else {
                 context.append_pending_errors(existing_errors);
                 self.pending_parser_errors.extend(generated_errors);

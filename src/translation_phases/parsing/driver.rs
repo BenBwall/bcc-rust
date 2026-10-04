@@ -89,9 +89,23 @@ impl Parser {
     ///
     /// C99: the input is the translation unit produced after phase 7 under
     /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
-    pub(crate) fn new(mut preprocessor: Preprocessor, context: &mut Context) -> Self {
+    pub(crate) fn new(preprocessor: Preprocessor, context: &mut Context) -> Self {
+        Self::new_with_config(preprocessor, context, ParserLimits::default())
+    }
+
+    fn new_with_config(
+        mut preprocessor: Preprocessor,
+        context: &mut Context,
+        limits: ParserLimits,
+    ) -> Self {
         preprocessor.prepare_for_parsing();
-        Self::with_upstream(Upstream::preprocess_all(preprocessor, context))
+        let mut parser = Self::with_upstream(Upstream::preprocess_all(
+            preprocessor,
+            context,
+            limits.source_segments,
+        ));
+        parser.limits = limits;
+        parser
     }
 
     fn with_upstream(upstream: Upstream) -> Self {
@@ -124,9 +138,12 @@ impl Parser {
     }
 
     #[cfg(test)]
-    pub(super) fn with_limits(mut self, limits: ParserLimits) -> Self {
-        self.limits = limits;
-        self
+    pub(super) fn new_with_limits(
+        preprocessor: Preprocessor,
+        context: &mut Context,
+        limits: ParserLimits,
+    ) -> Self {
+        Self::new_with_config(preprocessor, context, limits)
     }
 
     #[cfg(test)]
@@ -173,6 +190,14 @@ impl Parser {
         // fetched nor parsed, so it cannot grow the exhausted storage.
         if self.resource_limit_reported {
             return None;
+        }
+        if let Some(token) = self.cursor.upstream.preprocessing_limit_token.take() {
+            return self.resource_failure_at(
+                context,
+                ParserResource::SourceSegments,
+                self.limits.source_segments,
+                Some(token),
+            );
         }
         loop {
             #[cfg(test)]
@@ -394,12 +419,22 @@ impl Parser {
         resource: ParserResource,
         limit: usize,
     ) -> Option<ExternalDeclaration> {
+        self.resource_failure_at(context, resource, limit, None)
+    }
+
+    fn resource_failure_at(
+        &mut self,
+        context: &mut Context,
+        resource: ParserResource,
+        limit: usize,
+        token_override: Option<Token>,
+    ) -> Option<ExternalDeclaration> {
         if self.resource_limit_reported {
             return None;
         }
         self.resource_limit_reported = true;
         self.has_external_declaration = true;
-        let token = self.cursor.current(context);
+        let token = token_override.or_else(|| self.cursor.current(context));
         let source_vectors = token.map_or_else(
             || {
                 context.create_retained_source_vectors(

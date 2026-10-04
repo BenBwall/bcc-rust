@@ -125,6 +125,9 @@ pub(crate) struct Preprocessor {
     expression_parser:          PreprocessorExpressionParser,
     pending_parser_token:       Option<Token>,
     pending_parser_errors:      Vec<TranslationError>,
+    /// Parser-supplied provenance budget, checked within string concatenation
+    /// as well as between completed output tokens.
+    source_segment_limit:       usize,
     /// Fixed on first use so every `__DATE__` and `__TIME__` in one
     /// translation unit agrees (C99 §6.10.8p1).
     translation_timestamp:      Option<TranslationTimestamp>,
@@ -205,6 +208,7 @@ impl Preprocessor {
             expression_parser: PreprocessorExpressionParser::new(),
             pending_parser_token: None,
             pending_parser_errors: Vec::new(),
+            source_segment_limit: usize::MAX,
             translation_timestamp: None,
         }
     }
@@ -249,19 +253,39 @@ impl Preprocessor {
         self.next_item(context)
     }
 
+    /// Runs translation phases 4 through 6 without the parser's resource
+    /// budget, for direct preprocessing tests and benchmarks.
+    #[cfg(any(test, feature = "benchmarking-internals"))]
+    pub(crate) fn preprocess_all(&mut self, context: &mut Context) -> ChunkedQueue<Token> {
+        self.preprocess_all_with_limit(context, usize::MAX).0
+    }
+
     /// Runs translation phases 4 through 6 over the whole translation unit
     /// before any token is parsed. Diagnostics stay pending in `context`.
     ///
     /// Each token's provenance is copied to the token arena as it is
-    /// produced, so the preprocessor arena is compacted between tokens
-    /// instead of holding every whitespace and intermediate vector.
-    pub(crate) fn preprocess_all(&mut self, context: &mut Context) -> ChunkedQueue<Token> {
+    /// produced, so the preprocessor arena is compacted between tokens.
+    /// Stop after the first token that exceeds the configured provenance
+    /// budget, letting the parser report the existing resource diagnostic.
+    pub(crate) fn preprocess_all_with_limit(
+        &mut self,
+        context: &mut Context,
+        source_segment_limit: usize,
+    ) -> (ChunkedQueue<Token>, Option<Token>) {
+        self.source_segment_limit = source_segment_limit;
         let mut tokens = ChunkedQueue::default();
         while let Some(mut token) = self.next_iterator_item(context) {
             token.source_vectors = context.retain_token_source(token.source_vectors);
             tokens.push_back(token);
+            if context.source_segment_count() > source_segment_limit {
+                let mut limit_token = self.pending_parser_token.unwrap_or(token);
+                limit_token.source_vectors =
+                    context.retain_token_source(limit_token.source_vectors);
+                context.append_pending_errors(take(&mut self.pending_parser_errors));
+                return (tokens, Some(limit_token));
+            }
         }
-        tokens
+        (tokens, None)
     }
 
     /// Whether the next [`Self::next_iterator_item`] call discards the

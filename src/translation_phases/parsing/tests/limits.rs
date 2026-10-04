@@ -17,6 +17,7 @@ use super::{
 use crate::{
     translation_phases::{
         Context,
+        TranslationError,
         TranslationPhase,
         parsing::{
             Parser,
@@ -31,6 +32,7 @@ use crate::{
                 TypeSpecifiers,
             },
             errors::{
+                ParserError,
                 ParserErrorType,
                 ParserResource,
             },
@@ -127,10 +129,7 @@ fn source_storage_exhaustion_reports_one_resource_diagnostic() {
 }
 
 #[test]
-fn source_storage_exhaustion_stops_parsing_the_remaining_input() {
-    // The whole unit is preprocessed before parsing, so its token
-    // provenance already exceeds the limit; parsing must stop rather than
-    // add to it.
+fn source_storage_exhaustion_stops_preprocessing_the_remaining_input() {
     let mut context = Context::new();
     let preprocessor = Preprocessor::new(
         &mut context,
@@ -139,23 +138,108 @@ fn source_storage_exhaustion_stops_parsing_the_remaining_input() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let mut parser = Parser::new(preprocessor, &mut context).with_limits(ParserLimits {
-        source_segments: 10,
-        ..ParserLimits::default()
-    });
-    let preprocessed = context.source_segment_count();
+    let mut parser = Parser::new_with_limits(
+        preprocessor,
+        &mut context,
+        ParserLimits {
+            source_segments: 10,
+            ..ParserLimits::default()
+        },
+    );
     let mut items = 0;
     while parser.next_item(&mut context).is_some() {
         items += 1;
     }
     assert!(items < 2, "{items} declarations parsed after the limit");
+    let errors = std::iter::from_fn(|| context.pop_pending_error()).collect::<Vec<_>>();
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| matches!(
+                error,
+                TranslationError::Parsing(ParserError {
+                    error_type: ParserErrorType::ResourceLimitExceeded {
+                        resource: ParserResource::SourceSegments,
+                        limit:    10,
+                    },
+                    ..
+                })
+            ))
+            .count(),
+        1
+    );
     assert!(
-        context.source_segment_count() < preprocessed + 100,
-        "provenance kept growing after the limit: {} segments after preprocessing, {} after \
-         parsing",
-        preprocessed,
+        context.source_segment_count() < 100,
+        "preprocessing kept growing provenance after the limit: {} segments",
         context.source_segment_count()
     );
+}
+
+#[test]
+fn macro_expansion_stops_at_the_source_segment_limit() {
+    let mut source = String::from("#define X0 x\n");
+    for level in 1..=12 {
+        writeln!(source, "#define X{level} X{} X{}", level - 1, level - 1).unwrap();
+    }
+    source.push_str("X12\n");
+
+    let parsed = parse_with_limits(
+        &source,
+        ParserLimits {
+            source_segments: 30,
+            ..ParserLimits::default()
+        },
+    );
+    assert!(
+        parsed.context.source_segment_count() < 256,
+        "{} source segments retained",
+        parsed.context.source_segment_count()
+    );
+    assert_eq!(
+        parser_errors(&parsed)
+            .filter(|error| matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::SourceSegments,
+                    limit:    30,
+                }
+            ))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        parsed.items.as_slice(),
+        [ExternalDeclaration::Error(_)]
+    ));
+}
+
+#[test]
+fn adjacent_strings_stop_at_the_source_segment_limit() {
+    let mut source = String::from("#define X0 \"x\"\n");
+    for level in 1..=12 {
+        writeln!(source, "#define X{level} X{} X{}", level - 1, level - 1).unwrap();
+    }
+    source.push_str("const char *value = X12;\n");
+
+    let parsed = parse_with_limits(
+        &source,
+        ParserLimits {
+            source_segments: 1_000,
+            ..ParserLimits::default()
+        },
+    );
+    assert!(
+        parsed.context.source_segment_count() < 1_200,
+        "{} source segments retained",
+        parsed.context.source_segment_count()
+    );
+    assert!(parser_errors(&parsed).any(|error| matches!(
+        error,
+        ParserErrorType::ResourceLimitExceeded {
+            resource: ParserResource::SourceSegments,
+            limit:    1_000,
+        }
+    )));
 }
 
 #[test]

@@ -97,11 +97,9 @@ fn parse_with(
         SharedVec::default(),
         SharedVec::default(),
     );
-    let mut parser = Parser::new(preprocessor, &mut context)
-        .with_action_budget(source.len().saturating_mul(256).saturating_add(4_096));
-    if let Some(limits) = limits {
-        parser = parser.with_limits(limits);
-    }
+    let mut parser =
+        Parser::new_with_limits(preprocessor, &mut context, limits.unwrap_or_default())
+            .with_action_budget(source.len().saturating_mul(256).saturating_add(4_096));
     let mut items = Vec::new();
     while let Some(item) = parser.next_item(&mut context) {
         items.push(item);
