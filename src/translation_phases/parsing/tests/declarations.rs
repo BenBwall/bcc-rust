@@ -28,7 +28,6 @@ use crate::{
                 TypeSpecifiers,
             },
             errors::ParserErrorType,
-            scope::NameClass,
             syntax::{
                 BlockItem,
                 EnumSpecifierIndex,
@@ -163,9 +162,9 @@ fn name_classification_is_published_after_each_declarator() {
                 .string_cache
                 .get_id_from_string("T")
                 .expect("interned T");
-            assert_eq!(
-                parsed.parser.scopes.file_scope.get(&t),
-                Some(&NameClass::Ordinary)
+            assert!(
+                !parsed.parser.scopes.is_file_scope_typedef(t),
+                "the ordinary declaration of T ends its typedef status"
             );
         },
     );

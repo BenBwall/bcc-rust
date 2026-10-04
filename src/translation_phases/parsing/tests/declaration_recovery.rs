@@ -25,7 +25,6 @@ use crate::translation_phases::{
             TypeSpecifiers,
         },
         errors::ParserErrorType,
-        scope::NameClass,
         syntax::{
             BlockItem,
             ExpressionSlot,
@@ -1038,10 +1037,7 @@ fn prototype_enumerators_stop_hiding_file_scope_typedefs_at_the_closing_parenthe
             .string_cache
             .get_id_from_string("A")
             .expect("interned A");
-        assert_eq!(
-            parsed.parser.scopes.file_scope.get(&a),
-            Some(&NameClass::Typedef)
-        );
+        assert!(parsed.parser.scopes.is_file_scope_typedef(a));
         assert!(matches!(
             declaration(parsed, 2)
                 .declaration_specifiers

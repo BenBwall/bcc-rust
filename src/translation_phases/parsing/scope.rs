@@ -11,6 +11,7 @@ use crate::util::{
         ArenaVec,
         Bump,
     },
+    region_bit_set::RegionBitSet,
     string_cache::StringCacheId,
 };
 
@@ -79,12 +80,18 @@ const RETAINED_PROTOTYPE_LIMIT: usize = 64;
 /// nested-scope storage is bounded by the bindings open at once, not by every
 /// name the translation unit ever binds in a block.
 ///
+/// File scope keeps only what the grammar asks of it: whether a name is a
+/// typedef. That is one bit per interned name, in its own region, so the
+/// parse arena does not grow with the number of file-scope declarations.
+///
 /// C99: identifier scopes are §6.2.1, pp. 29-30; PDF pp. 41-42; distinct
 /// namespaces are §6.2.3, p. 31; PDF p. 43. Function-prototype scope ends at
 /// the function declarator under §6.2.1 paragraph 4, p. 30; PDF p. 42.
 pub(super) struct ScopeStack<'p> {
-    /// Bindings visible for the translation unit.
-    pub(super) file_scope:    ArenaMap<'p, StringCacheId, NameClass>,
+    /// The file-scope names whose latest declaration is a typedef, indexed
+    /// by string-cache ID. A file-scope ordinary declaration of the name
+    /// removes it.
+    file_typedefs:            RegionBitSet,
     /// Nested scopes, with the innermost scope last.
     pub(super) nested_scopes: ArenaVec<'p, Scope>,
     /// Bindings of every open nested scope in the order they were made, so a
@@ -117,7 +124,7 @@ impl<'p> ScopeStack<'p> {
     /// An empty stack whose storage comes from the parse arena.
     pub(super) fn new_in(arena: &'p Bump) -> Self {
         Self {
-            file_scope:                 ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            file_typedefs:              RegionBitSet::new(),
             nested_scopes:              ArenaVec::new_in(arena),
             bindings:                   ArenaVec::new_in(arena),
             innermost:                  ArenaMap::with_hasher_in(FxBuildHasher, arena),
@@ -141,20 +148,52 @@ impl<'p> ScopeStack<'p> {
         }
         #[cfg(test)]
         self.lookup_probes.set(self.lookup_probes.get() + 1);
-        self.file_scope.get(&name) == Some(&NameClass::Typedef)
+        self.file_typedefs.contains(file_scope_index(name))
+    }
+
+    /// Whether the latest file-scope declaration of `name` is a typedef,
+    /// whatever nested scopes are open.
+    #[cfg(test)]
+    pub(super) fn is_file_scope_typedef(&self, name: StringCacheId) -> bool {
+        self.file_typedefs.contains(file_scope_index(name))
     }
 
     /// Publishes a binding in the innermost active scope.
     pub(super) fn publish(&mut self, name: StringCacheId, class: NameClass) {
-        _ = self.publish_reporting_new(name, class);
+        if self.nested_scopes.is_empty() {
+            self.publish_at_file_scope(name, class);
+        } else {
+            _ = self.publish_nested(name, class);
+        }
     }
 
-    /// Publishes a binding in the innermost active scope and reports whether
-    /// the name was not yet bound in that scope.
-    pub(super) fn publish_reporting_new(&mut self, name: StringCacheId, class: NameClass) -> bool {
-        if self.nested_scopes.is_empty() {
-            return self.file_scope.insert(name, class).is_none();
+    fn publish_at_file_scope(&mut self, name: StringCacheId, class: NameClass) {
+        let index = file_scope_index(name);
+        match class {
+            | NameClass::Typedef => self.file_typedefs.insert(index),
+            | NameClass::Ordinary => self.file_typedefs.remove(index),
         }
+    }
+
+    /// Publishes a binding in the innermost nested scope and reports whether
+    /// the name was not yet bound in that scope.
+    ///
+    /// Only prototype scopes ask this. File scope keeps one typedef bit per
+    /// name and cannot tell, so outside every nested scope the name is
+    /// published at file scope and reported as not new.
+    pub(super) fn publish_reporting_new(&mut self, name: StringCacheId, class: NameClass) -> bool {
+        debug_assert!(
+            !self.nested_scopes.is_empty(),
+            "only nested scopes report new bindings"
+        );
+        if self.nested_scopes.is_empty() {
+            self.publish_at_file_scope(name, class);
+            return false;
+        }
+        self.publish_nested(name, class)
+    }
+
+    fn publish_nested(&mut self, name: StringCacheId, class: NameClass) -> bool {
         let depth = u32::try_from(self.nested_scopes.len()).unwrap_or(u32::MAX);
         let index = self.bindings.len();
         let innermost = self.innermost.entry(name).or_insert(NO_OUTER_BINDING);
@@ -279,6 +318,12 @@ impl<'p> ScopeStack<'p> {
         self.retained_prototypes.clear();
         found.is_some()
     }
+}
+
+/// The bit that holds `name`'s file-scope typedef status.
+fn file_scope_index(name: StringCacheId) -> usize {
+    // Interned IDs count up from one, so the set stays dense.
+    name.to_u32() as usize
 }
 
 /// Labels defined and referenced in one function body.
