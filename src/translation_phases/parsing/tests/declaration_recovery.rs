@@ -430,78 +430,49 @@ fn nested_recovery_stops_before_grammar_starters() {
 
 #[test]
 fn omitted_k_and_r_comma_reprocesses_the_next_identifier() {
-    let parsed = parse("int f(a b, c);\n");
-
-    assert!(parser_errors(&parsed).any(|error| matches!(
+    with_parse("int f(a b, c);\n", |parsed| {
+        assert!(parser_errors(parsed).any(|error| matches!(
         error,
         ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
             Some(TokenType::Identifier)
         )
     )));
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<Identifier>()
-            .map(|identifier| parsed.context.string_cache.at(identifier.name))
-            .collect::<Vec<_>>(),
-        ["a", "b", "c"]
-    );
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<Identifier>()
+                .map(|identifier| parsed.context.string_cache.at(identifier.name))
+                .collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+    });
 }
 
 #[test]
 fn malformed_parameter_after_ellipsis_terminates() {
-    let parsed = parse("int f(int, ..., char trailing);\nint after;\n");
-
-    assert_eq!(parsed.items.len(), 2);
-    assert!(parser_errors(&parsed).any(|error| matches!(
+    with_parse("int f(int, ..., char trailing);\nint after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert!(parser_errors(parsed).any(|error| matches!(
         error,
         ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
             TokenType::Operator(OperatorTokenType::Comma)
         )
     )));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 }
 
 #[test]
 fn malformed_array_bound_recovery_stops_at_the_owning_bracket() {
-    let parsed = parse("int a[(1];\nint after;\n");
-
-    assert!(matches!(
-        parsed.items.first(),
-        Some(ExternalDeclaration::RecoveredDeclaration(_))
-    ));
-    assert!(matches!(
-        parsed.items.get(1),
-        Some(ExternalDeclaration::Declaration(_))
-    ));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
-}
-
-#[test]
-fn malformed_children_stop_at_unambiguous_owning_delimiters() {
-    for source in [
-        "int x = (1; int after;\n",
-        "enum E { A = (1, B }; int after;\n",
-        "int f(int x + [); int after;\n",
-        "struct S { int x + ( ; }; int after;\n",
-    ] {
-        let parsed = parse(source);
-
+    with_parse("int a[(1];\nint after;\n", |parsed| {
         assert!(matches!(
             parsed.items.first(),
             Some(ExternalDeclaration::RecoveredDeclaration(_))
@@ -512,52 +483,81 @@ fn malformed_children_stop_at_unambiguous_owning_delimiters() {
         ));
         assert_eq!(
             identifier_name(
-                &parsed,
-                init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
             )
             .as_deref(),
-            Some("after"),
-            "recovery swallowed the declaration after {source:?}"
+            Some("after")
         );
+    });
+}
+
+#[test]
+fn malformed_children_stop_at_unambiguous_owning_delimiters() {
+    for source in [
+        "int x = (1; int after;\n",
+        "enum E { A = (1, B }; int after;\n",
+        "int f(int x + [); int after;\n",
+        "struct S { int x + ( ; }; int after;\n",
+    ] {
+        with_parse(source, |parsed| {
+            assert!(matches!(
+                parsed.items.first(),
+                Some(ExternalDeclaration::RecoveredDeclaration(_))
+            ));
+            assert!(matches!(
+                parsed.items.get(1),
+                Some(ExternalDeclaration::Declaration(_))
+            ));
+            assert_eq!(
+                identifier_name(
+                    parsed,
+                    init_declarators(parsed, declaration(parsed, 1))[0].declarator
+                )
+                .as_deref(),
+                Some("after"),
+                "recovery swallowed the declaration after {source:?}"
+            );
+        });
     }
 }
 
 #[test]
 fn malformed_initializer_recovery_preserves_the_next_declaration() {
-    let parsed = parse("int x = + int after;\n");
-
-    assert_eq!(parsed.items.len(), 2);
-    assert!(matches!(
-        parsed.items.first(),
-        Some(ExternalDeclaration::RecoveredDeclaration(_))
-    ));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("int x = + int after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::RecoveredDeclaration(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 }
 
 #[test]
 fn malformed_array_bound_recovery_preserves_the_next_declaration() {
-    let parsed = parse("int a[+ int after;\n");
-
-    assert_eq!(parsed.items.len(), 2);
-    assert!(matches!(
-        parsed.items.first(),
-        Some(ExternalDeclaration::RecoveredDeclaration(_))
-    ));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("int a[+ int after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::RecoveredDeclaration(_))
+        ));
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 }
 
 #[test]
