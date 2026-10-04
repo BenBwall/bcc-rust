@@ -351,6 +351,12 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             .expect("preprocessing does not resume after stopping inside an expansion")
     }
 
+    /// The most bytes the expansion arena has held at once.
+    #[cfg(feature = "benchmarking-internals")]
+    pub(crate) fn expansion_high_water(&self) -> usize {
+        self.expansion.high_water()
+    }
+
     /// Where reading stopped, for end-of-input diagnostics.
     pub(crate) fn end_position(&self) -> SourcePosition {
         self.end.0

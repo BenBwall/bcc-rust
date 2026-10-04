@@ -226,6 +226,59 @@ pub fn preprocess(input: BenchmarkInput) -> usize {
     )
 }
 
+/// What the arenas of one compilation held, measured in-process.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArenaUsage {
+    /// The preprocessing arena's high-water mark over phases 4 to 6 (the
+    /// plan's `'pp` peak), lexed files included.
+    pub preprocessor_high_water: usize,
+    /// The expansion arena's high-water mark; it is reset between
+    /// top-level expansions.
+    pub expansion_high_water:    usize,
+    /// The most virtual-memory regions live at once over phases 1 to 7.
+    pub peak_regions:            usize,
+    /// The most address space those regions reserved at once.
+    pub peak_reserved:           usize,
+    /// The most bytes committed across all regions at once.
+    pub peak_committed:          usize,
+}
+
+/// Preprocesses `input` to report its arena high-water marks, then compiles
+/// it through phase 7 to report its peak regions and commit.
+#[doc(hidden)]
+#[must_use]
+pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
+    use crate::util::vm::accounting;
+    let (preprocessor_high_water, expansion_high_water) = {
+        let tu = Bump::new();
+        let mut context = Context::new(&tu);
+        with_preprocessor(
+            &mut context,
+            Path::new("<input>"),
+            input.source(),
+            &[],
+            &[],
+            |mut preprocessor, context, pp| {
+                let mut tokens = crate::util::bump::RegionVec::new_in(Bump::new());
+                let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
+                (pp.high_water(), preprocessor.expansion_high_water())
+            },
+        )
+    };
+    let before = accounting::live();
+    accounting::reset_peak();
+    _ = parse(input);
+    let peak = accounting::peak();
+    ArenaUsage {
+        preprocessor_high_water,
+        expansion_high_water,
+        peak_regions: peak.regions - before.regions,
+        peak_reserved: peak.reserved - before.reserved,
+        peak_committed: peak.committed - before.committed,
+    }
+}
+
 /// Summary of one benchmarked parse, returned so the work cannot be elided
 /// and so benchmark setup can reject inputs that produce diagnostics.
 #[doc(hidden)]

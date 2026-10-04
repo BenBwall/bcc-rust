@@ -154,5 +154,24 @@ fn main() -> ExitCode {
             );
         }
     }
+    // Arena counters are exact and need no fresh process.
+    println!();
+    println!(
+        "| input | PP arena high water (MiB) | expansion arena high water (MiB) | peak regions | \
+         peak reserved (GiB) | peak arena commit (MiB) |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|");
+    for input in BenchmarkInput::ALL {
+        let usage = bcc_rust::arena_usage(input);
+        println!(
+            "| {} | {:.1} | {:.1} | {} | {:.0} | {:.1} |",
+            input.name(),
+            mebibytes(usage.preprocessor_high_water),
+            mebibytes(usage.expansion_high_water),
+            usage.peak_regions,
+            mebibytes(usage.peak_reserved) / 1024.0,
+            mebibytes(usage.peak_committed)
+        );
+    }
     ExitCode::SUCCESS
 }

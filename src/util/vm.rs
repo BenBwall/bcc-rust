@@ -31,7 +31,7 @@ impl Region {
         #[cfg(test)]
         faults::reserve()?;
         let base = os_reserve(reserved)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "benchmarking-internals"))]
         accounting::update(|usage| {
             usage.regions += 1;
             usage.reserved += reserved;
@@ -100,7 +100,7 @@ impl Region {
 
 impl Drop for Region {
     fn drop(&mut self) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "benchmarking-internals"))]
         accounting::update(|usage| {
             usage.regions -= 1;
             usage.reserved -= self.reserved;
@@ -179,7 +179,7 @@ impl GrowingRegion {
                 minimal
             },
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "benchmarking-internals"))]
         accounting::update(|usage| usage.committed += target - self.committed);
         self.committed = target;
         #[cfg(miri)]
@@ -190,7 +190,7 @@ impl GrowingRegion {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "benchmarking-internals"))]
 impl Drop for GrowingRegion {
     fn drop(&mut self) {
         accounting::update(|usage| usage.committed -= self.committed);
@@ -235,7 +235,7 @@ fn next_commit(committed: usize, needed: usize, reserved: usize, page: usize) ->
 /// Per-thread totals of live regions, for tests and benchmarks. Regions are
 /// neither `Send` nor `Sync`, so each one is counted on the thread that owns
 /// it.
-#[cfg(test)]
+#[cfg(any(test, feature = "benchmarking-internals"))]
 #[expect(
     clippy::missing_const_for_thread_local,
     reason = "The initializers are const blocks; Clippy misreads their expansion."

@@ -83,7 +83,7 @@ impl Bump {
     /// The most bytes this arena has held at once, including alignment
     /// padding and blocks a reset later reclaimed.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "benchmarking-internals")),
         expect(dead_code, reason = "Only measurements read the high-water mark.")
     )]
     pub(crate) fn high_water(&self) -> usize {
