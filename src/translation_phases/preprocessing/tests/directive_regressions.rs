@@ -443,10 +443,11 @@ fn conditional_arms_reject_duplicate_else_and_late_elif() {
             "`#elif` after `#else`",
         ),
     ] {
-        let (identifiers, errors) = super::preprocess(source);
-        assert_eq!(identifiers, ["yes", "after"]);
-        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
-        assert_eq!(errors[0].to_string(), expected);
+        super::preprocess(source, |identifiers, errors| {
+            assert_eq!(identifiers, ["yes", "after"]);
+            assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+            assert_eq!(errors[0].to_string(), expected);
+        });
     }
 }
 
@@ -456,18 +457,20 @@ fn conditional_tails_diagnose_without_leaking_tokens() {
         "#if 0\n#else extra\nyes\n#endif\nafter\n",
         "#if 1\nyes\n#endif extra\nafter\n",
     ] {
-        let (identifiers, errors) = super::preprocess(source);
-        assert_eq!(identifiers, ["yes", "after"]);
-        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+        super::preprocess(source, |identifiers, errors| {
+            assert_eq!(identifiers, ["yes", "after"]);
+            assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+        });
     }
 }
 
 #[test]
 fn null_and_undef_directives_preserve_start_of_line() {
     let source = "#\n#define A 1\n#undef A\n#ifdef A\nwrong\n#else\nyes\n#endif\nafter\n";
-    let (identifiers, errors) = super::preprocess(source);
-    assert_eq!(identifiers, ["yes", "after"]);
-    assert!(errors.is_empty(), "{errors:#?}");
+    super::preprocess(source, |identifiers, errors| {
+        assert_eq!(identifiers, ["yes", "after"]);
+        assert!(errors.is_empty(), "{errors:#?}");
+    });
 }
 
 #[test]

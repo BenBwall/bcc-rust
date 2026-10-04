@@ -17,13 +17,14 @@ use crate::translation_phases::SourceVector;
 fn assert_true_expression(expression: &str) {
     let source =
         format!("#define NAME 1\n#if {expression}\nselected\n#else\nwrong\n#endif\nafter\n");
-    let (identifiers, errors) = preprocess(&source);
-    assert_eq!(
-        identifiers,
-        ["selected", "after"],
-        "{expression}: {errors:#?}"
-    );
-    assert!(errors.is_empty(), "{expression}: {errors:#?}");
+    preprocess(&source, |identifiers, errors| {
+        assert_eq!(
+            identifiers,
+            ["selected", "after"],
+            "{expression}: {errors:#?}"
+        );
+        assert!(errors.is_empty(), "{expression}: {errors:#?}");
+    });
 }
 
 #[test]
@@ -79,32 +80,34 @@ fn nested_groups_with_a_long_unary_prefix_reduce_without_recursion() {
 fn empty_parentheses_recover_without_a_panic_or_spurious_unclosed_group() {
     for expression in ["()", "() + ()", "(())", "() + 1"] {
         let source = format!("#if {expression}\ninside\n#endif\nafter\n");
-        let (identifiers, errors) = preprocess(&source);
-        assert_eq!(identifiers.last().map(String::as_str), Some("after"));
-        assert!(!errors.is_empty(), "{expression} must be diagnosed");
-        assert!(errors.iter().all(|error| !matches!(error,
-            TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression,
-                ..
-            })
-        )), "{expression}: {errors:#?}");
+        preprocess(&source, |identifiers, errors| {
+            assert_eq!(identifiers.last().map(String::as_str), Some("after"));
+            assert!(!errors.is_empty(), "{expression} must be diagnosed");
+            assert!(errors.iter().all(|error| !matches!(error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression,
+                    ..
+                })
+            )), "{expression}: {errors:#?}");
+        });
     }
 }
 
 #[test]
 fn unmatched_closing_parenthesis_is_not_reported_as_an_empty_group() {
-    let (identifiers, errors) = preprocess("#if 1)\ninside\n#endif\nafter\n");
-    assert_eq!(identifiers, ["inside", "after"]);
-    assert!(
-        matches!(
-            errors.as_slice(),
-            [TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(_),
-                ..
-            })]
-        ),
-        "{errors:#?}"
-    );
+    preprocess("#if 1)\ninside\n#endif\nafter\n", |identifiers, errors| {
+        assert_eq!(identifiers, ["inside", "after"]);
+        assert!(
+            matches!(
+                errors,
+                [TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(_),
+                    ..
+                })]
+            ),
+            "{errors:#?}"
+        );
+    });
 }
 
 #[test]
@@ -144,18 +147,19 @@ fn selected_arithmetic_still_reports_each_fault_once() {
         "1 / 0 ? 0 : 1",
     ] {
         let source = format!("#if {expression}\ninside\n#endif\nafter\n");
-        let (identifiers, errors) = preprocess(&source);
-        assert_eq!(identifiers.last().map(String::as_str), Some("after"));
-        assert!(
-            matches!(
-                errors.as_slice(),
-                [TranslationError::Preprocessing(PreprocessorError {
-                    error_type: PreprocessorErrorType::DivideByZero,
-                    ..
-                })]
-            ),
-            "{expression}: {errors:#?}"
-        );
+        preprocess(&source, |identifiers, errors| {
+            assert_eq!(identifiers.last().map(String::as_str), Some("after"));
+            assert!(
+                matches!(
+                    errors,
+                    [TranslationError::Preprocessing(PreprocessorError {
+                        error_type: PreprocessorErrorType::DivideByZero,
+                        ..
+                    })]
+                ),
+                "{expression}: {errors:#?}"
+            );
+        });
     }
 }
 
@@ -192,18 +196,18 @@ fn each_evaluated_arithmetic_fault_keeps_its_diagnostic_kind() {
         ("1 >> 64", PreprocessorErrorType::RightShiftOverflow),
     ] {
         let source = format!("#if {expression}\ninside\n#endif\nafter\n");
-        let (identifiers, errors) = preprocess(&source);
-        assert_eq!(identifiers.last().map(String::as_str), Some("after"));
-        let [TranslationError::Preprocessing(PreprocessorError { error_type, .. })] =
-            errors.as_slice()
-        else {
-            panic!("{expression}: {errors:#?}");
-        };
-        assert_eq!(
-            std::mem::discriminant(error_type),
-            std::mem::discriminant(&expected),
-            "{expression}: {errors:#?}"
-        );
+        preprocess(&source, |identifiers, errors| {
+            assert_eq!(identifiers.last().map(String::as_str), Some("after"));
+            let [TranslationError::Preprocessing(PreprocessorError { error_type, .. })] = errors
+            else {
+                panic!("{expression}: {errors:#?}");
+            };
+            assert_eq!(
+                std::mem::discriminant(error_type),
+                std::mem::discriminant(&expected),
+                "{expression}: {errors:#?}"
+            );
+        });
     }
 }
 
@@ -266,16 +270,17 @@ fn many_dead_arithmetic_faults_reduce_without_recursion() {
 fn unsupported_function_calls_stop_recovery_at_the_directive_newline() {
     for expression in ["1(", "1((", "1(argument", "1((argument"] {
         let source = format!("#if {expression}\nselected\n#endif\nafter\n");
-        let (identifiers, errors) = preprocess(&source);
-        assert_eq!(
-            identifiers,
-            ["selected", "after"],
-            "{expression}: {errors:#?}"
-        );
-        assert!(matches!(errors.as_slice(), [TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::FunctionCallOperatorNotSupportedInPreprocessorExpression,
-            ..
-        })]), "{expression}: {errors:#?}");
+        preprocess(&source, |identifiers, errors| {
+            assert_eq!(
+                identifiers,
+                ["selected", "after"],
+                "{expression}: {errors:#?}"
+            );
+            assert!(matches!(errors, [TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::FunctionCallOperatorNotSupportedInPreprocessorExpression,
+                ..
+            })]), "{expression}: {errors:#?}");
+        });
     }
 }
 
@@ -294,9 +299,10 @@ fn malformed_ternary_groups_keep_outer_operands_and_operator_locations() {
         ),
     ] {
         let source = format!("#if {expression}\nselected\n#endif\nafter\n");
-        let (identifiers, errors) = preprocess(&source);
-        assert_eq!(identifiers, ["selected", "after"], "{errors:#?}");
-        assert_eq!(errors.len(), 1, "{expression}: {errors:#?}");
+        preprocess(&source, |identifiers, errors| {
+            assert_eq!(identifiers, ["selected", "after"], "{errors:#?}");
+            assert_eq!(errors.len(), 1, "{expression}: {errors:#?}");
+        });
         // Pin the exact operator location, not the cursor after the directive.
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
@@ -330,12 +336,13 @@ fn malformed_nested_expression_groups_preserve_following_source() {
         "1?(2:3):4",
     ] {
         let source = format!("#if {expression}\nselected\n#endif\nafter\n");
-        let (identifiers, errors) = preprocess(&source);
-        assert_eq!(
-            identifiers.last().map(String::as_str),
-            Some("after"),
-            "{expression}: {errors:#?}"
-        );
-        assert!(!errors.is_empty());
+        preprocess(&source, |identifiers, errors| {
+            assert_eq!(
+                identifiers.last().map(String::as_str),
+                Some("after"),
+                "{expression}: {errors:#?}"
+            );
+            assert!(!errors.is_empty());
+        });
     }
 }
