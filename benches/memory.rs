@@ -158,17 +158,19 @@ fn main() -> ExitCode {
     println!();
     println!(
         "| input | PP arena high water (MiB) | expansion arena high water (KiB) | parse arena \
-         high water (KiB) | peak regions | peak reserved (GiB) | peak arena commit (MiB) |"
+         high water (KiB) | TU arena high water (MiB) | peak regions | peak reserved (GiB) | peak \
+         arena commit (MiB) |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|");
     for input in BenchmarkInput::ALL {
         let usage = bcc_rust::arena_usage(input);
         println!(
-            "| {} | {:.1} | {:.1} | {:.1} | {} | {:.0} | {:.1} |",
+            "| {} | {:.1} | {:.1} | {:.1} | {:.1} | {} | {:.0} | {:.1} |",
             input.name(),
             mebibytes(usage.preprocessor_high_water),
             mebibytes(usage.expansion_high_water) * 1024.0,
             mebibytes(usage.parse_high_water) * 1024.0,
+            mebibytes(usage.tu_high_water),
             usage.peak_regions,
             mebibytes(usage.peak_reserved) / 1024.0,
             mebibytes(usage.peak_committed)

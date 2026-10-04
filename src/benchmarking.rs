@@ -242,6 +242,9 @@ pub struct ArenaUsage {
     /// The parse arena's high-water mark over phase 7 (the plan's `'parse`
     /// peak): frames, their pools, scopes, and recovery state.
     pub parse_high_water:        usize,
+    /// The translation-unit arena's high-water mark after phase 7: source
+    /// text, diagnostics, and everything else that lives as long as the unit.
+    pub tu_high_water:           usize,
     /// The most virtual-memory regions live at once over phases 1 to 7.
     pub peak_regions:            usize,
     /// The most address space those regions reserved at once.
@@ -279,12 +282,25 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
     });
     let before = accounting::live();
     accounting::reset_peak();
-    _ = parse(input);
+    let tu_high_water = {
+        let tu = Bump::new();
+        let mut context = Context::new(&tu);
+        let unit = crate::pipeline::parse_translation_unit(
+            &mut context,
+            Path::new("<input>"),
+            input.source(),
+            &[],
+            &[],
+        );
+        _ = unit.external_declarations().len();
+        tu.high_water()
+    };
     let peak = accounting::peak();
     ArenaUsage {
         preprocessor_high_water,
         expansion_high_water,
         parse_high_water,
+        tu_high_water,
         peak_regions: peak.regions - before.regions,
         peak_reserved: peak.reserved - before.reserved,
         peak_committed: peak.committed - before.committed,
