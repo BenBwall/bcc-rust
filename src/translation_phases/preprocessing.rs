@@ -62,7 +62,10 @@ use crate::{
         SourcePosition,
         TranslationError,
         TranslationPhase,
-        preprocessor_tokenizer::TokenSource,
+        preprocessor_tokenizer::{
+            LexedFiles,
+            TokenSource,
+        },
     },
     util::{
         HashMap,
@@ -107,10 +110,12 @@ struct PreprocessorState<'pp> {
     arena:                 &'pp Bump,
     once_set:              ArenaSet<'pp, u32>,
     macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
+    /// Every source file opened, including the main file and headers.
+    lexed_files:           LexedFiles<'pp>,
     /// Source-file frames, outermost first, while no expansion is active.
     /// During an expansion segment they live on the expander's stack and
     /// this vector stays empty, keeping its capacity.
-    file_frames:           ArenaVec<'pp, TokenizerFrame>,
+    file_frames:           ArenaVec<'pp, FileFrame<'pp>>,
     /// Provenance of open conditionals is owned because token iteration
     /// compacts temporary preprocessor provenance while groups remain open.
     open_conditionals:     ArenaVec<'pp, ConditionalGroup<'pp>>,
@@ -123,6 +128,7 @@ impl Debug for PreprocessorState<'_> {
         f.debug_struct("PreprocessorState")
             .field("once_set", &self.once_set)
             .field("macro_definitions", &self.macro_definitions)
+            .field("lexed_files", &self.lexed_files)
             .field("file_frames", &self.file_frames)
             .field("open_conditionals", &self.open_conditionals)
             .field("translation_timestamp", &self.translation_timestamp)
@@ -130,16 +136,23 @@ impl Debug for PreprocessorState<'_> {
     }
 }
 
+/// A source-file frame kept while no expansion is active.
+#[derive(Debug)]
+struct FileFrame<'pp> {
+    conditional_base:           usize,
+    physical_source_file_index: u32,
+    tokenizer:                  TokenSource<'pp>,
+}
+
 /// What the preprocessor keeps while no macro expansion is active.
 #[derive(Debug)]
 struct Resting<'tu, 'pp> {
     state:                 PreprocessorState<'pp>,
     /// The innermost source file's cursor.
-    tokenizer:             TokenSource,
+    tokenizer:             TokenSource<'pp>,
     current_is_newline:    bool,
     last_was_newline:      bool,
     output_purpose:        OutputPurpose,
-    empty_arguments:       std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
     empty_disabled_macros: std::rc::Rc<[StringCacheId]>,
     expression_parser:     PreprocessorExpressionParser<'pp>,
     pending_parser_token:  Option<Token>,
@@ -173,12 +186,12 @@ impl Debug for Preprocessor<'_, '_> {
 
 /// The preprocessor while it reads input: its long-lived state plus the
 /// expansion state, whose memory comes from the expansion arena `'x`.
-pub(crate) struct Expander<'tu, 'pp, 'x> {
+pub(crate) struct Expander<'tu, 'pp: 'x, 'x> {
     state:                 PreprocessorState<'pp>,
     /// Source and include frames remain between expansions. Macro frames
     /// share this stack until the current expansion finishes.
-    tokenizer_stack:       ArenaVec<'x, TokenizerFrame>,
-    pub(crate) tokenizer:  TokenSource,
+    tokenizer_stack:       ArenaVec<'x, TokenizerFrame<'x>>,
+    pub(crate) tokenizer:  TokenSource<'x>,
     /// Expansion working memory, reset between top-level expansions.
     scratch:               &'x Bump,
     hash_hash_stack:       ArenaVec<'x, HashHash>,
@@ -194,7 +207,7 @@ pub(crate) struct Expander<'tu, 'pp, 'x> {
     operand_fence:         usize,
     /// Argument prescan stops here without suppressing expansion within it.
     expansion_fence:       usize,
-    empty_arguments:       std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
+    empty_arguments:       std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument<'x>>>,
     empty_disabled_macros: std::rc::Rc<[StringCacheId]>,
     expression_parser:     PreprocessorExpressionParser<'pp>,
     pending_parser_token:  Option<Token>,
@@ -300,14 +313,13 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             );
         }
         let source_file_index = context.intern_source_file(source_name);
-        let tokenizer = TokenSource::new(context, source_file_index, source);
+        let mut lexed_files = LexedFiles::new_in(pp);
+        let tokenizer = lexed_files.open(context, source_file_index, source);
         let mut file_frames = ArenaVec::new_in(pp);
-        file_frames.push(TokenizerFrame {
-            frame_type: TokenizerFrameType::SourceFile {
-                conditional_base:           0,
-                physical_source_file_index: source_file_index,
-            },
-            tokenizer:  tokenizer.clone(),
+        file_frames.push(FileFrame {
+            conditional_base:           0,
+            physical_source_file_index: source_file_index,
+            tokenizer:                  tokenizer.clone(),
         });
         if let Some(source) = arena_source {
             context.record_arena_source_text(source_file_index, source);
@@ -321,6 +333,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     macro_definitions,
+                    lexed_files,
                     file_frames,
                     open_conditionals: ArenaVec::new_in(pp),
                     translation_timestamp: None,
@@ -329,7 +342,6 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                 last_was_newline: true,
                 current_is_newline: true,
                 output_purpose: OutputPurpose::Preprocessing,
-                empty_arguments: std::rc::Rc::default(),
                 empty_disabled_macros: std::rc::Rc::from([]),
                 expression_parser: PreprocessorExpressionParser::new(pp),
                 pending_parser_token: None,
@@ -496,7 +508,6 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             current_is_newline,
             last_was_newline,
             output_purpose,
-            empty_arguments,
             empty_disabled_macros,
             expression_parser,
             pending_parser_token,
@@ -504,7 +515,13 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             source_segment_limit,
         } = resting;
         let mut tokenizer_stack = ArenaVec::with_capacity_in(state.file_frames.len(), scratch);
-        tokenizer_stack.extend(state.file_frames.drain(..));
+        tokenizer_stack.extend(state.file_frames.drain(..).map(|frame| TokenizerFrame {
+            frame_type: TokenizerFrameType::SourceFile {
+                conditional_base:           frame.conditional_base,
+                physical_source_file_index: frame.physical_source_file_index,
+            },
+            tokenizer:  frame.tokenizer,
+        }));
         Self {
             state,
             tokenizer_stack,
@@ -517,7 +534,7 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             generate_placeholders: false,
             operand_fence: 0,
             expansion_fence: 0,
-            empty_arguments,
+            empty_arguments: std::rc::Rc::default(),
             empty_disabled_macros,
             expression_parser,
             pending_parser_token,
@@ -540,7 +557,8 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
     }
 
     /// Returns the state to keep while the expansion arena is reset. Only
-    /// valid between expansions.
+    /// valid between expansions. Source cursors return to the `'pp`
+    /// lifetime through the registry of opened files.
     fn suspend(self) -> Resting<'tu, 'pp> {
         debug_assert!(
             self.is_between_expansions(),
@@ -553,7 +571,6 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             current_is_newline,
             output_purpose,
             last_was_newline,
-            empty_arguments,
             empty_disabled_macros,
             expression_parser,
             pending_parser_token,
@@ -561,14 +578,28 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             source_segment_limit,
             ..
         } = self;
-        state.file_frames.extend(tokenizer_stack.drain(..));
+        for frame in tokenizer_stack.drain(..) {
+            let TokenizerFrameType::SourceFile {
+                conditional_base,
+                physical_source_file_index,
+            } = frame.frame_type
+            else {
+                unreachable!("only source-file frames remain between expansions");
+            };
+            let tokenizer = state.lexed_files.persist(&frame.tokenizer);
+            state.file_frames.push(FileFrame {
+                conditional_base,
+                physical_source_file_index,
+                tokenizer,
+            });
+        }
+        let tokenizer = state.lexed_files.persist(&tokenizer);
         Resting {
             state,
             tokenizer,
             current_is_newline,
             last_was_newline,
             output_purpose,
-            empty_arguments,
             empty_disabled_macros,
             expression_parser,
             pending_parser_token,

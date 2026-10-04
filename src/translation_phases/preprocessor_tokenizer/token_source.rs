@@ -1,13 +1,10 @@
 //! The preprocessing-token source that phase 4 reads: a lexed source file
 //! or replayed tokens.
 
-use std::{
-    fmt::{
-        Debug,
-        Formatter,
-        Result as FmtResult,
-    },
-    rc::Rc,
+use std::fmt::{
+    Debug,
+    Formatter,
+    Result as FmtResult,
 };
 
 use super::{
@@ -15,40 +12,53 @@ use super::{
     batch::LexedFile,
     replay::ReplayCursor,
 };
-use crate::translation_phases::{
-    Context,
-    GetPosition,
-    GetSourceFileIndex,
-    SetPosition,
-    SetSourceFileIndex,
-    SourcePosition,
-    SourceVector,
-    SourceVectors,
-    TranslationPhase,
+use crate::{
+    translation_phases::{
+        Context,
+        GetPosition,
+        GetSourceFileIndex,
+        SetPosition,
+        SetSourceFileIndex,
+        SourcePosition,
+        SourceVector,
+        SourceVectors,
+        TranslationPhase,
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 /// A cloneable, rewindable stream of preprocessing tokens over one source
 /// buffer. Phase 4 keeps one per source file, macro replacement list, and
 /// macro argument.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TokenSource {
+pub(crate) enum TokenSource<'a> {
     /// A source buffer, lexed completely when it was opened.
-    File(LexedCursor),
+    File(LexedCursor<'a>),
     /// Tokens phase 4 already produced.
     Replay(ReplayCursor),
 }
 
-impl Default for TokenSource {
+impl Default for TokenSource<'_> {
     fn default() -> Self {
         Self::Replay(ReplayCursor::default())
     }
 }
 
-impl TokenSource {
-    /// Lexes all of `source` (translation phases 1 through 3) and opens it.
-    pub(crate) fn new(context: &mut Context<'_>, source_file_index: u32, source: &str) -> Self {
-        Self::File(LexedCursor::new(Rc::new(LexedFile::lex(
+impl<'a> TokenSource<'a> {
+    /// Lexes all of `source` (translation phases 1 through 3) into `arena`
+    /// and opens it.
+    pub(crate) fn new(
+        context: &mut Context<'_>,
+        arena: &'a Bump,
+        source_file_index: u32,
+        source: &str,
+    ) -> Self {
+        Self::File(LexedCursor::new(arena.alloc(LexedFile::lex(
             context,
+            arena,
             source_file_index,
             source,
         ))))
@@ -77,7 +87,7 @@ impl TokenSource {
     }
 }
 
-impl GetPosition for TokenSource {
+impl GetPosition for TokenSource<'_> {
     #[inline(always)]
     fn position(&self, _context: &Context<'_>) -> SourcePosition {
         match self {
@@ -87,7 +97,7 @@ impl GetPosition for TokenSource {
     }
 }
 
-impl SetPosition for TokenSource {
+impl SetPosition for TokenSource<'_> {
     #[inline(always)]
     fn set_position(&mut self, _context: &mut Context<'_>, position: SourcePosition) {
         match self {
@@ -97,7 +107,7 @@ impl SetPosition for TokenSource {
     }
 }
 
-impl GetSourceFileIndex for TokenSource {
+impl GetSourceFileIndex for TokenSource<'_> {
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         match self {
@@ -107,7 +117,7 @@ impl GetSourceFileIndex for TokenSource {
     }
 }
 
-impl SetSourceFileIndex for TokenSource {
+impl SetSourceFileIndex for TokenSource<'_> {
     fn set_source_file_index(&mut self, _context: &mut Context<'_>, source_file_index: u32) {
         match self {
             | Self::File(cursor) => cursor.source_file_index = source_file_index,
@@ -117,7 +127,7 @@ impl SetSourceFileIndex for TokenSource {
     }
 }
 
-impl TranslationPhase<'_> for TokenSource {
+impl TranslationPhase<'_> for TokenSource<'_> {
     type Item = PreprocessorToken;
 
     #[inline(always)]
@@ -139,8 +149,8 @@ impl TranslationPhase<'_> for TokenSource {
     clippy::struct_excessive_bools,
     reason = "Each flag is one piece of the end-of-input reading state."
 )]
-pub(crate) struct LexedCursor {
-    file:                   Rc<LexedFile>,
+pub(crate) struct LexedCursor<'a> {
+    file:                   &'a LexedFile<'a>,
     /// The next entry to read.
     next:                   usize,
     /// Whether reading past the last entry has already returned `None`.
@@ -160,9 +170,9 @@ pub(crate) struct LexedCursor {
     at_eof:                 bool,
 }
 
-impl PartialEq for LexedCursor {
+impl PartialEq for LexedCursor<'_> {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.file, &other.file)
+        std::ptr::eq(self.file, other.file)
             && self.next == other.next
             && self.finished == other.finished
             && self.line_delta == other.line_delta
@@ -173,9 +183,9 @@ impl PartialEq for LexedCursor {
     }
 }
 
-impl Eq for LexedCursor {}
+impl Eq for LexedCursor<'_> {}
 
-impl Debug for LexedCursor {
+impl Debug for LexedCursor<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("LexedCursor")
             .field("source_file_index", &self.source_file_index)
@@ -190,8 +200,8 @@ impl Debug for LexedCursor {
     }
 }
 
-impl LexedCursor {
-    fn new(file: Rc<LexedFile>) -> Self {
+impl<'a> LexedCursor<'a> {
+    fn new(file: &'a LexedFile<'a>) -> Self {
         Self {
             source_file_index: file.source_file_index,
             file,
@@ -212,6 +222,20 @@ impl LexedCursor {
         };
         position.line = position.line.wrapping_add(self.line_delta);
         position
+    }
+
+    /// The same reading state over `file`, a copy of this cursor's file.
+    fn with_file<'b>(&self, file: &'b LexedFile<'b>) -> LexedCursor<'b> {
+        LexedCursor {
+            file,
+            next: self.next,
+            finished: self.finished,
+            line_delta: self.line_delta,
+            source_file_index: self.source_file_index,
+            final_newline_withheld: self.final_newline_withheld,
+            splice_reported: self.splice_reported,
+            at_eof: self.at_eof,
+        }
     }
 
     /// Resumes reading at `position`, which must start an entry or be the
@@ -320,6 +344,76 @@ impl LexedCursor {
             kind:           super::PreprocessorTokenType::Newline,
             source_vectors: SourceVectors::new(vector, vector + 1),
             contents:       context.string_cache.intern("\n"),
+        }
+    }
+}
+
+/// The source files opened during one preprocessing run, kept in its arena.
+///
+/// Phase 4 reads files through cursors whose lifetime may be shorter than
+/// the run, such as expansion state. [`Self::persist`] returns such a
+/// source to the run's lifetime, so a macro definition or a resting include
+/// frame can keep reading it.
+pub(crate) struct LexedFiles<'pp> {
+    arena: &'pp Bump,
+    files: ArenaVec<'pp, &'pp LexedFile<'pp>>,
+}
+
+impl Debug for LexedFiles<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_struct("LexedFiles")
+            .field("files", &self.files.len())
+            .finish()
+    }
+}
+
+impl<'pp> LexedFiles<'pp> {
+    pub(crate) fn new_in(arena: &'pp Bump) -> Self {
+        Self {
+            arena,
+            files: ArenaVec::new_in(arena),
+        }
+    }
+
+    /// Lexes all of `source` (translation phases 1 through 3) into the
+    /// run's arena and opens it.
+    pub(crate) fn open(
+        &mut self,
+        context: &mut Context<'_>,
+        source_file_index: u32,
+        source: &str,
+    ) -> TokenSource<'pp> {
+        let file = LexedFile::lex(context, self.arena, source_file_index, source);
+        TokenSource::File(LexedCursor::new(self.register(file)))
+    }
+
+    fn register(&mut self, mut file: LexedFile<'pp>) -> &'pp LexedFile<'pp> {
+        file.registration = Some(u32::try_from(self.files.len()).expect("opened files fit in u32"));
+        let file = &*self.arena.alloc(file);
+        self.files.push(file);
+        file
+    }
+
+    /// `source` in the run's lifetime. A cursor over a file opened here is
+    /// re-pointed at that file; any other file is copied into the arena.
+    pub(crate) fn persist(&mut self, source: &TokenSource<'_>) -> TokenSource<'pp> {
+        match source {
+            | TokenSource::File(cursor) => {
+                let registered = cursor
+                    .file
+                    .registration
+                    .and_then(|index| self.files.get(index as usize).copied())
+                    .filter(|file| std::ptr::addr_eq(*file, cursor.file));
+                let file = match registered {
+                    | Some(file) => file,
+                    | None => {
+                        let copy = cursor.file.copy_into(self.arena);
+                        self.register(copy)
+                    },
+                };
+                TokenSource::File(cursor.with_file(file))
+            },
+            | TokenSource::Replay(cursor) => TokenSource::Replay(cursor.clone()),
         }
     }
 }

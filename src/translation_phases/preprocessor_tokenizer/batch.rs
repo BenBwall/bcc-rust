@@ -354,39 +354,125 @@ enum LexDiagnostic {
 /// Every preprocessing token of one source buffer, stored as parallel
 /// arrays. Entry `i` ends where entry `i + 1` starts. Other-token provenance
 /// can exclude deleted splices without changing these shared boundaries.
-pub(super) struct LexedFile {
+///
+/// Lexing fills growable columns; the finished file keeps exact-size copies
+/// in the caller's arena, so an open file holds no storage of its own.
+pub(super) struct LexedFile<'a> {
     pub(super) source_file_index: u32,
-    kinds: RegionVec<Option<PreprocessorTokenType>>,
-    contents: RegionVec<StringCacheId>,
-    indices: RegionVec<u32>,
-    lines: RegionVec<u32>,
-    columns: RegionVec<u32>,
+    /// The file's index in the preprocessor's registry of opened files, if
+    /// it was opened there rather than for temporary use.
+    pub(super) registration: Option<u32>,
+    kinds: &'a [Option<PreprocessorTokenType>],
+    contents: &'a [StringCacheId],
+    indices: &'a [u32],
+    lines: &'a [u32],
+    columns: &'a [u32],
     /// Where the last entry ends.
     end_of_tokens: SourcePosition,
     /// Where reading past the last entry stands: past any trailing splices.
     eof: SourcePosition,
     /// Sorted by entry.
-    diagnostics: Vec<(u32, LexDiagnostic)>,
+    diagnostics: &'a [(u32, LexDiagnostic)],
     /// Exact character spans for Other tokens, sorted by entry. Normal token
     /// spans still use the adjacent entry boundaries above.
-    other_locations: Vec<(u32, SourceVector)>,
+    other_locations: &'a [(u32, SourceVector)],
     /// The entry for a missing final newline read at the start of a token.
     final_newline_entry: Option<usize>,
     /// Entries whose lexing read the supplied final newline while looking
     /// ahead. Sorted, and empty unless the final newline is missing.
-    final_newline_readers: Vec<u32>,
+    final_newline_readers: &'a [u32],
     lacks_final_newline: bool,
     /// The splice that escapes the source's final newline, with its line
     /// given before any `#line` renumbering.
     escaped_final_newline: Option<SourceVector>,
     /// Entries whose lexing read the end of input. Sorted, and empty unless
     /// the final newline is escaped.
-    end_readers: Vec<u32>,
+    end_readers: &'a [u32],
 }
 
-impl LexedFile {
-    /// Runs translation phases 1 through 3 over all of `source`.
-    pub(super) fn lex(context: &mut Context<'_>, source_file_index: u32, source: &str) -> Self {
+/// A [`LexedFile`] while its entries are being lexed.
+struct LexingFile {
+    kinds:                 RegionVec<Option<PreprocessorTokenType>>,
+    contents:              RegionVec<StringCacheId>,
+    indices:               RegionVec<u32>,
+    lines:                 RegionVec<u32>,
+    columns:               RegionVec<u32>,
+    end_of_tokens:         SourcePosition,
+    eof:                   SourcePosition,
+    diagnostics:           Vec<(u32, LexDiagnostic)>,
+    other_locations:       Vec<(u32, SourceVector)>,
+    final_newline_entry:   Option<usize>,
+    final_newline_readers: Vec<u32>,
+    lacks_final_newline:   bool,
+    end_readers:           Vec<u32>,
+}
+
+impl LexingFile {
+    /// Copies the finished entries into `arena`. Each growable column is
+    /// released as soon as it is copied, so lexing holds at most one extra
+    /// column at a time.
+    fn finish(
+        self,
+        arena: &Bump,
+        source_file_index: u32,
+        escaped_final_newline: Option<SourceVector>,
+    ) -> LexedFile<'_> {
+        let Self {
+            kinds,
+            contents,
+            indices,
+            lines,
+            columns,
+            end_of_tokens,
+            eof,
+            diagnostics,
+            other_locations,
+            final_newline_entry,
+            final_newline_readers,
+            lacks_final_newline,
+            end_readers,
+        } = self;
+        // Release each column's region as soon as it is copied.
+        let kinds_copy = arena.alloc_slice_copy(&kinds);
+        drop(kinds);
+        let contents_copy = arena.alloc_slice_copy(&contents);
+        drop(contents);
+        let indices_copy = arena.alloc_slice_copy(&indices);
+        drop(indices);
+        let lines_copy = arena.alloc_slice_copy(&lines);
+        drop(lines);
+        let columns_copy = arena.alloc_slice_copy(&columns);
+        drop(columns);
+        LexedFile {
+            source_file_index,
+            registration: None,
+            kinds: kinds_copy,
+            contents: contents_copy,
+            indices: indices_copy,
+            lines: lines_copy,
+            columns: columns_copy,
+            end_of_tokens,
+            eof,
+            diagnostics: arena.alloc_slice_fill_iter(diagnostics),
+            other_locations: arena.alloc_slice_fill_iter(other_locations),
+            final_newline_entry,
+            final_newline_readers: arena.alloc_slice_copy(&final_newline_readers),
+            lacks_final_newline,
+            escaped_final_newline,
+            end_readers: arena.alloc_slice_copy(&end_readers),
+        }
+    }
+}
+
+impl<'a> LexedFile<'a> {
+    /// Runs translation phases 1 through 3 over all of `source`, keeping the
+    /// result in `arena`.
+    pub(super) fn lex(
+        context: &mut Context<'_>,
+        arena: &'a Bump,
+        source_file_index: u32,
+        source: &str,
+    ) -> Self {
         let (text, remaps) = splice(source);
         let terminal_splice = terminal_splice_length(source);
         let file = Lexer::new(context, &text, &remaps, source.is_empty())
@@ -404,10 +490,29 @@ impl LexedFile {
                 length: source_offset(length),
             }
         });
-        Self {
-            source_file_index,
-            escaped_final_newline,
-            ..file
+        file.finish(arena, source_file_index, escaped_final_newline)
+    }
+
+    /// A copy of this file in `arena`, outside any registry.
+    pub(super) fn copy_into<'b>(&self, arena: &'b Bump) -> LexedFile<'b> {
+        LexedFile {
+            source_file_index:     self.source_file_index,
+            registration:          None,
+            kinds:                 arena.alloc_slice_copy(self.kinds),
+            contents:              arena.alloc_slice_copy(self.contents),
+            indices:               arena.alloc_slice_copy(self.indices),
+            lines:                 arena.alloc_slice_copy(self.lines),
+            columns:               arena.alloc_slice_copy(self.columns),
+            end_of_tokens:         self.end_of_tokens,
+            eof:                   self.eof,
+            diagnostics:           arena.alloc_slice_fill_iter(self.diagnostics.iter().cloned()),
+            other_locations:       arena
+                .alloc_slice_fill_iter(self.other_locations.iter().cloned()),
+            final_newline_entry:   self.final_newline_entry,
+            final_newline_readers: arena.alloc_slice_copy(self.final_newline_readers),
+            lacks_final_newline:   self.lacks_final_newline,
+            escaped_final_newline: self.escaped_final_newline.clone(),
+            end_readers:           arena.alloc_slice_copy(self.end_readers),
         }
     }
 
@@ -639,7 +744,7 @@ struct Lexer<'a, 'tu> {
     /// Diagnostics raised while lexing the current token, in order.
     pending:             Vec<LexDiagnostic>,
     scratch:             String,
-    file:                LexedFile,
+    file:                LexingFile,
 }
 
 impl<'a, 'tu> Lexer<'a, 'tu> {
@@ -668,8 +773,7 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
             read_final_newline: false,
             pending: Vec::new(),
             scratch: String::new(),
-            file: LexedFile {
-                source_file_index: 0,
+            file: LexingFile {
                 kinds: RegionVec::with_capacity_in(capacity, Bump::new()),
                 contents: RegionVec::with_capacity_in(capacity, Bump::new()),
                 indices: RegionVec::with_capacity_in(capacity, Bump::new()),
@@ -682,7 +786,6 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
                 final_newline_entry: None,
                 final_newline_readers: Vec::new(),
                 lacks_final_newline,
-                escaped_final_newline: None,
                 end_readers: Vec::new(),
             },
         }
@@ -755,7 +858,7 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
         tracker.advance_past_deletions(self.bytes.len())
     }
 
-    fn run(mut self) -> LexedFile {
+    fn run(mut self) -> LexingFile {
         loop {
             let start = self.pos;
             let position = self.tracker.advance(start);

@@ -42,7 +42,6 @@ use crate::{
             LogicalCharacter,
             PreprocessorToken,
             PreprocessorTokenType,
-            TokenSource,
             logical_characters,
             position_after,
         },
@@ -883,7 +882,10 @@ impl Expander<'_, '_, '_> {
         }) else {
             return;
         };
-        let tokenizer = TokenSource::new(context, header_source_index, header_string);
+        let tokenizer = self
+            .state
+            .lexed_files
+            .open(context, header_source_index, header_string);
         self.push_tokenizer_frame(
             context,
             TokenizerFrame {
@@ -1041,7 +1043,7 @@ impl Expander<'_, '_, '_> {
             drop(self.state.macro_definitions.insert(
                 name.identifier_id(context),
                 MacroDefinition::FunctionLike {
-                    tokenizer,
+                    tokenizer: self.state.lexed_files.persist(&tokenizer),
                     argument_names: self.state.arena.alloc_slice_copy(&argument_names),
                     is_variadic,
                 },
@@ -1065,7 +1067,7 @@ impl Expander<'_, '_, '_> {
             drop(self.state.macro_definitions.insert(
                 name.identifier_id(context),
                 MacroDefinition::ObjectLike {
-                    tokenizer: tokenizer.clone(),
+                    tokenizer: self.state.lexed_files.persist(&tokenizer),
                 },
             ));
         }

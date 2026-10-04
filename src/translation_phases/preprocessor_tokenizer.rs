@@ -12,7 +12,10 @@ pub(crate) use batch::{
     logical_characters,
     position_after,
 };
-pub(crate) use token_source::TokenSource;
+pub(crate) use token_source::{
+    LexedFiles,
+    TokenSource,
+};
 
 use super::{
     Context,

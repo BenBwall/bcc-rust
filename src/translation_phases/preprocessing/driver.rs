@@ -56,7 +56,7 @@ use crate::{
 };
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum TokenizerFrameType {
+pub(crate) enum TokenizerFrameType<'a> {
     /// Remainder of already substituted tokens in a boundary-crossing call.
     Rescan,
     SourceFile {
@@ -74,11 +74,11 @@ pub(crate) enum TokenizerFrameType {
         invocation:     SourceVector,
         invocation_end: SourceVector,
         name:           StringCacheId,
-        arguments:      Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
+        arguments:      Rc<HashMap<StringCacheId, FunctionLikeMacroArgument<'a>>>,
         is_variadic:    bool,
     },
     FunctionLikeMacroArgument {
-        argument:            Box<FunctionLikeMacroArgument>,
+        argument:            Box<FunctionLikeMacroArgument<'a>>,
         /// The parenthesis depth within an argument read from its invocation,
         /// or `None` for a replayed operand, which ends with its tokens.
         paren_depth:         Option<usize>,
@@ -87,9 +87,9 @@ pub(crate) enum TokenizerFrameType {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct TokenizerFrame {
-    pub(super) frame_type: TokenizerFrameType,
-    pub(super) tokenizer:  TokenSource,
+pub(crate) struct TokenizerFrame<'a> {
+    pub(super) frame_type: TokenizerFrameType<'a>,
+    pub(super) tokenizer:  TokenSource<'a>,
 }
 
 /// The date and time of translation, spelled as C99 §6.10.8p1 requires.
@@ -140,7 +140,7 @@ pub(super) fn string_literal_spelling(value: &str) -> String {
     clippy::needless_continue,
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
 )]
-impl Expander<'_, '_, '_> {
+impl<'x> Expander<'_, '_, 'x> {
     pub(super) fn expansion_end(&self) -> Option<SourceVector> {
         for frame in self.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
@@ -237,7 +237,7 @@ impl Expander<'_, '_, '_> {
     pub(super) fn push_tokenizer_frame(
         &mut self,
         _context: &mut Context<'_>,
-        frame: TokenizerFrame,
+        frame: TokenizerFrame<'x>,
     ) {
         self.tokenizer_stack.last_mut().unwrap().tokenizer = take(&mut self.tokenizer);
         self.tokenizer = frame.tokenizer.clone();
@@ -913,7 +913,9 @@ impl Expander<'_, '_, '_> {
                             // most recent one.
                             let pragma_string = context
                                 .add_synthetic_source_file(Path::new("<pragma string>"), &input);
-                            self.tokenizer = TokenSource::new(context, pragma_string, &input);
+                            self.tokenizer =
+                                TokenSource::new(context, self.scratch, pragma_string, &input);
+                            self.pushed_frames += 1;
                             _ = self.parse_pragma_directive(context, string_token);
                             if self.tokenizer.next_item(context).is_some() {
                                 let source_vectors = self.current_location(context);
@@ -953,7 +955,7 @@ impl Expander<'_, '_, '_> {
     }
 
     pub(super) fn next_ignore_whitespace(
-        tokenizer: &mut TokenSource,
+        tokenizer: &mut TokenSource<'_>,
         context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         loop {
@@ -966,7 +968,7 @@ impl Expander<'_, '_, '_> {
     }
 
     pub(super) fn next_treat_newlines_as_whitespace(
-        tokenizer: &mut TokenSource,
+        tokenizer: &mut TokenSource<'_>,
         context: &mut Context<'_>,
         last_was_whitespace: &mut bool,
     ) -> Option<PreprocessorToken> {

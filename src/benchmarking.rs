@@ -192,7 +192,8 @@ pub fn lex(input: BenchmarkInput) -> usize {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
     let file = context.intern_source_file(Path::new("<input>"));
-    let mut tokens = TokenSource::new(&mut context, file, input.source());
+    let pp = Bump::new();
+    let mut tokens = TokenSource::new(&mut context, &pp, file, input.source());
     let mut count = 0;
     while tokens.next_item(&mut context).is_some() {
         count += 1;

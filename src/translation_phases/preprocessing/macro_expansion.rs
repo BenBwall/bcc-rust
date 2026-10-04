@@ -50,11 +50,11 @@ use crate::{
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum MacroDefinition<'pp> {
     ObjectLike {
-        tokenizer: TokenSource,
+        tokenizer: TokenSource<'pp>,
     },
     FunctionLike {
         argument_names: &'pp [StringCacheId],
-        tokenizer:      TokenSource,
+        tokenizer:      TokenSource<'pp>,
         is_variadic:    bool,
     },
     BuiltIn,
@@ -68,20 +68,21 @@ pub(crate) enum HashHash {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) struct FunctionLikeMacroArgument {
+pub(crate) struct FunctionLikeMacroArgument<'a> {
     pub(super) name:                StringCacheId,
-    pub(super) tokenizer:           TokenSource,
-    pub(super) enclosing_arguments: Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>>,
+    pub(super) tokenizer:           TokenSource<'a>,
+    pub(super) enclosing_arguments:
+        Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument<'a>>>>,
     pub(super) disabled_macros:     Rc<[StringCacheId]>,
     /// Shared once-only argument prescan; raw #/## operands bypass it.
-    pub(super) expanded:            Rc<OnceCell<TokenSource>>,
+    pub(super) expanded:            Rc<OnceCell<TokenSource<'a>>>,
 }
 
 /// Transactional logical cursor over replacement lists and their continuations.
 /// Exhausted frames remain present until normal rescan unwinds them, preserving
 /// disabled macro names. A failed lookahead changes no real source cursor.
 struct MacroCallCursor<'x> {
-    frames:       ArenaVec<'x, TokenizerFrame>,
+    frames:       ArenaVec<'x, TokenizerFrame<'x>>,
     index:        Option<usize>,
     floor:        usize,
     /// Consumed prefix stays in place until the queue empties.
@@ -108,7 +109,7 @@ impl<'x> MacroCallCursor<'x> {
 
     fn next(
         &mut self,
-        preprocessor: &mut Expander<'_, '_, '_>,
+        preprocessor: &mut Expander<'_, '_, 'x>,
         context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         loop {
@@ -255,7 +256,7 @@ impl<'x> MacroCallCursor<'x> {
 
     fn commit(
         mut self,
-        preprocessor: &mut Expander<'_, '_, '_>,
+        preprocessor: &mut Expander<'_, '_, 'x>,
         context: &Context<'_>,
         location: crate::translation_phases::SourceVector,
     ) {
@@ -280,7 +281,7 @@ impl<'x> MacroCallCursor<'x> {
     clippy::needless_continue,
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
 )]
-impl Expander<'_, '_, '_> {
+impl<'x> Expander<'_, '_, 'x> {
     /// Capture an invocation whose opening, arguments, or closing delimiter
     /// can come from different replacement/argument/source frames.
     pub(super) fn capture_cross_frame_call(
@@ -290,7 +291,7 @@ impl Expander<'_, '_, '_> {
         names: &[StringCacheId],
         variadic: bool,
     ) -> Option<(
-        HashMap<StringCacheId, FunctionLikeMacroArgument>,
+        HashMap<StringCacheId, FunctionLikeMacroArgument<'x>>,
         crate::translation_phases::SourceVector,
     )> {
         let mut cursor = MacroCallCursor::new(self);
@@ -409,7 +410,7 @@ impl Expander<'_, '_, '_> {
     pub(super) fn get_arguments(
         &self,
         _context: &Context<'_>,
-    ) -> Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>> {
+    ) -> Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument<'x>>>> {
         match self.tokenizer_stack.last().map(|frame| &frame.frame_type) {
             // Argument tokens belong to the invocation's caller. Looking them
             // up in the callee's map can make a same-named parameter expand itself.
@@ -502,7 +503,7 @@ impl Expander<'_, '_, '_> {
         &mut self,
         context: &mut Context<'_>,
         token: PreprocessorToken,
-    ) -> Option<TokenizerFrame> {
+    ) -> Option<TokenizerFrame<'x>> {
         let arguments = self.get_arguments(context)?;
         let argument = arguments.get(&token.identifier_id(context))?.clone();
         // Prescan is isolated from the replacement list. Rescanning the result
@@ -520,8 +521,8 @@ impl Expander<'_, '_, '_> {
         &mut self,
         context: &mut Context<'_>,
         token: PreprocessorToken,
-        argument: &FunctionLikeMacroArgument,
-    ) -> TokenSource {
+        argument: &FunctionLikeMacroArgument<'x>,
+    ) -> TokenSource<'x> {
         if let Some(tokenizer) = argument.expanded.get() {
             return tokenizer.clone();
         }
@@ -540,7 +541,7 @@ impl Expander<'_, '_, '_> {
         &mut self,
         context: &mut Context<'_>,
         token: PreprocessorToken,
-    ) -> Option<TokenizerFrame> {
+    ) -> Option<TokenizerFrame<'x>> {
         if let Some(arguments) = self.get_arguments(context)
             && let Some(arg) = arguments.get(&token.identifier_id(context))
         {
@@ -573,7 +574,7 @@ impl Expander<'_, '_, '_> {
         &mut self,
         context: &mut Context<'_>,
         token: PreprocessorToken,
-    ) -> Option<TokenizerFrame> {
+    ) -> Option<TokenizerFrame<'x>> {
         let mut frame = self.raw_macro_argument_frame(context, token)?;
         let TokenizerFrameType::FunctionLikeMacroArgument {
             argument,
@@ -611,7 +612,7 @@ impl Expander<'_, '_, '_> {
     fn replace_operand_argument(
         &mut self,
         context: &mut Context<'_>,
-        argument: &FunctionLikeMacroArgument,
+        argument: &FunctionLikeMacroArgument<'x>,
     ) -> Vec<PreprocessorToken> {
         self.read_argument(context, argument, false)
     }
@@ -619,7 +620,7 @@ impl Expander<'_, '_, '_> {
     fn read_argument(
         &mut self,
         context: &mut Context<'_>,
-        argument: &FunctionLikeMacroArgument,
+        argument: &FunctionLikeMacroArgument<'x>,
         expand: bool,
     ) -> Vec<PreprocessorToken> {
         let hash_hash_stack = replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));

@@ -11,7 +11,10 @@ use std::path::{
 
 use proptest::prelude::*;
 
-use super::TokenSource;
+use super::{
+    LexedFiles,
+    TokenSource,
+};
 use crate::{
     cli::describe_token,
     diagnostics::{
@@ -68,24 +71,25 @@ fn walk(source: &str, steps: &[Step]) -> Vec<String> {
     let file = context.intern_source_file(Path::new("<test>"));
     let source = SharedString::from(source.to_owned());
     context.record_source_text(file, &source);
-    let mut tokens = TokenSource::new(&mut context, file, &source);
+    let mut tokens = TokenSource::new(&mut context, &tu, file, &source);
     let mut saved: Vec<SourcePosition> = Vec::new();
     let mut events = Vec::new();
-    let read = |tokens: &mut TokenSource, context: &mut Context<'_>, events: &mut Vec<String>| {
-        let token = tokens.next_item(context);
-        drain_diagnostics(context, events);
-        events.push(match token {
-            | Some(token) => format!(
-                "{:?} {:?} {:?}",
-                token.kind,
-                context.string_cache.at(token.contents),
-                context.get_source_vectors(token.source_vectors),
-            ),
-            | None => "end".to_owned(),
-        });
-        events.push(format!("at {:?}", tokens.position(context)));
-        token.is_some()
-    };
+    let read =
+        |tokens: &mut TokenSource<'_>, context: &mut Context<'_>, events: &mut Vec<String>| {
+            let token = tokens.next_item(context);
+            drain_diagnostics(context, events);
+            events.push(match token {
+                | Some(token) => format!(
+                    "{:?} {:?} {:?}",
+                    token.kind,
+                    context.string_cache.at(token.contents),
+                    context.get_source_vectors(token.source_vectors),
+                ),
+                | None => "end".to_owned(),
+            });
+            events.push(format!("at {:?}", tokens.position(context)));
+            token.is_some()
+        };
     for step in steps {
         match step {
             | Step::Next => _ = read(&mut tokens, &mut context, &mut events),
@@ -502,7 +506,7 @@ fn physically_empty_source_has_no_missing_final_newline() {
     let file = context.intern_source_file(Path::new("<test>"));
     let source = SharedString::from(String::new());
     context.record_source_text(file, &source);
-    let mut tokens = TokenSource::new(&mut context, file, &source);
+    let mut tokens = TokenSource::new(&mut context, &tu, file, &source);
     assert!(tokens.next_item(&mut context).is_none(), "");
     assert!(context.take_pending_errors().is_empty(), "");
     snapshot.walk("", &[]);
@@ -544,7 +548,7 @@ fn unterminated_block_comments_report_the_actual_opener() {
         let file = context.intern_source_file(Path::new("<test>"));
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
-        let mut tokens = TokenSource::new(&mut context, file, &text);
+        let mut tokens = TokenSource::new(&mut context, &tu, file, &text);
         let mut spellings = Vec::new();
         while let Some(token) = tokens.next_item(&mut context) {
             spellings.push(context.string_cache.at(token.contents).to_owned());
@@ -598,7 +602,7 @@ fn terminal_spliced_newlines_report_the_actual_last_splice() {
         let file = context.intern_source_file(Path::new("<test>"));
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
-        let mut tokens = TokenSource::new(&mut context, file, &text);
+        let mut tokens = TokenSource::new(&mut context, &tu, file, &text);
         while tokens.next_item(&mut context).is_some() {}
         let errors = context.take_pending_errors();
         assert_eq!(errors.len(), 1, "{source:?}: {errors:#?}");
@@ -648,7 +652,7 @@ fn terminal_splice_warning_is_deferred_until_the_tail_is_read() {
     let file = context.intern_source_file(Path::new("<test>"));
     let text = SharedString::from("\n\\\n".to_owned());
     context.record_source_text(file, &text);
-    let mut tokens = TokenSource::new(&mut context, file, &text);
+    let mut tokens = TokenSource::new(&mut context, &tu, file, &text);
     assert!(context.take_pending_errors().is_empty());
     let first = tokens.next_item(&mut context).unwrap();
     assert_eq!(context.string_cache.at(first.contents), "\n");
@@ -666,7 +670,7 @@ fn cloned_terminal_splice_cursors_keep_independent_warning_state() {
         let file = context.intern_source_file(Path::new("<test>"));
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
-        let mut original = TokenSource::new(&mut context, file, &text);
+        let mut original = TokenSource::new(&mut context, &tu, file, &text);
         let mut cloned = original.clone();
         while original.next_item(&mut context).is_some() {}
         assert_eq!(context.take_pending_errors().len(), 1);
@@ -676,4 +680,38 @@ fn cloned_terminal_splice_cursors_keep_independent_warning_state() {
         assert!(cloned.next_item(&mut context).is_none());
         assert!(context.take_pending_errors().is_empty());
     }
+}
+
+#[test]
+fn persisted_sources_resume_where_their_cursor_stood() {
+    let spellings = |source: &mut TokenSource<'_>, context: &mut Context<'_>| {
+        let mut spellings = Vec::new();
+        while let Some(token) = source.next_item(context) {
+            spellings.push(context.string_cache.at(token.contents).to_owned());
+        }
+        spellings
+    };
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let file = context.intern_source_file(Path::new("<test>"));
+    let text = "a b\nc\n";
+    context.record_source_text(file, text);
+    let pp = crate::util::bump::Bump::new();
+    let mut files = LexedFiles::new_in(&pp);
+
+    // A registered file is shared rather than copied.
+    let mut opened = files.open(&mut context, file, text);
+    assert!(opened.next_item(&mut context).is_some());
+    assert_eq!(files.persist(&opened), opened);
+
+    // A file lexed elsewhere is copied with its reading state.
+    let scratch = crate::util::bump::Bump::new();
+    let mut temporary = TokenSource::new(&mut context, &scratch, file, text);
+    assert!(temporary.next_item(&mut context).is_some());
+    let mut persisted = files.persist(&temporary);
+    assert_ne!(persisted, temporary);
+    let expected = spellings(&mut temporary, &mut context);
+    drop(scratch);
+    assert_eq!(spellings(&mut persisted, &mut context), expected);
+    assert_eq!(expected, [" ", "b", "\n", "c", "\n"]);
 }
