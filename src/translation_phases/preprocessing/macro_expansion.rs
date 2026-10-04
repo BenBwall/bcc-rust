@@ -88,7 +88,7 @@ struct MacroCallCursor {
 }
 
 impl MacroCallCursor {
-    fn new(preprocessor: &Preprocessor) -> Self {
+    fn new(preprocessor: &Preprocessor<'_>) -> Self {
         let mut frames = preprocessor.tokenizer_stack.clone();
         frames.last_mut().unwrap().tokenizer = preprocessor.tokenizer.clone();
         Self {
@@ -104,7 +104,7 @@ impl MacroCallCursor {
 
     fn next(
         &mut self,
-        preprocessor: &mut Preprocessor,
+        preprocessor: &mut Preprocessor<'_>,
         context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         loop {
@@ -249,7 +249,7 @@ impl MacroCallCursor {
 
     fn commit(
         mut self,
-        preprocessor: &mut Preprocessor,
+        preprocessor: &mut Preprocessor<'_>,
         context: &Context<'_>,
         location: crate::translation_phases::SourceVector,
     ) {
@@ -273,7 +273,7 @@ impl MacroCallCursor {
     clippy::needless_continue,
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
 )]
-impl Preprocessor {
+impl Preprocessor<'_> {
     /// Capture an invocation whose opening, arguments, or closing delimiter
     /// can come from different replacement/argument/source frames.
     pub(super) fn capture_cross_frame_call(

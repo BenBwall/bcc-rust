@@ -132,7 +132,7 @@ pub(super) fn string_literal_spelling(value: &str) -> String {
     clippy::needless_continue,
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
 )]
-impl Preprocessor {
+impl Preprocessor<'_> {
     pub(super) fn expansion_end(&self) -> Option<SourceVector> {
         for frame in self.tokenizer_stack.iter().rev() {
             match &frame.frame_type {

@@ -54,7 +54,7 @@ struct Parsed<'a, 'tu, 'tok> {
     parser:  Parser<'tok>,
     context: &'a mut Context<'tu>,
     items:   Vec<ExternalDeclaration>,
-    errors:  Vec<TranslationError>,
+    errors:  Vec<TranslationError<'tu>>,
     source:  String,
 }
 

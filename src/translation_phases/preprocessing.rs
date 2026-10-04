@@ -95,7 +95,7 @@ enum OutputPurpose {
 }
 
 #[derive(Debug)]
-pub(crate) struct Preprocessor {
+pub(crate) struct Preprocessor<'tu> {
     pub(crate) tokenizer:       TokenSource,
     pub(crate) tokenizer_stack: Vec<TokenizerFrame>,
     pub(crate) hash_hash_stack: Vec<HashHash>,
@@ -123,7 +123,7 @@ pub(crate) struct Preprocessor {
     empty_disabled_macros: std::rc::Rc<[StringCacheId]>,
     expression_parser:     PreprocessorExpressionParser,
     pending_parser_token:  Option<Token>,
-    pending_parser_errors: Vec<TranslationError>,
+    pending_parser_errors: Vec<TranslationError<'tu>>,
     /// Parser-supplied provenance budget, checked within string concatenation
     /// as well as between completed output tokens.
     source_segment_limit:  usize,
@@ -132,42 +132,42 @@ pub(crate) struct Preprocessor {
     translation_timestamp: Option<TranslationTimestamp>,
 }
 
-impl GetPosition for Preprocessor {
+impl GetPosition for Preprocessor<'_> {
     #[inline(always)]
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.tokenizer.position(context)
     }
 }
 
-impl SetPosition for Preprocessor {
+impl SetPosition for Preprocessor<'_> {
     #[inline(always)]
     fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
         self.tokenizer.set_position(context, position);
     }
 }
 
-impl GetSourceFileIndex for Preprocessor {
+impl GetSourceFileIndex for Preprocessor<'_> {
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         self.tokenizer.source_file_index()
     }
 }
 
-impl SetSourceFileIndex for Preprocessor {
+impl SetSourceFileIndex for Preprocessor<'_> {
     fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
         self.tokenizer
             .set_source_file_index(context, source_file_index);
     }
 }
 
-impl Preprocessor {
+impl<'tu> Preprocessor<'tu> {
     pub(crate) fn prepare_for_parsing(&mut self) {
         self.output_purpose = OutputPurpose::Parsing;
     }
 
     #[cfg(test)]
     pub(crate) fn new(
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         source_name: Box<Path>,
         source: &str,
         quote_include_directories: SharedVec<PathBuf>,
@@ -187,7 +187,7 @@ impl Preprocessor {
         preprocessor
     }
 
-    pub(crate) fn new_with_arena_source<'tu>(
+    pub(crate) fn new_with_arena_source(
         context: &mut Context<'tu>,
         source_name: &Path,
         source: &'tu str,
@@ -204,7 +204,7 @@ impl Preprocessor {
         )
     }
 
-    fn new_inner<'tu>(
+    fn new_inner(
         context: &mut Context<'tu>,
         source_name: &Path,
         source: &str,
@@ -255,7 +255,7 @@ impl Preprocessor {
         }
     }
 
-    fn next_parser_token(&mut self, context: &mut Context<'_>) -> Option<Token> {
+    fn next_parser_token(&mut self, context: &mut Context<'tu>) -> Option<Token> {
         context.append_pending_errors(take(&mut self.pending_parser_errors));
         if let Some(token) = self.pending_parser_token.take() {
             return Some(token);
@@ -288,7 +288,7 @@ impl Preprocessor {
     /// Adjacent-string concatenation may already have mapped a later token or
     /// EOF diagnostic. Source-vector compaction therefore belongs to the
     /// producer that owns that buffered work, not to each iterator consumer.
-    pub(crate) fn next_iterator_item(&mut self, context: &mut Context<'_>) -> Option<Token> {
+    pub(crate) fn next_iterator_item(&mut self, context: &mut Context<'tu>) -> Option<Token> {
         if self.next_iterator_item_compacts() {
             context.compact_preprocessor_vectors();
         }
@@ -300,7 +300,7 @@ impl Preprocessor {
     #[cfg(test)]
     pub(crate) fn preprocess_all(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         tok: &Bump,
     ) -> RegionVec<Token> {
         self.preprocess_into_arena(context, usize::MAX, tok).0
@@ -311,7 +311,7 @@ impl Preprocessor {
     /// compaction of preprocessor working storage between tokens.
     pub(crate) fn preprocess_into_arena(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         source_segment_limit: usize,
         _tok: &Bump,
     ) -> (RegionVec<Token>, Option<Token>) {
@@ -326,7 +326,7 @@ impl Preprocessor {
     /// budget, letting the parser report the existing resource diagnostic.
     fn collect_with_limit(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         source_segment_limit: usize,
         mut push: impl FnMut(Token),
     ) -> Option<Token> {
@@ -361,10 +361,10 @@ impl Preprocessor {
     }
 }
 
-impl TranslationPhase for Preprocessor {
+impl<'tu> TranslationPhase<'tu> for Preprocessor<'tu> {
     type Item = Token;
 
-    fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item> {
+    fn next_item(&mut self, context: &mut Context<'tu>) -> Option<Self::Item> {
         let token = self.next_parser_token(context)?;
         Some(self.concatenate_adjacent_strings(context, token))
     }

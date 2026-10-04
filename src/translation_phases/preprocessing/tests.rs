@@ -51,7 +51,7 @@ use crate::{
 fn preprocess_with_configuration<R>(
     source: &str,
     configuration: CompilerConfiguration,
-    inspect: impl FnOnce(Vec<String>, &[TranslationError]) -> R,
+    inspect: impl FnOnce(Vec<String>, &[TranslationError<'_>]) -> R,
 ) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::with_configuration(&tu, configuration);
@@ -75,7 +75,10 @@ fn preprocess_with_configuration<R>(
     inspect(identifiers, &errors)
 }
 
-fn preprocess<R>(source: &str, inspect: impl FnOnce(Vec<String>, &[TranslationError]) -> R) -> R {
+fn preprocess<R>(
+    source: &str,
+    inspect: impl FnOnce(Vec<String>, &[TranslationError<'_>]) -> R,
+) -> R {
     preprocess_with_configuration(source, CompilerConfiguration::default(), inspect)
 }
 
@@ -650,7 +653,7 @@ fn quoted_includes_search_beside_the_including_file_not_the_working_directory() 
 
 /// Preprocesses `source`, spelling each token as written in C source with a
 /// space between tokens.
-fn expansion_of<R>(source: &str, inspect: impl FnOnce(String, &[TranslationError]) -> R) -> R {
+fn expansion_of<R>(source: &str, inspect: impl FnOnce(String, &[TranslationError<'_>]) -> R) -> R {
     with_tokens_of(source, "<test>", |tokens, context| {
         let spellings: Vec<String> = tokens
             .iter()

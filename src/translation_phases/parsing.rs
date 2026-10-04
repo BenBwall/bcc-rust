@@ -223,7 +223,7 @@ impl SetSourceFileIndex for Parser<'_> {
     }
 }
 
-impl TranslationPhase for Parser<'_> {
+impl TranslationPhase<'_> for Parser<'_> {
     type Item = ExternalDeclaration;
 
     fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item> {

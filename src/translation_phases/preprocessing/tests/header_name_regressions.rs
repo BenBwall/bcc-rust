@@ -80,7 +80,7 @@ fn backslash_header() -> PathBuf {
 
 struct Outcome<'a, 'tu> {
     identifiers: Vec<String>,
-    errors:      Vec<TranslationError>,
+    errors:      Vec<TranslationError<'tu>>,
     context:     &'a mut Context<'tu>,
 }
 

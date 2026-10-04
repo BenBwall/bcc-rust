@@ -44,10 +44,10 @@ use crate::{
     util::packed::Packed,
 };
 
-impl Preprocessor {
+impl<'tu> Preprocessor<'tu> {
     pub(super) fn concatenate_adjacent_strings(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         first: Token,
     ) -> Token {
         let TokenType::String(first_kind) = first.kind else {

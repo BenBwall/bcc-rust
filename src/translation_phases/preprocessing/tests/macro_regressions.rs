@@ -20,7 +20,7 @@ use crate::{
     util::shared::SharedVec,
 };
 
-fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError]) -> R) -> R {
+fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError<'_>]) -> R) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();

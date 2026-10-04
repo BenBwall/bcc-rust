@@ -41,7 +41,7 @@ use crate::diagnostics::{
 };
 
 #[derive(Error, Debug)]
-pub(crate) enum TranslationError {
+pub(crate) enum TranslationError<'tu> {
     #[error(transparent)]
     InitialProcessing(InitialProcessorError),
     #[error(transparent)]
@@ -49,10 +49,10 @@ pub(crate) enum TranslationError {
     #[error(transparent)]
     Preprocessing(PreprocessorError),
     #[error(transparent)]
-    Parsing(ParserError),
+    Parsing(ParserError<'tu>),
 }
 
-impl TranslationError {
+impl TranslationError<'_> {
     /// Visits every provenance range this diagnostic reads from a context
     /// arena. Owned source vectors are not visited.
     pub(crate) fn for_each_source_vectors_mut(
@@ -67,7 +67,7 @@ impl TranslationError {
     }
 }
 
-impl GetSeverity for TranslationError {
+impl GetSeverity for TranslationError<'_> {
     fn severity(&self) -> ErrorSeverity {
         match self {
             | Self::InitialProcessing(error) => error.severity(),
@@ -78,7 +78,7 @@ impl GetSeverity for TranslationError {
     }
 }
 
-impl ToDiagnostic for TranslationError {
+impl ToDiagnostic for TranslationError<'_> {
     fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic {
         match self {
             | Self::InitialProcessing(error) => error.to_diagnostic(context, source),
@@ -89,7 +89,7 @@ impl ToDiagnostic for TranslationError {
     }
 }
 
-impl GetPosition for TranslationError {
+impl GetPosition for TranslationError<'_> {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         match self {
             | Self::InitialProcessing(error) => error.position(context),
@@ -100,7 +100,7 @@ impl GetPosition for TranslationError {
     }
 }
 
-impl GetSourceVectors for TranslationError {
+impl GetSourceVectors for TranslationError<'_> {
     fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors {
         match self {
             | Self::InitialProcessing(error) => error.source_vectors(context),
@@ -251,9 +251,9 @@ impl GetPosition for Infallible {
     }
 }
 
-pub(crate) trait TranslationPhase:
+pub(crate) trait TranslationPhase<'tu>:
     GetPosition + SetPosition + GetSourceFileIndex + SetSourceFileIndex
 {
     type Item;
-    fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item>;
+    fn next_item(&mut self, context: &mut Context<'tu>) -> Option<Self::Item>;
 }

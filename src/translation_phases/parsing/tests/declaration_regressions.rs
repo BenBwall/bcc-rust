@@ -471,12 +471,13 @@ fn head_semicolon_suggestion_keeps_an_existing_insertion_point() {
             })
             .collect();
         assert_eq!(parsing_errors.len(), 2, "{:#?}", parsed.errors);
-        let explains_head = |error: &crate::translation_phases::parsing::errors::ParserError| {
-            error
-                .related
-                .iter()
-                .any(|related| related.message.contains("not a function"))
-        };
+        let explains_head =
+            |error: &crate::translation_phases::parsing::errors::ParserError<'_>| {
+                error
+                    .related
+                    .iter()
+                    .any(|related| related.message.contains("not a function"))
+            };
         // `int q` lacks its own `;`: that diagnostic keeps its insertion point
         // after `q`, and the head explanation moves to the next diagnostic.
         assert!(parsing_errors[0].insertion_point.is_some());

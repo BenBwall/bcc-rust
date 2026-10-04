@@ -38,9 +38,9 @@ pub(super) struct Upstream<'tok> {
 impl<'tok> Upstream<'tok> {
     /// Runs the whole of `preprocessor`, so parsing never interleaves with
     /// preprocessing.
-    pub(super) fn preprocess_all(
-        mut preprocessor: Preprocessor,
-        context: &mut Context<'_>,
+    pub(super) fn preprocess_all<'tu>(
+        mut preprocessor: Preprocessor<'tu>,
+        context: &mut Context<'tu>,
         source_segment_limit: usize,
         tok: &'tok Bump,
     ) -> Self {

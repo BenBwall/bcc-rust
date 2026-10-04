@@ -168,7 +168,7 @@ pub(crate) struct RecoverySummary {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct ParserError {
+pub(crate) struct ParserError<'tu> {
     pub(crate) code:              ParserDiagnosticCode,
     pub(crate) severity:          ErrorSeverity,
     pub(crate) warning_group:     Option<ParserWarningGroup>,
@@ -177,7 +177,7 @@ pub(crate) struct ParserError {
     pub(crate) found:             Option<TokenType>,
     /// Source spelling of the found token, captured when the diagnostic is
     /// reported so messages can quote what was written.
-    pub(crate) found_spelling:    Option<Box<str>>,
+    pub(crate) found_spelling:    Option<&'tu str>,
     /// Where a missing `;` most likely belongs, when the found token starts
     /// a new line.
     pub(crate) insertion_point:   Option<SourceVectors>,
@@ -196,7 +196,7 @@ pub(crate) struct ParserError {
     pub(crate) ordering_location: Option<(u32, u32)>,
 }
 
-impl ParserError {
+impl ParserError<'_> {
     /// Whether a later error at the same place may be folded into this one,
     /// or this one into an earlier error. A resource limit always shows,
     /// because it explains why the rest of the input was not parsed.
@@ -237,15 +237,15 @@ impl ParserError {
     }
 }
 
-impl Display for ParserError {
+impl Display for ParserError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.error_type)
     }
 }
 
-impl ToDiagnostic for ParserError {
+impl ToDiagnostic for ParserError<'_> {
     fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic {
-        let mut explanation = self.error_type.explain(self.found_spelling.as_deref());
+        let mut explanation = self.error_type.explain(self.found_spelling);
         if self.insertion_point.is_some() {
             if self.error_type.expects_terminating_semicolon() {
                 // The likely fix is known, so lead with it.
@@ -253,7 +253,7 @@ impl ToDiagnostic for ParserError {
                     "expected `;`, found {}",
                     self.found.map_or_else(
                         || "end of file".to_owned(),
-                        |found| found.found(self.found_spelling.as_deref())
+                        |found| found.found(self.found_spelling)
                     )
                 );
             }
@@ -306,25 +306,25 @@ impl ToDiagnostic for ParserError {
     }
 }
 
-impl GetSeverity for ParserError {
+impl GetSeverity for ParserError<'_> {
     fn severity(&self) -> ErrorSeverity {
         self.severity
     }
 }
 
-impl GetPosition for ParserError {
+impl GetPosition for ParserError<'_> {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.source_vectors.position(context)
     }
 }
 
-impl GetSourceVectors for ParserError {
+impl GetSourceVectors for ParserError<'_> {
     fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         self.source_vectors
     }
 }
 
-impl std::error::Error for ParserError {}
+impl std::error::Error for ParserError<'_> {}
 
 /// Every diagnostic produced by the language parser.
 ///

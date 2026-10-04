@@ -134,7 +134,7 @@ pub(crate) struct Context<'tu> {
     /// Sparse endpoints follow their source arena's lifetime.
     expansion_sites: [ExpansionSites; 3],
     ignore_tokenizer_errors: bool,
-    pub(super) pending_errors: ArenaQueue<'tu, TranslationError>,
+    pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
@@ -147,6 +147,10 @@ pub(crate) struct Context<'tu> {
 }
 
 impl<'tu> Context<'tu> {
+    pub(crate) fn diagnostic_text(&self, text: &str) -> &'tu str {
+        self.tu.alloc_str(text)
+    }
+
     pub(crate) fn new(tu: &'tu Bump) -> Self {
         Self::with_configuration(tu, CompilerConfiguration::default())
     }
@@ -655,7 +659,7 @@ impl<'tu> Context<'tu> {
     #[cold]
     #[inline(never)]
     pub(crate) fn raw_preprocessor_error(
-        self_pending_errors: &mut impl Extend<TranslationError>,
+        self_pending_errors: &mut impl Extend<TranslationError<'tu>>,
         error: PreprocessorError,
     ) {
         self_pending_errors.extend([TranslationError::Preprocessing(error)]);
@@ -663,14 +667,14 @@ impl<'tu> Context<'tu> {
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn parser_error(&mut self, error: ParserError) {
+    pub(crate) fn parser_error(&mut self, error: ParserError<'tu>) {
         self.pending_errors
             .push_back(TranslationError::Parsing(error));
     }
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError> {
+    pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError<'tu>> {
         let error = self.pending_errors.pop_front();
         self.relocated_errors = self.relocated_errors.saturating_sub(1);
         error
@@ -680,12 +684,12 @@ impl<'tu> Context<'tu> {
         self.pending_errors.len()
     }
 
-    pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError> {
+    pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError<'tu>> {
         self.relocated_errors = 0;
         std::iter::from_fn(|| self.pending_errors.pop_front()).collect()
     }
 
-    pub(crate) fn append_pending_errors(&mut self, errors: Vec<TranslationError>) {
+    pub(crate) fn append_pending_errors(&mut self, errors: Vec<TranslationError<'tu>>) {
         self.pending_errors.extend(errors);
     }
 

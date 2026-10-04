@@ -371,7 +371,7 @@ impl DiagnosticReporter {
         }
     }
 
-    fn report(&mut self, error: &TranslationError, context: &mut Context<'_>) {
+    fn report(&mut self, error: &TranslationError<'_>, context: &mut Context<'_>) {
         let source = error.source_vectors(context);
         let diagnostic = error.to_diagnostic(context, source);
         let location = context.get_source_vectors(source).to_vec();

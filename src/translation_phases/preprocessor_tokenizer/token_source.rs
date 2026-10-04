@@ -117,7 +117,7 @@ impl SetSourceFileIndex for TokenSource {
     }
 }
 
-impl TranslationPhase for TokenSource {
+impl TranslationPhase<'_> for TokenSource {
     type Item = PreprocessorToken;
 
     #[inline(always)]

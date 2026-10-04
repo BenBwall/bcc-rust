@@ -62,7 +62,7 @@ pub(crate) fn with_preprocessor<'tu, R>(
     source: &'tu str,
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
-    run: impl FnOnce(Preprocessor, &mut Context<'tu>, &Bump) -> R,
+    run: impl FnOnce(Preprocessor<'tu>, &mut Context<'tu>, &Bump) -> R,
 ) -> R {
     let pp = Bump::new();
     let preprocessor = Preprocessor::new_with_arena_source(
@@ -92,11 +92,11 @@ pub(crate) fn parse_with_arena(
 /// Token provenance is copied to the token arena as each token is produced,
 /// and pending diagnostics keep theirs across preprocessor-arena compaction,
 /// so every item stays renderable afterwards.
-pub(crate) fn preprocess_with_diagnostics(
-    mut preprocessor: Preprocessor,
-    context: &mut Context<'_>,
+pub(crate) fn preprocess_with_diagnostics<'tu>(
+    mut preprocessor: Preprocessor<'tu>,
+    context: &mut Context<'tu>,
     _tok: &Bump,
-) -> RegionVec<Result<Token, TranslationError>> {
+) -> RegionVec<Result<Token, TranslationError<'tu>>> {
     let mut tokens = RegionVec::new_in(Bump::new());
     while let Some(mut token) = preprocessor.next_iterator_item(context) {
         token.source_vectors = context.retain_token_source(token.source_vectors);

@@ -94,17 +94,17 @@ impl<'tok> Parser<'tok> {
     /// C99: the input is the translation unit produced after phase 7 under
     /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
     #[cfg(test)]
-    pub(crate) fn new(
-        preprocessor: Preprocessor,
-        context: &mut Context<'_>,
+    pub(crate) fn new<'tu>(
+        preprocessor: Preprocessor<'tu>,
+        context: &mut Context<'tu>,
         tok: &'tok Bump,
     ) -> Self {
         Self::new_with_config(preprocessor, context, ParserLimits::default(), tok)
     }
 
-    pub(crate) fn preprocess(
-        preprocessor: Preprocessor,
-        context: &mut Context<'_>,
+    pub(crate) fn preprocess<'tu>(
+        preprocessor: Preprocessor<'tu>,
+        context: &mut Context<'tu>,
         tok: &'tok Bump,
     ) -> PreprocessedTranslationUnit<'tok> {
         Self::preprocess_with_limit(
@@ -115,9 +115,9 @@ impl<'tok> Parser<'tok> {
         )
     }
 
-    fn preprocess_with_limit(
-        mut preprocessor: Preprocessor,
-        context: &mut Context<'_>,
+    fn preprocess_with_limit<'tu>(
+        mut preprocessor: Preprocessor<'tu>,
+        context: &mut Context<'tu>,
         source_segment_limit: usize,
         tok: &'tok Bump,
     ) -> PreprocessedTranslationUnit<'tok> {
@@ -132,9 +132,9 @@ impl<'tok> Parser<'tok> {
     }
 
     #[cfg(test)]
-    fn new_with_config(
-        preprocessor: Preprocessor,
-        context: &mut Context<'_>,
+    fn new_with_config<'tu>(
+        preprocessor: Preprocessor<'tu>,
+        context: &mut Context<'tu>,
         limits: ParserLimits,
         tok: &'tok Bump,
     ) -> Self {
@@ -175,9 +175,9 @@ impl<'tok> Parser<'tok> {
     }
 
     #[cfg(test)]
-    pub(super) fn new_with_limits(
-        preprocessor: Preprocessor,
-        context: &mut Context<'_>,
+    pub(super) fn new_with_limits<'tu>(
+        preprocessor: Preprocessor<'tu>,
+        context: &mut Context<'tu>,
         limits: ParserLimits,
         tok: &'tok Bump,
     ) -> Self {
@@ -712,17 +712,18 @@ impl<'tok> Parser<'tok> {
         if error_type.severity() == ErrorSeverity::Error && !error_type.leaves_syntax_intact() {
             self.hard_error_count += 1;
         }
-        let found_spelling = token.map(|token| -> Box<str> {
+        let found_spelling = token.map(|token| -> &str {
             match token.kind {
                 | TokenType::String(StringTokenType::String(contents)) =>
-                    context.literal_spelling(contents, false).into(),
+                    context.diagnostic_text(&context.literal_spelling(contents, false)),
                 | TokenType::String(StringTokenType::WideString(contents)) =>
-                    context.literal_spelling(contents, true).into(),
-                | _ => context
-                    .string_cache
-                    .at(token.contents)
-                    .trim_end_matches('\0')
-                    .into(),
+                    context.diagnostic_text(&context.literal_spelling(contents, true)),
+                | _ => context.diagnostic_text(
+                    context
+                        .string_cache
+                        .at(token.contents)
+                        .trim_end_matches('\0'),
+                ),
             }
         });
         let source_vectors = match token {
