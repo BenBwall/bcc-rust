@@ -64,7 +64,9 @@ fn with_directive_tokens_at_path<R>(
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         path.to_path_buf().into_boxed_path(),
         source,
@@ -84,7 +86,9 @@ fn with_directive_tokens_with_system_directory<R>(
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         path.to_path_buf().into_boxed_path(),
         source,
@@ -101,7 +105,9 @@ fn with_directive_tokens<R>(
 ) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<directive-test>").into_boxed_path(),
         source,
@@ -126,7 +132,9 @@ fn pragma_destringizing_preserves_non_special_escapes() {
     ] {
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
+        let preprocess_arena = crate::util::bump::Bump::new();
         let preprocessor = Preprocessor::new(
+            &preprocess_arena,
             &mut context,
             PathBuf::from("<pragma-test>").into_boxed_path(),
             "",

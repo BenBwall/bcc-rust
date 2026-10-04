@@ -139,7 +139,9 @@ fn source_storage_exhaustion_stops_preprocessing_the_remaining_input() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<limit-test>").into_boxed_path(),
         &"int a;\n".repeat(1_000),

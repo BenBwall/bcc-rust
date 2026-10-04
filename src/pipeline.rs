@@ -62,10 +62,11 @@ pub(crate) fn with_preprocessor<'tu, R>(
     source: &'tu str,
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
-    run: impl FnOnce(Preprocessor<'tu>, &mut Context<'tu>, &Bump) -> R,
+    run: impl for<'pp> FnOnce(Preprocessor<'tu, 'pp>, &mut Context<'tu>, &'pp Bump) -> R,
 ) -> R {
     let pp = Bump::new();
     let preprocessor = Preprocessor::new_with_arena_source(
+        &pp,
         context,
         source_filename,
         source,
@@ -93,7 +94,7 @@ pub(crate) fn parse_with_arena(
 /// and pending diagnostics keep theirs across preprocessor-arena compaction,
 /// so every item stays renderable afterwards.
 pub(crate) fn preprocess_with_diagnostics<'tu>(
-    mut preprocessor: Preprocessor<'tu>,
+    mut preprocessor: Preprocessor<'tu, '_>,
     context: &mut Context<'tu>,
     _tok: &Bump,
 ) -> RegionVec<Result<Token, TranslationError<'tu>>> {

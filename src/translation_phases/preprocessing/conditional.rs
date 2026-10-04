@@ -49,7 +49,7 @@ pub(super) enum SkipMode {
     ToEndif,
 }
 
-impl Preprocessor<'_> {
+impl Preprocessor<'_, '_> {
     /// Physical source frames own conditional groups. Presumed filenames
     /// changed by #line do not change the frame's boundary.
     fn current_file_conditional_base(&self) -> usize {

@@ -18,7 +18,9 @@ fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {
     let source = format!("{spellings} integer Int _bool while_ defined identifier\n");
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut pp = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<keywords>").into_boxed_path(),
         &source,
@@ -47,7 +49,9 @@ fn keywords_remain_macro_names_and_paste_results_until_phase_seven() {
         "#define int renamed\nint\n#undef int\n#define CAT(a,b) a##b\nCAT(in,t) CAT(wh,ile)\n";
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut pp = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<keywords>").into_boxed_path(),
         source,

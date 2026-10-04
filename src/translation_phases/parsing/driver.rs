@@ -95,7 +95,7 @@ impl<'tok> Parser<'tok> {
     /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
     #[cfg(test)]
     pub(crate) fn new<'tu>(
-        preprocessor: Preprocessor<'tu>,
+        preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         tok: &'tok Bump,
     ) -> Self {
@@ -103,7 +103,7 @@ impl<'tok> Parser<'tok> {
     }
 
     pub(crate) fn preprocess<'tu>(
-        preprocessor: Preprocessor<'tu>,
+        preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         tok: &'tok Bump,
     ) -> PreprocessedTranslationUnit<'tok> {
@@ -116,7 +116,7 @@ impl<'tok> Parser<'tok> {
     }
 
     fn preprocess_with_limit<'tu>(
-        mut preprocessor: Preprocessor<'tu>,
+        mut preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         source_segment_limit: usize,
         tok: &'tok Bump,
@@ -133,7 +133,7 @@ impl<'tok> Parser<'tok> {
 
     #[cfg(test)]
     fn new_with_config<'tu>(
-        preprocessor: Preprocessor<'tu>,
+        preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         limits: ParserLimits,
         tok: &'tok Bump,
@@ -176,7 +176,7 @@ impl<'tok> Parser<'tok> {
 
     #[cfg(test)]
     pub(super) fn new_with_limits<'tu>(
-        preprocessor: Preprocessor<'tu>,
+        preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         limits: ParserLimits,
         tok: &'tok Bump,

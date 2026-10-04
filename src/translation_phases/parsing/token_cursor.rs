@@ -39,7 +39,7 @@ impl<'tok> Upstream<'tok> {
     /// Runs the whole of `preprocessor`, so parsing never interleaves with
     /// preprocessing.
     pub(super) fn preprocess_all<'tu>(
-        mut preprocessor: Preprocessor<'tu>,
+        mut preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         source_segment_limit: usize,
         _tok: &'tok Bump,

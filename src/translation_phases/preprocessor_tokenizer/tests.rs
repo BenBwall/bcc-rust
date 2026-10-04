@@ -363,7 +363,9 @@ fn preprocess(source: &str, path: &Path, include_directory: Option<&Path>) -> Ve
         .map(|directory| vec![directory.to_owned()])
         .unwrap_or_default()
         .into();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         path.into(),
         source,

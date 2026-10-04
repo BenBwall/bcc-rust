@@ -55,7 +55,9 @@ fn preprocess_with_configuration<R>(
 ) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::with_configuration(&tu, configuration);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
         source,
@@ -118,7 +120,9 @@ fn adjacent_string_diagnostics_remain_in_source_order() {
 fn malformed_include_restores_include_tokenization_mode() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
         "#include 123 extra\nint x = a < b > c;\n",
@@ -237,7 +241,9 @@ fn malformed_macro_include_does_not_repeat_expansion_diagnostics() {
 fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<phase-7-totality-test>").into_boxed_path(),
         "",
@@ -432,7 +438,9 @@ fn with_tokens_of<R>(
 ) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from(path).into_boxed_path(),
         source,

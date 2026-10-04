@@ -34,7 +34,9 @@ fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<empty-syntax-lists-test>").into_boxed_path(),
         "int f(); int (*pointer)(); int g(void);\n",
@@ -66,7 +68,9 @@ fn complete_translation_unit_retains_roots_already_streamed() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<mixed-parser-consumption-test>").into_boxed_path(),
         "int first; int second;\n",
@@ -115,7 +119,9 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
         .join("fixtures")
         .join("parser");
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<identifier-provenance-test>").into_boxed_path(),
         "#define DECL_NAME generated\nint DECL_NAME;\n#include \"identifier-provenance.h\"\n",
@@ -195,7 +201,9 @@ fn deterministic_inspection_uses_spellings_and_marks_recovery() {
     let mut context = Context::new(&tu);
     let source = "int good = 1; } int after;\n";
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<inspection-test>").into_boxed_path(),
         source,
@@ -231,7 +239,9 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
     let mut context = Context::new(&tu);
     let source = "struct S { int member : 3; }; int values[2] = { [1] = 7 }; int f(int arg);\n";
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<inspection-shapes-test>").into_boxed_path(),
         source,
@@ -262,7 +272,9 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
     let tu = crate::util::bump::Bump::new();
     let mut multi_context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut multi_context,
         PathBuf::from("<inspection-order-test>").into_boxed_path(),
         "int a = 1, b = 2;\n",

@@ -44,7 +44,7 @@ use crate::{
     util::packed::Packed,
 };
 
-impl<'tu> Preprocessor<'tu> {
+impl<'tu> Preprocessor<'tu, '_> {
     pub(super) fn concatenate_adjacent_strings(
         &mut self,
         context: &mut Context<'tu>,

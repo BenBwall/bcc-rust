@@ -47,7 +47,9 @@ fn with_preprocessed_with<R>(
 ) -> R {
     let tu = Bump::new();
     let mut context = Context::with_configuration(&tu, configuration);
+    let preprocess_arena = Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
         source,
@@ -76,7 +78,9 @@ fn with_parser<R>(
     let tu = Bump::new();
     let mut context = Context::new(&tu);
     let tok = Bump::new();
+    let preprocess_arena = Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
         source,
@@ -263,7 +267,9 @@ fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
     let tok = Bump::new();
+    let preprocess_arena = Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
         "int first; int second = 2;\n",
@@ -293,7 +299,9 @@ fn cli_parser_details_render_recovery_ranges_and_notes() {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
     let tok = Bump::new();
+    let preprocess_arena = Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
         "int first extra junk; int after;\n",
@@ -345,7 +353,9 @@ fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
     let tok = Bump::new();
+    let preprocess_arena = Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<syntax-tree-consumer-test>").into_boxed_path(),
         "struct S { int member : 3; }; int f(int parameter);",

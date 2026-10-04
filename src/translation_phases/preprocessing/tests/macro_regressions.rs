@@ -24,7 +24,9 @@ fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<macro regression>").into_boxed_path(),
         source,

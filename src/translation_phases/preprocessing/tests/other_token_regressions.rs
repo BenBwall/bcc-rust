@@ -58,7 +58,9 @@ fn observe(source: &str) -> Observation {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<other tokens>").into_boxed_path(),
         source,
@@ -81,7 +83,9 @@ fn observe(source: &str) -> Observation {
 fn lexers_preserve_other_tokens_before_preprocessing() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<other tokens>").into_boxed_path(),
         "a\\\n@\n",

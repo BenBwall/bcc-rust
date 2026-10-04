@@ -95,7 +95,9 @@ fn observe(source: &str, path: &Path) -> Observation {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         path.to_path_buf().into_boxed_path(),
         source,

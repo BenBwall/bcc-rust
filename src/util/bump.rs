@@ -315,13 +315,6 @@ pub(crate) type ArenaVec<'a, T> = AllocVec<T, &'a Bump>;
 /// A growable vector that owns its own fixed-address virtual-memory region.
 pub(crate) type RegionVec<T> = AllocVec<T, Bump>;
 pub(crate) type ArenaMap<'a, K, V> = hashbrown::HashMap<K, V, FxBuildHasher, &'a Bump>;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Later arena migration stages use these collections."
-    )
-)]
 pub(crate) type ArenaSet<'a, T> = hashbrown::HashSet<T, FxBuildHasher, &'a Bump>;
 
 /// A UTF-8 string allocated in an arena.

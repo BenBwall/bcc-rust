@@ -22,7 +22,9 @@ fn located_tree(source: &str) -> String {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<located-tree-test>").into_boxed_path(),
         source,
@@ -85,7 +87,9 @@ fn source_segments_after_parsing(source: &str) -> usize {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let tok = crate::util::bump::Bump::new();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<segment-test>").into_boxed_path(),
         source,
@@ -189,7 +193,9 @@ fn missing_semicolon_help_uses_macro_invocations_after_full_batch_preprocessing(
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
         let tok = crate::util::bump::Bump::new();
+        let preprocess_arena = crate::util::bump::Bump::new();
         let preprocessor = Preprocessor::new(
+            &preprocess_arena,
             &mut context,
             PathBuf::from("<macro-help>").into_boxed_path(),
             &source,

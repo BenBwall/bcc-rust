@@ -492,7 +492,7 @@ impl PreprocessorExpressionParser {
     clippy::cast_possible_truncation,
     reason = "Integer literal values are range-checked before narrowing."
 )]
-impl Preprocessor<'_> {
+impl Preprocessor<'_, '_> {
     fn map_operator(
         &mut self,
         _context: &Context<'_>,

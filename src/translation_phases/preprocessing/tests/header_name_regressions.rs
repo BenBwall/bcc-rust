@@ -137,7 +137,9 @@ fn with_preprocess_directories<R>(
     let tu = crate::util::bump::Bump::new();
     let mut context =
         Context::with_configuration(&tu, CompilerConfiguration::new(CStandard::C99, policy));
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         headers.0.join("main.c").into_boxed_path(),
         source,
@@ -174,7 +176,9 @@ fn written_header_names_keep_their_source_text() {
         let directory = SharedVec::from(vec![headers.0.clone()]);
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
+        let preprocess_arena = crate::util::bump::Bump::new();
         let mut preprocessor = Preprocessor::new(
+            &preprocess_arena,
             &mut context,
             headers.0.join("main.c").into_boxed_path(),
             source,

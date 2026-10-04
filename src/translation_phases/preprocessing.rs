@@ -35,6 +35,7 @@ pub(crate) use errors::{
 use expression::PreprocessorExpressionParser;
 pub(crate) use macro_expansion::HashHash;
 use macro_expansion::MacroDefinition;
+use rustc_hash::FxBuildHasher;
 pub(crate) use token::{
     CharacterTokenType,
     FloatTokenType,
@@ -49,8 +50,6 @@ pub(crate) use token::{
 };
 
 use self::macro_expansion::FunctionLikeMacroArgument;
-#[cfg(test)]
-use crate::util::bump::Bump;
 #[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
@@ -67,8 +66,12 @@ use crate::{
     },
     util::{
         HashMap,
-        HashSet,
-        bump::RegionVec,
+        bump::{
+            ArenaMap,
+            ArenaSet,
+            Bump,
+            RegionVec,
+        },
         string_cache::StringCacheId,
     },
 };
@@ -95,9 +98,9 @@ enum OutputPurpose {
 
 /// State retained while replacement-list and argument expansions unwind.
 #[derive(Debug)]
-struct PreprocessorState {
-    once_set:              HashSet<u32>,
-    macro_definitions:     HashMap<StringCacheId, MacroDefinition>,
+struct PreprocessorState<'pp> {
+    once_set:              ArenaSet<'pp, u32>,
+    macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition>,
     /// Source and include frames remain between expansions. Macro frames
     /// share this stack until the current expansion finishes.
     tokenizer_stack:       Vec<TokenizerFrame>,
@@ -109,8 +112,8 @@ struct PreprocessorState {
 }
 
 #[derive(Debug)]
-pub(crate) struct Preprocessor<'tu> {
-    state: PreprocessorState,
+pub(crate) struct Preprocessor<'tu, 'pp> {
+    state: PreprocessorState<'pp>,
     pub(crate) tokenizer: TokenSource,
     pub(crate) hash_hash_stack: Vec<HashHash>,
     current_is_newline: bool,
@@ -135,41 +138,42 @@ pub(crate) struct Preprocessor<'tu> {
     source_segment_limit: usize,
 }
 
-impl GetPosition for Preprocessor<'_> {
+impl GetPosition for Preprocessor<'_, '_> {
     #[inline(always)]
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.tokenizer.position(context)
     }
 }
 
-impl SetPosition for Preprocessor<'_> {
+impl SetPosition for Preprocessor<'_, '_> {
     #[inline(always)]
     fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
         self.tokenizer.set_position(context, position);
     }
 }
 
-impl GetSourceFileIndex for Preprocessor<'_> {
+impl GetSourceFileIndex for Preprocessor<'_, '_> {
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         self.tokenizer.source_file_index()
     }
 }
 
-impl SetSourceFileIndex for Preprocessor<'_> {
+impl SetSourceFileIndex for Preprocessor<'_, '_> {
     fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
         self.tokenizer
             .set_source_file_index(context, source_file_index);
     }
 }
 
-impl<'tu> Preprocessor<'tu> {
+impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
     pub(crate) fn prepare_for_parsing(&mut self) {
         self.output_purpose = OutputPurpose::Parsing;
     }
 
     #[cfg(test)]
     pub(crate) fn new(
+        pp: &'pp Bump,
         context: &mut Context<'tu>,
         source_name: Box<Path>,
         source: &str,
@@ -178,6 +182,7 @@ impl<'tu> Preprocessor<'tu> {
     ) -> Self {
         let source_name = source_name.into_path_buf();
         let preprocessor = Self::new_inner(
+            pp,
             context,
             &source_name,
             source,
@@ -191,6 +196,7 @@ impl<'tu> Preprocessor<'tu> {
     }
 
     pub(crate) fn new_with_arena_source(
+        pp: &'pp Bump,
         context: &mut Context<'tu>,
         source_name: &Path,
         source: &'tu str,
@@ -198,6 +204,7 @@ impl<'tu> Preprocessor<'tu> {
         system_include_directories: &[PathBuf],
     ) -> Self {
         Self::new_inner(
+            pp,
             context,
             source_name,
             source,
@@ -208,6 +215,7 @@ impl<'tu> Preprocessor<'tu> {
     }
 
     fn new_inner(
+        pp: &'pp Bump,
         context: &mut Context<'tu>,
         source_name: &Path,
         source: &str,
@@ -216,12 +224,13 @@ impl<'tu> Preprocessor<'tu> {
         system_include_directories: &[PathBuf],
     ) -> Self {
         context.set_include_directories(quote_include_directories, system_include_directories);
-        let macro_definitions = PREDEFINED_MACRO_NAMES
-            .into_iter()
-            .map(|s| -> (StringCacheId, MacroDefinition) {
-                (context.string_cache.intern(s), MacroDefinition::BuiltIn)
-            })
-            .collect();
+        let mut macro_definitions = ArenaMap::with_hasher_in(FxBuildHasher, pp);
+        for name in PREDEFINED_MACRO_NAMES {
+            drop(
+                macro_definitions
+                    .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn),
+            );
+        }
         let source_file_index = context.intern_source_file(source_name);
         let tokenizer = TokenSource::new(context, source_file_index, source);
         if let Some(source) = arena_source {
@@ -232,7 +241,7 @@ impl<'tu> Preprocessor<'tu> {
         Self {
             hash_hash_stack: Vec::new(),
             state: PreprocessorState {
-                once_set: HashSet::default(),
+                once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                 macro_definitions,
                 tokenizer_stack: vec![TokenizerFrame {
                     frame_type: TokenizerFrameType::SourceFile {
@@ -364,7 +373,7 @@ impl<'tu> Preprocessor<'tu> {
     }
 }
 
-impl<'tu> TranslationPhase<'tu> for Preprocessor<'tu> {
+impl<'tu> TranslationPhase<'tu> for Preprocessor<'tu, '_> {
     type Item = Token;
 
     fn next_item(&mut self, context: &mut Context<'tu>) -> Option<Self::Item> {

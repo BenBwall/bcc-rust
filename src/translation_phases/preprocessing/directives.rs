@@ -217,7 +217,7 @@ fn header_name_from_source(
     clippy::while_let_loop,
     reason = "The macro-parameter loop has multiple semantic exit conditions."
 )]
-impl Preprocessor<'_> {
+impl Preprocessor<'_, '_> {
     pub(super) fn parse_directive(&mut self, context: &mut Context<'_>, token: PreprocessorToken) {
         if !self.last_was_newline {
             context.preprocessor_error(PreprocessorError {

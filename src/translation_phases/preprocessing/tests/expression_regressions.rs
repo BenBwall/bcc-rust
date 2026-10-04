@@ -214,7 +214,9 @@ fn each_evaluated_arithmetic_fault_keeps_its_diagnostic_kind() {
 fn divide_fault_sources(source: &str) -> Vec<SourceVector> {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<expression-test>").into_boxed_path(),
         source,
@@ -306,7 +308,9 @@ fn malformed_ternary_groups_keep_outer_operands_and_operator_locations() {
         // Pin the exact operator location, not the cursor after the directive.
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
+        let preprocess_arena = crate::util::bump::Bump::new();
         let mut pp = Preprocessor::new(
+            &preprocess_arena,
             &mut context,
             PathBuf::from("<test>").into_boxed_path(),
             &source,
