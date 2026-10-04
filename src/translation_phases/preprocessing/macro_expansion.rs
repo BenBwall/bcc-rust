@@ -626,7 +626,10 @@ impl Preprocessor<'_, '_> {
         argument: &FunctionLikeMacroArgument,
         expand: bool,
     ) -> Vec<PreprocessorToken> {
-        let hash_hash_stack = take(&mut self.hash_hash_stack);
+        let hash_hash_stack = replace(
+            &mut self.hash_hash_stack,
+            crate::util::bump::ArenaVec::new_in(self.state.arena),
+        );
         let generate_placeholders = self.generate_placeholders;
         let newlines = (self.last_was_newline, self.current_is_newline);
         self.push_tokenizer_frame(

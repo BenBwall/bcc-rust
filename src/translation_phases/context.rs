@@ -698,7 +698,10 @@ impl<'tu> Context<'tu> {
         std::iter::from_fn(|| self.pending_errors.pop_front()).collect()
     }
 
-    pub(crate) fn append_pending_errors(&mut self, errors: Vec<TranslationError<'tu>>) {
+    pub(crate) fn append_pending_errors(
+        &mut self,
+        errors: impl IntoIterator<Item = TranslationError<'tu>>,
+    ) {
         self.pending_errors.extend(errors);
     }
 

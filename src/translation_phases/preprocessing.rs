@@ -15,7 +15,6 @@ mod token_conversion;
 
 use std::{
     fmt::Debug,
-    mem::take,
     path::{
         Path,
         PathBuf,
@@ -128,7 +127,7 @@ impl Debug for PreprocessorState<'_> {
 pub(crate) struct Preprocessor<'tu, 'pp> {
     state: PreprocessorState<'pp>,
     pub(crate) tokenizer: TokenSource,
-    pub(crate) hash_hash_stack: Vec<HashHash>,
+    pub(crate) hash_hash_stack: ArenaVec<'pp, HashHash>,
     current_is_newline: bool,
     /// Collect use-site hint metadata only when a language parser will consume
     /// the output.
@@ -145,7 +144,7 @@ pub(crate) struct Preprocessor<'tu, 'pp> {
     empty_disabled_macros: std::rc::Rc<[StringCacheId]>,
     expression_parser: PreprocessorExpressionParser,
     pending_parser_token: Option<Token>,
-    pending_parser_errors: Vec<TranslationError<'tu>>,
+    pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
     /// Parser-supplied provenance budget, checked within string concatenation
     /// as well as between completed output tokens.
     source_segment_limit: usize,
@@ -260,7 +259,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             context.record_source_text(source_file_index, source);
         }
         Self {
-            hash_hash_stack: Vec::new(),
+            hash_hash_stack: ArenaVec::new_in(pp),
             state: PreprocessorState {
                 arena: pp,
                 once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
@@ -280,13 +279,13 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             empty_disabled_macros: std::rc::Rc::from([]),
             expression_parser: PreprocessorExpressionParser::new(),
             pending_parser_token: None,
-            pending_parser_errors: Vec::new(),
+            pending_parser_errors: ArenaVec::new_in(pp),
             source_segment_limit: usize::MAX,
         }
     }
 
     fn next_parser_token(&mut self, context: &mut Context<'tu>) -> Option<Token> {
-        context.append_pending_errors(take(&mut self.pending_parser_errors));
+        context.append_pending_errors(self.pending_parser_errors.drain(..));
         if let Some(token) = self.pending_parser_token.take() {
             return Some(token);
         }
@@ -366,7 +365,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                 let mut limit_token = self.pending_parser_token.unwrap_or(token);
                 limit_token.source_vectors =
                     context.retain_token_source(limit_token.source_vectors);
-                context.append_pending_errors(take(&mut self.pending_parser_errors));
+                context.append_pending_errors(self.pending_parser_errors.drain(..));
                 return Some(limit_token);
             }
         }
