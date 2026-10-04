@@ -5,13 +5,9 @@
 #[doc(hidden)]
 mod shut_up_clippy_about_unused_dev_dependencies {
     use criterion as _;
-    #[cfg(unix)]
-    use libc as _;
     use pretty_assertions as _;
     use proptest as _;
     use rstest as _;
-    #[cfg(windows)]
-    use windows_sys as _;
 }
 // Only the benchmarking binary emits coz progress points.
 #[cfg(all(unix, feature = "benchmarking-internals"))]

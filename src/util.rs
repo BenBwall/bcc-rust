@@ -17,6 +17,7 @@ pub(crate) mod packed;
 pub(crate) mod shared;
 pub(crate) mod string_cache;
 pub(crate) mod vector_slice;
+pub(crate) mod vm;
 
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, FxBuildHasher>;
 pub(crate) type HashSet<K> = hashbrown::HashSet<K, FxBuildHasher>;
