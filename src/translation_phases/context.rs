@@ -32,8 +32,8 @@ use crate::{
         preprocessor_tokenizer::PreprocessorTokenizerError,
     },
     util::{
-        HashMap,
         bump::{
+            ArenaMap,
             ArenaVec,
             Bump,
         },
@@ -124,8 +124,8 @@ pub(crate) struct Context<'tu> {
     parser_token_vectors: ArenaVec<'tu, SourceVector>,
     retained_vectors: ArenaVec<'tu, SourceVector>,
     pub(crate) string_cache: StringCache,
-    pub(crate) canonical_identifiers: HashMap<StringCacheId, StringCacheId>,
-    literal_values: DedupArena<Box<[LiteralUnit]>, FxBuildHasher>,
+    pub(crate) canonical_identifiers: ArenaMap<'tu, StringCacheId, StringCacheId>,
+    literal_values: DedupArena<'tu, &'tu [LiteralUnit], FxBuildHasher>,
     /// Sparse endpoints follow their source arena's lifetime.
     expansion_sites: [ExpansionSites; 3],
     ignore_tokenizer_errors: bool,
@@ -133,7 +133,7 @@ pub(crate) struct Context<'tu> {
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
-    pub(crate) source_files: DedupArena<Box<Path>, FxBuildHasher>,
+    pub(crate) source_files: DedupArena<'tu, Box<Path>, FxBuildHasher>,
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
     source_texts: ArenaVec<'tu, Option<&'tu str>>,
@@ -161,13 +161,13 @@ impl<'tu> Context<'tu> {
             parser_token_vectors: ArenaVec::new_in(tu),
             retained_vectors: ArenaVec::new_in(tu),
             string_cache,
-            canonical_identifiers: HashMap::default(),
-            literal_values: DedupArena::new(),
+            canonical_identifiers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            literal_values: DedupArena::new(tu),
             expansion_sites: Default::default(),
             ignore_tokenizer_errors: false,
             pending_errors: VecDeque::new(),
             relocated_errors: 0,
-            source_files: DedupArena::new(),
+            source_files: DedupArena::new(tu),
             source_texts: ArenaVec::new_in(tu),
         }
     }
@@ -226,12 +226,16 @@ impl<'tu> Context<'tu> {
             .sum()
     }
 
-    pub(crate) fn intern_literal(&mut self, units: Vec<LiteralUnit>) -> LiteralId {
-        LiteralId(self.literal_values.intern(units.into_boxed_slice()))
+    pub(crate) fn intern_literal(&mut self, units: &[LiteralUnit]) -> LiteralId {
+        let tu = self.tu;
+        LiteralId(
+            self.literal_values
+                .intern_by(units, || tu.alloc_slice_copy(units)),
+        )
     }
 
     pub(crate) fn literal_units(&self, id: LiteralId) -> &[LiteralUnit] {
-        &self.literal_values[id.0]
+        self.literal_values[id.0]
     }
 
     pub(crate) fn literal_bytes(&self, id: LiteralId) -> Vec<u8> {
@@ -729,6 +733,21 @@ mod tests {
         SourceArena,
         SourceVector,
     };
+
+    #[test]
+    fn repeated_literal_values_keep_one_identity_after_arena_growth() {
+        use crate::translation_phases::preprocessing::LiteralUnit;
+
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let original = [LiteralUnit::Character('é'), LiteralUnit::Numeric(0)];
+        let id = context.intern_literal(&original);
+        for value in 0..2_000 {
+            _ = context.intern_literal(&[LiteralUnit::Numeric(value)]);
+        }
+        assert_eq!(context.intern_literal(&original), id);
+        assert_eq!(context.literal_units(id), original);
+    }
 
     #[test]
     fn macro_locations_survive_compaction_without_retaining_temporary_metadata() {

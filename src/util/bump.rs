@@ -334,13 +334,6 @@ unsafe impl Allocator for &Bump {
 }
 
 pub(crate) type ArenaVec<'a, T> = AllocVec<T, &'a Bump>;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Later arena migration stages use these collections."
-    )
-)]
 pub(crate) type ArenaMap<'a, K, V> = hashbrown::HashMap<K, V, FxBuildHasher, &'a Bump>;
 #[cfg_attr(
     not(test),

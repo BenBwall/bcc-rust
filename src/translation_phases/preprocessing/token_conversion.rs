@@ -112,7 +112,7 @@ impl Preprocessor {
         let Some((units, sources, spelling)) = builder else {
             return first;
         };
-        let contents = context.intern_literal(units);
+        let contents = context.intern_literal(&units);
         Token {
             kind:           if wide {
                 TokenType::String(StringTokenType::WideString(contents))
@@ -626,7 +626,7 @@ impl Preprocessor {
 
     fn parse_string(context: &mut Context<'_>, token: PreprocessorToken) -> StringTokenType {
         let (contents, _) = Self::eval_escape_sequences(context, token);
-        let cached_contents = context.intern_literal(contents);
+        let cached_contents = context.intern_literal(&contents);
         if context.string_cache.at(token.contents).starts_with('L') {
             StringTokenType::WideString(cached_contents)
         } else {
@@ -640,7 +640,7 @@ impl Preprocessor {
     ) -> CharacterTokenType {
         let (units, had_escape_error) = Self::eval_escape_sequences(context, token);
         let wide = context.string_cache.at(token.contents).starts_with('L');
-        let contents = context.intern_literal(units);
+        let contents = context.intern_literal(&units);
         if wide {
             let units = context.literal_wide_units(contents);
             if units.len() != 1 && (!units.is_empty() || !had_escape_error) {
@@ -709,8 +709,8 @@ impl Preprocessor {
             | PreprocessorTokenType::WideGeneratedString => {
                 let wide = token.kind == PreprocessorTokenType::WideGeneratedString;
                 let text = &context.string_cache.at(token.contents)[usize::from(wide)..];
-                let units = text.chars().map(LiteralUnit::Character).collect();
-                let id = context.intern_literal(units);
+                let units: Vec<_> = text.chars().map(LiteralUnit::Character).collect();
+                let id = context.intern_literal(&units);
                 Token {
                     kind: TokenType::String(if wide {
                         StringTokenType::WideString(id)
