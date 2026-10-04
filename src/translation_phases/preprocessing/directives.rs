@@ -811,7 +811,9 @@ impl Preprocessor {
             }
         } else if !self.current_is_newline
             && self
-                .expect_token::<true>(
+                // An extra token is discarded with the directive tail. Rewinding
+                // after an expansion frame ends can target a different source.
+                .expect_token_without_rewind::<true>(
                     context,
                     |_, _, token| token.kind == PreprocessorTokenType::Newline,
                     |_, _, token| {

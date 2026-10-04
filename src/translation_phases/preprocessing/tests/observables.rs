@@ -165,3 +165,9 @@ proptest! {
         drop(observe(&source));
     }
 }
+
+#[test]
+fn unfinished_quoted_include_in_macro_argument_preserves_rewind_boundary() {
+    let source = "#define F(x) [x]\nF(\n#include \"missing\\\n#define A 1\n)";
+    drop(observe(source));
+}
