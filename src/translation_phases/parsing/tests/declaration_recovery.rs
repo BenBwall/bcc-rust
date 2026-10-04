@@ -238,180 +238,194 @@ fn named_parameter_declarators_retain_nested_k_and_r_identifier_lists() {
 
 #[test]
 fn nested_recovery_stops_before_grammar_starters() {
-    let parsed = parse("int f(int a + int b);\n");
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<ParameterDeclaration>()
-            .filter_map(|parameter| parameter
-                .declarator
-                .and_then(|declarator| identifier_name(&parsed, declarator)))
-            .collect::<Vec<_>>(),
-        ["a", "b"]
-    );
+    with_parse("int f(int a + int b);\n", |parsed| {
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<ParameterDeclaration>()
+                .filter_map(|parameter| parameter
+                    .declarator
+                    .and_then(|declarator| identifier_name(parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+    });
 
-    let parsed = parse("struct S { int first + int second; };\n");
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<StructDeclarator>()
-            .filter_map(|declarator| declarator
-                .declarator
-                .and_then(|declarator| identifier_name(&parsed, declarator)))
-            .collect::<Vec<_>>(),
-        ["first", "second"]
-    );
+    with_parse("struct S { int first + int second; };\n", |parsed| {
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<StructDeclarator>()
+                .filter_map(|declarator| declarator
+                    .declarator
+                    .and_then(|declarator| identifier_name(parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+    });
 
-    let parsed = parse("struct S { int first : int; int second; };\n");
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<StructDeclarator>()
-            .filter_map(|declarator| declarator
-                .declarator
-                .and_then(|declarator| identifier_name(&parsed, declarator)))
-            .collect::<Vec<_>>(),
-        ["first", "second"]
-    );
+    with_parse("struct S { int first : int; int second; };\n", |parsed| {
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<StructDeclarator>()
+                .filter_map(|declarator| declarator
+                    .declarator
+                    .and_then(|declarator| identifier_name(parsed, declarator)))
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+    });
 
-    let parsed = parse("enum E { A + B, C };\n");
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<Enumerator>()
-            .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
-            .collect::<Vec<_>>(),
-        ["A", "B", "C"]
-    );
+    with_parse("enum E { A + B, C };\n", |parsed| {
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<Enumerator>()
+                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>(),
+            ["A", "B", "C"]
+        );
+    });
 
-    let parsed = parse("int f(a + b, c);\n");
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<Identifier>()
-            .map(|identifier| parsed.context.string_cache.at(identifier.name))
-            .collect::<Vec<_>>(),
-        ["a", "b", "c"]
-    );
+    with_parse("int f(a + b, c);\n", |parsed| {
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<Identifier>()
+                .map(|identifier| parsed.context.string_cache.at(identifier.name))
+                .collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+    });
 
-    let parsed = parse("enum E { A = + int after;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("enum E { A = + int after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 
-    let parsed = parse("enum E { A = VALUE + OTHER, B };\n");
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<Enumerator>()
-            .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
-            .collect::<Vec<_>>(),
-        ["A", "B"]
-    );
+    with_parse("enum E { A = VALUE + OTHER, B };\n", |parsed| {
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<Enumerator>()
+                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+    });
 
-    let parsed = parse("enum E { A = int, B };\n");
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<Enumerator>()
-            .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
-            .collect::<Vec<_>>(),
-        ["A", "B"]
-    );
+    with_parse("enum E { A = int, B };\n", |parsed| {
+        assert_eq!(
+            parsed
+                .parser
+                .syntax
+                .iter::<Enumerator>()
+                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+    });
 
-    let parsed = parse("int array[int];\nint after;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("int array[int];\nint after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 
-    let parsed = parse("int array[* int];\nint after;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("int array[* int];\nint after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 
-    let parsed = parse("int initialized = int;\nint after;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("int initialized = int;\nint after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 
-    let parsed = parse("int f(int a, ... + int after;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("int f(int a, ... + int after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 
-    let parsed = parse("int f(int a, ... int b);\nint after;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 0))[0].declarator
-        )
-        .as_deref(),
-        Some("f")
-    );
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("int f(int a, ... int b);\nint after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 0))[0].declarator
+            )
+            .as_deref(),
+            Some("f")
+        );
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 
-    let parsed = parse("int f(int a,);\nint after;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(parser_errors(&parsed).count(), 1);
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(Some(
-            TokenType::Operator(OperatorTokenType::ClosingParenthesis)
-        ))
-    )));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
+    with_parse("int f(int a,);\nint after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(parser_errors(parsed).count(), 1);
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(Some(
+                TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+            ))
+        )));
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 }
 
 #[test]
