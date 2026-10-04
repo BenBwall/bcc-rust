@@ -239,6 +239,9 @@ pub struct ArenaUsage {
     /// The expansion arena's high-water mark; it is reset between
     /// top-level expansions.
     pub expansion_high_water:    usize,
+    /// The parse arena's high-water mark over phase 7 (the plan's `'parse`
+    /// peak): frames, their pools, scopes, and recovery state.
+    pub parse_high_water:        usize,
     /// The most virtual-memory regions live at once over phases 1 to 7.
     pub peak_regions:            usize,
     /// The most address space those regions reserved at once.
@@ -247,8 +250,8 @@ pub struct ArenaUsage {
     pub peak_committed:          usize,
 }
 
-/// Preprocesses `input` to report its arena high-water marks, then compiles
-/// it through phase 7 to report its peak regions and commit.
+/// Preprocesses and parses `input` to report its arena high-water marks, then
+/// compiles it through phase 7 to report its peak regions and commit.
 #[doc(hidden)]
 #[must_use]
 pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
@@ -269,6 +272,11 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
             },
         )
     };
+    let parse_high_water = with_prepared_parse(input, |prepared| {
+        let parse = prepared.parse;
+        _ = prepared.parse();
+        parse.high_water()
+    });
     let before = accounting::live();
     accounting::reset_peak();
     _ = parse(input);
@@ -276,6 +284,7 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
     ArenaUsage {
         preprocessor_high_water,
         expansion_high_water,
+        parse_high_water,
         peak_regions: peak.regions - before.regions,
         peak_reserved: peak.reserved - before.reserved,
         peak_committed: peak.committed - before.committed,
