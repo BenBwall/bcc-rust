@@ -6,6 +6,15 @@ use std::{
 use rustc_hash::FxBuildHasher;
 
 pub(crate) mod arena;
+/// Compile checks import the crate-private allocator from its source file.
+///
+/// ```compile_fail,E0080
+/// # #[path = "util/bump.rs"]
+/// # mod bump;
+/// let arena = bump::Bump::new();
+/// arena.alloc(String::from("owned"));
+/// ```
+pub(crate) mod bump;
 pub(crate) mod byte_scan;
 pub(crate) mod chunked_queue;
 pub(crate) mod dedup_arena;
