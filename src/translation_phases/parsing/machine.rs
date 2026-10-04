@@ -16,7 +16,10 @@ use super::{
     enum_specifier::EnumSpecifierFrame,
     expression::ExpressionFrame,
     external_declaration::ExternalDeclarationFrame,
-    frame_pool::FramePools,
+    frame_pool::{
+        FramePools,
+        PoolBox,
+    },
     function_definition::FunctionDefinitionFrame,
     initializer::InitializerFrame,
     parameter_list::ParameterListFrame,
@@ -109,11 +112,11 @@ impl ParseFrameKind {
 /// recursion and support the translation-limit requirements of §5.2.4.1,
 /// pp. 20-21; PDF pp. 32-33.
 #[derive(Debug)]
-pub(super) enum ParseAction {
+pub(super) enum ParseAction<'p> {
     /// Consume the current token and keep the active frame.
     Consume,
     /// Suspend the active frame and push an unstarted child.
-    Push(ParseFrame),
+    Push(ParseFrame<'p>),
     /// Complete the active frame and return a typed value to its parent.
     Reduce(ParseValue),
     /// Keep the current token and run the active frame again after a state
@@ -202,21 +205,22 @@ pub(super) struct InitializerResult {
 /// C99: the represented grammar families currently cover declarations through
 /// external definitions, §6.7-§6.9, pp. 97-144; PDF pp. 109-156.
 #[derive(Debug)]
-pub(super) enum ParseFrame {
+pub(super) enum ParseFrame<'p> {
     ExternalDeclaration(ExternalDeclarationFrame),
-    Declaration(DeclarationFrame),
+    Declaration(DeclarationFrame<'p>),
     DeclarationSpecifiers(DeclarationSpecifiersFrame),
-    Declarator(DeclaratorFrame),
+    Declarator(DeclaratorFrame<'p>),
     // Parameter lists and struct/union bodies already own growing lists, so
-    // boxing them keeps every other frame push small.
-    ParameterList(Box<ParameterListFrame>),
-    StructOrUnionSpecifier(Box<StructOrUnionSpecifierFrame>),
-    EnumSpecifier(EnumSpecifierFrame),
+    // boxing them keeps every other frame push small. The boxes are pooled,
+    // so a popped frame's box serves the next one.
+    ParameterList(PoolBox<'p, ParameterListFrame<'p>>),
+    StructOrUnionSpecifier(PoolBox<'p, StructOrUnionSpecifierFrame<'p>>),
+    EnumSpecifier(EnumSpecifierFrame<'p>),
     TypeName(TypeNameFrame),
-    Expression(ExpressionFrame),
-    Initializer(InitializerFrame),
-    FunctionDefinition(FunctionDefinitionFrame),
-    CompoundStatement(CompoundStatementFrame),
+    Expression(ExpressionFrame<'p>),
+    Initializer(InitializerFrame<'p>),
+    FunctionDefinition(FunctionDefinitionFrame<'p>),
+    CompoundStatement(CompoundStatementFrame<'p>),
     Statement(StatementFrame),
 }
 
@@ -233,7 +237,7 @@ pub(super) struct FrameTraceEvent {
     pub(super) depth:  usize,
 }
 
-impl ParseAction {
+impl ParseAction<'_> {
     #[cfg(test)]
     pub(super) fn name(&self) -> &'static str {
         match self {
@@ -247,7 +251,7 @@ impl ParseAction {
     }
 }
 
-impl ParseFrame {
+impl<'p> ParseFrame<'p> {
     /// Counts arena entries retained by a frame before their final bulk insert.
     pub(super) fn retained_node_count(&self) -> usize {
         match self {
@@ -282,7 +286,7 @@ impl ParseFrame {
     }
 
     /// Gives a newly pushed frame spare vectors for the lists it grows.
-    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools) {
+    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'p>) {
         match self {
             | Self::Declaration(frame) => {
                 pools.init_declarators.lend(&mut frame.init_declarators);
@@ -296,6 +300,12 @@ impl ParseFrame {
             | Self::Initializer(frame) => {
                 pools.initializers.lend(&mut frame.elements);
                 pools.source_vectors.lend(&mut frame.source_vectors);
+                if frame.designation.is_none() {
+                    frame.designation = Some(pools.take_designation());
+                }
+            },
+            | Self::FunctionDefinition(frame) => {
+                pools.declarations.lend(&mut frame.declaration_list);
             },
             | Self::CompoundStatement(frame) => {
                 pools.block_items.lend(&mut frame.items);
@@ -318,55 +328,50 @@ impl ParseFrame {
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
-            | Self::FunctionDefinition(_)
             | Self::Statement(_) => {},
         }
     }
 
-    /// Returns a popped frame's vectors to the pools.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools) {
+    /// Returns a popped frame's vectors, boxes, and other pooled storage to
+    /// the pools. Every popped frame comes here, so none of its arena storage
+    /// is left behind.
+    pub(super) fn reclaim_pooled(self, pools: &mut FramePools<'p>) {
         match self {
-            | Self::Declaration(frame) => {
+            | Self::Declaration(mut frame) => {
                 pools.init_declarators.reclaim(&mut frame.init_declarators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
             },
-            | Self::Declarator(frame) => {
-                pools
-                    .pointer_qualifiers
-                    .reclaim(&mut frame.pointer_qualifiers);
-                pools
-                    .direct_declarators
-                    .reclaim(&mut frame.direct_declarators);
+            | Self::Declarator(mut frame) => frame.reclaim_pooled(pools),
+            | Self::Expression(mut frame) => frame.reclaim_pooled(pools),
+            | Self::Initializer(mut frame) => frame.reclaim_pooled(pools),
+            | Self::FunctionDefinition(mut frame) => {
+                pools.declarations.reclaim(&mut frame.declaration_list);
             },
-            | Self::Expression(frame) => frame.reclaim_pooled(pools),
-            | Self::Initializer(frame) => {
-                pools.initializers.reclaim(&mut frame.elements);
-                pools.source_vectors.reclaim(&mut frame.source_vectors);
-            },
-            | Self::CompoundStatement(frame) => {
+            | Self::CompoundStatement(mut frame) => {
                 pools.block_items.reclaim(&mut frame.items);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
             },
-            | Self::ParameterList(frame) => {
+            | Self::ParameterList(mut frame) => {
                 pools.parameters.reclaim(&mut frame.parameters);
                 pools.identifiers.reclaim(&mut frame.identifiers);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
+                pools.parameter_lists.reclaim(frame);
             },
-            | Self::StructOrUnionSpecifier(frame) => {
+            | Self::StructOrUnionSpecifier(mut frame) => {
                 pools.struct_members.reclaim(&mut frame.declarations);
                 pools
                     .struct_declarators
                     .reclaim(&mut frame.member_declarators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
+                pools.struct_or_union_specifiers.reclaim(frame);
             },
-            | Self::EnumSpecifier(frame) => {
+            | Self::EnumSpecifier(mut frame) => {
                 pools.enumerators.reclaim(&mut frame.enumerators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
             },
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
-            | Self::FunctionDefinition(_)
             | Self::Statement(_) => {},
         }
     }
@@ -441,11 +446,11 @@ impl ParseFrame {
     /// repeating [`ParseAction::Continue`] transitions in place.
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         let mut returned = returned;
         loop {
             let action = self.step_once(parser, context, token, returned.take());
@@ -459,11 +464,11 @@ impl ParseFrame {
     /// kind cannot change during a step, so the driver reads it beforehand.
     fn step_once(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self {
             | Self::ExternalDeclaration(frame) => frame.step(parser, context, token, returned),
             | Self::Declaration(frame) => frame.step(parser, context, token, returned),

@@ -36,14 +36,20 @@ use super::{
         Identifier,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        KeywordTokenType,
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        preprocessing::{
+            KeywordTokenType,
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -53,13 +59,13 @@ use crate::translation_phases::{
 /// C99: enumeration specifiers and enumerators are §6.7.2.2,
 /// pp. 105-107; PDF pp. 117-119.
 #[derive(Debug)]
-pub(super) struct EnumSpecifierFrame {
+pub(super) struct EnumSpecifierFrame<'p> {
     /// Current tag/enumerator transition.
     phase: EnumPhase,
     /// Optional enum tag.
     name: Option<Identifier>,
     /// Completed enumerators before arena insertion.
-    pub(super) enumerators: Vec<Enumerator>,
+    pub(super) enumerators: ArenaVec<'p, Enumerator>,
     /// Enumerator name waiting for an optional explicit value.
     current_enumerator: Option<Identifier>,
     /// Whether `{` was consumed, distinguishing a reference from a definition.
@@ -70,7 +76,7 @@ pub(super) struct EnumSpecifierFrame {
     /// a malformed enumerator does not also report that the list is empty.
     body_starting_error_count: usize,
     /// Provenance accumulated across the complete enum specifier.
-    pub(super) source_vectors: Vec<SourceVectors>,
+    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     /// Provenance for the enumerator currently being built.
     current_enumerator_source: Option<SourceVectors>,
     /// Whether the enumerator before the current separator position already
@@ -103,17 +109,17 @@ pub(super) enum EnumPhase {
     FinishBody,
 }
 
-impl EnumSpecifierFrame {
-    pub(super) fn new() -> Self {
+impl<'p> EnumSpecifierFrame<'p> {
+    pub(super) fn new(arena: &'p Bump) -> Self {
         Self {
             phase: EnumPhase::Start,
             name: None,
-            enumerators: Vec::new(),
+            enumerators: ArenaVec::new_in(arena),
             current_enumerator: None,
             body_started: false,
             stopped_before_declaration: false,
             body_starting_error_count: 0,
-            source_vectors: Vec::new(),
+            source_vectors: ArenaVec::new_in(arena),
             current_enumerator_source: None,
             resuming_after_error: false,
         }
@@ -121,11 +127,11 @@ impl EnumSpecifierFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | EnumPhase::Start => {
                 debug_assert!(
@@ -319,6 +325,7 @@ impl EnumSpecifierFrame {
                 );
                 self.phase = EnumPhase::AwaitEnumeratorValue;
                 ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
                     ExpressionMode::ConstantExpression,
                     ExpressionBoundary::Enumerator,
                     parser.hard_error_count,
@@ -468,7 +475,7 @@ impl EnumSpecifierFrame {
     /// `,`, `=`, or `}`. Anything else keeps the malformed-body recovery that
     /// stops before a following declaration.
     fn misplaced_enumerator(
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Token,
     ) -> bool {
@@ -508,7 +515,7 @@ impl EnumSpecifierFrame {
     /// `int f(enum E { A ) int after;`, the `)` closes that parenthesis and
     /// the body's `}` is missing. The scan is bounded so repeated errors stay
     /// linear.
-    fn enumerator_list_continues(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
+    fn enumerator_list_continues(parser: &mut Parser<'p>, context: &mut Context<'_>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {
@@ -551,7 +558,7 @@ impl EnumSpecifierFrame {
 
     fn finish_enumerator(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         expression: Option<ConstantExpressionIndex>,
     ) {
         let source_vectors = self.current_enumerator_source.take().unwrap_or_default();
@@ -567,7 +574,7 @@ impl EnumSpecifierFrame {
         }
     }
 
-    fn finish(&mut self, parser: &mut Parser<'_>, context: &mut Context<'_>) -> ParseAction {
+    fn finish(&mut self, parser: &mut Parser<'p>, context: &mut Context<'_>) -> ParseAction<'p> {
         let enumeration_list = self
             .body_started
             .then(|| parser.append_syntax(&mut self.enumerators));

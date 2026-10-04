@@ -43,13 +43,19 @@ use super::{
         StorageClass,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        preprocessing::{
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -59,16 +65,16 @@ use crate::translation_phases::{
 /// C99: declaration, init-declarator-list, and init-declarator are §6.7,
 /// p. 97; PDF p. 109.
 #[derive(Debug)]
-pub(super) struct DeclarationFrame {
+pub(super) struct DeclarationFrame<'p> {
     /// Current declaration transition.
     phase: DeclarationPhase,
     /// Specifiers shared by every init-declarator in this declaration.
     declaration_specifiers: Option<DeclarationSpecifiers>,
     /// Init-declarators parsed so far, stored as one list when the
     /// declaration reduces.
-    pub(super) init_declarators: Vec<InitDeclarator>,
+    pub(super) init_declarators: ArenaVec<'p, InitDeclarator>,
     /// Provenance accumulated across specifiers, declarators, and separators.
-    pub(super) source_vectors: Vec<SourceVectors>,
+    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     /// Hard-error count on entry, used to scope recovery to this declaration.
     starting_error_count: usize,
     /// Provenance of `=` retained while the initializer child runs.
@@ -115,13 +121,17 @@ pub(super) enum DeclarationPhase {
     Finish,
 }
 
-impl DeclarationFrame {
-    pub(super) fn new(context: DeclarationContext, starting_error_count: usize) -> Self {
+impl<'p> DeclarationFrame<'p> {
+    pub(super) fn new(
+        arena: &'p Bump,
+        context: DeclarationContext,
+        starting_error_count: usize,
+    ) -> Self {
         Self {
             phase: DeclarationPhase::Start,
             declaration_specifiers: None,
-            init_declarators: Vec::new(),
-            source_vectors: Vec::new(),
+            init_declarators: ArenaVec::new_in(arena),
+            source_vectors: ArenaVec::new_in(arena),
             starting_error_count,
             initializer_source: None,
             context,
@@ -163,11 +173,11 @@ impl DeclarationFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | DeclarationPhase::Start => {
                 debug_assert!(
@@ -210,6 +220,7 @@ impl DeclarationFrame {
                 } else {
                     self.phase = DeclarationPhase::AwaitDeclarator;
                     ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        parser.arena,
                         DeclaratorMode::Named,
                     )))
                 }
@@ -475,6 +486,7 @@ impl DeclarationFrame {
                 );
                 self.phase = DeclarationPhase::AwaitInitializer;
                 ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
+                    parser.arena,
                     parser.hard_error_count,
                     self.context == DeclarationContext::ForInitializer,
                     false,
@@ -511,6 +523,7 @@ impl DeclarationFrame {
                 );
                 self.phase = DeclarationPhase::AwaitDeclarator;
                 ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                    parser.arena,
                     DeclaratorMode::Named,
                 )))
             },

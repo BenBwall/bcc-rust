@@ -13,7 +13,10 @@ use super::{
         is_postfix_starter,
         prefix_operator,
     },
-    frame_pool::FramePools,
+    frame_pool::{
+        FramePools,
+        PoolBox,
+    },
     initializer::InitializerFrame,
     machine::{
         ConstantExpressionResult,
@@ -39,15 +42,21 @@ use super::{
     },
     type_name::TypeNameFrame,
 };
-use crate::translation_phases::{
-    Context,
-    GetPosition,
-    SourceVectors,
-    preprocessing::{
-        KeywordTokenType,
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        GetPosition,
+        SourceVectors,
+        preprocessing::{
+            KeywordTokenType,
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -87,18 +96,18 @@ pub(super) struct ExpressionOperand {
 }
 
 #[derive(Debug)]
-pub(super) struct ExpressionFrame {
+pub(super) struct ExpressionFrame<'p> {
     mode:                  ExpressionMode,
     boundary:              ExpressionBoundary,
     recovery_boundary:     ExpressionBoundary,
     phase:                 ExpressionPhase,
-    operators:             Vec<LanguageExpressionOperator>,
-    operands:              Vec<ExpressionOperand>,
+    operators:             ArenaVec<'p, LanguageExpressionOperator>,
+    operands:              ArenaVec<'p, ExpressionOperand>,
     state:                 ExpressionParserState,
     starting_error_count:  usize,
     /// Postfix call under construction, boxed because most expression frames
-    /// never parse a call.
-    pub(super) call:       Option<Box<CallState>>,
+    /// never parse a call. The box comes from and returns to the frame pools.
+    pub(super) call:       Option<PoolBox<'p, CallState<'p>>>,
     pending_sizeof_prefix: Option<SourceVectors>,
     /// The top operand is an error operand that replaced a stray token
     /// already diagnosed, so the tokens after it need no second report.
@@ -107,11 +116,21 @@ pub(super) struct ExpressionFrame {
 
 /// Arguments and provenance of the postfix call an expression frame is
 /// building.
-#[derive(Debug, Default)]
-pub(super) struct CallState {
-    pub(super) arguments: Vec<ExpressionIndex>,
-    source_vectors:       Vec<SourceVectors>,
-    operator_sources:     Vec<SourceVectors>,
+#[derive(Debug)]
+pub(super) struct CallState<'p> {
+    pub(super) arguments: ArenaVec<'p, ExpressionIndex>,
+    source_vectors:       ArenaVec<'p, SourceVectors>,
+    operator_sources:     ArenaVec<'p, SourceVectors>,
+}
+
+impl<'p> CallState<'p> {
+    pub(super) fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            arguments:        ArenaVec::new_in(arena),
+            source_vectors:   ArenaVec::new_in(arena),
+            operator_sources: ArenaVec::new_in(arena),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -353,25 +372,34 @@ fn brace_group_continues_expression(parser: &mut Parser<'_>, context: &mut Conte
     false
 }
 
-impl ExpressionFrame {
+impl<'p> ExpressionFrame<'p> {
     pub(super) fn new(
+        arena: &'p Bump,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
         starting_error_count: usize,
     ) -> Self {
-        Self::with_recovery_boundary(mode, boundary, boundary, starting_error_count)
+        Self::with_recovery_boundary(arena, mode, boundary, boundary, starting_error_count)
     }
 
     fn nested(
         &self,
+        arena: &'p Bump,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
         starting_error_count: usize,
     ) -> Self {
-        Self::with_recovery_boundary(mode, boundary, self.recovery_boundary, starting_error_count)
+        Self::with_recovery_boundary(
+            arena,
+            mode,
+            boundary,
+            self.recovery_boundary,
+            starting_error_count,
+        )
     }
 
     pub(super) fn with_recovery_boundary(
+        arena: &'p Bump,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
         recovery_boundary: ExpressionBoundary,
@@ -382,8 +410,8 @@ impl ExpressionFrame {
             boundary,
             recovery_boundary,
             phase: ExpressionPhase::Parse,
-            operators: Vec::new(),
-            operands: Vec::new(),
+            operators: ArenaVec::new_in(arena),
+            operands: ArenaVec::new_in(arena),
             state: ExpressionParserState::Operand,
             starting_error_count,
             call: None,
@@ -393,20 +421,20 @@ impl ExpressionFrame {
     }
 
     /// Gives the operator and operand stacks spare allocations.
-    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools) {
+    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'p>) {
         pools.operators.lend(&mut self.operators);
         pools.operands.lend(&mut self.operands);
     }
 
     /// Returns the operator and operand stacks' allocations to the pools.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools) {
+    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'p>) {
         pools.operators.reclaim(&mut self.operators);
         pools.operands.reclaim(&mut self.operands);
         if let Some(mut call) = self.call.take() {
             call.arguments.clear();
             call.source_vectors.clear();
             call.operator_sources.clear();
-            pools.reclaim_call(call);
+            pools.calls.reclaim(call);
         }
     }
 
@@ -444,11 +472,11 @@ impl ExpressionFrame {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | ExpressionPhase::RecoverUnexpectedBrace(depth, source_vectors) => {
                 debug_assert!(returned.is_none());
@@ -475,6 +503,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitGrouped(opening);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::Expression,
                     ExpressionBoundary::ClosingParenthesis,
                     parser.hard_error_count,
@@ -525,6 +554,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitSubscript(base, opening);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::Expression,
                     ExpressionBoundary::ClosingSquareBracket,
                     parser.hard_error_count,
@@ -598,6 +628,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitCallArgument(base);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::AssignmentExpression,
                     ExpressionBoundary::Argument,
                     parser.hard_error_count,
@@ -706,6 +737,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitPrefix(operator, operator_source);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     child_mode,
                     self.boundary,
                     parser.hard_error_count,
@@ -747,6 +779,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitSizeofExpression(sizeof_source);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::UnaryExpression,
                     self.boundary,
                     parser.hard_error_count,
@@ -867,6 +900,7 @@ impl ExpressionFrame {
                 self.phase =
                     ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind);
                 return ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
+                    parser.arena,
                     parser.hard_error_count,
                     self.closing_parenthesis_is_boundary(),
                     self.closing_square_bracket_is_boundary(),
@@ -903,6 +937,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitCastOperand(type_name, type_source);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::CastExpression,
                     self.boundary,
                     parser.hard_error_count,
@@ -929,6 +964,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitConditionalMiddle;
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::Expression,
                     ExpressionBoundary::Statement(ExpressionTerminator::Colon),
                     parser.hard_error_count,
@@ -984,6 +1020,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitConditionalElse;
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::ConstantExpression,
                     self.boundary,
                     parser.hard_error_count,
@@ -1473,7 +1510,7 @@ impl ExpressionFrame {
     /// Returns whether the current `(` opens a type name: a type-name starter
     /// follows, or a storage-class or `inline` keyword that a type-name frame
     /// diagnoses as not allowed before one, as in `(static int)x`.
-    fn parenthesized_type_name_follows(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
+    fn parenthesized_type_name_follows(parser: &mut Parser<'p>, context: &mut Context<'_>) -> bool {
         let Some(following) = parser.cursor.following(context) else {
             return false;
         };
@@ -1517,7 +1554,7 @@ impl ExpressionFrame {
 
     fn pop_operand_or_error(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
     ) -> ExpressionOperand {
         if let Some(operand) = self.operands.pop() {
@@ -1529,22 +1566,21 @@ impl ExpressionFrame {
             .expect("error expression supplies one operand")
     }
 
-    fn call_state(&mut self, pools: &mut FramePools) -> &mut CallState {
-        self.call
-            .get_or_insert_with(|| pools.calls.pop().unwrap_or_default())
+    fn call_state(&mut self, pools: &mut FramePools<'p>) -> &mut CallState<'p> {
+        self.call.get_or_insert_with(|| pools.take_call())
     }
 
-    fn merge_call_source(&mut self, pools: &mut FramePools, source: SourceVectors) {
+    fn merge_call_source(&mut self, pools: &mut FramePools<'p>, source: SourceVectors) {
         self.call_state(pools).source_vectors.push(source);
     }
 
-    fn merge_call_operator_source(&mut self, pools: &mut FramePools, source: SourceVectors) {
+    fn merge_call_operator_source(&mut self, pools: &mut FramePools<'p>, source: SourceVectors) {
         self.call_state(pools).operator_sources.push(source);
     }
 
     fn finish_call(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         base: ExpressionIndex,
     ) {
@@ -1565,7 +1601,7 @@ impl ExpressionFrame {
         self.push_operand(index, true, true);
     }
 
-    fn reduce_one(&mut self, parser: &mut Parser<'_>, context: &mut Context<'_>) {
+    fn reduce_one(&mut self, parser: &mut Parser<'p>, context: &mut Context<'_>) {
         let operator = self
             .operators
             .pop()
@@ -1733,7 +1769,7 @@ impl ExpressionFrame {
 
     fn is_strong_grammar_boundary(
         &self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Token,
     ) -> bool {
@@ -1766,7 +1802,7 @@ impl ExpressionFrame {
     }
 
     pub(super) fn is_strong_grammar_boundary_for(
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Token,
         boundary: ExpressionBoundary,
@@ -1846,7 +1882,7 @@ impl ExpressionFrame {
 
     fn push_error(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         anchor: Option<Token>,
     ) {
@@ -1873,7 +1909,7 @@ impl ExpressionFrame {
 
     fn push_error_with_source(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         source_vectors: SourceVectors,
         operator_source_vectors: Option<SourceVectors>,
     ) {
@@ -1894,7 +1930,7 @@ impl ExpressionFrame {
         self.stray_error_operand = false;
     }
 
-    fn finish(&mut self, parser: &mut Parser<'_>, context: &mut Context<'_>) -> ParseAction {
+    fn finish(&mut self, parser: &mut Parser<'p>, context: &mut Context<'_>) -> ParseAction<'p> {
         while !self.operators.is_empty() {
             self.reduce_one(parser, context);
         }

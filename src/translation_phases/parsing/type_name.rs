@@ -48,7 +48,7 @@ pub(super) enum TypeNamePhase {
     Finish(Option<Declarator>),
 }
 
-impl TypeNameFrame {
+impl<'p> TypeNameFrame {
     pub(super) fn new(starting_error_count: usize) -> Self {
         Self {
             phase: TypeNamePhase::Start,
@@ -63,11 +63,11 @@ impl TypeNameFrame {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | TypeNamePhase::Start => {
                 debug_assert!(returned.is_none());
@@ -84,6 +84,7 @@ impl TypeNameFrame {
                 if token.is_some_and(|token| is_abstract_declarator_starter(token.kind)) {
                     self.phase = TypeNamePhase::AwaitDeclarator;
                     ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        parser.arena,
                         DeclaratorMode::Abstract,
                     )))
                 } else {

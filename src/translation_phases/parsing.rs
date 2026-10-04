@@ -15,8 +15,8 @@
 //! Phase 05 closes declarations, function definitions, compound blocks, every
 //! C99 statement family, expressions, type names, initializers, and the scope
 //! transitions needed for typedef-sensitive grammar decisions into a complete
-//! translation-unit interface. All productions use heap-backed frames and
-//! retain recovered syntax at their owning grammar boundaries.
+//! translation-unit interface. All productions use frames held in the parse
+//! arena and retain recovered syntax at their owning grammar boundaries.
 //!
 //! Standard references in this module cite WG14/N1256, ISO/IEC 9899:TC3
 //! (C99 with Technical Corrigenda 1, 2, and 3). Each reference gives the
@@ -91,7 +91,10 @@ use crate::{
         TranslationPhase,
     },
     util::{
-        bump::ArenaVec,
+        bump::{
+            ArenaVec,
+            Bump,
+        },
         string_cache::StringCacheId,
     },
 };
@@ -105,12 +108,16 @@ use crate::{
 /// p. 140; PDF p. 152: a translation unit “consists of a sequence of external
 /// declarations.” The diagnostic obligation is §5.1.1.3, p. 11; PDF p. 23.
 pub(crate) struct Parser<'p> {
+    /// The parse arena, which holds the parser's working memory until
+    /// parsing ends.
+    arena: &'p Bump,
     /// Buffered parser-facing token stream.
     cursor: TokenCursor,
-    /// Heap-backed grammar control stack; the final element is active.
-    frames: Vec<ParseFrame>,
-    /// Spare vectors lent to pushed frames and reclaimed when they pop.
-    pools: frame_pool::FramePools,
+    /// Grammar control stack in the parse arena; the final element is
+    /// active.
+    frames: ArenaVec<'p, ParseFrame<'p>>,
+    /// Spare storage lent to pushed frames and reclaimed when they pop.
+    pools: frame_pool::FramePools<'p>,
     /// Syntax nodes retained by the pending frames, updated on push/pop.
     retained_frame_nodes: usize,
     /// Completed child value waiting for its parent frame.

@@ -45,14 +45,20 @@ use super::{
         StructOrUnionSpecifierIndex,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        KeywordTokenType,
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        preprocessing::{
+            KeywordTokenType,
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -62,7 +68,7 @@ use crate::translation_phases::{
 /// C99: structure and union specifiers, member declarations, and bit-fields
 /// are §6.7.2.1, pp. 101-104; PDF pp. 113-116.
 #[derive(Debug)]
-pub(super) struct StructOrUnionSpecifierFrame {
+pub(super) struct StructOrUnionSpecifierFrame<'p> {
     /// Current tag/member transition.
     phase: StructOrUnionPhase,
     /// Keyword-selected aggregate kind.
@@ -70,9 +76,9 @@ pub(super) struct StructOrUnionSpecifierFrame {
     /// Optional tag identifier.
     identifier: Option<Identifier>,
     /// Completed member declarations before arena insertion.
-    pub(super) declarations: Vec<StructDeclaration>,
+    pub(super) declarations: ArenaVec<'p, StructDeclaration>,
     /// Declarators belonging to the member declaration in progress.
-    pub(super) member_declarators: Vec<StructDeclarator>,
+    pub(super) member_declarators: ArenaVec<'p, StructDeclarator>,
     /// Specifiers shared by the member declarators in progress.
     member_specifiers: Option<DeclarationSpecifiers>,
     /// Named declarator waiting for an optional bit-field width.
@@ -88,7 +94,7 @@ pub(super) struct StructOrUnionSpecifierFrame {
     /// again.
     width_recovered: bool,
     /// Provenance accumulated across the complete tag specifier.
-    pub(super) source_vectors: Vec<SourceVectors>,
+    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     /// Provenance accumulated for the member declaration in progress.
     member_source: Option<SourceVectors>,
     /// Provenance for the member declarator/bit-field currently being built.
@@ -126,20 +132,20 @@ pub(super) enum StructOrUnionPhase {
     FinishBody,
 }
 
-impl StructOrUnionSpecifierFrame {
-    pub(super) fn new() -> Self {
+impl<'p> StructOrUnionSpecifierFrame<'p> {
+    pub(super) fn new(arena: &'p Bump) -> Self {
         Self {
             phase: StructOrUnionPhase::Start,
             kind: None,
             identifier: None,
-            declarations: Vec::new(),
-            member_declarators: Vec::new(),
+            declarations: ArenaVec::new_in(arena),
+            member_declarators: ArenaVec::new_in(arena),
             member_specifiers: None,
             member_declarator: None,
             body_started: false,
             resuming_after_member_recovery: false,
             width_recovered: false,
-            source_vectors: Vec::new(),
+            source_vectors: ArenaVec::new_in(arena),
             member_source: None,
             current_member_declarator_source: None,
         }
@@ -147,11 +153,11 @@ impl StructOrUnionSpecifierFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | StructOrUnionPhase::Start => {
                 debug_assert!(
@@ -307,6 +313,7 @@ impl StructOrUnionSpecifierFrame {
                 } else {
                     self.phase = StructOrUnionPhase::AwaitMemberDeclarator;
                     ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        parser.arena,
                         DeclaratorMode::Named,
                     )))
                 }
@@ -362,6 +369,7 @@ impl StructOrUnionSpecifierFrame {
                 );
                 self.phase = StructOrUnionPhase::AwaitBitFieldWidth;
                 ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
                     ExpressionMode::ConstantExpression,
                     ExpressionBoundary::StructMember,
                     parser.hard_error_count,
@@ -518,7 +526,7 @@ impl StructOrUnionSpecifierFrame {
     /// `int f(struct S { int x ) int after;`, the `)` closes that
     /// parenthesis and the body's `}` is missing. The scan is bounded so
     /// repeated errors stay linear.
-    fn member_list_continues(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
+    fn member_list_continues(parser: &mut Parser<'p>, context: &mut Context<'_>) -> bool {
         const SCAN_LIMIT: usize = 64;
         // Parentheses and brackets, which never contain `;`.
         let mut groups = 0_u32;
@@ -603,7 +611,7 @@ impl StructOrUnionSpecifierFrame {
         false
     }
 
-    fn finish_member(&mut self, parser: &mut Parser<'_>) {
+    fn finish_member(&mut self, parser: &mut Parser<'p>) {
         // Commit all declarators for this shared specifier-qualifier-list as a
         // single member declaration with one stable arena slice.
         let start = parser.append_syntax(&mut self.member_declarators);
@@ -621,7 +629,7 @@ impl StructOrUnionSpecifierFrame {
         self.source_vectors.push(source_vectors);
     }
 
-    fn finish(&mut self, parser: &mut Parser<'_>, context: &mut Context<'_>) -> ParseAction {
+    fn finish(&mut self, parser: &mut Parser<'p>, context: &mut Context<'_>) -> ParseAction<'p> {
         let declaration_list = self
             .body_started
             .then(|| parser.append_syntax(&mut self.declarations));

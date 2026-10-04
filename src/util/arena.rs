@@ -33,6 +33,11 @@ use std::{
     ptr::NonNull,
 };
 
+use allocator_api2::{
+    alloc::Allocator,
+    vec::Vec as AllocVec,
+};
+
 use super::HashMap;
 
 const PAGE_BITS: u32 = 16;
@@ -161,7 +166,10 @@ impl Arena {
     }
 
     /// Moves every value out of `values`, in order, into one contiguous run.
-    pub(crate) fn extend<T: 'static>(&mut self, values: &mut Vec<T>) -> ArenaRun {
+    pub(crate) fn extend<T: 'static, A: Allocator>(
+        &mut self,
+        values: &mut AllocVec<T, A>,
+    ) -> ArenaRun {
         self.inner.get_mut().extend(values)
     }
 
@@ -417,7 +425,7 @@ impl Inner {
         (self.handle(block, offset), ptr)
     }
 
-    fn extend<T: 'static>(&mut self, values: &mut Vec<T>) -> ArenaRun {
+    fn extend<T: 'static, A: Allocator>(&mut self, values: &mut AllocVec<T, A>) -> ArenaRun {
         if values.is_empty() {
             return ArenaRun::EMPTY;
         }
@@ -568,8 +576,8 @@ mod tests {
     #[test]
     fn runs_are_contiguous_including_runs_larger_than_a_page() {
         let mut arena = Arena::new();
-        let small = arena.extend(&mut vec![1_u16, 2, 3]);
-        let large_values: Vec<u64> = (0..20_000).collect();
+        let small = arena.extend(&mut allocator_api2::vec![1_u16, 2, 3]);
+        let large_values: AllocVec<u64> = (0..20_000).collect();
         let large = arena.extend(&mut large_values.clone());
         let after = arena.push(5_u64);
         assert_eq!(arena.slice::<u16>(small), &[1, 2, 3]);
@@ -609,7 +617,7 @@ mod tests {
     #[should_panic(expected = "out of bounds")]
     fn a_run_cannot_extend_past_its_values() {
         let mut arena = Arena::new();
-        let run = arena.extend(&mut vec![1_u32, 2]);
+        let run = arena.extend(&mut allocator_api2::vec![1_u32, 2]);
         let _ = arena.slice::<u32>(ArenaRun {
             start:  run.start,
             length: 3,
@@ -622,7 +630,7 @@ mod tests {
         let kept = arena.push(1_u32);
         let checkpoint = arena.checkpoint();
         let _ = arena.push(2_u32);
-        let _ = arena.extend(&mut (0..40_000_u32).collect());
+        let _ = arena.extend(&mut (0..40_000_u32).collect::<AllocVec<_>>());
         let _ = arena.push(3_u8);
         arena.restore(checkpoint);
         assert_eq!(arena.count::<u32>(), 1);

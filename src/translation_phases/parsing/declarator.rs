@@ -3,7 +3,6 @@
 use std::{
     cell::Cell,
     fmt::Debug,
-    rc::Rc,
 };
 
 use super::{
@@ -29,6 +28,7 @@ use super::{
         is_array_pointer_marker,
         is_operator,
     },
+    frame_pool::FramePools,
     machine::{
         ExpressionResult,
         ParameterListResult,
@@ -49,14 +49,20 @@ use super::{
         SyntaxList,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        KeywordTokenType,
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        preprocessing::{
+            KeywordTokenType,
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -83,15 +89,15 @@ pub(super) enum DeclaratorMode {
 ///
 /// C99: declarator and direct-declarator are §6.7.5, pp. 114-121; PDF
 /// pp. 126-133. Abstract forms are §6.7.6, p. 122; PDF p. 134.
-pub(super) struct DeclaratorFrame {
+pub(super) struct DeclaratorFrame<'p> {
     /// Current pointer/base/suffix transition.
     phase: DeclaratorPhase,
     /// Whether the declarator requires or permits an identifier.
     mode: DeclaratorMode,
     /// Qualifiers for completed pointer levels, outermost first.
-    pub(super) pointer_qualifiers: Vec<TypeQualifiers>,
+    pub(super) pointer_qualifiers: ArenaVec<'p, TypeQualifiers>,
     /// Direct base and suffixes accumulated before arena insertion.
-    pub(super) direct_declarators: Vec<DirectDeclarator>,
+    pub(super) direct_declarators: ArenaVec<'p, DirectDeclarator>,
     /// Qualifiers being collected for the current pointer level.
     current_qualifiers: TypeQualifiers,
     /// Whether at least one pointer level has been parsed.
@@ -105,8 +111,12 @@ pub(super) struct DeclaratorFrame {
     /// the innermost one parses its identifier. A nested declarator's
     /// identifier is also its parent's, so each `(`-nesting level learns
     /// whether it is named without walking its children again, keeping deep
-    /// `(*(*(*x)())())()` chains linear.
-    chain_named: Option<Rc<Cell<bool>>>,
+    /// `(*(*(*x)())())()` chains linear. The flag lives in the parse arena
+    /// and returns to the frame pools when the frame that took it pops.
+    chain_named: Option<&'p Cell<bool>>,
+    /// Whether this frame took `chain_named` from the pools, as the
+    /// outermost declarator of its chain.
+    owns_chain_named: bool,
     /// Qualifiers accumulated for the active array suffix.
     array_qualifiers: TypeQualifiers,
     /// Whether array qualifiers occurred before `static`.
@@ -159,18 +169,19 @@ pub(super) enum DeclaratorPhase {
     Finish,
 }
 
-impl DeclaratorFrame {
-    pub(super) fn new(mode: DeclaratorMode) -> Self {
+impl<'p> DeclaratorFrame<'p> {
+    pub(super) fn new(arena: &'p Bump, mode: DeclaratorMode) -> Self {
         Self {
             phase: DeclaratorPhase::PointerOrBase,
             mode,
-            pointer_qualifiers: Vec::new(),
-            direct_declarators: Vec::new(),
+            pointer_qualifiers: ArenaVec::new_in(arena),
+            direct_declarators: ArenaVec::new_in(arena),
             current_qualifiers: TypeQualifiers::empty(),
             has_pointer_level: false,
             has_direct_declarator: false,
             named: false,
             chain_named: None,
+            owns_chain_named: false,
             array_qualifiers: TypeQualifiers::empty(),
             array_qualifiers_before_static: false,
             array_is_static: false,
@@ -183,11 +194,11 @@ impl DeclaratorFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | DeclaratorPhase::PointerOrBase => {
                 debug_assert!(
@@ -299,7 +310,7 @@ impl DeclaratorFrame {
                     "this frame phase cannot receive a child value"
                 );
                 self.phase = DeclaratorPhase::AwaitNested;
-                ParseAction::Push(ParseFrame::Declarator(self.nested_frame()))
+                ParseAction::Push(ParseFrame::Declarator(self.nested_frame(parser)))
             },
             | DeclaratorPhase::ClassifyAbstractParenthesis => {
                 debug_assert!(
@@ -322,12 +333,10 @@ impl DeclaratorFrame {
                     ParseAction::Consume
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
                     self.phase = DeclaratorPhase::AwaitParameterList;
-                    ParseAction::Push(ParseFrame::ParameterList(Box::new(
-                        ParameterListFrame::new(false),
-                    )))
+                    Self::push_parameter_list(parser, false)
                 } else {
                     self.phase = DeclaratorPhase::AwaitNested;
-                    ParseAction::Push(ParseFrame::Declarator(self.nested_frame()))
+                    ParseAction::Push(ParseFrame::Declarator(self.nested_frame(parser)))
                 }
             },
             | DeclaratorPhase::AwaitNested => {
@@ -516,6 +525,7 @@ impl DeclaratorFrame {
                 }
                 self.phase = DeclaratorPhase::AwaitArrayBound;
                 ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
                     ExpressionMode::AssignmentExpression,
                     ExpressionBoundary::ArrayBound,
                     parser.hard_error_count,
@@ -676,9 +686,7 @@ impl DeclaratorFrame {
                     ParseAction::Reprocess
                 } else {
                     self.phase = DeclaratorPhase::AwaitParameterList;
-                    ParseAction::Push(ParseFrame::ParameterList(Box::new(
-                        ParameterListFrame::new(allow_k_and_r),
-                    )))
+                    Self::push_parameter_list(parser, allow_k_and_r)
                 }
             },
             | DeclaratorPhase::AwaitParameterList => {
@@ -750,17 +758,43 @@ impl DeclaratorFrame {
         self.array_is_pointer = false;
     }
 
+    /// Pushes a parameter-list child in a pooled box.
+    fn push_parameter_list(parser: &mut Parser<'p>, allow_k_and_r: bool) -> ParseAction<'p> {
+        let frame = ParameterListFrame::new(parser.arena, allow_k_and_r);
+        ParseAction::Push(ParseFrame::ParameterList(
+            parser.pools.parameter_list(frame),
+        ))
+    }
+
     /// Creates the declarator nested inside this one's `(`, sharing the
     /// chain flag through which it reports an identifier. Abstract
-    /// declarators never declare one, so they skip the allocation.
-    fn nested_frame(&mut self) -> Self {
-        let mut nested = Self::new(self.mode);
+    /// declarators never declare one, so they take no flag.
+    fn nested_frame(&mut self, parser: &mut Parser<'p>) -> Self {
+        let mut nested = Self::new(parser.arena, self.mode);
         if self.mode != DeclaratorMode::Abstract {
-            nested.chain_named = Some(Rc::clone(
-                self.chain_named
-                    .get_or_insert_with(|| Rc::new(Cell::new(false))),
-            ));
+            let chain_named = *self.chain_named.get_or_insert_with(|| {
+                self.owns_chain_named = true;
+                parser.pools.take_chain_flag()
+            });
+            nested.chain_named = Some(chain_named);
         }
         nested
+    }
+
+    /// Returns this popped frame's lists and, if it began its chain, the
+    /// chain flag. Every nested declarator of the chain has popped by then.
+    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'p>) {
+        pools
+            .pointer_qualifiers
+            .reclaim(&mut self.pointer_qualifiers);
+        pools
+            .direct_declarators
+            .reclaim(&mut self.direct_declarators);
+        if self.owns_chain_named
+            && let Some(chain_named) = self.chain_named.take()
+        {
+            self.owns_chain_named = false;
+            pools.reclaim_chain_flag(chain_named);
+        }
     }
 }

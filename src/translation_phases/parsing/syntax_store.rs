@@ -63,9 +63,12 @@ use super::{
         TypeNameIndex,
     },
 };
-use crate::util::arena::{
-    Arena,
-    ArenaCheckpoint,
+use crate::util::{
+    arena::{
+        Arena,
+        ArenaCheckpoint,
+    },
+    bump::ArenaVec,
 };
 
 /// Owns the storage of every syntax domain constructed by parser frames.
@@ -151,7 +154,7 @@ impl SyntaxStore {
     }
 
     /// Moves `nodes` into one contiguous list.
-    pub(super) fn append<T: 'static>(&mut self, nodes: &mut Vec<T>) -> SyntaxList<T> {
+    pub(super) fn append<T: 'static>(&mut self, nodes: &mut ArenaVec<'_, T>) -> SyntaxList<T> {
         SyntaxList::new(self.arena.extend(nodes))
     }
 

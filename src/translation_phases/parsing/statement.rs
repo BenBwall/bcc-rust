@@ -188,7 +188,7 @@ impl HeaderKind {
     reason = "The single iterative statement grammar dispatcher keeps all phase transitions and \
               delimiter ownership visible in one frame implementation."
 )]
-impl StatementFrame {
+impl<'p> StatementFrame {
     pub(super) fn new(starting_error_count: usize, implicit_scope: Option<ScopeKind>) -> Self {
         Self {
             phase: StatementPhase::Start,
@@ -218,11 +218,11 @@ impl StatementFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         if self.entry_scope_depth.is_none() {
             self.entry_scope_depth = Some(parser.scopes.depth());
             if let Some(kind) = self.implicit_scope {
@@ -236,7 +236,7 @@ impl StatementFrame {
                 if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
                     self.phase = StatementPhase::AwaitCompound;
                     return ParseAction::Push(ParseFrame::CompoundStatement(
-                        CompoundStatementFrame::new(parser.hard_error_count, false),
+                        CompoundStatementFrame::new(parser.arena, parser.hard_error_count, false),
                     ));
                 }
                 if is_operator(token, OperatorTokenType::Semicolon) {
@@ -416,6 +416,7 @@ impl StatementFrame {
                 }
                 self.phase = StatementPhase::AwaitExpression;
                 ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
                     ExpressionMode::Expression,
                     ExpressionBoundary::Statement(ExpressionTerminator::Semicolon),
                     parser.hard_error_count,
@@ -469,6 +470,7 @@ impl StatementFrame {
                 } else {
                     self.phase = StatementPhase::AwaitReturnExpression;
                     ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        parser.arena,
                         ExpressionMode::Expression,
                         ExpressionBoundary::Statement(ExpressionTerminator::Semicolon),
                         parser.hard_error_count,
@@ -567,6 +569,7 @@ impl StatementFrame {
                 } else {
                     self.phase = StatementPhase::AwaitCaseExpression;
                     ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        parser.arena,
                         ExpressionMode::ConstantExpression,
                         ExpressionBoundary::Statement(ExpressionTerminator::Colon),
                         parser.hard_error_count,
@@ -688,6 +691,7 @@ impl StatementFrame {
                 } else {
                     self.phase = StatementPhase::AwaitHeaderExpression(kind);
                     ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        parser.arena,
                         ExpressionMode::Expression,
                         ExpressionBoundary::ClosingParenthesis,
                         parser.hard_error_count,
@@ -907,6 +911,7 @@ impl StatementFrame {
                 } else {
                     self.phase = StatementPhase::DoAwaitExpression(body);
                     ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        parser.arena,
                         ExpressionMode::Expression,
                         ExpressionBoundary::ClosingParenthesis,
                         parser.hard_error_count,
@@ -1001,12 +1006,14 @@ impl StatementFrame {
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
                     self.phase = StatementPhase::AwaitForInitializerDeclaration;
                     ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
+                        parser.arena,
                         DeclarationContext::ForInitializer,
                         parser.hard_error_count,
                     )))
                 } else {
                     self.phase = StatementPhase::AwaitForInitializerExpression;
                     ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        parser.arena,
                         ExpressionMode::Expression,
                         ExpressionBoundary::Statement(ExpressionTerminator::ForSemicolon),
                         parser.hard_error_count,
@@ -1078,6 +1085,7 @@ impl StatementFrame {
                 } else {
                     self.phase = StatementPhase::AwaitForCondition(initializer);
                     ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        parser.arena,
                         ExpressionMode::Expression,
                         ExpressionBoundary::Statement(ExpressionTerminator::ForSemicolon),
                         parser.hard_error_count,
@@ -1128,6 +1136,7 @@ impl StatementFrame {
                 } else {
                     self.phase = StatementPhase::AwaitForIteration(initializer, condition);
                     ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        parser.arena,
                         ExpressionMode::Expression,
                         ExpressionBoundary::ClosingParenthesis,
                         parser.hard_error_count,
@@ -1250,7 +1259,7 @@ impl StatementFrame {
         }
     }
 
-    fn enter_construct_scope(parser: &mut Parser<'_>, kind: ScopeKind) {
+    fn enter_construct_scope(parser: &mut Parser<'p>, kind: ScopeKind) {
         parser.scopes.enter_scope(kind);
     }
 
@@ -1269,7 +1278,7 @@ impl StatementFrame {
     /// starter outside parentheses), at the end of input, or after
     /// [`HEADER_RECOVERY_LOOKAHEAD`] tokens.
     fn for_header_closer_distance(
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
     ) -> Option<u16> {
         let mut depth = 0_usize;
@@ -1297,24 +1306,24 @@ impl StatementFrame {
         None
     }
 
-    fn missing_slot(parser: &mut Parser<'_>, context: &mut Context<'_>) -> ExpressionSlot {
+    fn missing_slot(parser: &mut Parser<'p>, context: &mut Context<'_>) -> ExpressionSlot {
         ExpressionSlot::Missing(parser.missing_syntax_source(context))
     }
 
     fn missing_constant_slot(
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
     ) -> ConstantExpressionSlot {
         ConstantExpressionSlot::Missing(parser.missing_syntax_source(context))
     }
 
-    fn merge_token(&mut self, parser: &Parser<'_>, context: &mut Context<'_>, token: Token) {
+    fn merge_token(&mut self, parser: &Parser<'p>, context: &mut Context<'_>, token: Token) {
         parser.merge_source(context, &mut self.source_vectors, token);
     }
 
     fn merge_statement(
         &mut self,
-        parser: &Parser<'_>,
+        parser: &Parser<'p>,
         context: &mut Context<'_>,
         statement: StatementIndex,
     ) {
@@ -1343,7 +1352,7 @@ impl StatementFrame {
         ConstantExpressionSlot::Parsed(index)
     }
 
-    fn merge_slot(&mut self, parser: &Parser<'_>, context: &mut Context<'_>, slot: ExpressionSlot) {
+    fn merge_slot(&mut self, parser: &Parser<'p>, context: &mut Context<'_>, slot: ExpressionSlot) {
         let source = match slot {
             | ExpressionSlot::Parsed(index) => parser.syntax[index].source_vectors,
             | ExpressionSlot::Missing(source) => source,
@@ -1358,7 +1367,7 @@ impl StatementFrame {
 
     fn merge_constant_slot(
         &mut self,
-        parser: &Parser<'_>,
+        parser: &Parser<'p>,
         context: &mut Context<'_>,
         slot: ConstantExpressionSlot,
     ) {
@@ -1376,7 +1385,7 @@ impl StatementFrame {
 
     fn own_semicolon_or_report(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         position: &'static str,
@@ -1397,7 +1406,7 @@ impl StatementFrame {
 
     fn own_colon_or_report(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         position: &'static str,
@@ -1415,19 +1424,19 @@ impl StatementFrame {
 
     fn finish_existing(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         statement: StatementIndex,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         self.restore_scopes(parser);
         ParseAction::Reduce(ParseValue::Statement(statement))
     }
 
     fn finish(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         kind: StatementType,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         let source_vectors = self
             .source_vectors
             .unwrap_or_else(|| parser.missing_syntax_source(context));
@@ -1440,7 +1449,7 @@ impl StatementFrame {
         ParseAction::Reduce(ParseValue::Statement(StatementIndex(index)))
     }
 
-    fn restore_scopes(&mut self, parser: &mut Parser<'_>) {
+    fn restore_scopes(&mut self, parser: &mut Parser<'p>) {
         if self.owns_switch_scope {
             let _switch_scope = parser
                 .switch_scopes

@@ -156,8 +156,9 @@ impl<'p> Parser<'p> {
     fn with_upstream(upstream: Upstream, arena: &'p Bump) -> Self {
         Self {
             cursor: TokenCursor::new(upstream),
-            frames: Vec::new(),
-            pools: FramePools::default(),
+            arena,
+            frames: ArenaVec::new_in(arena),
+            pools: FramePools::new_in(arena),
             retained_frame_nodes: 0,
             returned: None,
             syntax: SyntaxStore::default(),
@@ -315,7 +316,7 @@ impl<'p> Parser<'p> {
             let syntax_checkpoint = self.syntax.checkpoint();
             // Step the active frame in place. Frames never inspect the control
             // stack, so it is detached while the frame borrows the parser.
-            let mut frames = std::mem::take(&mut self.frames);
+            let mut frames = std::mem::replace(&mut self.frames, ArenaVec::new_in(self.arena));
             let frame = frames.last_mut().expect("parser frame stack is nonempty");
             let frame_kind = frame.kind();
             self.active_frame = frame_kind;
@@ -376,7 +377,7 @@ impl<'p> Parser<'p> {
                     self.push_frame(child);
                 },
                 | ParseAction::Reduce(value) => {
-                    let mut frame = self.pop_frame();
+                    let frame = self.pop_frame();
                     frame.reclaim_pooled(&mut self.pools);
                     self.returned = Some(value);
                 },
@@ -434,7 +435,10 @@ impl<'p> Parser<'p> {
     }
 
     /// Moves frame-retained nodes into one syntax list and counts them.
-    pub(super) fn append_syntax<T: 'static>(&mut self, nodes: &mut Vec<T>) -> SyntaxList<T> {
+    pub(super) fn append_syntax<T: 'static>(
+        &mut self,
+        nodes: &mut ArenaVec<'_, T>,
+    ) -> SyntaxList<T> {
         self.syntax_nodes += nodes.len();
         self.syntax.append(nodes)
     }
@@ -445,7 +449,7 @@ impl<'p> Parser<'p> {
         self.syntax_nodes = self.syntax.node_count();
     }
 
-    fn push_frame(&mut self, mut frame: ParseFrame) {
+    fn push_frame(&mut self, mut frame: ParseFrame<'p>) {
         frame.lend_pooled(&mut self.pools);
         self.retained_frame_nodes = self
             .retained_frame_nodes
@@ -453,7 +457,7 @@ impl<'p> Parser<'p> {
         self.frames.push(frame);
     }
 
-    fn pop_frame(&mut self) -> ParseFrame {
+    fn pop_frame(&mut self) -> ParseFrame<'p> {
         let frame = self.frames.pop().expect("parser frame stack is nonempty");
         self.retained_frame_nodes = self
             .retained_frame_nodes
@@ -500,7 +504,9 @@ impl<'p> Parser<'p> {
             token,
         );
         self.cursor.abandon();
-        self.frames.clear();
+        while let Some(frame) = self.frames.pop() {
+            frame.reclaim_pooled(&mut self.pools);
+        }
         self.retained_frame_nodes = 0;
         self.returned = None;
         self.recovery.abandon();

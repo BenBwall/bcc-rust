@@ -35,7 +35,7 @@ main source.
 `Parser::parse_translation_unit` returns an ordered `ParsedTranslationUnit` and
 validated, read-only `SyntaxTree`. Declarations, prototype-style and old-style
 function definitions, blocks, every C99 statement family, expressions, type
-names, and initializers run through one explicit heap-backed frame stack.
+names, and initializers run through one explicit frame stack in the parse arena.
 Malformed input retains repaired syntax where meaningful, produces a
 provenance-only external error node for pure top-level garbage, and emits
 structured FIFO diagnostics with recovery context.

@@ -31,21 +31,27 @@ use super::{
         SyntaxList,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    TranslationError,
-    preprocessing::{
-        OperatorTokenType,
-        Token,
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        TranslationError,
+        preprocessing::{
+            OperatorTokenType,
+            Token,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
 #[derive(Debug)]
-pub(super) struct FunctionDefinitionFrame {
+pub(super) struct FunctionDefinitionFrame<'p> {
     phase: FunctionDefinitionPhase,
     head: DeclarationIndex,
-    pub(super) declaration_list: Vec<DeclarationIndex>,
+    pub(super) declaration_list: ArenaVec<'p, DeclarationIndex>,
     body: Option<StatementIndex>,
     pub(super) source_vectors: Option<SourceVectors>,
     starting_error_count: usize,
@@ -70,12 +76,16 @@ pub(super) enum FunctionDefinitionPhase {
     reason = "Frame phases assert the typed driver protocol, whose mismatch already identifies \
               the invariant."
 )]
-impl FunctionDefinitionFrame {
-    pub(super) fn new(head: DeclarationIndex, starting_error_count: usize) -> Self {
+impl<'p> FunctionDefinitionFrame<'p> {
+    pub(super) fn new(
+        arena: &'p Bump,
+        head: DeclarationIndex,
+        starting_error_count: usize,
+    ) -> Self {
         Self {
             phase: FunctionDefinitionPhase::Start,
             head,
-            declaration_list: Vec::new(),
+            declaration_list: ArenaVec::new_in(arena),
             body: None,
             source_vectors: None,
             starting_error_count,
@@ -87,11 +97,11 @@ impl FunctionDefinitionFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | FunctionDefinitionPhase::Start => {
                 debug_assert!(returned.is_none());
@@ -167,6 +177,7 @@ impl FunctionDefinitionFrame {
                 if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
                     self.phase = FunctionDefinitionPhase::AwaitBody;
                     ParseAction::Push(ParseFrame::CompoundStatement(CompoundStatementFrame::new(
+                        parser.arena,
                         parser.hard_error_count,
                         true,
                     )))
@@ -185,6 +196,7 @@ impl FunctionDefinitionFrame {
                     }
                     self.phase = FunctionDefinitionPhase::AwaitDeclaration;
                     ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
+                        parser.arena,
                         DeclarationContext::OldStyleParameter,
                         parser.hard_error_count,
                     )))
@@ -232,7 +244,11 @@ impl FunctionDefinitionFrame {
                     } else {
                         self.phase = FunctionDefinitionPhase::AwaitBody;
                         ParseAction::Push(ParseFrame::CompoundStatement(
-                            CompoundStatementFrame::new(parser.hard_error_count, true),
+                            CompoundStatementFrame::new(
+                                parser.arena,
+                                parser.hard_error_count,
+                                true,
+                            ),
                         ))
                     }
                 }

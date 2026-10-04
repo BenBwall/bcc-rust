@@ -36,13 +36,19 @@ use super::{
     },
     syntax::Identifier,
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        preprocessing::{
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -58,15 +64,15 @@ use crate::translation_phases::{
     reason = "The flags are independent recovery facts of one parameter list, not a hidden state \
               machine."
 )]
-pub(super) struct ParameterListFrame {
+pub(super) struct ParameterListFrame<'p> {
     /// Current prototype/K&R transition.
     phase: ParameterListPhase,
     /// Whether this syntactic position permits a K&R identifier list.
     allow_k_and_r: bool,
     /// Prototype parameters accumulated before arena insertion.
-    pub(super) parameters: Vec<ParameterDeclaration>,
+    pub(super) parameters: ArenaVec<'p, ParameterDeclaration>,
     /// K&R identifiers accumulated before arena insertion.
-    pub(super) identifiers: Vec<Identifier>,
+    pub(super) identifiers: ArenaVec<'p, Identifier>,
     /// Specifiers retained while an optional parameter declarator runs.
     pending_specifiers: Option<DeclarationSpecifiers>,
     /// Specifier provenance retained for parameter-source construction.
@@ -76,7 +82,7 @@ pub(super) struct ParameterListFrame {
     /// Whether variadic recovery may unwind at a later declaration starter.
     can_unwind_variadic_recovery: bool,
     /// Provenance accumulated across the entire parenthesized suffix.
-    pub(super) source_vectors: Vec<SourceVectors>,
+    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     /// Scope depth restored by every parameter-list exit.
     entry_scope_depth: Option<usize>,
     /// Prototype-scope bindings introduced by parameter declarator names.
@@ -122,18 +128,18 @@ pub(super) enum ParameterListPhase {
     FinishPrototype,
 }
 
-impl ParameterListFrame {
-    pub(super) fn new(allow_k_and_r: bool) -> Self {
+impl<'p> ParameterListFrame<'p> {
+    pub(super) fn new(arena: &'p Bump, allow_k_and_r: bool) -> Self {
         Self {
             phase: ParameterListPhase::Start,
             allow_k_and_r,
-            parameters: Vec::new(),
-            identifiers: Vec::new(),
+            parameters: ArenaVec::new_in(arena),
+            identifiers: ArenaVec::new_in(arena),
             pending_specifiers: None,
             pending_source: None,
             is_variadic: false,
             can_unwind_variadic_recovery: false,
-            source_vectors: Vec::new(),
+            source_vectors: ArenaVec::new_in(arena),
             entry_scope_depth: None,
             parameter_name_bindings: 0,
             diagnosed_mixed_parameter: false,
@@ -151,7 +157,7 @@ impl ParameterListFrame {
     /// declaration syntax; without it, `(a b, c)` stays an identifier list with
     /// an omitted comma.
     fn unknown_type_name_starts_prototype(
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
     ) -> bool {
         /// Tokens examined after two adjacent identifiers before the list is
@@ -195,11 +201,11 @@ impl ParameterListFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | ParameterListPhase::Start => {
                 debug_assert!(
@@ -304,6 +310,7 @@ impl ParameterListFrame {
                 } else {
                     self.phase = ParameterListPhase::KAndRMixedDeclarator;
                     ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        parser.arena,
                         DeclaratorMode::MaybeAbstract,
                     )))
                 }
@@ -438,6 +445,7 @@ impl ParameterListFrame {
                 } else {
                     self.phase = ParameterListPhase::AwaitDeclarator;
                     ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        parser.arena,
                         DeclaratorMode::MaybeAbstract,
                     )))
                 }

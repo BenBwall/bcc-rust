@@ -61,7 +61,7 @@ pub(super) enum ExternalDeclarationPhase {
     AwaitFunctionDefinition,
 }
 
-impl ExternalDeclarationFrame {
+impl<'p> ExternalDeclarationFrame {
     pub(super) fn new(starting_error_count: usize, starting_diagnostic_count: usize) -> Self {
         Self {
             phase: ExternalDeclarationPhase::Start,
@@ -72,11 +72,11 @@ impl ExternalDeclarationFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | ExternalDeclarationPhase::Start => {
                 debug_assert!(
@@ -85,6 +85,7 @@ impl ExternalDeclarationFrame {
                 );
                 self.phase = ExternalDeclarationPhase::AwaitDeclaration;
                 ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
+                    parser.arena,
                     DeclarationContext::External,
                     parser.hard_error_count,
                 )))
@@ -99,7 +100,11 @@ impl ExternalDeclarationFrame {
                 if is_definition {
                     self.phase = ExternalDeclarationPhase::AwaitFunctionDefinition;
                     return ParseAction::Push(ParseFrame::FunctionDefinition(
-                        FunctionDefinitionFrame::new(declaration, self.starting_error_count),
+                        FunctionDefinitionFrame::new(
+                            parser.arena,
+                            declaration,
+                            self.starting_error_count,
+                        ),
                     ));
                 }
                 if parser.hard_error_count > self.starting_error_count {

@@ -97,7 +97,7 @@ pub(super) enum DeclarationSpecifiersPhase {
     AwaitEnum,
 }
 
-impl DeclarationSpecifiersFrame {
+impl<'p> DeclarationSpecifiersFrame {
     pub(super) fn new(mode: SpecifierMode) -> Self {
         Self {
             phase: DeclarationSpecifiersPhase::Collect,
@@ -115,11 +115,11 @@ impl DeclarationSpecifiersFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | DeclarationSpecifiersPhase::AwaitStructOrUnion => {
                 let Some(ParseValue::StructOrUnionSpecifier(index)) = returned else {
@@ -221,14 +221,17 @@ impl DeclarationSpecifiersFrame {
             // it as the first token it owns.
             self.pending_type_specifier = Some(token);
             self.phase = DeclarationSpecifiersPhase::AwaitStructOrUnion;
-            return ParseAction::Push(ParseFrame::StructOrUnionSpecifier(Box::new(
-                StructOrUnionSpecifierFrame::new(),
-            )));
+            let frame = StructOrUnionSpecifierFrame::new(parser.arena);
+            return ParseAction::Push(ParseFrame::StructOrUnionSpecifier(
+                parser.pools.struct_or_union_specifier(frame),
+            ));
         }
         if token.kind == TokenType::Keyword(KeywordTokenType::Enum) {
             self.pending_type_specifier = Some(token);
             self.phase = DeclarationSpecifiersPhase::AwaitEnum;
-            return ParseAction::Push(ParseFrame::EnumSpecifier(EnumSpecifierFrame::new()));
+            return ParseAction::Push(ParseFrame::EnumSpecifier(EnumSpecifierFrame::new(
+                parser.arena,
+            )));
         }
 
         if let Some(storage_class) = storage_class(token.kind) {
@@ -379,7 +382,7 @@ impl DeclarationSpecifiersFrame {
     ///
     /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112 lists only
     /// `float _Complex`, `double _Complex`, and `long double _Complex`.
-    fn report_incomplete_complex(&self, parser: &mut Parser<'_>, context: &mut Context<'_>) {
+    fn report_incomplete_complex(&self, parser: &mut Parser<'p>, context: &mut Context<'_>) {
         if !self.invalid_type_seen
             && !self.type_conflict_seen
             && matches!(
@@ -397,7 +400,7 @@ impl DeclarationSpecifiersFrame {
 
     fn apply_type_specifier(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Token,
         specifier: PrimitiveTypeSpecifier,

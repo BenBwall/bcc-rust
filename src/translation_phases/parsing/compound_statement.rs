@@ -27,21 +27,27 @@ use super::{
         StatementType,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        preprocessing::{
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
 #[derive(Debug)]
-pub(super) struct CompoundStatementFrame {
+pub(super) struct CompoundStatementFrame<'p> {
     phase:                     CompoundStatementPhase,
-    pub(super) items:          Vec<BlockItem>,
-    pub(super) source_vectors: Vec<SourceVectors>,
+    pub(super) items:          ArenaVec<'p, BlockItem>,
+    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     starting_error_count:      usize,
     entry_scope_depth:         Option<usize>,
     function_body:             bool,
@@ -61,12 +67,12 @@ pub(super) enum CompoundStatementPhase {
     reason = "Frame phases assert the typed driver protocol, whose mismatch already identifies \
               the invariant."
 )]
-impl CompoundStatementFrame {
-    pub(super) fn new(starting_error_count: usize, function_body: bool) -> Self {
+impl<'p> CompoundStatementFrame<'p> {
+    pub(super) fn new(arena: &'p Bump, starting_error_count: usize, function_body: bool) -> Self {
         Self {
             phase: CompoundStatementPhase::Start,
-            items: Vec::new(),
-            source_vectors: Vec::new(),
+            items: ArenaVec::new_in(arena),
+            source_vectors: ArenaVec::new_in(arena),
             starting_error_count,
             entry_scope_depth: None,
             function_body,
@@ -75,11 +81,11 @@ impl CompoundStatementFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'_>,
+        parser: &mut Parser<'p>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
-    ) -> ParseAction {
+    ) -> ParseAction<'p> {
         match self.phase {
             | CompoundStatementPhase::Start => {
                 debug_assert!(returned.is_none());
@@ -129,6 +135,7 @@ impl CompoundStatementFrame {
                     if !is_label && token.is_some_and(|token| parser.declaration_starter(token)) {
                         self.phase = CompoundStatementPhase::AwaitDeclaration;
                         ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
+                            parser.arena,
                             DeclarationContext::Block,
                             parser.hard_error_count,
                         )))
