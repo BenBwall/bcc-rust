@@ -9,6 +9,7 @@ use super::{
     init_declarators,
     parse,
     parser_errors,
+    with_parse,
 };
 use crate::translation_phases::{
     TranslationError,
@@ -90,22 +91,23 @@ fn every_ordering_of_every_c99_type_specifier_multiset_is_accepted() {
         let mut canonical: Option<TypeSpecifiers> = None;
         for ordering in orderings(multiset) {
             let source = format!("{} x;\n", ordering.join(" "));
-            let parsed = parse(&source);
-            let errors: Vec<_> = parser_errors(&parsed).collect();
-            if !errors.is_empty() {
-                failures.push(format!("{source:?}: {errors:?}"));
-                continue;
-            }
-            let type_specifiers = declaration(&parsed, 0)
-                .declaration_specifiers
-                .type_specifiers;
-            match canonical {
-                | None => canonical = Some(type_specifiers),
-                | Some(expected) if expected != type_specifiers => failures.push(format!(
-                    "{source:?}: normalized to {type_specifiers:?}, expected {expected:?}"
-                )),
-                | Some(_) => {},
-            }
+            with_parse(&source, |parsed| {
+                let errors: Vec<_> = parser_errors(parsed).collect();
+                if !errors.is_empty() {
+                    failures.push(format!("{source:?}: {errors:?}"));
+                    return;
+                }
+                let type_specifiers = declaration(parsed, 0)
+                    .declaration_specifiers
+                    .type_specifiers;
+                match canonical {
+                    | None => canonical = Some(type_specifiers),
+                    | Some(expected) if expected != type_specifiers => failures.push(format!(
+                        "{source:?}: normalized to {type_specifiers:?}, expected {expected:?}"
+                    )),
+                    | Some(_) => {},
+                }
+            });
         }
     }
     assert!(
@@ -127,24 +129,28 @@ fn unsigned_short_int_is_accepted() {
         "unsigned int long x;",
         "signed int long x;",
     ] {
-        let parsed = parse(source);
-        assert!(
-            !parser_errors(&parsed)
-                .any(|error| matches!(error, ParserErrorType::ConflictingTypeSpecifiers { .. })),
-            "{source:?} was rejected"
-        );
+        with_parse(source, |parsed| {
+            assert!(
+                !parser_errors(parsed).any(|error| matches!(
+                    error,
+                    ParserErrorType::ConflictingTypeSpecifiers { .. }
+                )),
+                "{source:?} was rejected"
+            );
+        });
     }
 }
 
 #[test]
 fn repeated_double_is_a_duplicate_not_a_conflict() {
-    let parsed = parse("double double x;\n");
-    let errors: Vec<_> = parser_errors(&parsed).collect();
-    assert_eq!(errors.len(), 1, "{:#?}", parsed.errors);
-    assert!(
-        matches!(errors[0], ParserErrorType::TypeSpecifierSpecifiedTwice(_)),
-        "{errors:?}"
-    );
+    with_parse("double double x;\n", |parsed| {
+        let errors: Vec<_> = parser_errors(parsed).collect();
+        assert_eq!(errors.len(), 1, "{:#?}", parsed.errors);
+        assert!(
+            matches!(errors[0], ParserErrorType::TypeSpecifierSpecifiedTwice(_)),
+            "{errors:?}"
+        );
+    });
 }
 
 /// C99 §6.7.2p2 lists `_Complex` only together with `float`, `double`, or
@@ -163,19 +169,22 @@ fn incomplete_complex_type_specifiers_are_diagnosed() {
         "const _Complex;\n",
         "_Complex",
     ] {
-        let parsed = parse(source);
-        let count = parser_errors(&parsed)
-            .filter(|error| matches!(error, ParserErrorType::IncompleteComplexTypeSpecifier))
-            .count();
-        assert_eq!(count, 1, "{source:?}: {:#?}", parsed.errors);
+        with_parse(source, |parsed| {
+            let count = parser_errors(parsed)
+                .filter(|error| matches!(error, ParserErrorType::IncompleteComplexTypeSpecifier))
+                .count();
+            assert_eq!(count, 1, "{source:?}: {:#?}", parsed.errors);
+        });
     }
-    let parsed = parse(
+    with_parse(
         "float _Complex a; _Complex double b; long _Complex double c; double long _Complex d;\n",
-    );
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
+        |parsed| {
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+        },
     );
 }
 
