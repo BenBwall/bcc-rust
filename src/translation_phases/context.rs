@@ -737,6 +737,10 @@ impl<'tu> Context<'tu> {
     /// Remembers the text a source file was translated from.
     pub(crate) fn record_source_text(&mut self, index: u32, text: &str) {
         let text = self.tu.alloc_str(text);
+        self.record_arena_source_text(index, text);
+    }
+
+    pub(crate) fn record_arena_source_text(&mut self, index: u32, text: &'tu str) {
         let index = index as usize;
         if self.source_texts.len() <= index {
             self.source_texts.resize(index + 1, None);
@@ -747,11 +751,7 @@ impl<'tu> Context<'tu> {
     /// Reads and retains an included file without a temporary heap string.
     pub(crate) fn read_source_file(&mut self, index: u32) -> std::io::Result<&'tu str> {
         let text = self.tu.read_to_str_lossy(self.get_source_file(index))?;
-        let slot = index as usize;
-        if self.source_texts.len() <= slot {
-            self.source_texts.resize(slot + 1, None);
-        }
-        self.source_texts[slot] = Some(text);
+        self.record_arena_source_text(index, text);
         Ok(text)
     }
 

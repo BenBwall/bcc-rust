@@ -161,10 +161,46 @@ impl Preprocessor {
         self.output_purpose = OutputPurpose::Parsing;
     }
 
+    #[cfg(any(test, feature = "benchmarking-internals"))]
     pub(crate) fn new(
         context: &mut Context<'_>,
         source_name: Box<Path>,
         source: &str,
+        quote_include_directories: SharedVec<PathBuf>,
+        system_include_directories: SharedVec<PathBuf>,
+    ) -> Self {
+        Self::new_inner(
+            context,
+            source_name,
+            source,
+            None,
+            quote_include_directories,
+            system_include_directories,
+        )
+    }
+
+    pub(crate) fn new_with_arena_source<'tu>(
+        context: &mut Context<'tu>,
+        source_name: Box<Path>,
+        source: &'tu str,
+        quote_include_directories: SharedVec<PathBuf>,
+        system_include_directories: SharedVec<PathBuf>,
+    ) -> Self {
+        Self::new_inner(
+            context,
+            source_name,
+            source,
+            Some(source),
+            quote_include_directories,
+            system_include_directories,
+        )
+    }
+
+    fn new_inner<'tu>(
+        context: &mut Context<'tu>,
+        source_name: Box<Path>,
+        source: &str,
+        arena_source: Option<&'tu str>,
         quote_include_directories: SharedVec<PathBuf>,
         system_include_directories: SharedVec<PathBuf>,
     ) -> Self {
@@ -180,7 +216,11 @@ impl Preprocessor {
             .collect();
         let source_file_index = context.intern_source_file(&source_name);
         let tokenizer = TokenSource::new(context, source_file_index, source);
-        context.record_source_text(source_file_index, source);
+        if let Some(source) = arena_source {
+            context.record_arena_source_text(source_file_index, source);
+        } else {
+            context.record_source_text(source_file_index, source);
+        }
         Self {
             tokenizer_stack: vec![TokenizerFrame {
                 frame_type: TokenizerFrameType::SourceFile {

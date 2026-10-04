@@ -141,9 +141,12 @@ pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
     let tu = crate::util::bump::Bump::new();
     let input_argument = args.input.input.take();
-    let (input_string, source_filename) =
+    let (input_string, source_filename): (&str, Box<Path>) =
         match (input_argument.as_deref(), args.input.input_file.take()) {
-            | (Some(input), None) => (input, PathBuf::from("<input>").into_boxed_path()),
+            | (Some(input), None) => (
+                tu.alloc_str(input),
+                PathBuf::from("<input>").into_boxed_path(),
+            ),
             | (None, Some(input_file)) => (
                 tu.read_to_str_lossy(&input_file).map_err(|source| {
                     MainError::OpenInputFileError {
@@ -186,15 +189,15 @@ pub fn run() -> Result<(), MainError> {
 
 /// Prints the preprocessed translation unit, each token after the
 /// diagnostics its production reported.
-fn print_preprocessor_output(
-    tu: &crate::util::bump::Bump,
+fn print_preprocessor_output<'tu>(
+    tu: &'tu crate::util::bump::Bump,
     source_filename: Box<Path>,
-    input_string: &str,
+    input_string: &'tu str,
     quote_include: SharedVec<PathBuf>,
     system_include: SharedVec<PathBuf>,
 ) {
     let mut context = Context::new(tu);
-    let preprocessor = Preprocessor::new(
+    let preprocessor = Preprocessor::new_with_arena_source(
         &mut context,
         source_filename,
         input_string,
@@ -270,10 +273,10 @@ pub(crate) fn describe_token(token: Token, context: &Context<'_>) -> String {
     }
 }
 
-fn print_parser_output(
-    tu: &crate::util::bump::Bump,
+fn print_parser_output<'tu>(
+    tu: &'tu crate::util::bump::Bump,
     source_filename: Box<Path>,
-    input_string: &str,
+    input_string: &'tu str,
     quote_include: SharedVec<PathBuf>,
     system_include: SharedVec<PathBuf>,
     output: &ParserOutput,
@@ -283,7 +286,7 @@ fn print_parser_output(
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
-    let preprocessor = Preprocessor::new(
+    let preprocessor = Preprocessor::new_with_arena_source(
         &mut context,
         source_filename,
         input_string,
