@@ -312,126 +312,134 @@ fn unowned_expression_closers_are_consumed_once() {
         "int f(void) { 1 ]; } int after;\n",
         "int f(void) { return (1 2); } int after;\n",
     ] {
-        let parsed = parse(source);
-        assert_eq!(parsed.items.len(), 2, "{source}: {:#?}", parsed.items);
-        assert!(matches!(
-            parsed.items[1],
-            ExternalDeclaration::Declaration(_)
-        ));
-        assert!(parser_errors(&parsed).next().is_some());
+        with_parse(source, |parsed| {
+            assert_eq!(parsed.items.len(), 2, "{source}: {:#?}", parsed.items);
+            assert!(matches!(
+                parsed.items[1],
+                ExternalDeclaration::Declaration(_)
+            ));
+            assert!(parser_errors(parsed).next().is_some());
+        });
     }
 }
 
 #[test]
 fn binary_expression_recovery_synthesizes_missing_operands() {
-    let parsed = parse("int f(void) { return 1 + ); return; }\n");
-    let items = block_items(&parsed, function_definition(&parsed, 0).body);
+    with_parse("int f(void) { return 1 + ); return; }\n", |parsed| {
+        let items = block_items(parsed, function_definition(parsed, 0).body);
 
-    assert_eq!(items.len(), 2, "{items:#?}");
-    assert!(matches!(
-        items[0],
-        BlockItem::Statement(index)
-            if matches!(
-                parsed.parser.syntax[index].kind,
-                StatementType::Return(Some(ExpressionSlot::Parsed(_)))
-            )
-    ));
-    assert!(matches!(
-        items[1],
-        BlockItem::Statement(index)
-            if matches!(
-                parsed.parser.syntax[index].kind,
-                StatementType::Return(None)
-            )
-    ));
-    assert!(parser_errors(&parsed).next().is_some());
+        assert_eq!(items.len(), 2, "{items:#?}");
+        assert!(matches!(
+            items[0],
+            BlockItem::Statement(index)
+                if matches!(
+                    parsed.parser.syntax[index].kind,
+                    StatementType::Return(Some(ExpressionSlot::Parsed(_)))
+                )
+        ));
+        assert!(matches!(
+            items[1],
+            BlockItem::Statement(index)
+                if matches!(
+                    parsed.parser.syntax[index].kind,
+                    StatementType::Return(None)
+                )
+        ));
+        assert!(parser_errors(parsed).next().is_some());
+    });
 }
 
 #[test]
 fn missing_operand_error_is_anchored_at_the_current_boundary_token() {
     let source = "int f(void) { return 1 + ; return; }\n";
-    let parsed = parse(source);
-    let error = parsed
-        .parser
-        .syntax
-        .iter::<Expression>()
-        .find(|expression| matches!(expression.kind, ExpressionType::Error))
-        .expect("missing operand must produce an error expression");
-    let [anchor] = parsed.context.get_source_vectors(error.source_vectors) else {
-        panic!("error expression must have one source anchor")
-    };
+    with_parse(source, |parsed| {
+        let error = parsed
+            .parser
+            .syntax
+            .iter::<Expression>()
+            .find(|expression| matches!(expression.kind, ExpressionType::Error))
+            .expect("missing operand must produce an error expression");
+        let [anchor] = parsed.context.get_source_vectors(error.source_vectors) else {
+            panic!("error expression must have one source anchor")
+        };
 
-    assert_eq!(
-        anchor.index as usize,
-        source.find(';').expect("boundary semicolon")
-    );
-    assert_eq!(anchor.length, 0);
+        assert_eq!(
+            anchor.index as usize,
+            source.find(';').expect("boundary semicolon")
+        );
+        assert_eq!(anchor.length, 0);
+    });
 }
 
 #[test]
 fn unexpected_braces_in_an_expression_do_not_close_the_function_body() {
-    let parsed = parse("int f(void) { int x = 1 + {} int after; return; }\n");
-    let items = block_items(&parsed, function_definition(&parsed, 0).body);
+    with_parse(
+        "int f(void) { int x = 1 + {} int after; return; }\n",
+        |parsed| {
+            let items = block_items(parsed, function_definition(parsed, 0).body);
 
-    assert_eq!(items.len(), 3, "{items:#?}");
-    assert!(matches!(items[0], BlockItem::Declaration(_)));
-    assert!(matches!(items[1], BlockItem::Declaration(_)));
-    assert!(
-        matches!(items[2], BlockItem::Statement(statement) if matches!(
-            parsed.parser.syntax[statement].kind,
-            StatementType::Return(None)
-        ))
+            assert_eq!(items.len(), 3, "{items:#?}");
+            assert!(matches!(items[0], BlockItem::Declaration(_)));
+            assert!(matches!(items[1], BlockItem::Declaration(_)));
+            assert!(
+                matches!(items[2], BlockItem::Statement(statement) if matches!(
+                    parsed.parser.syntax[statement].kind,
+                    StatementType::Return(None)
+                ))
+            );
+            assert!(parsed.parser.syntax.iter::<Expression>().any(|expression| {
+                matches!(expression.kind, ExpressionType::Error)
+                    && sourced_text(parsed, expression.source_vectors) == "{}"
+            }));
+        },
     );
-    assert!(parsed.parser.syntax.iter::<Expression>().any(|expression| {
-        matches!(expression.kind, ExpressionType::Error)
-            && sourced_text(&parsed, expression.source_vectors) == "{}"
-    }));
 }
 
 #[test]
 fn missing_member_names_retain_the_consumed_operator_provenance() {
-    let parsed = parse("int f(void) { return a.; return p->; }\n");
-    let items = block_items(&parsed, function_definition(&parsed, 0).body);
-    let roots = items
-        .iter()
-        .map(|item| {
-            let BlockItem::Statement(statement) = *item else {
-                panic!("expected return statement")
-            };
-            return_expression(&parsed, statement)
-        })
-        .collect::<Vec<_>>();
+    with_parse("int f(void) { return a.; return p->; }\n", |parsed| {
+        let items = block_items(parsed, function_definition(parsed, 0).body);
+        let roots = items
+            .iter()
+            .map(|item| {
+                let BlockItem::Statement(statement) = *item else {
+                    panic!("expected return statement")
+                };
+                return_expression(parsed, statement)
+            })
+            .collect::<Vec<_>>();
 
-    assert_eq!(roots.len(), 2);
-    for (root, expression_source, operator_source) in
-        [(roots[0], "a.", "."), (roots[1], "p->", "->")]
-    {
-        let expression = &parsed.parser.syntax[root];
-        assert!(matches!(expression.kind, ExpressionType::Error));
-        assert!(expression.recovered);
-        assert_eq!(expression_text(&parsed, root), expression_source);
+        assert_eq!(roots.len(), 2);
+        for (root, expression_source, operator_source) in
+            [(roots[0], "a.", "."), (roots[1], "p->", "->")]
+        {
+            let expression = &parsed.parser.syntax[root];
+            assert!(matches!(expression.kind, ExpressionType::Error));
+            assert!(expression.recovered);
+            assert_eq!(expression_text(parsed, root), expression_source);
+            assert_eq!(
+                sourced_text(
+                    parsed,
+                    expression
+                        .operator_source_vectors
+                        .expect("member operator provenance"),
+                ),
+                operator_source
+            );
+        }
+
+        let errors = parser_errors(parsed).collect::<Vec<_>>();
+        assert!(errors.iter().all(|error| matches!(
+            error,
+            ParserErrorType::ExpectedMemberIdentifier(Some(TokenType::Operator(
+                OperatorTokenType::Semicolon
+            )))
+        )));
         assert_eq!(
-            sourced_text(
-                &parsed,
-                expression
-                    .operator_source_vectors
-                    .expect("member operator provenance"),
-            ),
-            operator_source
+            errors[0].to_string(),
+            "expected a member name after `.` or `->`, found `;`"
         );
-    }
-
-    let errors = parser_errors(&parsed).collect::<Vec<_>>();
-    assert!(errors.iter().all(|error| matches!(
-        error,
-        ParserErrorType::ExpectedMemberIdentifier(Some(TokenType::Operator(
-            OperatorTokenType::Semicolon
-        )))
-    )));
-    assert_eq!(
-        errors[0].to_string(),
-        "expected a member name after `.` or `->`, found `;`"
-    );
+    });
 }
 
 #[test]
