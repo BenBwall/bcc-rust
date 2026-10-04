@@ -715,3 +715,19 @@ fn persisted_sources_resume_where_their_cursor_stood() {
     assert_eq!(spellings(&mut persisted, &mut context), expected);
     assert_eq!(expected, [" ", "b", "\n", "c", "\n"]);
 }
+
+#[test]
+fn lexed_files_grow_in_place_and_keep_exact_storage() {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let file = context.intern_source_file(Path::new("<test>"));
+    // One entry per byte, three times the up-front estimate.
+    let text = "a+b;\n".repeat(4096);
+    let pp = crate::util::bump::Bump::new();
+    let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
+    assert_eq!(lexed.len(), text.len());
+    // Exactly the 17-byte packed entries: growing left no copies behind,
+    // and the unused capacity went back to the arena.
+    assert_eq!(pp.used(), 17 * text.len());
+    assert!(pp.high_water() < 2 * pp.used());
+}

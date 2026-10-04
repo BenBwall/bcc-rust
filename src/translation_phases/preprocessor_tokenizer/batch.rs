@@ -34,8 +34,8 @@ use crate::{
     },
     util::{
         bump::{
+            ArenaVec,
             Bump,
-            RegionVec,
         },
         byte_scan,
         string_cache::StringCacheId,
@@ -351,22 +351,62 @@ enum LexDiagnostic {
     EscapedFinalNewline,
 }
 
-/// Every preprocessing token of one source buffer, stored as parallel
-/// arrays. Entry `i` ends where entry `i + 1` starts. Other-token provenance
-/// can exclude deleted splices without changing these shared boundaries.
+/// One lexed entry: a preprocessing token, or whitespace or a comment
+/// (`kind` is `None`), and where it starts.
 ///
-/// Lexing fills growable columns; the finished file keeps exact-size copies
-/// in the caller's arena, so an open file holds no storage of its own.
+/// Packed, so an entry costs the 17 bytes its fields need. Fields are read
+/// by value only, through the accessors.
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+struct Entry {
+    contents: StringCacheId,
+    /// Byte offset of the entry's start in the source.
+    index:    u32,
+    line:     u32,
+    column:   u32,
+    kind:     Option<PreprocessorTokenType>,
+}
+
+impl Entry {
+    #[inline(always)]
+    fn kind(self) -> Option<PreprocessorTokenType> {
+        self.kind
+    }
+
+    #[inline(always)]
+    fn contents(self) -> StringCacheId {
+        self.contents
+    }
+
+    #[inline(always)]
+    fn index(self) -> u32 {
+        self.index
+    }
+
+    #[inline(always)]
+    fn start(self) -> SourcePosition {
+        SourcePosition {
+            index:  self.index as usize,
+            line:   self.line,
+            column: self.column,
+        }
+    }
+}
+
+/// Every preprocessing token of one source buffer, in order. Entry `i` ends
+/// where entry `i + 1` starts. Other-token provenance can exclude deleted
+/// splices without changing these shared boundaries.
+///
+/// Lexing appends entries to one array at the end of the caller's arena.
+/// Nothing else is allocated there while a file is lexed, so the array grows
+/// in place, and the finished file gives its unused tail back: a file costs
+/// one exact-size array, written once, and holds no storage of its own.
 pub(super) struct LexedFile<'a> {
     pub(super) source_file_index: u32,
     /// The file's index in the preprocessor's registry of opened files, if
     /// it was opened there rather than for temporary use.
     pub(super) registration: Option<u32>,
-    kinds: &'a [Option<PreprocessorTokenType>],
-    contents: &'a [StringCacheId],
-    indices: &'a [u32],
-    lines: &'a [u32],
-    columns: &'a [u32],
+    entries: &'a [Entry],
     /// Where the last entry ends.
     end_of_tokens: SourcePosition,
     /// Where reading past the last entry stands: past any trailing splices.
@@ -391,12 +431,9 @@ pub(super) struct LexedFile<'a> {
 }
 
 /// A [`LexedFile`] while its entries are being lexed.
-struct LexingFile {
-    kinds:                 RegionVec<Option<PreprocessorTokenType>>,
-    contents:              RegionVec<StringCacheId>,
-    indices:               RegionVec<u32>,
-    lines:                 RegionVec<u32>,
-    columns:               RegionVec<u32>,
+struct LexingFile<'arena> {
+    /// The arena's latest block while lexing, so it grows in place.
+    entries:               ArenaVec<'arena, Entry>,
     end_of_tokens:         SourcePosition,
     eof:                   SourcePosition,
     diagnostics:           Vec<(u32, LexDiagnostic)>,
@@ -407,22 +444,17 @@ struct LexingFile {
     end_readers:           Vec<u32>,
 }
 
-impl LexingFile {
-    /// Copies the finished entries into `arena`. Each growable column is
-    /// released as soon as it is copied, so lexing holds at most one extra
-    /// column at a time.
+impl<'arena> LexingFile<'arena> {
+    /// Trims the entries to their length, returning the unused tail to
+    /// `arena`, and stores the side tables after them.
     fn finish(
         self,
-        arena: &Bump,
+        arena: &'arena Bump,
         source_file_index: u32,
         escaped_final_newline: Option<SourceVector>,
-    ) -> LexedFile<'_> {
+    ) -> LexedFile<'arena> {
         let Self {
-            kinds,
-            contents,
-            indices,
-            lines,
-            columns,
+            mut entries,
             end_of_tokens,
             eof,
             diagnostics,
@@ -432,25 +464,11 @@ impl LexingFile {
             lacks_final_newline,
             end_readers,
         } = self;
-        // Release each column's region as soon as it is copied.
-        let kinds_copy = arena.alloc_slice_copy(&kinds);
-        drop(kinds);
-        let contents_copy = arena.alloc_slice_copy(&contents);
-        drop(contents);
-        let indices_copy = arena.alloc_slice_copy(&indices);
-        drop(indices);
-        let lines_copy = arena.alloc_slice_copy(&lines);
-        drop(lines);
-        let columns_copy = arena.alloc_slice_copy(&columns);
-        drop(columns);
+        entries.shrink_to_fit();
         LexedFile {
             source_file_index,
             registration: None,
-            kinds: kinds_copy,
-            contents: contents_copy,
-            indices: indices_copy,
-            lines: lines_copy,
-            columns: columns_copy,
+            entries: entries.leak(),
             end_of_tokens,
             eof,
             diagnostics: arena.alloc_slice_fill_iter(diagnostics),
@@ -475,7 +493,7 @@ impl<'a> LexedFile<'a> {
     ) -> Self {
         let (text, remaps) = splice(source);
         let terminal_splice = terminal_splice_length(source);
-        let file = Lexer::new(context, &text, &remaps, source.is_empty())
+        let file = Lexer::new(context, arena, &text, &remaps, source.is_empty())
             .with_terminal_splice(terminal_splice.is_some())
             .run();
         let escaped_final_newline = terminal_splice.map(|length| {
@@ -498,11 +516,7 @@ impl<'a> LexedFile<'a> {
         LexedFile {
             source_file_index:     self.source_file_index,
             registration:          None,
-            kinds:                 arena.alloc_slice_copy(self.kinds),
-            contents:              arena.alloc_slice_copy(self.contents),
-            indices:               arena.alloc_slice_copy(self.indices),
-            lines:                 arena.alloc_slice_copy(self.lines),
-            columns:               arena.alloc_slice_copy(self.columns),
+            entries:               arena.alloc_slice_copy(self.entries),
             end_of_tokens:         self.end_of_tokens,
             eof:                   self.eof,
             diagnostics:           arena.alloc_slice_fill_iter(self.diagnostics.iter().cloned()),
@@ -547,37 +561,32 @@ impl<'a> LexedFile<'a> {
     }
 
     pub(super) fn len(&self) -> usize {
-        self.kinds.len()
+        self.entries.len()
     }
 
     #[inline(always)]
     pub(super) fn kind(&self, entry: usize) -> Option<PreprocessorTokenType> {
-        self.kinds[entry]
+        self.entries[entry].kind()
     }
 
     #[inline(always)]
     pub(super) fn contents(&self, entry: usize) -> StringCacheId {
-        self.contents[entry]
+        self.entries[entry].contents()
     }
 
     /// Where `entry` starts, or where the last entry ends for `len()`.
     #[inline(always)]
     pub(super) fn start(&self, entry: usize) -> SourcePosition {
-        match self.indices.get(entry) {
-            | Some(&index) => SourcePosition {
-                index:  index as usize,
-                line:   self.lines[entry],
-                column: self.columns[entry],
-            },
-            | None => self.end_of_tokens,
-        }
+        self.entries
+            .get(entry)
+            .map_or(self.end_of_tokens, |entry| entry.start())
     }
 
     #[inline(always)]
     pub(super) fn end_index(&self, entry: usize) -> usize {
-        self.indices
+        self.entries
             .get(entry + 1)
-            .map_or(self.end_of_tokens.index, |&index| index as usize)
+            .map_or(self.end_of_tokens.index, |next| next.index() as usize)
     }
 
     /// The actual character span, excluding any splice before an Other token.
@@ -594,7 +603,7 @@ impl<'a> LexedFile<'a> {
     /// the last character it read was a newline.
     #[inline(always)]
     pub(super) fn withholds_final_newline_after(&self, entry: usize) -> bool {
-        self.kinds[entry] == Some(PreprocessorTokenType::Newline)
+        self.kind(entry) == Some(PreprocessorTokenType::Newline)
             || (!self.final_newline_readers.is_empty()
                 && self
                     .final_newline_readers
@@ -638,15 +647,15 @@ impl<'a> LexedFile<'a> {
     /// entry, or `None` when `position` is inside an entry.
     pub(super) fn boundary(&self, position: SourcePosition) -> Option<usize> {
         let target = u32::try_from(position.index).ok()?;
-        let entry = self.indices.partition_point(|&index| index < target);
+        let entry = self.entries.partition_point(|entry| entry.index() < target);
         (self.start(entry).index == position.index && self.start(entry).column == position.column)
             .then_some(entry)
     }
 
     /// The first entry starting at or after `position`.
     pub(super) fn entry_after(&self, position: SourcePosition) -> usize {
-        self.indices
-            .partition_point(|&index| (index as usize) < position.index)
+        self.entries
+            .partition_point(|entry| (entry.index() as usize) < position.index)
     }
 
     /// Reports the diagnostics recorded while lexing `entry`.
@@ -718,7 +727,7 @@ struct Lexed {
     clippy::struct_excessive_bools,
     reason = "Each flag is one piece of the end-of-input reading state."
 )]
-struct Lexer<'a, 'tu> {
+struct Lexer<'a, 'tu, 'arena> {
     context:             &'a mut Context<'tu>,
     text:                &'a str,
     bytes:               &'a [u8],
@@ -744,19 +753,21 @@ struct Lexer<'a, 'tu> {
     /// Diagnostics raised while lexing the current token, in order.
     pending:             Vec<LexDiagnostic>,
     scratch:             String,
-    file:                LexingFile,
+    file:                LexingFile<'arena>,
 }
 
-impl<'a, 'tu> Lexer<'a, 'tu> {
+impl<'a, 'tu, 'arena> Lexer<'a, 'tu, 'arena> {
     fn new(
         context: &'a mut Context<'tu>,
+        arena: &'arena Bump,
         text: &'a str,
         remaps: &'a [Remap],
         physically_empty: bool,
     ) -> Self {
         let bytes = text.as_bytes();
         let lacks_final_newline = !physically_empty && bytes.last() != Some(&b'\n');
-        // Entries average a few bytes each.
+        // Entries average a few bytes each. Growing past this estimate stays
+        // in place, and finishing returns what is left over.
         let capacity = bytes.len() / 3;
         Self {
             context,
@@ -774,11 +785,7 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
             pending: Vec::new(),
             scratch: String::new(),
             file: LexingFile {
-                kinds: RegionVec::with_capacity_in(capacity, Bump::new()),
-                contents: RegionVec::with_capacity_in(capacity, Bump::new()),
-                indices: RegionVec::with_capacity_in(capacity, Bump::new()),
-                lines: RegionVec::with_capacity_in(capacity, Bump::new()),
-                columns: RegionVec::with_capacity_in(capacity, Bump::new()),
+                entries: ArenaVec::with_capacity_in(capacity, arena),
                 end_of_tokens: SourcePosition::default(),
                 eof: SourcePosition::default(),
                 diagnostics: Vec::new(),
@@ -858,7 +865,7 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
         tracker.advance_past_deletions(self.bytes.len())
     }
 
-    fn run(mut self) -> LexingFile {
+    fn run(mut self) -> LexingFile<'arena> {
         loop {
             let start = self.pos;
             let position = self.tracker.advance(start);
@@ -871,7 +878,7 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
             let lexed = if start == self.bytes.len() {
                 // The supplied final newline, read at the start of a token.
                 self.reached_eof = true;
-                self.file.final_newline_entry = Some(self.file.kinds.len());
+                self.file.final_newline_entry = Some(self.file.entries.len());
                 self.respelled(start, PreprocessorTokenType::Newline, "\n")
             } else {
                 self.lex_token(start, position, byte)
@@ -887,7 +894,7 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
     }
 
     fn push(&mut self, position: SourcePosition, lexed: Lexed) {
-        let entry = u32::try_from(self.file.kinds.len()).expect("entry indices fit in u32");
+        let entry = u32::try_from(self.file.entries.len()).expect("entry indices fit in u32");
         if self.read_final_newline {
             self.file.final_newline_readers.push(entry);
         }
@@ -897,13 +904,13 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
         self.file
             .diagnostics
             .extend(self.pending.drain(..).map(|diagnostic| (entry, diagnostic)));
-        self.file.kinds.push(lexed.kind);
-        self.file.contents.push(lexed.contents);
-        self.file
-            .indices
-            .push(u32::try_from(position.index).expect("source files are smaller than 4 GiB"));
-        self.file.lines.push(position.line);
-        self.file.columns.push(position.column);
+        self.file.entries.push(Entry {
+            contents: lexed.contents,
+            index:    u32::try_from(position.index).expect("source files are smaller than 4 GiB"),
+            line:     position.line,
+            column:   position.column,
+            kind:     lexed.kind,
+        });
     }
 
     /// Lexes the token starting with `byte` at `start`.
@@ -1045,7 +1052,7 @@ impl<'a, 'tu> Lexer<'a, 'tu> {
         } else {
             character.len_utf8()
         };
-        let entry = u32::try_from(self.file.kinds.len()).expect("entry indices fit in u32");
+        let entry = u32::try_from(self.file.entries.len()).expect("entry indices fit in u32");
         self.file
             .other_locations
             .push((entry, SourceVector::new(position, 0, length)));
