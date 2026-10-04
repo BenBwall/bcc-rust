@@ -385,22 +385,11 @@ impl fmt::Write for ArenaString<'_> {
 }
 
 /// A FIFO queue with cheap front removal and arena-backed storage.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Later arena migration stages use this collection."
-    )
-)]
 pub(crate) struct ArenaQueue<'a, T> {
     data: ArenaVec<'a, Option<T>>,
     read: usize,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Later arena migration stages use these methods.")
-)]
 impl<'a, T> ArenaQueue<'a, T> {
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
         Self {
@@ -419,6 +408,10 @@ impl<'a, T> ArenaQueue<'a, T> {
         }
         let value = self.data[self.read].take();
         self.read += 1;
+        if self.read == self.data.len() {
+            self.data.clear();
+            self.read = 0;
+        }
         value
     }
 
@@ -430,10 +423,39 @@ impl<'a, T> ArenaQueue<'a, T> {
         self.len() == 0
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
         self.data[self.read..]
             .iter()
             .map(|item| item.as_ref().expect("unread queue item"))
+    }
+
+    pub(crate) fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
+        self.data[self.read..]
+            .iter_mut()
+            .map(|item| item.as_mut().expect("unread queue item"))
+    }
+
+    pub(crate) fn back(&self) -> Option<&T> {
+        self.data[self.read..].last().and_then(Option::as_ref)
+    }
+
+    pub(crate) fn back_mut(&mut self) -> Option<&mut T> {
+        self.data[self.read..].last_mut().and_then(Option::as_mut)
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        drop(self.data.drain(..self.read));
+        self.read = 0;
+        self.data
+            .retain(|item| keep(item.as_ref().expect("unread queue item")));
+    }
+}
+
+impl<T> Extend<T> for ArenaQueue<'_, T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        for value in iter {
+            self.push_back(value);
+        }
     }
 }
 
@@ -656,6 +678,27 @@ mod tests {
         );
         assert_eq!(queue.pop_front().as_deref(), Some("two"));
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn queue_retains_unread_values_after_front_removal() {
+        let arena = Bump::new();
+        let mut queue = ArenaQueue::new_in(&arena);
+        queue.extend([1, 2, 3, 4]);
+        assert_eq!(queue.pop_front(), Some(1));
+        queue.retain(|value| value % 2 == 0);
+        assert_eq!(queue.iter().copied().collect::<Vec<_>>(), [2, 4]);
+        *queue.back_mut().unwrap() = 6;
+        assert_eq!(queue.back(), Some(&6));
+        for value in queue.iter_mut() {
+            *value += 1;
+        }
+        assert_eq!(queue.pop_front(), Some(3));
+        assert_eq!(queue.pop_front(), Some(7));
+        assert!(queue.is_empty());
+        assert_eq!(queue.back(), None);
+        queue.push_back(9);
+        assert_eq!(queue.pop_front(), Some(9));
     }
 
     #[test]

@@ -2,7 +2,6 @@
 //! arenas, interned strings, source files, and pending diagnostics.
 
 use std::{
-    collections::VecDeque,
     ffi::OsStr,
     path::{
         Path,
@@ -38,6 +37,7 @@ use crate::{
     util::{
         bump::{
             ArenaMap,
+            ArenaQueue,
             ArenaVec,
             Bump,
             RegionVec,
@@ -134,7 +134,7 @@ pub(crate) struct Context<'tu> {
     /// Sparse endpoints follow their source arena's lifetime.
     expansion_sites: [ExpansionSites; 3],
     ignore_tokenizer_errors: bool,
-    pub(super) pending_errors: VecDeque<TranslationError>,
+    pub(super) pending_errors: ArenaQueue<'tu, TranslationError>,
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
@@ -172,7 +172,7 @@ impl<'tu> Context<'tu> {
             literal_values: DedupArena::new(tu),
             expansion_sites: Default::default(),
             ignore_tokenizer_errors: false,
-            pending_errors: VecDeque::new(),
+            pending_errors: ArenaQueue::new_in(tu),
             relocated_errors: 0,
             source_files: DedupArena::new(tu),
             quote_include_directories: &[],
@@ -510,7 +510,8 @@ impl<'tu> Context<'tu> {
         if self.source_vectors.0.is_empty() {
             return;
         }
-        let mut pending_errors = std::mem::take(&mut self.pending_errors);
+        let mut pending_errors =
+            std::mem::replace(&mut self.pending_errors, ArenaQueue::new_in(self.tu));
         for error in pending_errors.iter_mut().skip(self.relocated_errors) {
             error.for_each_source_vectors_mut(&mut |source_vectors| {
                 *source_vectors = self.retain_preprocessor_range(*source_vectors);
@@ -638,6 +639,10 @@ impl<'tu> Context<'tu> {
         self.pending_errors.retain(|error| {
             !matches!(error, TranslationError::PreprocessorTokenizining(error) if error.is_unclosed_header_string_at(source))
         });
+        // Retaining can remove a diagnostic from the relocated prefix.
+        // Rechecking already-retained ranges during the next compaction is
+        // safe.
+        self.relocated_errors = 0;
     }
 
     #[cold]
@@ -677,7 +682,7 @@ impl<'tu> Context<'tu> {
 
     pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError> {
         self.relocated_errors = 0;
-        std::mem::take(&mut self.pending_errors).into()
+        std::iter::from_fn(|| self.pending_errors.pop_front()).collect()
     }
 
     pub(crate) fn append_pending_errors(&mut self, errors: Vec<TranslationError>) {
