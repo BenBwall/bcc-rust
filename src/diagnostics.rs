@@ -26,11 +26,17 @@ use owo_colors::{
     Style,
 };
 
-use crate::translation_phases::{
-    Context,
-    ErrorSeverity,
-    SourceVector,
-    SourceVectors,
+use crate::{
+    translation_phases::{
+        Context,
+        ErrorSeverity,
+        SourceVector,
+        SourceVectors,
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 /// Width a tab occupies when a source line is echoed.
@@ -313,18 +319,19 @@ impl ColorChoice {
 pub(crate) struct Renderer {
     color:       ColorChoice,
     line_starts: HashMap<u32, Vec<usize>>,
+    scratch:     Bump,
 }
 
 /// One underline on one physical source line.
 #[derive(Debug, Clone)]
-struct Mark {
+struct Mark<'a> {
     file:    u32,
     line:    usize,
     /// Byte range within the file, clipped to the line.
     start:   usize,
     end:     usize,
     primary: bool,
-    label:   Option<String>,
+    label:   Option<&'a str>,
 }
 
 impl Renderer {
@@ -332,6 +339,7 @@ impl Renderer {
         Self {
             color,
             line_starts: HashMap::new(),
+            scratch: Bump::new(),
         }
     }
 
@@ -375,10 +383,15 @@ impl Renderer {
         (line, start, end)
     }
 
-    fn marks(&mut self, diagnostic: &Diagnostic, context: &Context<'_>) -> Vec<Mark> {
-        let mut marks: Vec<Mark> = Vec::new();
+    fn marks<'a, 'scratch>(
+        &mut self,
+        diagnostic: &'a Diagnostic,
+        context: &Context<'_>,
+        scratch: &'scratch Bump,
+    ) -> ArenaVec<'scratch, Mark<'a>> {
+        let mut marks: ArenaVec<'_, Mark<'a>> = ArenaVec::new_in(scratch);
         for label in &diagnostic.labels {
-            let mut label_text = label.message.clone();
+            let mut label_text = label.message.as_deref();
             for vector in label.source.vectors(context) {
                 let file = vector.source_file_index;
                 let Some(text) = context.source_text(file) else {
@@ -414,6 +427,8 @@ impl Renderer {
 
     /// Renders one diagnostic, ending with a blank line.
     pub(crate) fn render(&mut self, diagnostic: &Diagnostic, context: &Context<'_>) -> String {
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.reset();
         let mut out = String::new();
         let severity_style = Self::severity_style(diagnostic.severity);
         let _ = writeln!(
@@ -423,14 +438,14 @@ impl Renderer {
             self.paint(&format!(" {}", diagnostic.message), Style::new().bold()),
         );
 
-        let marks = self.marks(diagnostic, context);
+        let marks = self.marks(diagnostic, context, &scratch);
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
         let gutter_width = max_line.to_string().len().max(1);
         let pad = " ".repeat(gutter_width);
         let bar = self.paint("|", Self::gutter_style());
 
         // Files in order of first appearance, primary file first.
-        let mut files: Vec<u32> = Vec::new();
+        let mut files = ArenaVec::new_in(&scratch);
         for mark in marks.iter().filter(|mark| mark.primary).chain(&marks) {
             if !files.contains(&mark.file) {
                 files.push(mark.file);
@@ -482,6 +497,7 @@ impl Renderer {
                 (file, text, starts),
                 diagnostic.severity,
                 gutter_width,
+                &scratch,
             );
         }
 
@@ -507,22 +523,27 @@ impl Renderer {
             }
         }
         out.push('\n');
+        drop(files);
+        drop(marks);
+        self.scratch = scratch;
         out
     }
 
     fn render_file_lines(
         &self,
         out: &mut String,
-        marks: &[Mark],
+        marks: &[Mark<'_>],
         (file, text, starts): (u32, &str, &[usize]),
         severity: ErrorSeverity,
         gutter_width: usize,
+        scratch: &Bump,
     ) {
         let pad = " ".repeat(gutter_width);
         let bar = self.paint("|", Self::gutter_style());
         // Sort once and walk the marks line by line: rescanning every mark
         // for each line made a label spanning many lines quadratic.
-        let mut file_marks: Vec<&Mark> = marks.iter().filter(|mark| mark.file == file).collect();
+        let mut file_marks = ArenaVec::new_in(scratch);
+        file_marks.extend(marks.iter().filter(|mark| mark.file == file));
         file_marks.sort_by_key(|mark| (mark.line, mark.start, !mark.primary));
         let line_text = |line: usize| -> &str {
             let start = starts.get(line - 1).copied().unwrap_or(text.len());
@@ -556,7 +577,7 @@ impl Renderer {
             let column_of = |offset: usize| {
                 display_width(&source[..offset.saturating_sub(line_start).min(source.len())])
             };
-            let mut cells: Vec<Option<bool>> = Vec::new();
+            let mut cells = ArenaVec::new_in(scratch);
             for primary in [false, true] {
                 for mark in on_line.iter().filter(|mark| mark.primary == primary) {
                     let from = column_of(mark.start);
@@ -599,14 +620,11 @@ impl Renderer {
             }
             flush(&mut run, &mut underline);
 
-            let labelled: Vec<(usize, bool, &str)> = on_line
-                .iter()
-                .filter_map(|mark| {
-                    mark.label
-                        .as_deref()
-                        .map(|label| (column_of(mark.start), mark.primary, label))
-                })
-                .collect();
+            let mut labelled = ArenaVec::new_in(scratch);
+            labelled.extend(on_line.iter().filter_map(|mark| {
+                mark.label
+                    .map(|label| (column_of(mark.start), mark.primary, label))
+            }));
             match labelled.split_last() {
                 | None => {
                     let _ = writeln!(out, "{pad} {bar} {underline}");
@@ -684,7 +702,7 @@ mod tests {
     use super::*;
 
     fn with_context<R>(text: &str, inspect: impl FnOnce(&mut Context<'_>, u32) -> R) -> R {
-        let tu = crate::util::bump::Bump::new();
+        let tu = Bump::new();
         let mut context = Context::new(&tu);
         let file = context.intern_source_file(Path::new("example.c"));
         context.record_source_text(file, text);
@@ -719,14 +737,16 @@ mod tests {
                 .at(ErrorSeverity::Error, primary)
                 .secondary(secondary, "declarator");
 
-            let rendered = Renderer::new(ColorChoice::Plain).render(&diagnostic, context);
+            let mut renderer = Renderer::new(ColorChoice::Plain);
+            let actual = renderer.render(&diagnostic, context);
 
             assert_eq!(
-                rendered,
+                actual,
                 "error: expected `;`, found string literal\n --> example.c:1:7\n  |\n1 | int x \
                  \"abc\";\n  |     - ^^^^^ expected `;`\n  |     |\n  |     declarator\n  |\n  = \
                  note: a declaration ends with `;`\n  = help: add `;` after `x`\n\n"
             );
+            assert_eq!(renderer.render(&diagnostic, context), actual);
         });
     }
 
