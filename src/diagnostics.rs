@@ -573,6 +573,7 @@ impl Renderer {
                         previous + 1,
                         line_text(previous + 1),
                         gutter_width,
+                        scratch,
                     );
                 } else if line > previous + 2 {
                     let _ = writeln!(out, "{}", self.paint("...", Self::gutter_style()));
@@ -580,7 +581,7 @@ impl Renderer {
             }
             previous = Some(line);
             let source = line_text(line);
-            self.write_source_line(out, line, source, gutter_width);
+            self.write_source_line(out, line, source, gutter_width, scratch);
             let line_start = starts[line - 1];
 
             // Underline row: secondary marks first so primary ones win.
@@ -675,14 +676,16 @@ impl Renderer {
         line: usize,
         source: &str,
         gutter_width: usize,
+        scratch: &Bump,
     ) {
         let number = format!("{line:>gutter_width$}");
+        let visible = visible_source(source, scratch);
         let _ = writeln!(
             out,
             "{} {} {}",
             self.paint(&number, Self::gutter_style()),
             self.paint("|", Self::gutter_style()),
-            visible_source(source).trim_end(),
+            visible.as_str().trim_end(),
         );
     }
 }
@@ -690,25 +693,28 @@ impl Renderer {
 /// Expands tabs and shows other control characters as their one-column
 /// Unicode control pictures, so a snippet never emits raw control bytes
 /// and carets stay aligned.
-fn visible_source(text: &str) -> String {
-    expand_tabs(text)
-        .chars()
-        .map(|c| match u32::from(c) {
-            | code @ 0..0x20 => char::from_u32(0x2400 + code).unwrap_or(c),
-            | 0x7F => '\u{2421}',
-            | _ => c,
-        })
-        .collect()
+fn visible_source<'scratch>(text: &str, scratch: &'scratch Bump) -> ArenaString<'scratch> {
+    let mut visible = ArenaString::new_in(scratch);
+    for c in text.chars() {
+        if c == '\t' {
+            for _ in 0..TAB_WIDTH {
+                visible.push(' ');
+            }
+        } else {
+            visible.push(match u32::from(c) {
+                | code @ 0..0x20 => char::from_u32(0x2400 + code).unwrap_or(c),
+                | 0x7F => '\u{2421}',
+                | _ => c,
+            });
+        }
+    }
+    visible
 }
 
 fn display_width(text: &str) -> usize {
     text.chars()
         .map(|c| if c == '\t' { TAB_WIDTH } else { 1 })
         .sum()
-}
-
-fn expand_tabs(text: &str) -> String {
-    text.replace('\t', &" ".repeat(TAB_WIDTH))
 }
 
 #[cfg(test)]
