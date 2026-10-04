@@ -62,33 +62,6 @@ impl<'a, T, H> DedupArena<'a, T, H> {
         Self::with_capacity_and_hasher(capacity, H::default(), arena)
     }
 
-    /// Intern a value into the arena, returning the index of the value. If the
-    /// value is already in the arena, the index of the existing value is
-    /// returned. The value is not cloned. Value is dropped if it already
-    /// exists. Returns `Err` if the value is already in the arena. `Ok`
-    /// otherwise.
-    pub(crate) fn try_intern(&mut self, value: T) -> Result<u32, u32>
-    where
-        H: BuildHasher,
-        T: Hash + Eq,
-    {
-        let hash = self.hasher.hash_one(&value);
-        let index = u32::try_from(self.data.len()).expect("DedupArena: Too many values.");
-
-        match self.indices.entry(
-            hash,
-            |&stored_index| self.data[stored_index as usize] == value,
-            |&stored_index| self.hasher.hash_one(&self.data[stored_index as usize]),
-        ) {
-            | Entry::Occupied(entry) => Err(*entry.get()),
-            | Entry::Vacant(entry) => {
-                self.data.push(value);
-                _ = entry.insert(index);
-                Ok(index)
-            },
-        }
-    }
-
     /// Appends a value that interning never returns, giving it an identity
     /// distinct from every equal value. Indexed values stay unique.
     pub(crate) fn push_unindexed(&mut self, value: T) -> u32 {
@@ -105,19 +78,6 @@ impl<'a, T, H> DedupArena<'a, T, H> {
     )]
     pub(crate) unsafe fn as_mut_slice(&mut self) -> &mut [T] {
         self.data.as_mut_slice()
-    }
-
-    /// Intern a value into the arena, returning the index of the value. Returns
-    /// the index of the old value if the value is already in the arena. Value
-    /// is dropped if it already exists. Value is not cloned.
-    pub(crate) fn intern(&mut self, value: T) -> u32
-    where
-        H: BuildHasher,
-        T: Hash + Eq,
-    {
-        match self.try_intern(value) {
-            | Err(index) | Ok(index) => index,
-        }
     }
 
     /// Only materialize a value in the arena after checking for an existing

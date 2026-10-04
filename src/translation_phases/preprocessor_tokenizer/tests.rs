@@ -65,7 +65,7 @@ enum Step {
 fn walk(source: &str, steps: &[Step]) -> Vec<String> {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
+    let file = context.intern_source_file(Path::new("<test>"));
     let source = SharedString::from(source.to_owned());
     context.record_source_text(file, &source);
     let mut tokens = TokenSource::new(&mut context, file, &source);
@@ -499,7 +499,7 @@ fn physically_empty_source_has_no_missing_final_newline() {
     let mut snapshot = Snapshot::new("physically_empty_source_has_no_missing_final_newline");
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
+    let file = context.intern_source_file(Path::new("<test>"));
     let source = SharedString::from(String::new());
     context.record_source_text(file, &source);
     let mut tokens = TokenSource::new(&mut context, file, &source);
@@ -541,7 +541,7 @@ fn unterminated_block_comments_report_the_actual_opener() {
     ] {
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
-        let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
+        let file = context.intern_source_file(Path::new("<test>"));
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
         let mut tokens = TokenSource::new(&mut context, file, &text);
@@ -595,7 +595,7 @@ fn terminal_spliced_newlines_report_the_actual_last_splice() {
     ] {
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
-        let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
+        let file = context.intern_source_file(Path::new("<test>"));
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
         let mut tokens = TokenSource::new(&mut context, file, &text);
@@ -645,7 +645,7 @@ fn terminal_splice_warning_is_deferred_until_the_tail_is_read() {
     // '\n' is already a complete token; batch construction must stay silent.
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
+    let file = context.intern_source_file(Path::new("<test>"));
     let text = SharedString::from("\n\\\n".to_owned());
     context.record_source_text(file, &text);
     let mut tokens = TokenSource::new(&mut context, file, &text);
@@ -663,7 +663,7 @@ fn cloned_terminal_splice_cursors_keep_independent_warning_state() {
     for source in ["\n\\\n", "word\\\n"] {
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
-        let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
+        let file = context.intern_source_file(Path::new("<test>"));
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
         let mut original = TokenSource::new(&mut context, file, &text);

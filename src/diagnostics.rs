@@ -679,14 +679,14 @@ fn expand_tabs(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::Path;
 
     use super::*;
 
     fn with_context<R>(text: &str, inspect: impl FnOnce(&mut Context<'_>, u32) -> R) -> R {
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
-        let file = context.intern_source_file(PathBuf::from("example.c").into_boxed_path());
+        let file = context.intern_source_file(Path::new("example.c"));
         context.record_source_text(file, text);
         inspect(&mut context, file)
     }

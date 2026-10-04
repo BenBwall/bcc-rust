@@ -2,6 +2,7 @@
 
 use std::{
     fmt::Write,
+    path::Path,
     sync::OnceLock,
 };
 
@@ -188,7 +189,7 @@ fn declaration_heavy_source(count: usize) -> String {
 pub fn lex(input: BenchmarkInput) -> usize {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    let file = context.intern_source_file(box_path_from_str("<input>"));
+    let file = context.intern_source_file(Path::new("<input>"));
     let mut tokens = TokenSource::new(&mut context, file, input.source());
     let mut count = 0;
     while tokens.next_item(&mut context).is_some() {

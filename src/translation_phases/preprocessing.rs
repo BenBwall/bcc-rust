@@ -170,13 +170,14 @@ impl Preprocessor {
         quote_include_directories: SharedVec<PathBuf>,
         system_include_directories: SharedVec<PathBuf>,
     ) -> Self {
+        let source_name = source_name.into_path_buf();
         let macro_definitions = PREDEFINED_MACRO_NAMES
             .into_iter()
             .map(|s| -> (StringCacheId, MacroDefinition) {
                 (context.string_cache.intern(s), MacroDefinition::BuiltIn)
             })
             .collect();
-        let source_file_index = context.intern_source_file(source_name);
+        let source_file_index = context.intern_source_file(&source_name);
         let tokenizer = TokenSource::new(context, source_file_index, source);
         context.record_source_text(source_file_index, source);
         Self {

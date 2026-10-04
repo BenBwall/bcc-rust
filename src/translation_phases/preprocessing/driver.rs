@@ -4,7 +4,7 @@ use std::{
     fmt::Debug,
     mem::take,
     ops::ControlFlow,
-    path::PathBuf,
+    path::Path,
     rc::Rc,
 };
 
@@ -900,10 +900,8 @@ impl Preprocessor {
                             // Each operator gets its own identity: diagnostics
                             // rendered later must quote this payload, not the
                             // most recent one.
-                            let pragma_string = context.add_synthetic_source_file(
-                                PathBuf::from("<pragma string>").into_boxed_path(),
-                                &input,
-                            );
+                            let pragma_string = context
+                                .add_synthetic_source_file(Path::new("<pragma string>"), &input);
                             self.tokenizer = TokenSource::new(context, pragma_string, &input);
                             _ = self.parse_pragma_directive(context, string_token);
                             if self.tokenizer.next_item(context).is_some() {

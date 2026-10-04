@@ -3,6 +3,7 @@
 
 use std::{
     collections::VecDeque,
+    ffi::OsStr,
     path::Path,
 };
 
@@ -133,7 +134,7 @@ pub(crate) struct Context<'tu> {
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
-    pub(crate) source_files: DedupArena<'tu, Box<Path>, FxBuildHasher>,
+    pub(crate) source_files: DedupArena<'tu, &'tu Path, FxBuildHasher>,
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
     source_texts: ArenaVec<'tu, Option<&'tu str>>,
@@ -681,21 +682,32 @@ impl<'tu> Context<'tu> {
         &self.arena(arena)[start as usize]
     }
 
-    pub(crate) fn intern_source_file(&mut self, path: Box<Path>) -> u32 {
-        self.source_files.intern(path)
+    pub(crate) fn intern_source_file(&mut self, path: &Path) -> u32 {
+        let tu = self.tu;
+        self.source_files
+            .intern_by(path, || Self::alloc_path(tu, path))
     }
 
     /// Registers synthetic source text under a fresh identity, even when
     /// `path` names an earlier input, so diagnostics retained from each
     /// input keep quoting their own text.
-    pub(crate) fn add_synthetic_source_file(&mut self, path: Box<Path>, text: &str) -> u32 {
-        let index = self.source_files.push_unindexed(path);
+    pub(crate) fn add_synthetic_source_file(&mut self, path: &Path, text: &str) -> u32 {
+        let index = self
+            .source_files
+            .push_unindexed(Self::alloc_path(self.tu, path));
         self.record_source_text(index, text);
         index
     }
 
     pub(crate) fn get_source_file(&self, index: u32) -> &Path {
-        &self.source_files[index]
+        self.source_files[index]
+    }
+
+    fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {
+        let bytes = tu.alloc_slice_copy(path.as_os_str().as_encoded_bytes());
+        // SAFETY: These are the complete encoded bytes of an OsStr from this
+        // process and target, copied without splitting or changing them.
+        Path::new(unsafe { OsStr::from_encoded_bytes_unchecked(bytes) })
     }
 
     /// Remembers the text a source file was translated from.
@@ -747,6 +759,41 @@ mod tests {
         }
         assert_eq!(context.intern_literal(&original), id);
         assert_eq!(context.literal_units(id), original);
+    }
+
+    #[test]
+    fn source_paths_keep_indices_and_synthetic_inputs_keep_distinct_text() {
+        use std::path::PathBuf;
+
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let path = PathBuf::from("included/header.h");
+        let first = context.intern_source_file(&path);
+        for index in 0..2_000 {
+            _ = context.intern_source_file(&PathBuf::from(format!("included/{index}.h")));
+        }
+        assert_eq!(context.intern_source_file(&path), first);
+        assert_eq!(context.get_source_file(first), path);
+        let synthetic = context.add_synthetic_source_file(&path, "second input");
+        assert_ne!(synthetic, first);
+        assert_eq!(context.source_text(synthetic), Some("second input"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_paths_preserve_unpaired_utf16_surrogates() {
+        use std::{
+            ffi::OsString,
+            os::windows::ffi::OsStringExt,
+            path::PathBuf,
+        };
+
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let path = PathBuf::from(OsString::from_wide(&[u16::from(b'x'), 0xD800]));
+        let id = context.intern_source_file(&path);
+        assert_eq!(context.get_source_file(id), path);
+        assert_eq!(context.intern_source_file(&path), id);
     }
 
     #[test]

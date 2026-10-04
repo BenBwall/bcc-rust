@@ -384,7 +384,7 @@ impl Preprocessor {
             });
             return None;
         };
-        let source_file_index = context.intern_source_file(header.into_boxed_path());
+        let source_file_index = context.intern_source_file(&header);
         if self.once_set.contains(&source_file_index) {
             None
         } else {
@@ -1299,7 +1299,7 @@ impl Preprocessor {
             self.set_line(context, value);
         }
         if let Some(filename) = filename {
-            let source_file_index = context.intern_source_file(filename);
+            let source_file_index = context.intern_source_file(&filename);
             self.set_source_file_index(context, source_file_index);
         }
     }
