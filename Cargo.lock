@@ -111,6 +111,7 @@ dependencies = [
  "coz",
  "criterion",
  "hashbrown",
+ "libc",
  "owo-colors",
  "pretty_assertions",
  "proptest",
@@ -118,6 +119,7 @@ dependencies = [
  "rustc-hash",
  "smallstr",
  "thiserror",
+ "windows-sys",
 ]
 
 [[package]]
