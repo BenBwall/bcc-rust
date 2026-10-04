@@ -345,13 +345,6 @@ pub(crate) type ArenaMap<'a, K, V> = hashbrown::HashMap<K, V, FxBuildHasher, &'a
 pub(crate) type ArenaSet<'a, T> = hashbrown::HashSet<T, FxBuildHasher, &'a Bump>;
 
 /// A UTF-8 string allocated in an arena.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Later arena migration stages use this collection."
-    )
-)]
 pub(crate) struct ArenaString<'a> {
     bytes: ArenaVec<'a, u8>,
 }
@@ -379,6 +372,10 @@ impl<'a> ArenaString<'a> {
     pub(crate) fn as_str(&self) -> &str {
         // SAFETY: construction and mutation only append valid UTF-8 sequences.
         unsafe { std::str::from_utf8_unchecked(&self.bytes) }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.bytes.clear();
     }
 }
 

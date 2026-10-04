@@ -123,7 +123,7 @@ pub(crate) struct Context<'tu> {
     pub(crate) source_vectors: SourceVectorStack,
     parser_token_vectors: ArenaVec<'tu, SourceVector>,
     retained_vectors: ArenaVec<'tu, SourceVector>,
-    pub(crate) string_cache: StringCache,
+    pub(crate) string_cache: StringCache<'tu>,
     pub(crate) canonical_identifiers: ArenaMap<'tu, StringCacheId, StringCacheId>,
     literal_values: DedupArena<'tu, &'tu [LiteralUnit], FxBuildHasher>,
     /// Sparse endpoints follow their source arena's lifetime.
@@ -145,7 +145,7 @@ impl<'tu> Context<'tu> {
     }
 
     pub(crate) fn with_configuration(tu: &'tu Bump, configuration: CompilerConfiguration) -> Self {
-        let mut string_cache = StringCache::new();
+        let mut string_cache = StringCache::new(tu);
         for &keyword in KeywordTokenType::ALL {
             let id = string_cache.intern(keyword.spelling());
             debug_assert_eq!(

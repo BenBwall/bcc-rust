@@ -15,28 +15,52 @@ use hashbrown::{
     hash_table::Entry,
 };
 use rustc_hash::FxBuildHasher;
-#[derive(Debug, Clone)]
-pub(crate) struct StringCache {
-    ends:  Vec<u32>,
-    data:  String,
-    dedup: HashTable<StringCacheId>,
+
+use super::bump::{
+    ArenaString,
+    ArenaVec,
+    Bump,
+};
+
+pub(crate) struct StringCache<'tu> {
+    arena: &'tu Bump,
+    ends:  ArenaVec<'tu, u32>,
+    data:  ArenaString<'tu>,
+    dedup: HashTable<StringCacheId, &'tu Bump>,
 }
 
-impl PartialEq<StringCache> for StringCache {
-    fn eq(&self, other: &StringCache) -> bool {
-        self.ends == other.ends && self.data == other.data
+impl fmt::Debug for StringCache<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StringCache")
+            .field("ends", &self.ends)
+            .field("data", &self.data)
+            .field("dedup", &self.dedup)
+            .finish()
     }
 }
 
-impl Eq for StringCache {}
-
-impl Default for StringCache {
-    fn default() -> Self {
-        Self::new()
+impl PartialEq<StringCache<'_>> for StringCache<'_> {
+    fn eq(&self, other: &StringCache<'_>) -> bool {
+        self.ends == other.ends && self.data.as_str() == other.data.as_str()
     }
 }
 
-impl Display for StringCache {
+impl Eq for StringCache<'_> {}
+
+impl Clone for StringCache<'_> {
+    fn clone(&self) -> Self {
+        let mut cloned = Self::new(self.arena);
+        for index in 1..self.ends.len() {
+            _ = cloned.intern(
+                self.get(u32::try_from(index).expect("string cache index overflow"))
+                    .expect("string cache index"),
+            );
+        }
+        cloned
+    }
+}
+
+impl Display for StringCache<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "StringCache:")?;
         for i in 1u32.. {
@@ -89,13 +113,16 @@ impl StringCacheId {
     }
 }
 
-impl StringCache {
+impl<'tu> StringCache<'tu> {
     /// Creates a new empty `StringCache`.
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(arena: &'tu Bump) -> Self {
+        let mut ends = ArenaVec::new_in(arena);
+        ends.push(0);
         Self {
-            ends:  vec![0],
-            data:  String::new(),
-            dedup: HashTable::new(),
+            arena,
+            ends,
+            data: ArenaString::new_in(arena),
+            dedup: HashTable::new_in(arena),
         }
     }
 
@@ -103,7 +130,11 @@ impl StringCache {
         clippy::cast_possible_truncation,
         reason = "We're checking that we're inbounds before casting."
     )]
-    fn intern_impl(data: &mut String, ends: &mut Vec<u32>, s: &str) -> StringCacheId {
+    fn intern_impl(
+        data: &mut ArenaString<'tu>,
+        ends: &mut ArenaVec<'tu, u32>,
+        s: &str,
+    ) -> StringCacheId {
         let len = s.len();
         let start = data.len();
         data.push_str(s);
@@ -119,7 +150,7 @@ impl StringCache {
     /// Interns the given string and returns an ID representing its position in
     /// the string cache.
     pub(crate) fn intern(&mut self, s: impl AsRef<str>) -> StringCacheId {
-        fn inner(interner: &mut StringCache, s: &str) -> StringCacheId {
+        fn inner(interner: &mut StringCache<'_>, s: &str) -> StringCacheId {
             let hash = FxBuildHasher.hash_one(s);
             match interner.dedup.entry(
                 hash,
@@ -152,7 +183,7 @@ impl StringCache {
         )
     )]
     pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
-        fn inner(interner: &StringCache, s: &str) -> Option<StringCacheId> {
+        fn inner(interner: &StringCache<'_>, s: &str) -> Option<StringCacheId> {
             let hash = FxBuildHasher.hash_one(s);
             interner
                 .dedup
@@ -204,7 +235,8 @@ mod tests {
 
     #[test]
     fn interning_keeps_lookup_consistent_after_growth() {
-        let mut cache = StringCache::new();
+        let arena = crate::util::bump::Bump::new();
+        let mut cache = StringCache::new(&arena);
         let before_growth = cache.intern("a");
         for index in 0..400 {
             let spelling = format!("growth-{index}");
@@ -218,7 +250,8 @@ mod tests {
 
     #[test]
     fn every_ascii_spelling_gets_a_stable_id() {
-        let mut cache = StringCache::new();
+        let arena = crate::util::bump::Bump::new();
+        let mut cache = StringCache::new(&arena);
         for byte in 0_u8..=127 {
             let spelling = char::from(byte).to_string();
             let first = cache.intern(&spelling);
@@ -231,7 +264,8 @@ mod tests {
 
     #[test]
     fn empty_and_multibyte_spellings_keep_distinct_ids() {
-        let mut cache = StringCache::new();
+        let arena = crate::util::bump::Bump::new();
+        let mut cache = StringCache::new(&arena);
         let mut ids = Vec::new();
         for spelling in ["", "é", "λ", "🦀", "int", "0\0"] {
             let id = cache.intern(spelling);
@@ -245,7 +279,8 @@ mod tests {
 
     #[test]
     fn cloned_and_cleared_caches_have_independent_valid_ids() {
-        let mut cache = StringCache::new();
+        let arena = crate::util::bump::Bump::new();
+        let mut cache = StringCache::new(&arena);
         let original = cache.intern("a");
         let mut cloned = cache.clone();
         assert_eq!(cloned.intern("a"), original);
