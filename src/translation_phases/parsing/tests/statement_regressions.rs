@@ -25,19 +25,19 @@ use crate::translation_phases::{
 };
 
 /// Returns the byte offsets of every parser error, in report order.
-fn error_offsets(parsed: &Parsed) -> Vec<usize> {
+fn error_offsets(parsed: &Parsed<'_>) -> Vec<usize> {
     parsed
         .errors
         .iter()
         .filter_map(|error| match error {
-            | TranslationError::Parsing(error) => Some(error.position(&parsed.context).index),
+            | TranslationError::Parsing(error) => Some(error.position(parsed.context).index),
             | _ => None,
         })
         .collect()
 }
 
 /// Returns the block items of the first function definition's body.
-fn body_items(parsed: &Parsed) -> &[BlockItem] {
+fn body_items<'a>(parsed: &'a Parsed<'_>) -> &'a [BlockItem] {
     block_items(parsed, function_definition(parsed, 0).body)
 }
 
@@ -48,7 +48,7 @@ fn statement_item(items: &[BlockItem], index: usize) -> StatementIndex {
     statement
 }
 
-fn expression_statement_text(parsed: &Parsed, statement: StatementIndex) -> String {
+fn expression_statement_text(parsed: &Parsed<'_>, statement: StatementIndex) -> String {
     let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
         parsed.parser.syntax[statement].kind
     else {
@@ -60,7 +60,7 @@ fn expression_statement_text(parsed: &Parsed, statement: StatementIndex) -> Stri
     expression_text(parsed, expression)
 }
 
-fn assert_errors_only_at(parsed: &Parsed, offset: usize) {
+fn assert_errors_only_at(parsed: &Parsed<'_>, offset: usize) {
     let offsets = error_offsets(parsed);
     assert!(!offsets.is_empty(), "expected a diagnostic");
     assert!(
@@ -281,7 +281,7 @@ fn duplicate_default_points_at_the_second_keyword() {
             .find_map(|error| match error {
                 | TranslationError::Parsing(error)
                     if matches!(error.error_type, ParserErrorType::DuplicateDefaultLabel) =>
-                    Some(error.position(&parsed.context).index),
+                    Some(error.position(parsed.context).index),
                 | _ => None,
             })
             .expect("duplicate default is diagnosed");

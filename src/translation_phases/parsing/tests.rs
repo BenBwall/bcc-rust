@@ -50,44 +50,37 @@ use crate::{
     util::shared::SharedVec,
 };
 
-struct Parsed {
+struct Parsed<'a> {
     parser:  Parser,
-    context: Context,
+    context: &'a mut Context,
     items:   Vec<ExternalDeclaration>,
     errors:  Vec<TranslationError>,
     source:  String,
 }
 
-fn parse(source: &str) -> Parsed {
-    parse_with(source, CompilerConfiguration::default(), None)
-}
-
-fn with_parse<R>(source: &str, inspect: impl FnOnce(&mut Parsed) -> R) -> R {
-    inspect(&mut parse(source))
-}
-
-fn parse_with_configuration(source: &str, configuration: CompilerConfiguration) -> Parsed {
-    parse_with(source, configuration, None)
+fn with_parse<R>(source: &str, inspect: impl FnOnce(&mut Parsed<'_>) -> R) -> R {
+    with_parse_with(source, CompilerConfiguration::default(), None, inspect)
 }
 
 fn with_parse_configuration<R>(
     source: &str,
     configuration: CompilerConfiguration,
-    inspect: impl FnOnce(&Parsed) -> R,
+    inspect: impl FnOnce(&Parsed<'_>) -> R,
 ) -> R {
-    inspect(&parse_with_configuration(source, configuration))
-}
-
-fn parse_with_limits(source: &str, limits: ParserLimits) -> Parsed {
-    parse_with(source, CompilerConfiguration::default(), Some(limits))
+    with_parse_with(source, configuration, None, |parsed| inspect(parsed))
 }
 
 fn with_parse_limits<R>(
     source: &str,
     limits: ParserLimits,
-    inspect: impl FnOnce(&Parsed) -> R,
+    inspect: impl FnOnce(&Parsed<'_>) -> R,
 ) -> R {
-    inspect(&parse_with_limits(source, limits))
+    with_parse_with(
+        source,
+        CompilerConfiguration::default(),
+        Some(limits),
+        |parsed| inspect(parsed),
+    )
 }
 
 fn with_parsed<R>(
@@ -106,11 +99,12 @@ fn with_parsed<R>(
     inspect(&unit, &mut context)
 }
 
-fn parse_with(
+fn with_parse_with<R>(
     source: &str,
     configuration: CompilerConfiguration,
     limits: Option<ParserLimits>,
-) -> Parsed {
+    inspect: impl FnOnce(&mut Parsed<'_>) -> R,
+) -> R {
     let source = source.to_owned();
     let mut context = Context::with_configuration(configuration);
     let preprocessor = Preprocessor::new(
@@ -135,16 +129,16 @@ fn parse_with(
     while let Some(error) = context.pop_pending_error() {
         errors.push(error);
     }
-    Parsed {
+    inspect(&mut Parsed {
         parser,
-        context,
+        context: &mut context,
         items,
         errors,
         source,
-    }
+    })
 }
 
-fn declaration(parsed: &Parsed, item: usize) -> &Declaration {
+fn declaration<'a>(parsed: &'a Parsed<'_>, item: usize) -> &'a Declaration {
     let index = match parsed.items[item] {
         | ExternalDeclaration::Declaration(index)
         | ExternalDeclaration::RecoveredDeclaration(index) => index,
@@ -155,7 +149,7 @@ fn declaration(parsed: &Parsed, item: usize) -> &Declaration {
     &parsed.parser.syntax[index]
 }
 
-fn function_definition(parsed: &Parsed, item: usize) -> &FunctionDefinition {
+fn function_definition<'a>(parsed: &'a Parsed<'_>, item: usize) -> &'a FunctionDefinition {
     let (ExternalDeclaration::FunctionDefinition(index)
     | ExternalDeclaration::RecoveredFunctionDefinition(index)) = parsed.items[item]
     else {
@@ -164,7 +158,7 @@ fn function_definition(parsed: &Parsed, item: usize) -> &FunctionDefinition {
     &parsed.parser.syntax[index]
 }
 
-fn return_expression(parsed: &Parsed, statement: StatementIndex) -> ExpressionIndex {
+fn return_expression(parsed: &Parsed<'_>, statement: StatementIndex) -> ExpressionIndex {
     let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
         parsed.parser.syntax[statement].kind
     else {
@@ -173,32 +167,32 @@ fn return_expression(parsed: &Parsed, statement: StatementIndex) -> ExpressionIn
     expression
 }
 
-fn block_items(parsed: &Parsed, statement: StatementIndex) -> &[BlockItem] {
+fn block_items<'a>(parsed: &'a Parsed<'_>, statement: StatementIndex) -> &'a [BlockItem] {
     let StatementType::Compound { items } = parsed.parser.syntax[statement].kind else {
         panic!("expected a compound statement")
     };
     &parsed.parser.syntax[items]
 }
 
-fn init_declarators<'a>(parsed: &'a Parsed, declaration: &Declaration) -> &'a [InitDeclarator] {
+fn init_declarators<'a>(parsed: &'a Parsed<'_>, declaration: &Declaration) -> &'a [InitDeclarator] {
     &parsed.parser.syntax[declaration.init_declarators]
 }
 
-fn identifier_name(parsed: &Parsed, declarator: Declarator) -> Option<String> {
+fn identifier_name(parsed: &Parsed<'_>, declarator: Declarator) -> Option<String> {
     parsed
         .parser
         .declarator_identifier(declarator)
         .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
 }
 
-fn parser_errors(parsed: &Parsed) -> impl Iterator<Item = &ParserErrorType> {
+fn parser_errors<'a>(parsed: &'a Parsed<'_>) -> impl Iterator<Item = &'a ParserErrorType> {
     parsed.errors.iter().filter_map(|error| match error {
         | TranslationError::Parsing(error) => Some(&error.error_type),
         | _ => None,
     })
 }
 
-fn sourced_text(parsed: &Parsed, source_vectors: SourceVectors) -> String {
+fn sourced_text(parsed: &Parsed<'_>, source_vectors: SourceVectors) -> String {
     parsed
         .context
         .get_source_vectors(source_vectors)
@@ -207,10 +201,10 @@ fn sourced_text(parsed: &Parsed, source_vectors: SourceVectors) -> String {
         .collect()
 }
 
-fn expression_text(parsed: &Parsed, expression: ExpressionIndex) -> String {
+fn expression_text(parsed: &Parsed<'_>, expression: ExpressionIndex) -> String {
     sourced_text(parsed, parsed.parser.syntax[expression].source_vectors)
 }
 
-fn constant_expression_text(parsed: &Parsed, expression: ConstantExpressionIndex) -> String {
+fn constant_expression_text(parsed: &Parsed<'_>, expression: ConstantExpressionIndex) -> String {
     expression_text(parsed, expression.into())
 }

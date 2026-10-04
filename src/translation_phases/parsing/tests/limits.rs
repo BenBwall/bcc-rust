@@ -402,7 +402,7 @@ fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
     assert!(defaults.frame_depth < u32::MAX as usize);
 }
 
-fn assert_resource_limit_cleanup(parsed: &super::Parsed) {
+fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_>) {
     assert!(parsed.parser.frames.is_empty());
     assert!(parsed.parser.returned.is_none());
     assert!(parsed.parser.recovery.active.is_none());

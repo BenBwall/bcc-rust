@@ -399,7 +399,7 @@ proptest! {
             prop_assert!(parsed.parser.label_scopes.is_empty());
             prop_assert!(parsed.parser.switch_scopes.is_empty());
             for error in &parsed.errors {
-                let vectors = error.source_vectors(&mut parsed.context);
+                let vectors = error.source_vectors(parsed.context);
                 prop_assert!(vectors.length > 0 || source.is_empty());
             }
             Ok(())
@@ -409,7 +409,7 @@ proptest! {
 
 #[test]
 fn pending_preprocessing_diagnostics_survive_arena_compaction() {
-    fn preprocessing_vectors(parsed: &Parsed) -> Vec<SourceVector> {
+    fn preprocessing_vectors(parsed: &Parsed<'_>) -> Vec<SourceVector> {
         parsed
             .errors
             .iter()

@@ -88,7 +88,7 @@ fn empty_translation_unit_emits_one_dedicated_diagnostic() {
             parser_errors(parsed).collect::<Vec<_>>(),
             [&ParserErrorType::EmptyTranslationUnit]
         );
-        assert_eq!(parsed.parser.next_item(&mut parsed.context), None);
+        assert_eq!(parsed.parser.next_item(parsed.context), None);
         assert!(parsed.context.pop_pending_error().is_none());
     });
 }
