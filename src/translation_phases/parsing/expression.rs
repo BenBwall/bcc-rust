@@ -4,6 +4,7 @@ use std::fmt::Debug;
 
 use super::{
     Parser,
+    declaration_syntax::TypeName,
     errors::ParserErrorType,
     expression_operators::{
         LanguageExpressionOperator,
@@ -37,7 +38,6 @@ use super::{
         Expression,
         ExpressionType,
         Identifier,
-        TypeNameIndex,
         UnaryOperator,
     },
     type_name::TypeNameFrame,
@@ -156,11 +156,11 @@ pub(super) enum ExpressionPhase<'tu> {
     AwaitSizeofExpression(SourceVectors),
     PushTypeName(SourceVectors, TypeNameUse),
     AwaitTypeName(SourceVectors, TypeNameUse),
-    CloseTypeName(SourceVectors, TypeNameUse, TypeNameIndex),
-    PushCompoundLiteral(TypeNameIndex, SourceVectors, TypeNameUse),
-    AwaitCompoundLiteral(TypeNameIndex, SourceVectors, TypeNameUse),
-    PushCastOperand(TypeNameIndex, SourceVectors),
-    AwaitCastOperand(TypeNameIndex, SourceVectors),
+    CloseTypeName(SourceVectors, TypeNameUse, &'tu TypeName<'tu>),
+    PushCompoundLiteral(&'tu TypeName<'tu>, SourceVectors, TypeNameUse),
+    AwaitCompoundLiteral(&'tu TypeName<'tu>, SourceVectors, TypeNameUse),
+    PushCastOperand(&'tu TypeName<'tu>, SourceVectors),
+    AwaitCastOperand(&'tu TypeName<'tu>, SourceVectors),
     PushConditionalMiddle,
     AwaitConditionalMiddle,
     ExpectConditionalColon(&'tu Expression<'tu>),
@@ -813,8 +813,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             },
             | ExpressionPhase::CloseTypeName(opening_source, use_kind, type_name) => {
                 debug_assert!(returned.is_none());
-                let mut source =
-                    context.merge_vectors(opening_source, parser.syntax[type_name].source_vectors);
+                let mut source = context.merge_vectors(opening_source, type_name.source_vectors);
                 let consume = if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                 {
@@ -905,16 +904,13 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 )));
             },
             | ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind) => {
-                let Some(ParseValue::Initializer(InitializerResult {
-                    index: initializer, ..
-                })) = returned
+                let Some(ParseValue::Initializer(InitializerResult { initializer, .. })) = returned
                 else {
                     panic!(
                         "compound-literal initializer returned an unexpected value: {returned:?}"
                     );
                 };
-                let source =
-                    context.merge_vectors(type_source, parser.syntax[initializer].source_vectors);
+                let source = context.merge_vectors(type_source, initializer.source_vectors);
                 let compound = parser.store_expression(
                     ExpressionType::CompoundLiteral {
                         type_name,

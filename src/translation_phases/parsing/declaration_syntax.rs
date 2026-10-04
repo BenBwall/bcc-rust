@@ -15,11 +15,9 @@ use super::{
     errors::ParserErrorType,
     syntax::{
         ConstantExpression,
-        DesignationIndex,
         EnumSpecifierIndex,
         Expression,
         Identifier,
-        InitializerIndex,
         ParenthesizedDeclaratorIndex,
         StorageClass,
         StructOrUnionSpecifierIndex,
@@ -67,7 +65,7 @@ pub(crate) struct Declaration<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct InitDeclarator<'tu> {
     pub(crate) declarator:     Declarator<'tu>,
-    pub(crate) initializer:    Option<InitializerIndex>,
+    pub(crate) initializer:    Option<&'tu Initializer<'tu>>,
     pub(crate) source_vectors: SourceVectors,
 }
 
@@ -89,20 +87,20 @@ pub(crate) struct Initializer<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum InitializerType<'tu> {
     AssignmentExpression(&'tu Expression<'tu>),
-    InitializerList(SyntaxList<InitializerElement>),
+    InitializerList(&'tu [InitializerElement<'tu>]),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct InitializerElement {
-    pub(crate) designation:          Option<DesignationIndex>,
-    pub(crate) initializer:          InitializerIndex,
+pub(crate) struct InitializerElement<'tu> {
+    pub(crate) designation:          Option<&'tu Designation<'tu>>,
+    pub(crate) initializer:          &'tu Initializer<'tu>,
     pub(crate) comma_source_vectors: Option<SourceVectors>,
     pub(crate) source_vectors:       SourceVectors,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Designation<'tu> {
-    pub(crate) designators:           SyntaxList<Designator<'tu>>,
+    pub(crate) designators:           &'tu [Designator<'tu>],
     pub(crate) equals_source_vectors: Option<SourceVectors>,
     pub(crate) source_vectors:        SourceVectors,
     pub(crate) recovered:             bool,

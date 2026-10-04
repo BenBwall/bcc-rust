@@ -292,7 +292,7 @@ fn conditional_middle_recovery_honors_enclosing_boundaries() {
         else {
             panic!("expected an initializer list")
         };
-        assert_eq!(elements.length, 2);
+        assert_eq!(elements.len(), 2);
         assert!(!parser_errors(initializer).any(|error| matches!(
             error,
             ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(_)
@@ -889,7 +889,7 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
             let InitializerType::InitializerList(nested_elements) = nested_initializer.kind else {
                 panic!("expected nested initializer list");
             };
-            assert_eq!(nested_elements.length, 2);
+            assert_eq!(nested_elements.len(), 2);
             let nested = &parsed.parser.syntax[nested_elements];
             let array_designation = nested[0].designation.expect("array designation");
             let array_designation = parsed.parser.syntax[array_designation];
@@ -911,7 +911,7 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
                 ),
                 "]"
             );
-            let scalar_text = |element: InitializerElement| {
+            let scalar_text = |element: InitializerElement<'_>| {
                 let InitializerType::AssignmentExpression(expression) =
                     parsed.parser.syntax[element.initializer].kind
                 else {

@@ -478,7 +478,7 @@ fn array_designator_recovery_synchronizes_to_its_closing_bracket() {
         ));
         assert_eq!(parsed.parser.syntax.count::<Designator<'_>>(), 1);
         assert!(parsed.parser.syntax.nth::<Designator<'_>>(0).recovered);
-        assert_eq!(parsed.parser.syntax.count::<InitializerElement>(), 2);
+        assert_eq!(parsed.parser.syntax.count::<InitializerElement<'_>>(), 2);
         // One stray run inside the brackets is one diagnostic.
         assert_eq!(parser_errors(parsed).count(), 1, "{:#?}", parsed.errors);
     });
@@ -496,7 +496,7 @@ fn array_designator_recovery_ignores_nested_commas() {
             ));
             assert_eq!(parsed.parser.syntax.count::<Designator<'_>>(), 1);
             assert!(parsed.parser.syntax.nth::<Designator<'_>>(0).recovered);
-            assert_eq!(parsed.parser.syntax.count::<InitializerElement>(), 2);
+            assert_eq!(parsed.parser.syntax.count::<InitializerElement<'_>>(), 2);
             // One stray run inside the brackets is one diagnostic.
             assert_eq!(parser_errors(parsed).count(), 1, "{:#?}", parsed.errors);
         },

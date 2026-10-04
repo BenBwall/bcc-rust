@@ -29,7 +29,6 @@ use super::{
         InitDeclarator,
         Initializer,
         InitializerElement,
-        InitializerType,
         ParameterDeclaration,
         ParenthesizedDeclarator,
         StructDeclaration,
@@ -42,7 +41,6 @@ use super::{
     syntax::{
         BlockItem,
         DeclarationIndex,
-        DesignationIndex,
         EnumSpecifierIndex,
         Expression,
         ExternalDeclaration,
@@ -50,14 +48,12 @@ use super::{
         FunctionDefinition,
         FunctionDefinitionIndex,
         Identifier,
-        InitializerIndex,
         ParenthesizedDeclaratorIndex,
         Statement,
         StatementIndex,
         StatementType,
         StructOrUnionSpecifierIndex,
         SyntaxList,
-        TypeNameIndex,
     },
 };
 use crate::util::{
@@ -98,13 +94,9 @@ macro_rules! stored_nodes {
 }
 
 stored_nodes! {
-    TypeName,
     ParenthesizedDeclarator,
     Declaration,
     InitDeclarator,
-    Initializer,
-    Designation,
-    Designator,
     Statement,
     FunctionDefinition,
     StructOrUnionSpecifier,
@@ -114,7 +106,6 @@ stored_nodes! {
     Enumerator,
     DirectDeclarator,
     ParameterDeclaration;
-    InitializerElement,
     BlockItem,
     DeclarationIndex,
     TypeQualifiers,
@@ -164,7 +155,12 @@ pub(super) struct SyntaxStore<'tu> {
 #[cfg(test)]
 #[derive(Default)]
 pub(super) struct SyntaxLog<'tu> {
-    expressions: Vec<&'tu Expression<'tu>>,
+    expressions:          Vec<&'tu Expression<'tu>>,
+    type_names:           Vec<&'tu TypeName<'tu>>,
+    initializers:         Vec<&'tu Initializer<'tu>>,
+    initializer_elements: Vec<&'tu InitializerElement<'tu>>,
+    designations:         Vec<&'tu Designation<'tu>>,
+    designators:          Vec<&'tu Designator<'tu>>,
 }
 
 /// A node kind that tests can count and visit.
@@ -207,6 +203,11 @@ macro_rules! tree_nodes {
 
 tree_nodes! {
     Expression => expressions,
+    TypeName => type_names,
+    Initializer => initializers,
+    InitializerElement => initializer_elements,
+    Designation => designations,
+    Designator => designators,
 }
 
 /// Call arguments are lists of expression references.
@@ -240,11 +241,8 @@ macro_rules! syntax_handles {
 }
 
 syntax_handles! {
-    TypeNameIndex => TypeName,
     ParenthesizedDeclaratorIndex => ParenthesizedDeclarator,
     DeclarationIndex => Declaration,
-    InitializerIndex => Initializer,
-    DesignationIndex => Designation,
     StatementIndex => Statement,
     FunctionDefinitionIndex => FunctionDefinition,
     StructOrUnionSpecifierIndex => StructOrUnionSpecifier,
@@ -401,13 +399,8 @@ impl<'tu> Debug for SyntaxStore<'tu> {
             DebugNodes(store, PhantomData)
         }
         f.debug_struct("SyntaxStore")
-            .field("type_names", &nodes::<TypeName<'tu>>(self))
             .field("declarations", &nodes::<Declaration<'tu>>(self))
             .field("init_declarators", &nodes::<InitDeclarator<'tu>>(self))
-            .field("initializers", &nodes::<Initializer<'tu>>(self))
-            .field("initializer_elements", &nodes::<InitializerElement>(self))
-            .field("designations", &nodes::<Designation<'tu>>(self))
-            .field("designators", &nodes::<Designator<'tu>>(self))
             .field("statements", &nodes::<Statement<'tu>>(self))
             .field("block_items", &nodes::<BlockItem>(self))
             .field(
@@ -486,26 +479,6 @@ impl<'tu> SyntaxTree<'tu> {
         }
         for init in self.store.stored::<InitDeclarator<'tu>>() {
             self.validate_declarator(init.declarator);
-            if let Some(initializer) = init.initializer {
-                let _ = self.initializer(initializer);
-            }
-        }
-        for initializer in self.store.stored::<Initializer<'tu>>() {
-            match initializer.kind {
-                | InitializerType::AssignmentExpression(_) => {},
-                | InitializerType::InitializerList(elements) => {
-                    let _ = self.initializer_elements(elements);
-                },
-            }
-        }
-        for element in self.store.stored::<InitializerElement>() {
-            if let Some(designation) = element.designation {
-                let _ = self.designation(designation);
-            }
-            let _ = self.initializer(element.initializer);
-        }
-        for designation in self.store.stored::<Designation<'tu>>() {
-            let _ = self.designators(designation.designators);
         }
         for statement in self.store.stored::<Statement<'tu>>() {
             match statement.kind {
@@ -562,12 +535,6 @@ impl<'tu> SyntaxTree<'tu> {
         }
         for declaration in self.store.stored::<DeclarationIndex>() {
             let _ = self.declaration(*declaration);
-        }
-        for type_name in self.store.stored::<TypeName<'tu>>() {
-            self.validate_specifiers(type_name.declaration_specifiers);
-            if let Some(declarator) = type_name.declarator {
-                self.validate_declarator(declarator);
-            }
         }
         for direct in self.store.stored::<DirectDeclarator<'tu>>() {
             match *direct {
@@ -649,21 +616,6 @@ impl<'tu> SyntaxTree<'tu> {
         &self.store[index]
     }
 
-    pub(crate) fn type_name(&self, index: TypeNameIndex) -> &TypeName<'tu> {
-        &self.store[index]
-    }
-
-    pub(crate) fn initializer(&self, index: InitializerIndex) -> InitializerView<'_, 'tu> {
-        InitializerView {
-            tree:        self,
-            initializer: &self.store[index],
-        }
-    }
-
-    pub(crate) fn designation(&self, index: DesignationIndex) -> &Designation<'tu> {
-        &self.store[index]
-    }
-
     pub(crate) fn struct_or_union_specifier(
         &self,
         index: StructOrUnionSpecifierIndex,
@@ -679,17 +631,6 @@ impl<'tu> SyntaxTree<'tu> {
         &self,
         range: SyntaxList<InitDeclarator<'tu>>,
     ) -> &[InitDeclarator<'tu>] {
-        &self.store[range]
-    }
-
-    pub(crate) fn initializer_elements(
-        &self,
-        range: SyntaxList<InitializerElement>,
-    ) -> &[InitializerElement] {
-        &self.store[range]
-    }
-
-    pub(crate) fn designators(&self, range: SyntaxList<Designator<'tu>>) -> &[Designator<'tu>] {
         &self.store[range]
     }
 
@@ -772,23 +713,5 @@ impl<'a, 'tu> DeclarationView<'a, 'tu> {
     pub(crate) fn init_declarators(&self) -> &'a [InitDeclarator<'tu>] {
         self.tree
             .init_declarators(self.declaration.init_declarators)
-    }
-}
-
-pub(crate) struct InitializerView<'a, 'tu> {
-    tree:        &'a SyntaxTree<'tu>,
-    initializer: &'a Initializer<'tu>,
-}
-
-impl<'a, 'tu> InitializerView<'a, 'tu> {
-    pub(crate) fn syntax(&self) -> &'a Initializer<'tu> {
-        self.initializer
-    }
-
-    pub(crate) fn elements(&self) -> Option<&'a [InitializerElement]> {
-        let InitializerType::InitializerList(elements) = self.initializer.kind else {
-            return None;
-        };
-        Some(self.tree.initializer_elements(elements))
     }
 }

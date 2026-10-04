@@ -33,7 +33,7 @@ fn errors<'tu>(parsed: &Parsed<'_, 'tu>) -> Vec<ParserErrorType<'tu>> {
 
 /// Number of elements in the brace initializer of the first declarator of
 /// external declaration `item`.
-fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> u32 {
+fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let declaration = declaration(parsed, item);
     let [init_declarator, ..] = init_declarators(parsed, declaration) else {
         panic!("expected an initialized declarator")
@@ -44,7 +44,7 @@ fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> u32 {
     let InitializerType::InitializerList(elements) = parsed.parser.syntax[initializer].kind else {
         panic!("expected an initializer list")
     };
-    elements.length
+    elements.len()
 }
 
 fn designated_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {

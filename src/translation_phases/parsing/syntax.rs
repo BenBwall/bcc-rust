@@ -13,6 +13,8 @@ use std::{
 use super::declaration_syntax::{
     DeclarationSpecifiers,
     Declarator,
+    Initializer,
+    TypeName,
 };
 use crate::{
     translation_phases::{
@@ -138,21 +140,9 @@ pub(crate) struct DeclarationIndex(pub(super) u32);
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct FunctionDefinitionIndex(pub(super) u32);
 
-/// Typed handle into the type-name arena.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct TypeNameIndex(pub(super) u32);
-
 /// Typed handle for one parenthesized declarator and its delimiter span.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct ParenthesizedDeclaratorIndex(pub(super) u32);
-
-/// Typed handle into the initializer arena.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct InitializerIndex(pub(super) u32);
-
-/// Typed handle into the designation arena.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct DesignationIndex(pub(super) u32);
 
 /// Expression whose grammar guarantees constant-expression syntax.
 ///
@@ -341,16 +331,16 @@ pub(crate) enum ExpressionType<'tu> {
         member:          Identifier,
     },
     CompoundLiteral {
-        type_name:   TypeNameIndex,
-        initializer: InitializerIndex,
+        type_name:   &'tu TypeName<'tu>,
+        initializer: &'tu Initializer<'tu>,
     },
     Identifier(Identifier),
     Constant(Constant),
     StringLiteral(StringTokenType),
-    SizeofType(TypeNameIndex),
+    SizeofType(&'tu TypeName<'tu>),
     SizeofExpr(&'tu Expression<'tu>),
     Cast {
-        target_type:        TypeNameIndex,
+        target_type:        &'tu TypeName<'tu>,
         operand_expression: &'tu Expression<'tu>,
     },
     Error,

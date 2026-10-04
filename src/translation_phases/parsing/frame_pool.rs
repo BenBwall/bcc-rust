@@ -132,7 +132,7 @@ pub(super) struct FramePools<'tu, 'p> {
     pub(super) direct_declarators: VecPool<'p, DirectDeclarator<'tu>>,
     pub(super) init_declarators: VecPool<'p, InitDeclarator<'tu>>,
     pub(super) block_items: VecPool<'p, BlockItem>,
-    pub(super) initializers: VecPool<'p, InitializerElement>,
+    pub(super) initializers: VecPool<'p, InitializerElement<'tu>>,
     pub(super) parameters: VecPool<'p, ParameterDeclaration<'tu>>,
     pub(super) identifiers: VecPool<'p, Identifier>,
     pub(super) struct_members: VecPool<'p, StructDeclaration<'tu>>,

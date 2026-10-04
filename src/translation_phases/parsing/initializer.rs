@@ -38,10 +38,8 @@ use super::{
     statement::is_statement_keyword,
     syntax::{
         ConstantExpression,
-        DesignationIndex,
         ExpressionType,
         Identifier,
-        InitializerIndex,
     },
 };
 use crate::{
@@ -63,7 +61,7 @@ use crate::{
 #[derive(Debug)]
 pub(super) struct InitializerFrame<'tu, 'p> {
     phase: InitializerPhase<'tu>,
-    pub(super) elements: ArenaVec<'p, InitializerElement>,
+    pub(super) elements: ArenaVec<'p, InitializerElement<'tu>>,
     pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     opening_brace_source_vectors: Option<SourceVectors>,
     closing_brace_source_vectors: Option<SourceVectors>,
@@ -83,7 +81,7 @@ pub(super) struct InitializerFrame<'tu, 'p> {
 #[derive(Debug)]
 pub(super) struct DesignationState<'tu, 'p> {
     pub(super) current_designators:    ArenaVec<'p, Designator<'tu>>,
-    current_designation:               Option<DesignationIndex>,
+    current_designation:               Option<&'tu Designation<'tu>>,
     designation_source_vectors:        Option<SourceVectors>,
     designation_equals_source_vectors: Option<SourceVectors>,
     current_designator_source:         Option<SourceVectors>,
@@ -228,8 +226,8 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     source_vectors,
                 );
                 ParseAction::Reduce(ParseValue::Initializer(InitializerResult {
-                    index,
-                    recovered: parser.hard_error_count > self.starting_error_count,
+                    initializer: index,
+                    recovered:   parser.hard_error_count > self.starting_error_count,
                 }))
             },
             | InitializerPhase::ElementOrClose => {
@@ -577,11 +575,13 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 ParseAction::Push(self.element_frame(parser))
             },
             | InitializerPhase::AwaitElement => {
-                let Some(ParseValue::Initializer(InitializerResult { index, .. })) = returned
+                let Some(ParseValue::Initializer(InitializerResult {
+                    initializer: index, ..
+                })) = returned
                 else {
                     panic!("initializer element returned an unexpected value: {returned:?}");
                 };
-                self.push_element(parser, context, index);
+                self.push_element(context, index);
                 self.phase = InitializerPhase::Separator;
                 ParseAction::Continue
             },
@@ -603,14 +603,14 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         source.unwrap_or_else(|| parser.missing_syntax_source(context));
                     let expression =
                         parser.store_expression(ExpressionType::Error, source_vectors, None, true);
-                    let index = InitializerIndex(parser.push_syntax(Initializer {
+                    let index = parser.alloc_syntax(Initializer {
                         kind: InitializerType::AssignmentExpression(expression),
                         source_vectors,
                         opening_brace_source_vectors: None,
                         closing_brace_source_vectors: None,
                         recovered: true,
-                    }));
-                    self.push_element(parser, context, index);
+                    });
+                    self.push_element(context, index);
                     self.phase = InitializerPhase::Separator;
                     return ParseAction::Reprocess;
                 }
@@ -689,8 +689,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             },
             | InitializerPhase::FinishList => {
                 debug_assert!(returned.is_none());
-                let start = parser.append_syntax(&mut self.elements);
-                let elements = start;
+                let elements = parser.alloc_syntax_list(&mut self.elements);
                 let source_vectors = context.merge_vector_list(&self.source_vectors);
                 let index = self.store_initializer(
                     parser,
@@ -698,30 +697,22 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     source_vectors,
                 );
                 ParseAction::Reduce(ParseValue::Initializer(InitializerResult {
-                    index,
-                    recovered: parser.hard_error_count > self.starting_error_count,
+                    initializer: index,
+                    recovered:   parser.hard_error_count > self.starting_error_count,
                 }))
             },
         }
     }
 
     /// Appends one element, with any designation that preceded it.
-    fn push_element(
-        &mut self,
-        parser: &Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-        index: InitializerIndex,
-    ) {
-        let initializer_source = parser.syntax[index].source_vectors;
+    fn push_element(&mut self, context: &mut Context<'_>, index: &'tu Initializer<'tu>) {
+        let initializer_source = index.source_vectors;
         let current_designation = self
             .designation
             .as_mut()
             .and_then(|designation| designation.current_designation.take());
         let source_vectors = current_designation.map_or(initializer_source, |designation| {
-            context.merge_vectors(
-                parser.syntax[designation].source_vectors,
-                initializer_source,
-            )
+            context.merge_vectors(designation.source_vectors, initializer_source)
         });
         self.elements.push(InitializerElement {
             designation: current_designation,
@@ -900,19 +891,16 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 .current_designators
                 .iter()
                 .any(|designator| designator.recovered);
-        let start = parser.append_syntax(&mut designation.current_designators);
-        let designators = start;
-        let index = DesignationIndex(
-            parser.push_syntax(Designation {
-                designators,
-                equals_source_vectors: designation.designation_equals_source_vectors.take(),
-                source_vectors: designation
-                    .designation_source_vectors
-                    .take()
-                    .unwrap_or_default(),
-                recovered,
-            }),
-        );
+        let designators = parser.alloc_syntax_list(&mut designation.current_designators);
+        let index = parser.alloc_syntax(Designation {
+            designators,
+            equals_source_vectors: designation.designation_equals_source_vectors.take(),
+            source_vectors: designation
+                .designation_source_vectors
+                .take()
+                .unwrap_or_default(),
+            recovered,
+        });
         designation.current_designation = Some(index);
     }
 
@@ -1028,13 +1016,13 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         parser: &mut Parser<'tu, 'p>,
         kind: InitializerType<'tu>,
         source_vectors: SourceVectors,
-    ) -> InitializerIndex {
-        InitializerIndex(parser.push_syntax(Initializer {
+    ) -> &'tu Initializer<'tu> {
+        parser.alloc_syntax(Initializer {
             kind,
             source_vectors,
             opening_brace_source_vectors: self.opening_brace_source_vectors,
             closing_brace_source_vectors: self.closing_brace_source_vectors,
             recovered: parser.hard_error_count > self.starting_error_count,
-        }))
+        })
     }
 }

@@ -494,14 +494,14 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
             },
             | DeclarationPhase::AwaitInitializer => {
                 let Some(ParseValue::Initializer(InitializerResult {
-                    index: initializer_index,
+                    initializer: initializer_index,
                     recovered,
                 })) = returned
                 else {
                     panic!("initializer frame returned an unexpected value: {returned:?}");
                 };
                 let _ = recovered;
-                let source_vectors = parser.syntax[initializer_index].source_vectors;
+                let source_vectors = initializer_index.source_vectors;
                 let initializer_source = self
                     .initializer_source
                     .map_or(source_vectors, |equals_source| {

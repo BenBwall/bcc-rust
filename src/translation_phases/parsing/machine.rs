@@ -11,6 +11,8 @@ use super::{
         DeclarationSpecifiers,
         Declarator,
         DirectDeclarator,
+        Initializer,
+        TypeName,
     },
     declarator::DeclaratorFrame,
     enum_specifier::EnumSpecifierFrame,
@@ -33,10 +35,8 @@ use super::{
         Expression,
         ExternalDeclaration,
         FunctionDefinitionIndex,
-        InitializerIndex,
         StatementIndex,
         StructOrUnionSpecifierIndex,
-        TypeNameIndex,
     },
     type_name::TypeNameFrame,
 };
@@ -147,10 +147,10 @@ pub(super) enum ParseValue<'tu> {
     /// Completed enum specifier and its recovery handoff.
     EnumSpecifier(EnumSpecifierResult),
     /// Arena handle for a completed type name.
-    TypeName(TypeNameIndex),
+    TypeName(&'tu TypeName<'tu>),
     Expression(ExpressionResult<'tu>),
     ConstantExpression(ConstantExpressionResult<'tu>),
-    Initializer(InitializerResult),
+    Initializer(InitializerResult<'tu>),
     /// Arena handle for a completed declaration.
     Declaration(DeclarationIndex),
     FunctionDefinition(FunctionDefinitionIndex),
@@ -195,9 +195,9 @@ pub(super) struct ConstantExpressionResult<'tu> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct InitializerResult {
-    pub(super) index:     InitializerIndex,
-    pub(super) recovered: bool,
+pub(super) struct InitializerResult<'tu> {
+    pub(super) initializer: &'tu Initializer<'tu>,
+    pub(super) recovered:   bool,
 }
 
 /// Sum type for every grammar frame currently implemented by the parser.

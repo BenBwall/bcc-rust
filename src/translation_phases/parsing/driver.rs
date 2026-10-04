@@ -1150,7 +1150,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         operator_source_vectors: Option<SourceVectors>,
         recovered: bool,
     ) -> &'tu Expression<'tu> {
-        let recovered = recovered || self.expression_children_recovered(&kind);
+        let recovered = recovered || Self::expression_children_recovered(&kind);
         self.alloc_syntax(Expression {
             kind,
             source_vectors,
@@ -1177,7 +1177,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         marked
     }
 
-    fn expression_children_recovered(&self, kind: &ExpressionType<'tu>) -> bool {
+    fn expression_children_recovered(kind: &ExpressionType<'tu>) -> bool {
         let expression_recovered = |expression: &Expression<'_>| expression.recovered;
         match kind {
             | ExpressionType::Parenthesized { expression }
@@ -1216,12 +1216,12 @@ impl<'tu, 'p> Parser<'tu, 'p> {
             | ExpressionType::CompoundLiteral {
                 type_name,
                 initializer,
-            } => self.syntax[*type_name].recovered || self.syntax[*initializer].recovered,
-            | ExpressionType::SizeofType(type_name) => self.syntax[*type_name].recovered,
+            } => type_name.recovered || initializer.recovered,
+            | ExpressionType::SizeofType(type_name) => type_name.recovered,
             | ExpressionType::Cast {
                 target_type,
                 operand_expression,
-            } => self.syntax[*target_type].recovered || expression_recovered(operand_expression),
+            } => target_type.recovered || expression_recovered(operand_expression),
             | ExpressionType::Error => true,
             | ExpressionType::Identifier(..)
             | ExpressionType::Constant(..)

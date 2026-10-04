@@ -22,7 +22,6 @@ use super::{
         ParseFrame,
         ParseValue,
     },
-    syntax::TypeNameIndex,
 };
 use crate::translation_phases::{
     Context,
@@ -111,13 +110,13 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
                             declarator.source_vectors,
                         )
                     });
-                let index = TypeNameIndex(parser.push_syntax(TypeName {
+                let type_name = parser.alloc_syntax(TypeName {
                     declaration_specifiers,
                     declarator,
                     source_vectors,
                     recovered: parser.hard_error_count > self.starting_error_count,
-                }));
-                ParseAction::Reduce(ParseValue::TypeName(index))
+                });
+                ParseAction::Reduce(ParseValue::TypeName(type_name))
             },
         }
     }

@@ -15,17 +15,20 @@ use std::{
 use super::{
     declaration_syntax::{
         Declarator,
+        Designation,
         Designator,
         DesignatorType,
         DirectDeclarator,
         Enumerator,
         InitDeclarator,
+        Initializer,
         InitializerElement,
         InitializerType,
         ParameterDeclaration,
         StructDeclaration,
         StructDeclarator,
         StructOrUnion,
+        TypeName,
         TypeQualifiers,
         TypeSpecifiers,
     },
@@ -35,7 +38,6 @@ use super::{
         Constant,
         ConstantExpressionSlot,
         DeclarationIndex,
-        DesignationIndex,
         EnumSpecifierIndex,
         Expression,
         ExpressionSlot,
@@ -44,12 +46,10 @@ use super::{
         ForInitializer,
         FunctionDefinitionIndex,
         Identifier,
-        InitializerIndex,
         StatementIndex,
         StatementType,
         StorageClass,
         StructOrUnionSpecifierIndex,
-        TypeNameIndex,
         UnaryOperator,
     },
     syntax_store::SyntaxTree,
@@ -90,11 +90,11 @@ enum Work<'tu> {
     Statement(StatementIndex, usize, &'static str),
     Expression(&'tu Expression<'tu>, usize, &'static str),
     Missing(SourceVectors, usize, &'static str),
-    Initializer(InitializerIndex, usize, &'static str),
-    InitializerElement(InitializerElement, usize),
-    Designation(DesignationIndex, usize),
+    Initializer(&'tu Initializer<'tu>, usize, &'static str),
+    InitializerElement(InitializerElement<'tu>, usize),
+    Designation(&'tu Designation<'tu>, usize),
     Designator(Designator<'tu>, usize),
-    TypeName(TypeNameIndex, usize, &'static str),
+    TypeName(&'tu TypeName<'tu>, usize, &'static str),
 }
 
 impl<'tu> SyntaxTree<'tu> {
@@ -628,21 +628,19 @@ impl<'tu> SyntaxTree<'tu> {
                     context,
                     options,
                 ),
-                | Work::Initializer(index, indent, role) => {
-                    if !seen.insert((4_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Initializer(initializer, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 4, initializer) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "initializer",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let view = self.initializer(index);
-                    let initializer = view.syntax();
                     Self::line(
                         &mut output,
                         indent,
@@ -668,11 +666,9 @@ impl<'tu> SyntaxTree<'tu> {
                         | InitializerType::AssignmentExpression(expression) => work.push(
                             Work::Expression(expression, indent + 1, "assignment-expression"),
                         ),
-                        | InitializerType::InitializerList(_) => {
-                            if let Some(elements) = view.elements() {
-                                for element in elements.iter().rev() {
-                                    work.push(Work::InitializerElement(*element, indent + 1));
-                                }
+                        | InitializerType::InitializerList(elements) => {
+                            for element in elements.iter().rev() {
+                                work.push(Work::InitializerElement(*element, indent + 1));
                             }
                         },
                     }
@@ -691,11 +687,10 @@ impl<'tu> SyntaxTree<'tu> {
                         work.push(Work::Designation(designation, indent + 1));
                     }
                 },
-                | Work::Designation(index, indent) => {
-                    if !seen.insert((9_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Designation(designation, indent) => {
+                    if first_visit(&mut visited, 9, designation).is_some() {
                         continue;
                     }
-                    let designation = self.designation(index);
                     Self::line(
                         &mut output,
                         indent,
@@ -711,7 +706,7 @@ impl<'tu> SyntaxTree<'tu> {
                         context,
                         options,
                     );
-                    for designator in self.designators(designation.designators).iter().rev() {
+                    for designator in designation.designators.iter().rev() {
                         work.push(Work::Designator(*designator, indent + 1));
                     }
                 },
@@ -743,20 +738,19 @@ impl<'tu> SyntaxTree<'tu> {
                         work.push(Work::Expression(expression.into(), indent + 1, "index"));
                     }
                 },
-                | Work::TypeName(index, indent, role) => {
-                    if !seen.insert((5_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::TypeName(type_name, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 5, type_name) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "type-name",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let type_name = self.type_name(index);
                     Self::line(
                         &mut output,
                         indent,
@@ -1074,18 +1068,18 @@ impl<'tu> SyntaxTree<'tu> {
                 type_name,
                 initializer,
             } => {
-                work.push(Work::Initializer(*initializer, indent, "initializer"));
-                work.push(Work::TypeName(*type_name, indent, "type"));
+                work.push(Work::Initializer(initializer, indent, "initializer"));
+                work.push(Work::TypeName(type_name, indent, "type"));
             },
             | ExpressionType::Cast {
                 target_type,
                 operand_expression,
             } => {
                 work.push(Work::Expression(operand_expression, indent, "operand"));
-                work.push(Work::TypeName(*target_type, indent, "target-type"));
+                work.push(Work::TypeName(target_type, indent, "target-type"));
             },
             | ExpressionType::SizeofType(type_name) => {
-                work.push(Work::TypeName(*type_name, indent, "operand-type"));
+                work.push(Work::TypeName(type_name, indent, "operand-type"));
             },
             | ExpressionType::Identifier(_)
             | ExpressionType::Constant(_)
