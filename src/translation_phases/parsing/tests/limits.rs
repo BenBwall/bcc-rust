@@ -9,7 +9,6 @@ use super::{
     block_items,
     declaration,
     function_definition,
-    parse,
     parser_errors,
     with_parse,
     with_parse_limits,
@@ -623,148 +622,156 @@ fn syntax_limit_counts_nodes_retained_by_active_frames() {
 #[test]
 fn remaining_c99_parser_translation_floors_are_supported() {
     let derived = format!("int value{};\n", "[1]".repeat(12));
-    let derived = parse(&derived);
-    assert!(parser_errors(&derived).next().is_none());
-    let derived_declarator = &derived.parser.syntax.nth::<InitDeclarator>(0).declarator;
-    assert_eq!(
-        derived.parser.syntax[derived_declarator.kind]
-            .iter()
-            .filter(|direct| matches!(direct, DirectDeclarator::Array { .. }))
-            .count(),
-        12
-    );
+    with_parse(&derived, |derived| {
+        assert!(parser_errors(derived).next().is_none());
+        let derived_declarator = &derived.parser.syntax.nth::<InitDeclarator>(0).declarator;
+        assert_eq!(
+            derived.parser.syntax[derived_declarator.kind]
+                .iter()
+                .filter(|direct| matches!(direct, DirectDeclarator::Array { .. }))
+                .count(),
+            12
+        );
+    });
 
     let block_identifiers = (0..511)
         .map(|index| format!("b{index}"))
         .collect::<Vec<_>>()
         .join(",");
     let block = format!("int f(void) {{ int {block_identifiers}; return 0; }}\n");
-    let block = parse(&block);
-    assert!(parser_errors(&block).next().is_none());
-    let block_declaration = block
-        .parser
-        .syntax
-        .iter::<Declaration>()
-        .max_by_key(|declaration| declaration.init_declarators.length())
-        .expect("block fixture must contain declarations");
-    assert_eq!(block_declaration.init_declarators.length(), 511);
-    let last_block_init = block.parser.syntax[block_declaration.init_declarators]
-        .last()
-        .expect("nonempty syntax list");
-    assert_eq!(
-        block
+    with_parse(&block, |block| {
+        assert!(parser_errors(block).next().is_none());
+        let block_declaration = block
             .parser
-            .declarator_identifier(last_block_init.declarator)
-            .map(|identifier| block.context.string_cache.at(identifier.name)),
-        Some("b510")
-    );
+            .syntax
+            .iter::<Declaration>()
+            .max_by_key(|declaration| declaration.init_declarators.length())
+            .expect("block fixture must contain declarations");
+        assert_eq!(block_declaration.init_declarators.length(), 511);
+        let last_block_init = block.parser.syntax[block_declaration.init_declarators]
+            .last()
+            .expect("nonempty syntax list");
+        assert_eq!(
+            block
+                .parser
+                .declarator_identifier(last_block_init.declarator)
+                .map(|identifier| block.context.string_cache.at(identifier.name)),
+            Some("b510")
+        );
+    });
 
     let external_identifiers = (0..4095)
         .map(|index| format!("e{index}"))
         .collect::<Vec<_>>()
         .join(",");
     let external = format!("int {external_identifiers};\n");
-    let external = parse(&external);
-    assert!(parser_errors(&external).next().is_none());
-    let declaration = declaration(&external, 0);
-    assert_eq!(declaration.init_declarators.length(), 4_095);
-    let last_external_init = external.parser.syntax[declaration.init_declarators]
-        .last()
-        .expect("nonempty syntax list");
-    assert_eq!(
-        external
-            .parser
-            .declarator_identifier(last_external_init.declarator)
-            .map(|identifier| external.context.string_cache.at(identifier.name)),
-        Some("e4094")
-    );
+    with_parse(&external, |external| {
+        assert!(parser_errors(external).next().is_none());
+        let declaration = declaration(external, 0);
+        assert_eq!(declaration.init_declarators.length(), 4_095);
+        let last_external_init = external.parser.syntax[declaration.init_declarators]
+            .last()
+            .expect("nonempty syntax list");
+        assert_eq!(
+            external
+                .parser
+                .declarator_identifier(last_external_init.declarator)
+                .map(|identifier| external.context.string_cache.at(identifier.name)),
+            Some("e4094")
+        );
+    });
 
     let cases = (0..1023).fold(String::new(), |mut cases, index| {
         write!(cases, "case {index}: ;").expect("writing to a String cannot fail");
         cases
     });
     let switch = format!("int f(int x) {{ switch (x) {{ {cases} }} return 0; }}\n");
-    let switch = parse(&switch);
-    assert!(parser_errors(&switch).next().is_none());
-    assert_eq!(
-        switch
-            .parser
-            .syntax
-            .iter::<Statement>()
-            .filter(|statement| matches!(statement.kind, StatementType::Case(..)))
-            .count(),
-        1_023
-    );
+    with_parse(&switch, |switch| {
+        assert!(parser_errors(switch).next().is_none());
+        assert_eq!(
+            switch
+                .parser
+                .syntax
+                .iter::<Statement>()
+                .filter(|statement| matches!(statement.kind, StatementType::Case(..)))
+                .count(),
+            1_023
+        );
+    });
 
     let members = (0..1023).fold(String::new(), |mut members, index| {
         write!(members, "int m{index};").expect("writing to a String cannot fail");
         members
     });
     let structure = format!("struct S {{ {members} }};\n");
-    let structure = parse(&structure);
-    assert!(parser_errors(&structure).next().is_none());
-    let member_list = structure
-        .parser
-        .syntax
-        .nth::<StructOrUnionSpecifier>(0)
-        .struct_declaration_list
-        .expect("struct definition must retain members");
-    assert_eq!(member_list.length(), 1_023);
-    let last_member = structure.parser.syntax[member_list]
-        .last()
-        .expect("nonempty syntax list");
-    let last_member_declarator = &structure.parser.syntax[last_member.struct_declarator_list][0];
-    assert_eq!(
-        last_member_declarator
-            .declarator
-            .and_then(|declarator| structure.parser.declarator_identifier(declarator))
-            .map(|identifier| structure.context.string_cache.at(identifier.name)),
-        Some("m1022")
-    );
+    with_parse(&structure, |structure| {
+        assert!(parser_errors(structure).next().is_none());
+        let member_list = structure
+            .parser
+            .syntax
+            .nth::<StructOrUnionSpecifier>(0)
+            .struct_declaration_list
+            .expect("struct definition must retain members");
+        assert_eq!(member_list.length(), 1_023);
+        let last_member = structure.parser.syntax[member_list]
+            .last()
+            .expect("nonempty syntax list");
+        let last_member_declarator =
+            &structure.parser.syntax[last_member.struct_declarator_list][0];
+        assert_eq!(
+            last_member_declarator
+                .declarator
+                .and_then(|declarator| structure.parser.declarator_identifier(declarator))
+                .map(|identifier| structure.context.string_cache.at(identifier.name)),
+            Some("m1022")
+        );
+    });
 
     let enumerators = (0..1023)
         .map(|index| format!("E{index}"))
         .collect::<Vec<_>>()
         .join(",");
     let enumeration = format!("enum E {{ {enumerators} }};\n");
-    let enumeration = parse(&enumeration);
-    assert!(parser_errors(&enumeration).next().is_none());
-    let enumeration_list = enumeration
-        .parser
-        .syntax
-        .nth::<EnumSpecifier>(0)
-        .enumeration_list
-        .expect("enum definition must retain enumerators");
-    assert_eq!(enumeration_list.length(), 1_023);
-    let last_enumerator = enumeration.parser.syntax[enumeration_list]
-        .last()
-        .expect("nonempty syntax list");
-    assert_eq!(
-        enumeration
-            .context
-            .string_cache
-            .at(last_enumerator.name.name),
-        "E1022"
-    );
+    with_parse(&enumeration, |enumeration| {
+        assert!(parser_errors(enumeration).next().is_none());
+        let enumeration_list = enumeration
+            .parser
+            .syntax
+            .nth::<EnumSpecifier>(0)
+            .enumeration_list
+            .expect("enum definition must retain enumerators");
+        assert_eq!(enumeration_list.length(), 1_023);
+        let last_enumerator = enumeration.parser.syntax[enumeration_list]
+            .last()
+            .expect("nonempty syntax list");
+        assert_eq!(
+            enumeration
+                .context
+                .string_cache
+                .at(last_enumerator.name.name),
+            "E1022"
+        );
+    });
 
     let mut nested = "int leaf;".to_owned();
     for index in (0..63).rev() {
         nested = format!("struct S{index} {{ {nested} }} member{index};");
     }
     let nested = format!("struct Outer {{ {nested} }};\n");
-    let nested = parse(&nested);
-    assert!(parser_errors(&nested).next().is_none());
-    assert_eq!(nested.parser.syntax.count::<StructOrUnionSpecifier>(), 64);
-    assert_eq!(
-        nested
-            .parser
-            .syntax
-            .iter::<StructOrUnionSpecifier>()
-            .last()
-            .and_then(|specifier| specifier.identifier)
-            .map(|identifier| nested.context.string_cache.at(identifier.name)),
-        Some("Outer")
-    );
+    with_parse(&nested, |nested| {
+        assert!(parser_errors(nested).next().is_none());
+        assert_eq!(nested.parser.syntax.count::<StructOrUnionSpecifier>(), 64);
+        assert_eq!(
+            nested
+                .parser
+                .syntax
+                .iter::<StructOrUnionSpecifier>()
+                .last()
+                .and_then(|specifier| specifier.identifier)
+                .map(|identifier| nested.context.string_cache.at(identifier.name)),
+            Some("Outer")
+        );
+    });
 }
 
 #[test]
@@ -772,12 +779,13 @@ fn completed_roots_release_macro_hint_metadata() {
     // The whole unit is preprocessed first, so the hints of every invocation
     // exist at once; each completed root releases those before it.
     let source = format!("#define DECL(x) int x\n{}", "DECL(value);\n".repeat(5_000));
-    let parsed = parse(&source);
-    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-    assert_eq!(parsed.items.len(), 5_000);
-    assert!(
-        parsed.context.macro_hint_entries() < 16,
-        "completed roots kept {} macro hints",
-        parsed.context.macro_hint_entries()
-    );
+    with_parse(&source, |parsed| {
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        assert_eq!(parsed.items.len(), 5_000);
+        assert!(
+            parsed.context.macro_hint_entries() < 16,
+            "completed roots kept {} macro hints",
+            parsed.context.macro_hint_entries()
+        );
+    });
 }
