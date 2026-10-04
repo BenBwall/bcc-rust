@@ -10,7 +10,6 @@ use super::{
     declaration,
     function_definition,
     parse,
-    parse_with_limits,
     parser_errors,
     with_parse,
     with_parse_limits,
@@ -326,91 +325,98 @@ fn configured_external_declaration_limit_has_boundary_evidence() {
         ..ParserLimits::default()
     };
     for source in ["int a;\n", "int a; int b;\n"] {
-        let parsed = parse_with_limits(source, limits);
-        assert!(
-            parser_errors(&parsed)
-                .all(|error| !matches!(error, ParserErrorType::ResourceLimitExceeded { .. }))
-        );
+        with_parse_limits(source, limits, |parsed| {
+            assert!(
+                parser_errors(parsed)
+                    .all(|error| !matches!(error, ParserErrorType::ResourceLimitExceeded { .. }))
+            );
+        });
     }
 
-    let parsed = parse_with_limits("int a; int b; int c;\n", limits);
-    assert!(matches!(
-        parsed.items.last(),
-        Some(ExternalDeclaration::Error(_))
-    ));
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ResourceLimitExceeded {
-            resource: ParserResource::ExternalDeclarations,
-            limit:    2,
-        }
-    )));
-    assert!(parsed.parser.frames.is_empty());
-    assert!(parsed.parser.returned.is_none());
-    assert_eq!(parsed.parser.scopes.depth(), 0);
+    with_parse_limits("int a; int b; int c;\n", limits, |parsed| {
+        assert!(matches!(
+            parsed.items.last(),
+            Some(ExternalDeclaration::Error(_))
+        ));
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ResourceLimitExceeded {
+                resource: ParserResource::ExternalDeclarations,
+                limit:    2,
+            }
+        )));
+        assert!(parsed.parser.frames.is_empty());
+        assert!(parsed.parser.returned.is_none());
+        assert_eq!(parsed.parser.scopes.depth(), 0);
+    });
 }
 
 #[test]
 fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
-    let node_limited = parse_with_limits(
+    with_parse_limits(
         "int value = 1;\n",
         ParserLimits {
             syntax_nodes: 0,
             ..ParserLimits::default()
         },
+        |parsed| {
+            assert!(parser_errors(parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::SyntaxNodes,
+                    limit:    0,
+                }
+            )));
+            assert!(matches!(
+                parsed.items.last(),
+                Some(ExternalDeclaration::Error(_))
+            ));
+            assert_resource_limit_cleanup(parsed);
+        },
     );
-    assert!(parser_errors(&node_limited).any(|error| matches!(
-        error,
-        ParserErrorType::ResourceLimitExceeded {
-            resource: ParserResource::SyntaxNodes,
-            limit:    0,
-        }
-    )));
-    assert!(matches!(
-        node_limited.items.last(),
-        Some(ExternalDeclaration::Error(_))
-    ));
 
-    let frame_limited = parse_with_limits(
+    with_parse_limits(
         "int value;\n",
         ParserLimits {
             frame_depth: 1,
             ..ParserLimits::default()
         },
+        |parsed| {
+            assert!(parser_errors(parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::FrameDepth,
+                    limit:    1,
+                }
+            )));
+            assert!(matches!(
+                parsed.items.last(),
+                Some(ExternalDeclaration::Error(_))
+            ));
+            assert_resource_limit_cleanup(parsed);
+        },
     );
-    assert!(parser_errors(&frame_limited).any(|error| matches!(
-        error,
-        ParserErrorType::ResourceLimitExceeded {
-            resource: ParserResource::FrameDepth,
-            limit:    1,
-        }
-    )));
-    assert!(matches!(
-        frame_limited.items.last(),
-        Some(ExternalDeclaration::Error(_))
-    ));
-
-    for parsed in [&node_limited, &frame_limited] {
-        assert!(parsed.parser.frames.is_empty());
-        assert!(parsed.parser.returned.is_none());
-        assert!(parsed.parser.recovery.active.is_none());
-        assert_eq!(parsed.parser.scopes.depth(), 0);
-        assert_eq!(
-            parser_errors(parsed)
-                .filter(|error| matches!(error, ParserErrorType::ResourceLimitExceeded { .. }))
-                .count(),
-            1
-        );
-        assert!(
-            parser_errors(parsed)
-                .all(|error| !matches!(error, ParserErrorType::EmptyTranslationUnit))
-        );
-    }
 
     let defaults = ParserLimits::default();
     assert!(defaults.external_declarations < u32::MAX as usize);
     assert!(defaults.syntax_nodes < u32::MAX as usize);
     assert!(defaults.frame_depth < u32::MAX as usize);
+}
+
+fn assert_resource_limit_cleanup(parsed: &super::Parsed) {
+    assert!(parsed.parser.frames.is_empty());
+    assert!(parsed.parser.returned.is_none());
+    assert!(parsed.parser.recovery.active.is_none());
+    assert_eq!(parsed.parser.scopes.depth(), 0);
+    assert_eq!(
+        parser_errors(parsed)
+            .filter(|error| matches!(error, ParserErrorType::ResourceLimitExceeded { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        parser_errors(parsed).all(|error| !matches!(error, ParserErrorType::EmptyTranslationUnit))
+    );
 }
 
 #[test]
@@ -467,55 +473,61 @@ fn mixed_declarator_translation_floor_uses_the_typed_tree() {
 }
 
 fn assert_syntax_node_limit_boundary(source: &str) {
-    let baseline = parse(source);
-    assert!(
-        parser_errors(&baseline).next().is_none(),
-        "baseline failed for {source:?}: {:?}",
-        baseline.errors
-    );
-    let exact_limit = baseline.parser.syntax.node_count();
+    let exact_limit = with_parse(source, |baseline| {
+        assert!(
+            parser_errors(baseline).next().is_none(),
+            "baseline failed for {source:?}: {:?}",
+            baseline.errors
+        );
+        baseline.parser.syntax.node_count()
+    });
     assert!(exact_limit > 0, "fixture must retain syntax nodes");
 
-    let exact = parse_with_limits(
+    with_parse_limits(
         source,
         ParserLimits {
             syntax_nodes: exact_limit,
             ..ParserLimits::default()
         },
+        |exact| {
+            assert!(parser_errors(exact).all(|error| !matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::SyntaxNodes,
+                    ..
+                }
+            )));
+            assert_eq!(exact.parser.syntax.node_count(), exact_limit);
+        },
     );
-    assert!(parser_errors(&exact).all(|error| !matches!(
-        error,
-        ParserErrorType::ResourceLimitExceeded {
-            resource: ParserResource::SyntaxNodes,
-            ..
-        }
-    )));
-    assert_eq!(exact.parser.syntax.node_count(), exact_limit);
 
     let below_limit = exact_limit - 1;
-    let below = parse_with_limits(
+    with_parse_limits(
         source,
         ParserLimits {
             syntax_nodes: below_limit,
             ..ParserLimits::default()
         },
+        |below| {
+            assert!(parser_errors(below).any(|error| matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::SyntaxNodes,
+                    limit,
+                } if *limit == below_limit
+            )));
+            assert!(
+                below.parser.syntax.node_count() <= below_limit,
+                "syntax limit retained too many nodes for {source:?}: limit={below_limit}, \
+                 actual={}",
+                below.parser.syntax.node_count()
+            );
+            assert!(matches!(
+                below.items.last(),
+                Some(ExternalDeclaration::Error(_))
+            ));
+        },
     );
-    assert!(parser_errors(&below).any(|error| matches!(
-        error,
-        ParserErrorType::ResourceLimitExceeded {
-            resource: ParserResource::SyntaxNodes,
-            limit,
-        } if *limit == below_limit
-    )));
-    assert!(
-        below.parser.syntax.node_count() <= below_limit,
-        "syntax limit retained too many nodes for {source:?}: limit={below_limit}, actual={}",
-        below.parser.syntax.node_count()
-    );
-    assert!(matches!(
-        below.items.last(),
-        Some(ExternalDeclaration::Error(_))
-    ));
 }
 
 #[test]
@@ -537,69 +549,75 @@ fn every_frame_retained_list_respects_the_exact_syntax_node_limit() {
 #[test]
 fn configured_frame_depth_accepts_exact_limit_and_rejects_limit_plus_one() {
     let source = "int f(void) { return sizeof(int (*)[2]) + ((1 + 2) * 3); }\n";
-    let baseline = parse(source);
-    let exact_limit = baseline
-        .parser
-        .trace
-        .iter()
-        .map(|event| event.depth)
-        .max()
-        .expect("fixture must execute parser frames");
+    let exact_limit = with_parse(source, |baseline| {
+        baseline
+            .parser
+            .trace
+            .iter()
+            .map(|event| event.depth)
+            .max()
+            .expect("fixture must execute parser frames")
+    });
 
-    let exact = parse_with_limits(
+    with_parse_limits(
         source,
         ParserLimits {
             frame_depth: exact_limit,
             ..ParserLimits::default()
         },
+        |exact| {
+            assert!(parser_errors(exact).all(|error| !matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::FrameDepth,
+                    ..
+                }
+            )));
+        },
     );
-    assert!(parser_errors(&exact).all(|error| !matches!(
-        error,
-        ParserErrorType::ResourceLimitExceeded {
-            resource: ParserResource::FrameDepth,
-            ..
-        }
-    )));
 
-    let below = parse_with_limits(
+    with_parse_limits(
         source,
         ParserLimits {
             frame_depth: exact_limit - 1,
             ..ParserLimits::default()
         },
+        |below| {
+            assert!(parser_errors(below).any(|error| matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::FrameDepth,
+                    limit,
+                } if *limit == exact_limit - 1
+            )));
+        },
     );
-    assert!(parser_errors(&below).any(|error| matches!(
-        error,
-        ParserErrorType::ResourceLimitExceeded {
-            resource: ParserResource::FrameDepth,
-            limit,
-        } if *limit == exact_limit - 1
-    )));
 }
 
 #[test]
 fn syntax_limit_counts_nodes_retained_by_active_frames() {
     let limit = 2;
-    let parsed = parse_with_limits(
+    with_parse_limits(
         "enum E { A, B, C };\n",
         ParserLimits {
             syntax_nodes: limit,
             ..ParserLimits::default()
         },
+        |parsed| {
+            assert!(parser_errors(parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::SyntaxNodes,
+                    limit: actual,
+                } if *actual == limit
+            )));
+            assert!(parsed.parser.syntax.node_count() <= limit);
+            assert!(matches!(
+                parsed.items.as_slice(),
+                [ExternalDeclaration::Error(_)]
+            ));
+        },
     );
-
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ResourceLimitExceeded {
-            resource: ParserResource::SyntaxNodes,
-            limit: actual,
-        } if *actual == limit
-    )));
-    assert!(parsed.parser.syntax.node_count() <= limit);
-    assert!(matches!(
-        parsed.items.as_slice(),
-        [ExternalDeclaration::Error(_)]
-    ));
 }
 
 #[test]
