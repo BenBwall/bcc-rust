@@ -104,6 +104,8 @@ struct HeaderName {
     /// Where a `"…"` name first uses a backslash, which only the backslash
     /// extension accepts.
     backslash:         Option<SourceVectors>,
+    /// A character after `>` in the token that closes a written angle name.
+    extra_tokens:      Option<SourceVectors>,
 }
 
 /// The first sequence in `name` whose behavior in a header name C99 §6.4.7p3
@@ -407,6 +409,7 @@ impl Preprocessor {
         // Where the operand ends when no token closes it.
         let mut end = open_vector.end();
         let mut closing = None;
+        let mut extra_after_closing = None;
         loop {
             let Some(token) = self.tokenizer.next_item(context) else {
                 context.preprocessor_error(PreprocessorError {
@@ -427,10 +430,16 @@ impl Preprocessor {
                 let source = context
                     .source_text(physical)
                     .expect("source files record their text");
-                closing = logical_characters(source, vector.range())
-                    .into_iter()
-                    .find(|character| character.character == '>')
-                    .map(|character| character.index);
+                let characters = logical_characters(source, vector.range());
+                closing = characters
+                    .iter()
+                    .position(|character| character.character == '>')
+                    .map(|index| {
+                        extra_after_closing = characters
+                            .get(index + 1)
+                            .map(|character| (character.index, character.length));
+                        characters[index].index
+                    });
                 if closing.is_some() {
                     break;
                 }
@@ -442,7 +451,7 @@ impl Preprocessor {
             line:   open_vector.line,
             column: open_vector.column,
         };
-        let (name, invalid, unclosed_at) = {
+        let (name, invalid, unclosed_at, extra_after_closing) = {
             let source = context
                 .source_text(physical)
                 .expect("source files record their text");
@@ -455,7 +464,14 @@ impl Preprocessor {
             let unclosed_at = closing
                 .is_none()
                 .then(|| position_after(source, anchor, end));
-            (written.name, written.invalid, unclosed_at)
+            let extra_after_closing = extra_after_closing
+                .map(|(index, length)| (position_after(source, anchor, index), length));
+            (
+                written.name,
+                written.invalid,
+                unclosed_at,
+                extra_after_closing,
+            )
         };
         let length = closing.map_or(end, |index| index + 1) - anchor.index;
         // Lexing a terminal `>` may already have read the supplied final
@@ -478,6 +494,8 @@ impl Preprocessor {
                 (sequence, context.create_source_vectors(start, file, length))
             }),
             backslash: None,
+            extra_tokens: extra_after_closing
+                .map(|(position, length)| context.create_source_vectors(position, file, length)),
         }
     }
 
@@ -534,6 +552,7 @@ impl Preprocessor {
             backslash:         written
                 .backslash
                 .map(|(start, length)| context.create_source_vectors(start, file, length)),
+            extra_tokens:      None,
         }
     }
 
@@ -577,6 +596,7 @@ impl Preprocessor {
                 missing_delimiter: None,
                 invalid,
                 backslash,
+                extra_tokens: None,
             });
         }
         let mut contents = TokenString::new();
@@ -626,6 +646,7 @@ impl Preprocessor {
             missing_delimiter: (!closed).then_some(('>', source_vectors)),
             invalid,
             backslash: None,
+            extra_tokens: None,
         })
     }
 
@@ -722,7 +743,15 @@ impl Preprocessor {
         } else {
             None
         };
-        if !self.current_is_newline
+        if let Some(source_vectors) = header.extra_tokens {
+            context.preprocessor_error(PreprocessorError {
+                error_type: PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
+                source_vectors,
+            });
+            if !self.current_is_newline {
+                self.skip_and_expand_until_newline(context);
+            }
+        } else if !self.current_is_newline
             && self
                 .expect_token::<true>(
                     context,

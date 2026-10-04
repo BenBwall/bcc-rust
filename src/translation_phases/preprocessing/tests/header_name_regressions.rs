@@ -111,6 +111,15 @@ impl Outcome {
 }
 
 fn preprocess_in(headers: &Headers, source: &str, policy: ExtensionPolicy) -> Outcome {
+    preprocess_with_directories(headers, source, policy, SharedVec::default())
+}
+
+fn preprocess_with_directories(
+    headers: &Headers,
+    source: &str,
+    policy: ExtensionPolicy,
+    system_directories: SharedVec<PathBuf>,
+) -> Outcome {
     let mut context =
         Context::with_configuration(CompilerConfiguration::new(CStandard::C99, policy));
     let mut preprocessor = Preprocessor::new(
@@ -118,7 +127,7 @@ fn preprocess_in(headers: &Headers, source: &str, policy: ExtensionPolicy) -> Ou
         headers.0.join("main.c").into_boxed_path(),
         source.to_owned().into(),
         SharedVec::default(),
-        SharedVec::default(),
+        system_directories,
     );
     let mut identifiers = Vec::new();
     while let Some(token) = preprocessor.next_item(&mut context) {
@@ -169,6 +178,59 @@ fn written_header_names_keep_their_source_text() {
         assert_eq!(identifiers.len(), 2, "{source:?}: {identifiers:?}");
         assert_eq!(identifiers[1], "after", "{source:?}");
     }
+}
+
+#[test]
+fn characters_glued_to_angle_header_closing_are_extra_tokens() {
+    let headers = Headers::new();
+    headers.write(Path::new("plain.h"), "plain");
+    let preprocess_header = |source: &str| {
+        preprocess_with_directories(
+            &headers,
+            source,
+            ExtensionPolicy::Allow,
+            SharedVec::from(vec![headers.0.clone()]),
+        )
+    };
+    for tail in [">", "=", "> extra"] {
+        let source = format!("#include <plain.h>{tail}\nafter\n");
+        let mut outcome = preprocess_header(&source);
+        assert_eq!(outcome.identifiers, ["plain", "after"], "{source:?}");
+        assert!(
+            matches!(
+                outcome.preprocessor_errors().as_slice(),
+                [PreprocessorErrorType::ExtraTokensAfterIncludeDirective]
+            ),
+            "{source:?}: {:#?}",
+            outcome.errors
+        );
+        let location = outcome.location(|error| {
+            matches!(
+                error,
+                PreprocessorErrorType::ExtraTokensAfterIncludeDirective
+            )
+        });
+        assert_eq!(location.line, 1, "{source:?}");
+        assert_eq!(location.column, 19, "{source:?}");
+        assert_eq!(location.length, 1, "{source:?}");
+    }
+
+    std::fs::write(headers.0.join("middle.h"), "#include <plain.h>>").unwrap();
+    let outcome = preprocess_header("#include \"middle.h\"\nafter\n");
+    assert_eq!(outcome.identifiers, ["plain", "after"]);
+    assert_eq!(
+        outcome
+            .preprocessor_errors()
+            .iter()
+            .filter(|error| matches!(
+                error,
+                PreprocessorErrorType::ExtraTokensAfterIncludeDirective
+            ))
+            .count(),
+        1,
+        "{:#?}",
+        outcome.errors
+    );
 }
 
 #[test]
