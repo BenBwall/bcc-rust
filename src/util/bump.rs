@@ -1,7 +1,7 @@
-//! Chunked arena allocation for phase-scoped compiler data.
+//! Virtual-memory arena allocation for phase-scoped compiler data.
 //!
-//! Chunks never move. Individual deallocation normally leaves memory in the
-//! arena; dropping or resetting the arena releases whole chunks. Values put
+//! The reservation never moves. Individual deallocation normally leaves memory
+//! in the arena; dropping releases the region and reset rewinds it. Values put
 //! here must not need destruction, since the arena does not run destructors.
 #![cfg_attr(
     not(test),
@@ -11,8 +11,6 @@
 use std::{
     alloc::{
         Layout,
-        alloc,
-        dealloc,
         handle_alloc_error,
     },
     cell::RefCell,
@@ -35,38 +33,24 @@ use allocator_api2::{
 };
 use rustc_hash::FxBuildHasher;
 
-const FIRST_CHUNK_BYTES: usize = 4096;
-const CHUNK_ALIGN: usize = 64;
+use super::vm::GrowingRegion;
 
-struct Chunk {
-    ptr:    NonNull<u8>,
-    layout: Layout,
-    used:   usize,
-}
-
-impl Drop for Chunk {
-    fn drop(&mut self) {
-        // SAFETY: `ptr` came from `alloc` with this exact layout and is freed
-        // once.
-        unsafe {
-            dealloc(self.ptr.as_ptr(), self.layout);
-        }
-    }
-}
+#[cfg(not(miri))]
+const REGION_BYTES: usize = 100 * 1024 * 1024 * 1024;
+#[cfg(miri)]
+const REGION_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 struct Last {
     ptr:   NonNull<u8>,
-    chunk: usize,
     start: usize,
     size:  usize,
 }
 
 struct Inner {
-    chunks:           Vec<Chunk>,
-    current:          Option<usize>,
-    last:             Option<Last>,
-    next_chunk_bytes: usize,
+    region: GrowingRegion,
+    used:   usize,
+    last:   Option<Last>,
 }
 
 /// An arena whose allocations remain at fixed addresses until it is reset or
@@ -85,10 +69,10 @@ impl Bump {
     pub(crate) fn new() -> Self {
         Self {
             inner: RefCell::new(Inner {
-                chunks:           Vec::new(),
-                current:          None,
-                last:             None,
-                next_chunk_bytes: FIRST_CHUNK_BYTES,
+                region: GrowingRegion::reserve(REGION_BYTES)
+                    .expect("failed to reserve virtual address space for arena"),
+                used:   0,
+                last:   None,
             }),
         }
     }
@@ -114,7 +98,7 @@ impl Bump {
         unsafe {
             typed.as_ptr().write(value);
         }
-        // SAFETY: the chunk cannot move, and reset/drop require exclusive
+        // SAFETY: the region cannot move, and reset/drop require exclusive
         // access to self.
         unsafe { &mut *typed.as_ptr() }
     }
@@ -195,24 +179,11 @@ impl Bump {
         vec.leak()
     }
 
-    /// Release all chunks except the largest, which is reused from its start.
+    /// Rewind the arena while retaining its committed pages for reuse.
     pub(crate) fn reset(&mut self) {
         let inner = self.inner.get_mut();
-        let keep = inner
-            .chunks
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, chunk)| chunk.layout.size())
-            .map(|(index, _)| index);
-        let kept = keep.map(|index| inner.chunks.swap_remove(index));
-        inner.chunks.clear();
-        inner.current = None;
+        inner.used = 0;
         inner.last = None;
-        if let Some(mut chunk) = kept {
-            chunk.used = 0;
-            inner.current = Some(0);
-            inner.chunks.push(chunk);
-        }
     }
 }
 
@@ -228,50 +199,23 @@ impl Inner {
             let ptr = NonNull::new(layout.align() as *mut u8).ok_or(AllocError)?;
             return Ok(NonNull::slice_from_raw_parts(ptr, 0));
         }
-        let slot = self.current.and_then(|index| {
-            let chunk = &self.chunks[index];
-            let start = aligned_start(chunk.ptr.as_ptr() as usize, chunk.used, layout.align())?;
-            (start.checked_add(layout.size())? <= chunk.layout.size()).then_some((index, start))
-        });
-        let (index, start) = if let Some(slot) = slot {
-            slot
-        } else {
-            let dedicated = layout.size() > self.next_chunk_bytes || layout.align() > CHUNK_ALIGN;
-            let bytes = if dedicated {
-                layout.size()
-            } else {
-                self.next_chunk_bytes
-            };
-            let chunk_layout = Layout::from_size_align(bytes, layout.align().max(CHUNK_ALIGN))
-                .map_err(|_| AllocError)?;
-            // SAFETY: `chunk_layout` is valid; a null result is reported as
-            // `AllocError`.
-            let raw = unsafe { alloc(chunk_layout) };
-            let ptr = NonNull::new(raw).ok_or(AllocError)?;
-            self.chunks.push(Chunk {
-                ptr,
-                layout: chunk_layout,
-                used: 0,
-            });
-            let index = self.chunks.len() - 1;
-            if !dedicated {
-                self.current = Some(index);
-                self.next_chunk_bytes = bytes.saturating_mul(2).max(bytes);
-            }
-            (index, 0)
-        };
-        let chunk = &mut self.chunks[index];
-        chunk.used = start + layout.size();
-        // SAFETY: `start` was aligned and checked to lie within the allocated
-        // chunk.
-        // SAFETY: the checked offset is within the allocated chunk.
-        let address = unsafe { chunk.ptr.as_ptr().add(start) };
+        let start = aligned_start(
+            self.region.as_ptr().as_ptr() as usize,
+            self.used,
+            layout.align(),
+        )
+        .ok_or(AllocError)?;
+        let end = start.checked_add(layout.size()).ok_or(AllocError)?;
+        self.region.ensure_committed(end).map_err(|_| AllocError)?;
+        self.used = end;
+        // SAFETY: the checked offset lies within the reserved region and the
+        // entire allocation was committed before constructing this pointer.
+        let address = unsafe { self.region.as_ptr().as_ptr().add(start) };
         // SAFETY: adding an in-bounds offset to a non-null pointer remains
         // non-null.
         let ptr = unsafe { NonNull::new_unchecked(address) };
         self.last = Some(Last {
             ptr,
-            chunk: index,
             start,
             size: layout.size(),
         });
@@ -279,7 +223,7 @@ impl Inner {
     }
 }
 
-// SAFETY: each returned block belongs to a stable chunk, and exclusive
+// SAFETY: each returned block belongs to a stable reservation, and exclusive
 // reset/drop cannot occur while an allocation borrowed from `&Bump` is in use.
 unsafe impl Allocator for &Bump {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -295,7 +239,7 @@ unsafe impl Allocator for &Bump {
             .last
             .filter(|last| last.ptr == ptr && layout.size() <= last.size)
         {
-            inner.chunks[last.chunk].used = last.start;
+            inner.used = last.start;
             inner.last = None;
         }
     }
@@ -311,21 +255,19 @@ unsafe impl Allocator for &Bump {
             if let Some(last) = inner
                 .last
                 .filter(|last| last.ptr == ptr && old_layout.size() <= last.size)
-            {
-                let chunk = &mut inner.chunks[last.chunk];
-                if (ptr.as_ptr() as usize).is_multiple_of(new_layout.align())
-                    && last
-                        .start
+                .filter(|_| (ptr.as_ptr() as usize).is_multiple_of(new_layout.align()))
+                .filter(|last| {
+                    last.start
                         .checked_add(new_layout.size())
-                        .is_some_and(|end| end <= chunk.layout.size())
-                {
-                    chunk.used = last.start + new_layout.size();
-                    inner.last = Some(Last {
-                        size: new_layout.size(),
-                        ..last
-                    });
-                    return Ok(NonNull::slice_from_raw_parts(ptr, new_layout.size()));
-                }
+                        .is_some_and(|end| inner.region.ensure_committed(end).is_ok())
+                })
+            {
+                inner.used = last.start + new_layout.size();
+                inner.last = Some(Last {
+                    size: new_layout.size(),
+                    ..last
+                });
+                return Ok(NonNull::slice_from_raw_parts(ptr, new_layout.size()));
             }
         }
         let new_ptr = self.allocate(new_layout)?;
@@ -514,7 +456,6 @@ mod tests {
         ArenaString,
         ArenaVec,
         Bump,
-        FIRST_CHUNK_BYTES,
     };
 
     #[test]
@@ -543,7 +484,7 @@ mod tests {
         for index in 0..10_000 {
             assert_eq!(*arena.alloc(index), index);
         }
-        assert!(arena.inner.borrow().chunks.len() > 1);
+        assert!(arena.inner.borrow().region.committed() >= 40_000);
         assert_eq!(*first, 0xDEAD_BEEF);
         let after: *mut u64 = first;
         assert_eq!(after, address);
@@ -551,6 +492,7 @@ mod tests {
         assert_eq!(arena.alloc_slice_fill_iter(0..4), [0, 1, 2, 3]);
     }
 
+    #[cfg(not(miri))]
     #[test]
     fn file_reads_match_lossy_utf8_across_buffer_boundaries() {
         let path = std::env::temp_dir().join(format!("bcc-bump-read-{}.c", std::process::id()));
@@ -570,14 +512,15 @@ mod tests {
     }
 
     #[test]
-    fn oversized_chunk_does_not_displace_current_small_chunk() {
+    fn large_allocation_keeps_previous_addresses_stable() {
         let arena = Bump::new();
-        _ = arena.alloc(1_u8);
-        let current = arena.inner.borrow().current;
-        let large = arena.alloc_slice_copy(&vec![7_u8; FIRST_CHUNK_BYTES * 4]);
+        let first = arena.alloc(1_u8);
+        let first_address: *mut u8 = first;
+        let large = arena.alloc_slice_copy(&vec![7_u8; 8 * 1024 * 1024]);
         assert_eq!(large[0], 7);
-        assert_eq!(arena.inner.borrow().current, current);
-        assert_eq!(arena.inner.borrow().chunks.len(), 2);
+        assert_eq!(*first, 1);
+        assert_eq!(first_address as usize, std::ptr::from_ref(first) as usize);
+        assert!(arena.inner.borrow().region.committed() >= 8 * 1024 * 1024);
     }
 
     #[test]
@@ -608,6 +551,32 @@ mod tests {
     }
 
     #[test]
+    fn grow_across_commit_boundary_stays_in_place_and_zeroes_tail() {
+        let arena = Bump::new();
+        let old = Layout::from_size_align(3 * 1024 * 1024, 64).unwrap();
+        let new = Layout::from_size_align(5 * 1024 * 1024, 64).unwrap();
+        let first = (&arena).allocate(old).unwrap().cast::<u8>();
+        // SAFETY: the first byte lies in the committed old allocation.
+        unsafe {
+            first.as_ptr().write(0xA5);
+        }
+        // SAFETY: `first` is live and `new` is larger and at least as aligned.
+        let grown = unsafe { (&arena).grow_zeroed(first, old, new) }
+            .unwrap()
+            .cast::<u8>();
+        assert_eq!(grown, first);
+        assert!(arena.inner.borrow().region.committed() >= new.size());
+        // SAFETY: all reads lie in the live grown allocation; the new tail
+        // was initialized by `grow_zeroed`.
+        assert_eq!(unsafe { grown.as_ptr().read() }, 0xA5);
+        // SAFETY: this is the first byte of the initialized tail.
+        assert_eq!(unsafe { grown.as_ptr().wrapping_add(old.size()).read() }, 0);
+        // SAFETY: this is the last byte of the initialized tail.
+        let final_byte = unsafe { grown.as_ptr().wrapping_add(new.size() - 1).read() };
+        assert_eq!(final_byte, 0);
+    }
+
+    #[test]
     fn shrink_keeps_storage_and_latest_allocation_can_regrow() {
         let arena = Bump::new();
         let large = Layout::from_size_align(64, 8).unwrap();
@@ -623,11 +592,11 @@ mod tests {
         unsafe {
             (&arena).deallocate(ptr, small);
         }
-        assert_eq!(arena.inner.borrow().chunks[0].used, 0);
+        assert_eq!(arena.inner.borrow().used, 0);
     }
 
     #[test]
-    fn deallocate_rolls_back_only_latest_and_reset_reuses_largest() {
+    fn deallocate_rolls_back_only_latest_and_reset_reuses_region() {
         let mut arena = Bump::new();
         let layout = Layout::new::<u64>();
         let first = (&arena).allocate(layout).unwrap().cast::<u8>();
@@ -636,31 +605,25 @@ mod tests {
         unsafe {
             (&arena).deallocate(first, layout);
         }
-        let used = arena.inner.borrow().chunks[0].used;
+        let used = arena.inner.borrow().used;
         assert_eq!(used, 16);
         // SAFETY: second is the most recent live allocation.
         unsafe {
             (&arena).deallocate(second, layout);
         }
-        assert_eq!(arena.inner.borrow().chunks[0].used, 8);
+        assert_eq!(arena.inner.borrow().used, 8);
         let reused = (&arena).allocate(layout).unwrap().cast::<u8>();
         assert_eq!(reused, second);
         _ = (&arena)
-            .allocate(Layout::from_size_align(FIRST_CHUNK_BYTES * 4, 8).unwrap())
+            .allocate(Layout::from_size_align(8 * 1024 * 1024, 8).unwrap())
             .unwrap();
-        let largest = arena
-            .inner
-            .borrow()
-            .chunks
-            .iter()
-            .max_by_key(|chunk| chunk.layout.size())
-            .unwrap()
-            .ptr;
+        let base = arena.inner.borrow().region.as_ptr();
+        let committed = arena.inner.borrow().region.committed();
         arena.reset();
-        assert_eq!(arena.inner.borrow().chunks.len(), 1);
-        assert_eq!(arena.inner.borrow().chunks[0].ptr, largest);
+        assert_eq!(arena.inner.borrow().used, 0);
+        assert_eq!(arena.inner.borrow().region.committed(), committed);
         let after = (&arena).allocate(layout).unwrap().cast::<u8>();
-        assert_eq!(after, largest);
+        assert_eq!(after, base);
     }
 
     #[test]
