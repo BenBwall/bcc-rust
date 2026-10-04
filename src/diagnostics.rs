@@ -16,15 +16,13 @@
 //! representation (arena indices, interned-string handles, Rust `Debug`
 //! output) may appear in a diagnostic.
 
-use std::{
-    collections::HashMap,
-    fmt::Write as _,
-};
+use std::fmt::Write as _;
 
 use owo_colors::{
     OwoColorize,
     Style,
 };
+use rustc_hash::FxBuildHasher;
 
 use crate::{
     translation_phases::{
@@ -34,6 +32,7 @@ use crate::{
         SourceVectors,
     },
     util::bump::{
+        ArenaMap,
         ArenaString,
         ArenaVec,
         Bump,
@@ -278,10 +277,11 @@ pub(crate) fn c_quoted(prefix: &str, quote: char, value: &str) -> String {
 /// Byte offsets at which each physical line of `text` starts. Like initial
 /// processing, LF, CRLF, and a lone CR each end a line; every terminator is
 /// one byte before the next start once a CRLF's CR is trimmed.
-fn physical_line_starts(text: &str) -> Vec<usize> {
+fn physical_line_starts<'a>(text: &str, scratch: &'a Bump) -> ArenaVec<'a, usize> {
     let bytes = text.as_bytes();
-    std::iter::once(0)
-        .chain(
+    let mut starts = ArenaVec::new_in(scratch);
+    starts.extend(
+        std::iter::once(0).chain(
             bytes
                 .iter()
                 .enumerate()
@@ -289,8 +289,9 @@ fn physical_line_starts(text: &str) -> Vec<usize> {
                     byte == b'\n' || (byte == b'\r' && bytes.get(index + 1) != Some(&b'\n'))
                 })
                 .map(|(index, _)| index + 1),
-        )
-        .collect()
+        ),
+    );
+    starts
 }
 
 /// How rendered text is decorated.
@@ -316,11 +317,10 @@ impl ColorChoice {
     }
 }
 
-/// Renders diagnostics, caching each file's line starts across calls.
+/// Renders diagnostics with reusable scratch storage.
 pub(crate) struct Renderer {
-    color:       ColorChoice,
-    line_starts: HashMap<u32, Vec<usize>>,
-    scratch:     Bump,
+    color:   ColorChoice,
+    scratch: Bump,
 }
 
 /// One underline on one physical source line.
@@ -339,7 +339,6 @@ impl Renderer {
     pub(crate) fn new(color: ColorChoice) -> Self {
         Self {
             color,
-            line_starts: HashMap::new(),
             scratch: Bump::new(),
         }
     }
@@ -365,11 +364,16 @@ impl Renderer {
 
     /// Returns the 1-based physical line containing `offset` and the byte
     /// range of that line, excluding its terminator.
-    fn locate(&mut self, file: u32, text: &str, offset: usize) -> (usize, usize, usize) {
-        let starts = self
-            .line_starts
+    fn locate<'scratch>(
+        line_starts: &mut ArenaMap<'scratch, u32, ArenaVec<'scratch, usize>>,
+        scratch: &'scratch Bump,
+        file: u32,
+        text: &str,
+        offset: usize,
+    ) -> (usize, usize, usize) {
+        let starts = line_starts
             .entry(file)
-            .or_insert_with(|| physical_line_starts(text));
+            .or_insert_with(|| physical_line_starts(text, scratch));
         let line = starts.partition_point(|&start| start <= offset);
         let start = starts[line - 1];
         let end = starts
@@ -385,10 +389,10 @@ impl Renderer {
     }
 
     fn marks<'a, 'scratch>(
-        &mut self,
         diagnostic: &'a Diagnostic,
         context: &Context<'_>,
         scratch: &'scratch Bump,
+        line_starts: &mut ArenaMap<'scratch, u32, ArenaVec<'scratch, usize>>,
     ) -> ArenaVec<'scratch, Mark<'a>> {
         let mut marks: ArenaVec<'_, Mark<'a>> = ArenaVec::new_in(scratch);
         for label in &diagnostic.labels {
@@ -399,7 +403,8 @@ impl Renderer {
                     continue;
                 };
                 let offset = (vector.index as usize).min(text.len());
-                let (line, line_start, line_end) = self.locate(file, text, offset);
+                let (line, line_start, line_end) =
+                    Self::locate(line_starts, scratch, file, text, offset);
                 let start = offset.max(line_start);
                 let end = vector.end().clamp(start, line_end);
                 // Adjacent segments of one range on one line form one mark.
@@ -428,11 +433,9 @@ impl Renderer {
 
     /// Renders one diagnostic, ending with a blank line.
     pub(crate) fn render(&mut self, diagnostic: &Diagnostic, context: &Context<'_>) -> String {
-        // File indices are local to a context, so cached offsets from an
-        // earlier context cannot be reused for this diagnostic.
-        self.line_starts.clear();
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.reset();
+        let mut line_starts = ArenaMap::with_hasher_in(FxBuildHasher, &scratch);
         let mut out = ArenaString::new_in(&scratch);
         let severity_style = Self::severity_style(diagnostic.severity);
         let _ = writeln!(
@@ -442,7 +445,7 @@ impl Renderer {
             self.paint(&format!(" {}", diagnostic.message), Style::new().bold()),
         );
 
-        let marks = self.marks(diagnostic, context, &scratch);
+        let marks = Self::marks(diagnostic, context, &scratch, &mut line_starts);
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
         let gutter_width = max_line.to_string().len().max(1);
         let pad = " ".repeat(gutter_width);
@@ -494,7 +497,7 @@ impl Renderer {
                 column,
             );
             let _ = writeln!(out, "{pad} {bar}");
-            let starts = self.line_starts.get(&file).map_or(&[0][..], Vec::as_slice);
+            let starts = line_starts.get(&file).map_or(&[0][..], ArenaVec::as_slice);
             self.render_file_lines(
                 &mut out,
                 &marks,
@@ -531,6 +534,7 @@ impl Renderer {
         drop(out);
         drop(files);
         drop(marks);
+        drop(line_starts);
         self.scratch = scratch;
         rendered
     }
