@@ -684,11 +684,11 @@ mod tests {
     use super::*;
     use crate::util::shared::SharedString;
 
-    fn context_with(text: &str) -> (Context, u32) {
+    fn with_context<R>(text: &str, inspect: impl FnOnce(&mut Context, u32) -> R) -> R {
         let mut context = Context::new();
         let file = context.intern_source_file(PathBuf::from("example.c").into_boxed_path());
         context.record_source_text(file, SharedString::from(text.to_owned()));
-        (context, file)
+        inspect(&mut context, file)
     }
 
     fn span(context: &mut Context, file: u32, text: &str, needle: &str) -> SourceVectors {
@@ -709,45 +709,47 @@ mod tests {
     #[test]
     fn renders_primary_and_secondary_labels_with_notes() {
         let text = "int x \"abc\";\n";
-        let (mut context, file) = context_with(text);
-        let primary = span(&mut context, file, text, "\"abc\"");
-        let secondary = span(&mut context, file, text, "x");
-        let diagnostic = Explanation::new("expected `;`, found string literal")
-            .label("expected `;`")
-            .note("a declaration ends with `;`")
-            .help("add `;` after `x`")
-            .at(ErrorSeverity::Error, primary)
-            .secondary(secondary, "declarator");
+        with_context(text, |context, file| {
+            let primary = span(context, file, text, "\"abc\"");
+            let secondary = span(context, file, text, "x");
+            let diagnostic = Explanation::new("expected `;`, found string literal")
+                .label("expected `;`")
+                .note("a declaration ends with `;`")
+                .help("add `;` after `x`")
+                .at(ErrorSeverity::Error, primary)
+                .secondary(secondary, "declarator");
 
-        let rendered = Renderer::new(ColorChoice::Plain).render(&diagnostic, &context);
+            let rendered = Renderer::new(ColorChoice::Plain).render(&diagnostic, context);
 
-        assert_eq!(
-            rendered,
-            "error: expected `;`, found string literal\n --> example.c:1:7\n  |\n1 | int x \
-             \"abc\";\n  |     - ^^^^^ expected `;`\n  |     |\n  |     declarator\n  |\n  = \
-             note: a declaration ends with `;`\n  = help: add `;` after `x`\n\n"
-        );
+            assert_eq!(
+                rendered,
+                "error: expected `;`, found string literal\n --> example.c:1:7\n  |\n1 | int x \
+                 \"abc\";\n  |     - ^^^^^ expected `;`\n  |     |\n  |     declarator\n  |\n  = \
+                 note: a declaration ends with `;`\n  = help: add `;` after `x`\n\n"
+            );
+        });
     }
 
     #[test]
     fn zero_length_ranges_point_after_the_line() {
         let text = "int x";
-        let (mut context, file) = context_with(text);
-        let end = context.create_source_vectors(
-            crate::translation_phases::SourcePosition {
-                index:  5,
-                line:   1,
-                column: 6,
-            },
-            file,
-            0,
-        );
-        let diagnostic =
-            Explanation::new("no newline at end of file").at(ErrorSeverity::Warning, end);
+        with_context(text, |context, file| {
+            let end = context.create_source_vectors(
+                crate::translation_phases::SourcePosition {
+                    index:  5,
+                    line:   1,
+                    column: 6,
+                },
+                file,
+                0,
+            );
+            let diagnostic =
+                Explanation::new("no newline at end of file").at(ErrorSeverity::Warning, end);
 
-        let rendered = Renderer::new(ColorChoice::Plain).render(&diagnostic, &context);
+            let rendered = Renderer::new(ColorChoice::Plain).render(&diagnostic, context);
 
-        assert!(rendered.contains("1 | int x\n  |      ^\n"), "{rendered}");
+            assert!(rendered.contains("1 | int x\n  |      ^\n"), "{rendered}");
+        });
     }
 
     #[test]
