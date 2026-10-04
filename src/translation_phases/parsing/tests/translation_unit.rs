@@ -7,8 +7,8 @@ use proptest::prelude::*;
 use super::{
     Parsed,
     parse,
-    parse_unit,
     parser_errors,
+    with_parsed,
 };
 use crate::{
     translation_phases::{
@@ -277,13 +277,15 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
 
 #[test]
 fn inspection_has_a_stable_statement_expression_and_missing_slot_golden() {
-    let (unit, context) = parse_unit(
+    let output = with_parsed(
         "int f(void) { if (x) return a + 1; else return 0; if () ; switch (x) { case : ; } }\n",
-    );
-    let output = unit.syntax().inspect(
-        unit.external_declarations(),
-        &context,
-        InspectionOptions::default(),
+        |unit, context| {
+            unit.syntax().inspect(
+                unit.external_declarations(),
+                context,
+                InspectionOptions::default(),
+            )
+        },
     );
 
     let expected = [

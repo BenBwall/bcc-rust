@@ -70,7 +70,10 @@ fn parse_with_limits(source: &str, limits: ParserLimits) -> Parsed {
     parse_with(source, CompilerConfiguration::default(), Some(limits))
 }
 
-fn parse_unit(source: &str) -> (ParsedTranslationUnit, Context) {
+fn with_parsed<R>(
+    source: &str,
+    inspect: impl FnOnce(&ParsedTranslationUnit, &mut Context) -> R,
+) -> R {
     let mut context = Context::new();
     let preprocessor = Preprocessor::new(
         &mut context,
@@ -80,7 +83,7 @@ fn parse_unit(source: &str) -> (ParsedTranslationUnit, Context) {
         SharedVec::default(),
     );
     let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
-    (unit, context)
+    inspect(&unit, &mut context)
 }
 
 fn parse_with(

@@ -1,7 +1,7 @@
 //! Regression tests for verified expression bugs found by the overnight bug
 //! hunt.
 
-use super::parse_unit;
+use super::with_parsed;
 use crate::translation_phases::{
     TranslationError,
     parsing::{
@@ -62,23 +62,24 @@ impl Outcome {
 }
 
 fn run(source: &str) -> Outcome {
-    let (unit, mut context) = parse_unit(source);
-    let tree = unit.syntax().inspect(
-        unit.external_declarations(),
-        &context,
-        InspectionOptions::default(),
-    );
-    let mut errors = Vec::new();
-    while let Some(error) = context.pop_pending_error() {
-        if let TranslationError::Parsing(error) = error {
-            let offset = context
-                .get_source_vectors(error.source_vectors)
-                .first()
-                .map_or(usize::MAX, |vector| vector.range().start);
-            errors.push((error.error_type, offset));
+    with_parsed(source, |unit, context| {
+        let tree = unit.syntax().inspect(
+            unit.external_declarations(),
+            context,
+            InspectionOptions::default(),
+        );
+        let mut errors = Vec::new();
+        while let Some(error) = context.pop_pending_error() {
+            if let TranslationError::Parsing(error) = error {
+                let offset = context
+                    .get_source_vectors(error.source_vectors)
+                    .first()
+                    .map_or(usize::MAX, |vector| vector.range().start);
+                errors.push((error.error_type, offset));
+            }
         }
-    }
-    Outcome { tree, errors }
+        Outcome { tree, errors }
+    })
 }
 
 fn offset_of(source: &str, needle: &str) -> usize {

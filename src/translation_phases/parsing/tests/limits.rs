@@ -10,9 +10,9 @@ use super::{
     declaration,
     function_definition,
     parse,
-    parse_unit,
     parse_with_limits,
     parser_errors,
+    with_parsed,
 };
 use crate::{
     translation_phases::{
@@ -426,27 +426,30 @@ fn mixed_declarator_translation_floor_uses_the_typed_tree() {
         counts
     }
 
-    let (unit, mut context) =
-        parse_unit("struct Incomplete (*(*(*(*(*(*value)[1])(void))(void))(void))(void))(void);\n");
-    assert!(context.take_pending_errors().is_empty());
-    let ExternalDeclaration::Declaration(root) = unit.external_declarations()[0] else {
-        panic!("expected a declaration root")
-    };
-    let declaration = unit.syntax().declaration(root);
-    let TypeSpecifiers::StructOrUnion(specifier) =
-        declaration.syntax().declaration_specifiers.type_specifiers
-    else {
-        panic!("expected an incomplete structure base type")
-    };
-    assert!(
-        unit.syntax()
-            .struct_or_union_specifier(specifier)
-            .struct_declaration_list
-            .is_none()
-    );
-    let declarator = declaration.init_declarators()[0].declarator;
+    with_parsed(
+        "struct Incomplete (*(*(*(*(*(*value)[1])(void))(void))(void))(void))(void);\n",
+        |unit, context| {
+            assert!(context.take_pending_errors().is_empty());
+            let ExternalDeclaration::Declaration(root) = unit.external_declarations()[0] else {
+                panic!("expected a declaration root")
+            };
+            let declaration = unit.syntax().declaration(root);
+            let TypeSpecifiers::StructOrUnion(specifier) =
+                declaration.syntax().declaration_specifiers.type_specifiers
+            else {
+                panic!("expected an incomplete structure base type")
+            };
+            assert!(
+                unit.syntax()
+                    .struct_or_union_specifier(specifier)
+                    .struct_declaration_list
+                    .is_none()
+            );
+            let declarator = declaration.init_declarators()[0].declarator;
 
-    assert_eq!(count_derivations(unit.syntax(), declarator), (6, 1, 5));
+            assert_eq!(count_derivations(unit.syntax(), declarator), (6, 1, 5));
+        },
+    );
 }
 
 fn assert_syntax_node_limit_boundary(source: &str) {
