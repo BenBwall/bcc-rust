@@ -61,7 +61,7 @@ impl Outcome {
     }
 }
 
-fn run(source: &str) -> Outcome {
+fn with_run(source: &str, f: impl FnOnce(&Outcome)) {
     with_parsed(source, |unit, context| {
         let tree = unit.syntax().inspect(
             unit.external_declarations(),
@@ -78,8 +78,8 @@ fn run(source: &str) -> Outcome {
                 errors.push((error.error_type, offset));
             }
         }
-        Outcome { tree, errors }
-    })
+        f(&Outcome { tree, errors });
+    });
 }
 
 fn offset_of(source: &str, needle: &str) -> usize {
@@ -91,54 +91,57 @@ fn offset_of(source: &str, needle: &str) -> usize {
 #[test]
 fn stray_operand_inside_parentheses_resyncs_to_the_matching_closer() {
     let source = "void f(int a, int b) { a = (a b); a = 1; }\n";
-    let outcome = run(source);
-    assert_eq!(
-        outcome.locations(),
-        [offset_of(source, "b);")],
-        "{:?}",
-        outcome.errors
-    );
-    assert_eq!(
-        outcome.tree.matches("block-item:").count(),
-        2,
-        "{}",
-        outcome.tree
-    );
-    assert!(
-        outcome.tree.contains("parenthesized recovered"),
-        "{}",
-        outcome.tree
-    );
+    with_run(source, |outcome| {
+        assert_eq!(
+            outcome.locations(),
+            [offset_of(source, "b);")],
+            "{:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.tree.matches("block-item:").count(),
+            2,
+            "{}",
+            outcome.tree
+        );
+        assert!(
+            outcome.tree.contains("parenthesized recovered"),
+            "{}",
+            outcome.tree
+        );
+    });
 
     let source = "void f(int a, int b) { if ((a b)) a = 1; else b = 2; }\n";
-    let outcome = run(source);
-    assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
-    assert_eq!(
-        outcome.tree.matches("block-item:").count(),
-        1,
-        "{}",
-        outcome.tree
-    );
-    assert!(
-        outcome.tree.contains("then: expression"),
-        "{}",
-        outcome.tree
-    );
-    assert!(
-        outcome.tree.contains("else: expression"),
-        "{}",
-        outcome.tree
-    );
+    with_run(source, |outcome| {
+        assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
+        assert_eq!(
+            outcome.tree.matches("block-item:").count(),
+            1,
+            "{}",
+            outcome.tree
+        );
+        assert!(
+            outcome.tree.contains("then: expression"),
+            "{}",
+            outcome.tree
+        );
+        assert!(
+            outcome.tree.contains("else: expression"),
+            "{}",
+            outcome.tree
+        );
+    });
 
     let source = "void f(int a, int b) { a = ((a b c) + 1) + 2; f((a b), 1); }\n";
-    let outcome = run(source);
-    assert_eq!(outcome.locations().len(), 2, "{:?}", outcome.errors);
-    assert_eq!(
-        outcome.tree.matches("block-item:").count(),
-        2,
-        "{}",
-        outcome.tree
-    );
+    with_run(source, |outcome| {
+        assert_eq!(outcome.locations().len(), 2, "{:?}", outcome.errors);
+        assert_eq!(
+            outcome.tree.matches("block-item:").count(),
+            2,
+            "{}",
+            outcome.tree
+        );
+    });
 }
 
 // The resync must not swallow a following statement when the `)` is really
@@ -146,41 +149,43 @@ fn stray_operand_inside_parentheses_resyncs_to_the_matching_closer() {
 #[test]
 fn missing_closer_still_stops_before_the_statement_terminator() {
     let source = "void f(int a, int b) { a = (a\n b; a = 1; }\n";
-    let outcome = run(source);
-    // The first report at `b` is the one the CLI shows.
-    assert!(
-        matches!(
-            outcome.errors.first(),
-            Some((
-                ParserErrorType::ExpectedClosingParenthesisInStatement("grouped expression", _),
-                offset
-            )) if *offset == offset_of(source, "b;")
-        ),
-        "{:?}",
-        outcome.errors
-    );
-    assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
-    assert!(outcome.tree.contains("rhs: constant 1"), "{}", outcome.tree);
+    with_run(source, |outcome| {
+        // The first report at `b` is the one the CLI shows.
+        assert!(
+            matches!(
+                outcome.errors.first(),
+                Some((
+                    ParserErrorType::ExpectedClosingParenthesisInStatement("grouped expression", _),
+                    offset
+                )) if *offset == offset_of(source, "b;")
+            ),
+            "{:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
+        assert!(outcome.tree.contains("rhs: constant 1"), "{}", outcome.tree);
+    });
 }
 
 // expressions:0: the same stray operand directly inside a statement header.
 #[test]
 fn stray_operand_in_a_condition_keeps_the_body_attached() {
     let source = "void g(int a, int b, int c) { while (a b) { c = 1; } if (a b c) c = 2; }\n";
-    let outcome = run(source);
-    assert_eq!(outcome.locations().len(), 2, "{:?}", outcome.errors);
-    assert_eq!(
-        outcome.tree.matches("block-item:").count(),
-        3,
-        "{}",
-        outcome.tree
-    );
-    assert!(outcome.tree.contains("body: compound"), "{}", outcome.tree);
-    assert!(
-        outcome.tree.contains("then: expression"),
-        "{}",
-        outcome.tree
-    );
+    with_run(source, |outcome| {
+        assert_eq!(outcome.locations().len(), 2, "{:?}", outcome.errors);
+        assert_eq!(
+            outcome.tree.matches("block-item:").count(),
+            3,
+            "{}",
+            outcome.tree
+        );
+        assert!(outcome.tree.contains("body: compound"), "{}", outcome.tree);
+        assert!(
+            outcome.tree.contains("then: expression"),
+            "{}",
+            outcome.tree
+        );
+    });
 }
 
 // corpus-triage-A:2: a declaration starter inside an open call parenthesis
@@ -188,42 +193,44 @@ fn stray_operand_in_a_condition_keeps_the_body_attached() {
 #[test]
 fn declaration_starter_inside_a_call_stays_inside_the_call() {
     let source = "int f();\nstruct B { char a[f(int)]; int y; };\nint x;\n";
-    let outcome = run(source);
-    assert_eq!(
-        outcome.locations(),
-        [offset_of(source, "int)")],
-        "{:?}",
-        outcome.errors
-    );
-    assert!(!outcome.tree.contains("root["), "{}", outcome.tree);
-    assert!(outcome.tree.contains("identifier y"), "{}", outcome.tree);
-    assert!(
-        outcome.tree.contains(
-            "\ndeclaration: declaration storage=none type=int qualifiers=none \
-             function-specifiers=none\n  declarator x"
-        ),
-        "{}",
-        outcome.tree
-    );
+    with_run(source, |outcome| {
+        assert_eq!(
+            outcome.locations(),
+            [offset_of(source, "int)")],
+            "{:?}",
+            outcome.errors
+        );
+        assert!(!outcome.tree.contains("root["), "{}", outcome.tree);
+        assert!(outcome.tree.contains("identifier y"), "{}", outcome.tree);
+        assert!(
+            outcome.tree.contains(
+                "\ndeclaration: declaration storage=none type=int qualifiers=none \
+                 function-specifiers=none\n  declarator x"
+            ),
+            "{}",
+            outcome.tree
+        );
+    });
 
     for source in [
         "int f();\nvoid g(void){ f(int); f(2); }\n",
         "int f();\nint a = f(int);\n",
         "int f();\nint a = f(1, int);\n",
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert_eq!(outcome.roots(), 2, "{source}: {}", outcome.tree);
-        assert!(
-            !outcome.tree.contains("block-item: declaration"),
-            "{source}: {}",
-            outcome.tree
-        );
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert_eq!(outcome.roots(), 2, "{source}: {}", outcome.tree);
+            assert!(
+                !outcome.tree.contains("block-item: declaration"),
+                "{source}: {}",
+                outcome.tree
+            );
+        });
     }
 }
 
@@ -239,29 +246,31 @@ fn declaration_specifiers_inside_brackets_build_no_phantom_declaration() {
         "int x = (1 static);\n",
         "void g(int a[3 static]);\n",
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}: {:?}",
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert_eq!(outcome.roots(), 1, "{source}: {}", outcome.tree);
+            assert!(
+                !outcome.tree.contains("no type specifier"),
+                "{source}: {}",
+                outcome.tree
+            );
+        });
+    }
+    with_run("void g(int a[3 static]);\n", |outcome| {
+        assert!(
+            !outcome.has(|error| matches!(
+                error,
+                ParserErrorType::ExpectedStatementExpression("operator in expression", _)
+            )),
+            "inside brackets the missing-`;` help does not apply: {:?}",
             outcome.errors
         );
-        assert_eq!(outcome.roots(), 1, "{source}: {}", outcome.tree);
-        assert!(
-            !outcome.tree.contains("no type specifier"),
-            "{source}: {}",
-            outcome.tree
-        );
-    }
-    let outcome = run("void g(int a[3 static]);\n");
-    assert!(
-        !outcome.has(|error| matches!(
-            error,
-            ParserErrorType::ExpectedStatementExpression("operator in expression", _)
-        )),
-        "inside brackets the missing-`;` help does not apply: {:?}",
-        outcome.errors
-    );
+    });
 }
 
 // statements:5: the case label diagnostics name the missing `:` and resync.
@@ -271,43 +280,45 @@ fn malformed_case_labels_report_the_missing_colon_once() {
         ("void f(int x) { switch (x) { case 1; } }\n", "; }"),
         ("void f(int x) { switch (x) { case 4 x = 2; } }\n", "x = 2"),
     ] {
-        let outcome = run(source);
-        assert!(
-            outcome.has(|error| matches!(
-                error,
-                ParserErrorType::ExpectedColonInLabel("case label", _)
-            )),
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert!(
-            !outcome.reports_missing_operator(),
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.locations(),
-            [offset_of(source, found)],
-            "{source}: {:?}",
-            outcome.errors
-        );
+        with_run(source, |outcome| {
+            assert!(
+                outcome.has(|error| matches!(
+                    error,
+                    ParserErrorType::ExpectedColonInLabel("case label", _)
+                )),
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert!(
+                !outcome.reports_missing_operator(),
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert_eq!(
+                outcome.locations(),
+                [offset_of(source, found)],
+                "{source}: {:?}",
+                outcome.errors
+            );
+        });
     }
     for source in [
         "void f(int x) { switch (x) { case 1 2: break; } x = 3; }\n",
         "void f(int x) { switch (x) { case 2, 3: break; } x = 3; }\n",
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert!(
-            outcome.tree.contains("labeled: break"),
-            "{source}: {}",
-            outcome.tree
-        );
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert!(
+                outcome.tree.contains("labeled: break"),
+                "{source}: {}",
+                outcome.tree
+            );
+        });
     }
 }
 
@@ -366,13 +377,14 @@ fn semicolon_before_a_closer_names_the_missing_closer() {
         }),
     ];
     for (source, expected) in cases {
-        let outcome = run(source);
-        assert!(outcome.has(expected), "{source}: {:?}", outcome.errors);
-        assert!(
-            !outcome.reports_missing_operator(),
-            "{source}: {:?}",
-            outcome.errors
-        );
+        with_run(source, |outcome| {
+            assert!(outcome.has(expected), "{source}: {:?}", outcome.errors);
+            assert!(
+                !outcome.reports_missing_operator(),
+                "{source}: {:?}",
+                outcome.errors
+            );
+        });
     }
 }
 
@@ -381,29 +393,31 @@ fn semicolon_before_a_closer_names_the_missing_closer() {
 #[test]
 fn missing_left_operand_keeps_the_binary_operator() {
     let source = "int a, b; void g(void){ a = / b; }\n";
-    let outcome = run(source);
-    assert_eq!(
-        outcome.locations(),
-        [offset_of(source, "/ b")],
-        "{:?}",
-        outcome.errors
-    );
-    assert!(outcome.tree.contains("binary /"), "{}", outcome.tree);
+    with_run(source, |outcome| {
+        assert_eq!(
+            outcome.locations(),
+            [offset_of(source, "/ b")],
+            "{:?}",
+            outcome.errors
+        );
+        assert!(outcome.tree.contains("binary /"), "{}", outcome.tree);
+    });
 
     let source = "int a, b, c;\nvoid g(void){\n  if (a && (|| c)) a = b; else c = a;\n}\n";
-    let outcome = run(source);
-    assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
-    assert_eq!(
-        outcome.tree.matches("block-item:").count(),
-        1,
-        "{}",
-        outcome.tree
-    );
-    assert!(
-        outcome.tree.contains("else: expression"),
-        "{}",
-        outcome.tree
-    );
+    with_run(source, |outcome| {
+        assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
+        assert_eq!(
+            outcome.tree.matches("block-item:").count(),
+            1,
+            "{}",
+            outcome.tree
+        );
+        assert!(
+            outcome.tree.contains("else: expression"),
+            "{}",
+            outcome.tree
+        );
+    });
 
     for source in [
         "int x = = 2;\n",
@@ -414,37 +428,39 @@ fn missing_left_operand_keeps_the_binary_operator() {
         "int a, b, c; void g(void){ a = b = = c; }\n",
         "int a, b, c; void g(void){ a = (a > ? b : c); }\n",
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}: {:?}",
-            outcome.errors
-        );
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}: {:?}",
+                outcome.errors
+            );
+        });
     }
 }
 
 // expressions:4: operand diagnostics do not read "an expression in expression".
 #[test]
 fn missing_operand_diagnostics_use_the_plain_wording() {
-    let outcome = run("int a, b, c; void g(void){ a = b , , c; }\n");
-    assert!(
-        !outcome.has(|error| matches!(
-            error,
-            ParserErrorType::ExpectedStatementExpression("expression", _)
-        )),
-        "{:?}",
-        outcome.errors
-    );
-    let message = ParserErrorType::ExpectedStatementExpression(
-        "expression operand",
-        Some(TokenType::Operator(OperatorTokenType::Comma)),
-    );
-    assert!(
-        outcome.has(|error| *error == message),
-        "{:?}",
-        outcome.errors
-    );
+    with_run("int a, b, c; void g(void){ a = b , , c; }\n", |outcome| {
+        assert!(
+            !outcome.has(|error| matches!(
+                error,
+                ParserErrorType::ExpectedStatementExpression("expression", _)
+            )),
+            "{:?}",
+            outcome.errors
+        );
+        let message = ParserErrorType::ExpectedStatementExpression(
+            "expression operand",
+            Some(TokenType::Operator(OperatorTokenType::Comma)),
+        );
+        assert!(
+            outcome.has(|error| *error == message),
+            "{:?}",
+            outcome.errors
+        );
+    });
 }
 
 // expressions:5: a postfix operator after `sizeof(type)` is one error and the
@@ -457,19 +473,20 @@ fn postfix_after_a_non_postfix_expression_is_one_error() {
         "void g(void){ sizeof(int)++; }\n",
         "void g(void){ sizeof(int)(0); }\n",
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.tree.matches("block-item:").count(),
-            1,
-            "{source}: {}",
-            outcome.tree
-        );
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert_eq!(
+                outcome.tree.matches("block-item:").count(),
+                1,
+                "{source}: {}",
+                outcome.tree
+            );
+        });
     }
 }
 
@@ -478,19 +495,20 @@ fn postfix_after_a_non_postfix_expression_is_one_error() {
 #[test]
 fn unary_operator_on_a_cast_reports_the_missing_brace_once() {
     let source = "int a;\nvoid g(void){\n  ++(int)a;\n}\n";
-    let outcome = run(source);
-    assert_eq!(
-        outcome.locations(),
-        [offset_of(source, "a;\n}")],
-        "{:?}",
-        outcome.errors
-    );
-    assert_eq!(
-        outcome.tree.matches("block-item:").count(),
-        1,
-        "{}",
-        outcome.tree
-    );
+    with_run(source, |outcome| {
+        assert_eq!(
+            outcome.locations(),
+            [offset_of(source, "a;\n}")],
+            "{:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.tree.matches("block-item:").count(),
+            1,
+            "{}",
+            outcome.tree
+        );
+    });
 }
 
 // expressions:8: a brace list in operand position is one error and is
@@ -498,19 +516,20 @@ fn unary_operator_on_a_cast_reports_the_missing_brace_once() {
 #[test]
 fn brace_list_in_operand_position_is_skipped_as_one_error_operand() {
     let source = "int a, b; void g(void){ a = {1, 2}; b = 2; }\n";
-    let outcome = run(source);
-    assert_eq!(
-        outcome.locations(),
-        [offset_of(source, "{1")],
-        "{:?}",
-        outcome.errors
-    );
-    assert_eq!(
-        outcome.tree.matches("block-item:").count(),
-        2,
-        "{}",
-        outcome.tree
-    );
+    with_run(source, |outcome| {
+        assert_eq!(
+            outcome.locations(),
+            [offset_of(source, "{1")],
+            "{:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.tree.matches("block-item:").count(),
+            2,
+            "{}",
+            outcome.tree
+        );
+    });
 
     for source in [
         "int a[2], b; void g(void){ a[{1}] = 2; b = 2; }\n",
@@ -518,42 +537,45 @@ fn brace_list_in_operand_position_is_skipped_as_one_error_operand() {
         "int a; void g(void){ a = (1 + {1, 2}); }\n",
         "int g(void){ return {1, 2}; }\n",
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}: {:?}",
-            outcome.errors
-        );
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}: {:?}",
+                outcome.errors
+            );
+        });
     }
 
     // A real block after a malformed condition stays the statement body.
-    let outcome = run("void g(int a){ if (a + { return; } a = 1; }\n");
-    assert!(outcome.tree.contains("then: compound"), "{}", outcome.tree);
+    with_run("void g(int a){ if (a + { return; } a = 1; }\n", |outcome| {
+        assert!(outcome.tree.contains("then: compound"), "{}", outcome.tree);
+    });
 }
 
 // statements:4 (expression half): a statement keyword after an operand ends
 // the expression without a "missing operator" diagnostic.
 #[test]
 fn statement_keyword_after_an_operand_ends_the_expression() {
-    let outcome = run("void f(int x) { x = 1 break; }\n");
-    assert!(!outcome.reports_missing_operator(), "{:?}", outcome.errors);
-    assert!(
-        outcome.has(|error| matches!(
-            error,
-            ParserErrorType::ExpectedSemicolonInStatement(
-                "expression statement",
-                Some(TokenType::Keyword(KeywordTokenType::Break))
-            )
-        )),
-        "{:?}",
-        outcome.errors
-    );
-    assert!(
-        outcome.tree.contains("block-item: break"),
-        "{}",
-        outcome.tree
-    );
+    with_run("void f(int x) { x = 1 break; }\n", |outcome| {
+        assert!(!outcome.reports_missing_operator(), "{:?}", outcome.errors);
+        assert!(
+            outcome.has(|error| matches!(
+                error,
+                ParserErrorType::ExpectedSemicolonInStatement(
+                    "expression statement",
+                    Some(TokenType::Keyword(KeywordTokenType::Break))
+                )
+            )),
+            "{:?}",
+            outcome.errors
+        );
+        assert!(
+            outcome.tree.contains("block-item: break"),
+            "{}",
+            outcome.tree
+        );
+    });
 }
 
 // Round-2 regression from the corpus (gcc.c-torture/compile/20071107-1.c,
@@ -567,25 +589,26 @@ fn brace_group_directly_inside_parentheses_is_one_error_operand() {
         "void w(void);\nint e(int, int);\nvoid g(int r)\n{\n  if (e(__extension__ ({\n    int \
          v;\n    if (r == 1) v = 1;\n    else v = 0;\n    v;\n  }), 1)) {\n  }\n  else w();\n  r \
          = 2;\n}\n";
-    let outcome = run(source);
-    assert_eq!(
-        outcome.locations(),
-        [offset_of(source, "{\n    int v")],
-        "{:?}",
-        outcome.errors
-    );
-    assert_eq!(
-        outcome.tree.matches("block-item:").count(),
-        2,
-        "{}",
-        outcome.tree
-    );
-    assert!(outcome.tree.contains("then: compound"), "{}", outcome.tree);
-    assert!(
-        outcome.tree.contains("else: expression"),
-        "{}",
-        outcome.tree
-    );
+    with_run(source, |outcome| {
+        assert_eq!(
+            outcome.locations(),
+            [offset_of(source, "{\n    int v")],
+            "{:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.tree.matches("block-item:").count(),
+            2,
+            "{}",
+            outcome.tree
+        );
+        assert!(outcome.tree.contains("then: compound"), "{}", outcome.tree);
+        assert!(
+            outcome.tree.contains("else: expression"),
+            "{}",
+            outcome.tree
+        );
+    });
 
     for (source, block_items) in [
         ("int x = ({ 1; });\nint y;\n", 0),
@@ -599,21 +622,24 @@ fn brace_group_directly_inside_parentheses_is_one_error_operand() {
             2,
         ),
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.tree.matches("block-item:").count(),
-            block_items,
-            "{source}: {}",
-            outcome.tree
-        );
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert_eq!(
+                outcome.tree.matches("block-item:").count(),
+                block_items,
+                "{source}: {}",
+                outcome.tree
+            );
+        });
     }
-    assert_eq!(run("int x = ({ 1; });\nint y;\n").roots(), 2);
+    with_run("int x = ({ 1; });\nint y;\n", |outcome| {
+        assert_eq!(outcome.roots(), 2);
+    });
 }
 
 // recovery-fuzz:2 (remaining case): a `;` after an enumerator value is
@@ -622,22 +648,23 @@ fn brace_group_directly_inside_parentheses_is_one_error_operand() {
 #[test]
 fn semicolon_after_an_enumerator_value_is_reported_by_the_enumerator_list() {
     for source in ["enum e { A = 1\n; };\n", "enum e { A = 1 ; };\n"] {
-        let outcome = run(source);
-        assert!(
-            !outcome.reports_missing_operator(),
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert!(
-            outcome.has(|error| matches!(
-                error,
-                ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(
-                    TokenType::Operator(OperatorTokenType::Semicolon)
-                ))
-            )),
-            "{source}: {:?}",
-            outcome.errors
-        );
+        with_run(source, |outcome| {
+            assert!(
+                !outcome.reports_missing_operator(),
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert!(
+                outcome.has(|error| matches!(
+                    error,
+                    ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(
+                        TokenType::Operator(OperatorTokenType::Semicolon)
+                    ))
+                )),
+                "{source}: {:?}",
+                outcome.errors
+            );
+        });
     }
 }
 
@@ -650,26 +677,27 @@ fn unclosed_group_before_a_later_semicolon_names_the_missing_parenthesis() {
         "void f(int i) {\n  i = (i\n  ;\n}\n",
         "#define SQ(x) ((x) * (x)\nvoid f(int i) {\n  i = SQ(i);\n}\n",
     ] {
-        let outcome = run(source);
-        assert!(
-            outcome.has(|error| matches!(
-                error,
-                ParserErrorType::ExpectedClosingParenthesisInStatement("grouped expression", _)
-            )),
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert!(
-            !outcome.reports_missing_operator(),
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}: {:?}",
-            outcome.errors
-        );
+        with_run(source, |outcome| {
+            assert!(
+                outcome.has(|error| matches!(
+                    error,
+                    ParserErrorType::ExpectedClosingParenthesisInStatement("grouped expression", _)
+                )),
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert!(
+                !outcome.reports_missing_operator(),
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}: {:?}",
+                outcome.errors
+            );
+        });
     }
 }
 
@@ -684,27 +712,29 @@ fn misplaced_binary_operator_keeps_its_right_operand() {
         "void f(int x){ x = (x |= , x); }\n",
         "int a = sizeof > 1;\n",
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert!(
-            !outcome.reports_missing_operator(),
-            "{source}: {:?}",
-            outcome.errors
-        );
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert!(
+                !outcome.reports_missing_operator(),
+                "{source}: {:?}",
+                outcome.errors
+            );
+        });
     }
-    let outcome = run("void f(int x){ if ( > 1) ; }\n");
-    assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
-    assert!(
-        outcome.tree.contains("condition: binary >"),
-        "{}",
-        outcome.tree
-    );
-    assert!(outcome.tree.contains("then: null"), "{}", outcome.tree);
+    with_run("void f(int x){ if ( > 1) ; }\n", |outcome| {
+        assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
+        assert!(
+            outcome.tree.contains("condition: binary >"),
+            "{}",
+            outcome.tree
+        );
+        assert!(outcome.tree.contains("then: null"), "{}", outcome.tree);
+    });
 }
 
 // Corpus (gcc.c-torture/execute/scal-to-vec1.c): a brace list after a
@@ -721,25 +751,30 @@ fn brace_list_after_a_parenthesized_expression_is_skipped_with_it() {
             "float",
         ),
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations(),
-            [offset_of(source, location)],
-            "{source}: {:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.tree.matches("block-item:").count(),
-            2,
-            "{source}: {}",
-            outcome.tree
-        );
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations(),
+                [offset_of(source, location)],
+                "{source}: {:?}",
+                outcome.errors
+            );
+            assert_eq!(
+                outcome.tree.matches("block-item:").count(),
+                2,
+                "{source}: {}",
+                outcome.tree
+            );
+        });
     }
 
     // A statement block after a call in a malformed condition stays the body.
-    let outcome = run("int f(int); void g(int a) { while (f(a) { a = 1; } a = 2; }\n");
-    assert!(outcome.tree.contains("body: compound"), "{}", outcome.tree);
-    assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
+    with_run(
+        "int f(int); void g(int a) { while (f(a) { a = 1; } a = 2; }\n",
+        |outcome| {
+            assert!(outcome.tree.contains("body: compound"), "{}", outcome.tree);
+            assert_eq!(outcome.locations().len(), 1, "{:?}", outcome.errors);
+        },
+    );
 }
 
 #[test]
@@ -752,25 +787,34 @@ fn brace_group_before_a_header_closer_keeps_the_statement_intact() {
         "void f(int i) {\n  if (i + { i; }) i = 1;\n  i = 2;\n}\n",
         "void f(int x){ while (x == {}) x = 1; }\n",
     ] {
-        let outcome = run(source);
-        assert_eq!(
-            outcome.locations().len(),
-            1,
-            "{source}\n{:#?}",
-            outcome.errors
-        );
-        assert!(
-            !outcome.tree.contains("null recovered"),
-            "{source}\n{}",
-            outcome.tree
-        );
+        with_run(source, |outcome| {
+            assert_eq!(
+                outcome.locations().len(),
+                1,
+                "{source}\n{:#?}",
+                outcome.errors
+            );
+            assert!(
+                !outcome.tree.contains("null recovered"),
+                "{source}\n{}",
+                outcome.tree
+            );
+        });
     }
-    let outcome = run("void f(int x){ if (x == {}) x = 1; else x = 2; }\n");
-    assert!(outcome.tree.contains("else"), "{}", outcome.tree);
+    with_run(
+        "void f(int x){ if (x == {}) x = 1; else x = 2; }\n",
+        |outcome| {
+            assert!(outcome.tree.contains("else"), "{}", outcome.tree);
+        },
+    );
 }
 
 #[test]
 fn block_after_a_missing_header_closer_still_becomes_the_body() {
-    let outcome = run("int f(int a) { if (a + { return 1; } return 0; }\n");
-    assert!(outcome.tree.contains("then: compound"), "{}", outcome.tree);
+    with_run(
+        "int f(int a) { if (a + { return 1; } return 0; }\n",
+        |outcome| {
+            assert!(outcome.tree.contains("then: compound"), "{}", outcome.tree);
+        },
+    );
 }
