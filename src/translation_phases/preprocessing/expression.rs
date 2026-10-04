@@ -1573,7 +1573,7 @@ impl Preprocessor<'_> {
                     ),
                     (PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::UnavailableIdentifier | PreprocessorTokenType::UnavailableUniversalIdentifier, UNARY) => {
                         context.preprocessor_error(PreprocessorError {
-                                    error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(context.string_cache.at(token.contents).to_owned()),
+                                    error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(context.diagnostic_text(context.string_cache.at(token.contents))),
                                     source_vectors: token.source_vectors,
                                 },
                         );

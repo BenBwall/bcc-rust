@@ -170,7 +170,7 @@ fn mixed_hash_spellings_do_not_form_a_single_pasted_token() {
                 TranslationError::Preprocessing(PreprocessorError {
                     error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
                     ..
-                }) if lhs == "#" && rhs == "%:"
+                }) if *lhs == "#" && *rhs == "%:"
             )),
             "{errors:#?}"
         );

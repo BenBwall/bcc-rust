@@ -782,7 +782,7 @@ fn numbers_paste_into_preprocessing_numbers() {
                     | TranslationError::Preprocessing(PreprocessorError {
                         error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
                         ..
-                    }) => Some((lhs.as_str(), rhs.as_str())),
+                    }) => Some((*lhs, *rhs)),
                     | _ => None,
                 })
                 .collect();

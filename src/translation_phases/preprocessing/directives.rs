@@ -928,7 +928,7 @@ impl Preprocessor<'_> {
                     // redefined, so the built-in definition stays in effect.
                     context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::RedefinitionOfBuiltInMacro(
-                            context.string_cache.at(name.contents).to_owned(),
+                            context.diagnostic_text(context.string_cache.at(name.contents)),
                         ),
                         source_vectors: name.source_vectors,
                     });
@@ -974,7 +974,7 @@ impl Preprocessor<'_> {
                 context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(
-                            context.string_cache.at(name.contents).to_owned(),
+                            context.diagnostic_text(context.string_cache.at(name.contents)),
                         ),
                     source_vectors: name.source_vectors,
                 });
@@ -1006,7 +1006,7 @@ impl Preprocessor<'_> {
                 if is_variadic {
                     context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::VariadicMacroMustBeLastParameter(
-                            context.string_cache.at(name.contents).to_owned(),
+                            context.diagnostic_text(context.string_cache.at(name.contents)),
                         ),
                         source_vectors: name.source_vectors,
                     });
@@ -1054,7 +1054,7 @@ impl Preprocessor<'_> {
                 context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(
-                            context.string_cache.at(name.contents).to_owned(),
+                            context.diagnostic_text(context.string_cache.at(name.contents)),
                         ),
                     source_vectors: name.source_vectors,
                 });
@@ -1102,7 +1102,7 @@ impl Preprocessor<'_> {
             if !parameters_match {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
-                        context.string_cache.at(name.contents).to_owned(),
+                        context.diagnostic_text(context.string_cache.at(name.contents)),
                     ),
                     source_vectors: name.source_vectors,
                 });
@@ -1127,7 +1127,7 @@ impl Preprocessor<'_> {
                     context.preprocessor_error(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
-                                context.string_cache.at(name.contents).to_owned(),
+                                context.diagnostic_text(context.string_cache.at(name.contents)),
                             ),
                         source_vectors: name.source_vectors,
                     });
@@ -1241,7 +1241,7 @@ impl Preprocessor<'_> {
         if value.is_none() {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(
-                    digits.to_owned(),
+                    context.diagnostic_text(digits),
                 ),
                 source_vectors: token.source_vectors,
             });
@@ -1434,7 +1434,7 @@ impl Preprocessor<'_> {
                                         context.preprocessor_error(PreprocessorError {
                                             error_type:
                                                 PreprocessorErrorType::UnknownPragmaSTDCArgument(
-                                                    s.to_owned(),
+                                                    context.diagnostic_text(s),
                                                 ),
                                             source_vectors: token.source_vectors,
                                         });
@@ -1469,7 +1469,7 @@ impl Preprocessor<'_> {
                                         || !matches!(s, "ON" | "OFF" | "DEFAULT")
                                     {
                                         context.preprocessor_error(PreprocessorError {
-                                                    error_type:     PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(s.to_owned()),
+                                                    error_type:     PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(context.diagnostic_text(s)),
                                                     source_vectors: token.source_vectors,
                                                 },
                                             );

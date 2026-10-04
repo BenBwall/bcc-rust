@@ -791,7 +791,9 @@ impl Preprocessor<'_> {
                     context.preprocessor_error(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(
-                                context.string_cache.at(argument_name.contents).to_owned(),
+                                context.diagnostic_text(
+                                    context.string_cache.at(argument_name.contents),
+                                ),
                             ),
                         source_vectors: argument_name.source_vectors,
                     });
@@ -907,11 +909,10 @@ impl Preprocessor<'_> {
         // Number spellings carry a trailing NUL that is not source text.
         let spell = |token: PreprocessorToken| {
             let contents = context.string_cache.at(token.contents);
-            match token.kind {
+            context.diagnostic_text(match token.kind {
                 | PreprocessorTokenType::Number => contents.strip_suffix('\0').unwrap_or(contents),
                 | _ => contents,
-            }
-            .to_string()
+            })
         };
         let lhs_contents = spell(lhs);
         let rhs_contents = spell(rhs);
