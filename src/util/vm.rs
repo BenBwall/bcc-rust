@@ -18,6 +18,8 @@ pub(crate) struct Region {
     base:     NonNull<u8>,
     reserved: usize,
     page:     usize,
+    #[cfg(miri)]
+    layout:   std::alloc::Layout,
 }
 
 impl Region {
@@ -31,6 +33,9 @@ impl Region {
             base,
             reserved,
             page,
+            #[cfg(miri)]
+            layout: std::alloc::Layout::from_size_align(reserved, page)
+                .expect("valid mock region layout"),
         })
     }
 
@@ -81,16 +86,79 @@ impl Drop for Region {
         // SAFETY: this is the original reservation base and size, released
         // exactly once. Users of the region cannot outlive its owner.
         unsafe {
+            #[cfg(not(miri))]
             os_release(self.base, self.reserved);
+            #[cfg(miri)]
+            std::alloc::dealloc(self.base.as_ptr(), self.layout);
         }
     }
+}
+
+/// A fixed reservation whose writable prefix grows in page-aligned steps.
+/// The untouched tail remains inaccessible on native platforms.
+pub(crate) struct GrowingRegion {
+    region:    Region,
+    committed: usize,
+}
+
+impl GrowingRegion {
+    pub(crate) fn reserve(bytes: usize) -> io::Result<Self> {
+        Ok(Self {
+            region:    Region::reserve(bytes)?,
+            committed: 0,
+        })
+    }
+
+    pub(crate) fn as_ptr(&self) -> NonNull<u8> {
+        self.region.as_ptr()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn committed(&self) -> usize {
+        self.committed
+    }
+
+    pub(crate) fn ensure_committed(&mut self, needed: usize) -> io::Result<()> {
+        let target = next_commit(
+            self.committed,
+            needed,
+            self.region.reserved(),
+            self.region.page,
+        )
+        .ok_or_else(|| io::Error::new(io::ErrorKind::OutOfMemory, "region exhausted"))?;
+        if target > self.committed {
+            self.region
+                .commit(self.committed, target - self.committed)?;
+            self.committed = target;
+        }
+        Ok(())
+    }
+}
+
+/// Pure commit-charge bookkeeping, also exercised under Miri without OS calls.
+fn next_commit(committed: usize, needed: usize, reserved: usize, page: usize) -> Option<usize> {
+    if needed > reserved {
+        return None;
+    }
+    if needed <= committed {
+        return Some(committed);
+    }
+    let floor = 4 * 1024 * 1024;
+    let step = committed.max(floor).min(reserved - committed);
+    let target = committed.checked_add(step)?.max(needed);
+    round_up(target, page).filter(|&rounded| rounded <= reserved)
 }
 
 fn round_up(bytes: usize, page: usize) -> Option<usize> {
     bytes.checked_add(page - 1).map(|value| value / page * page)
 }
 
-#[cfg(windows)]
+#[cfg(miri)]
+fn page_size() -> io::Result<usize> {
+    Ok(4096)
+}
+
+#[cfg(all(windows, not(miri)))]
 fn page_size() -> io::Result<usize> {
     use windows_sys::Win32::System::SystemInformation::{
         GetSystemInfo,
@@ -108,7 +176,7 @@ fn page_size() -> io::Result<usize> {
         .ok_or_else(|| io::Error::other("GetSystemInfo returned a zero page size"))
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 fn page_size() -> io::Result<usize> {
     // SAFETY: sysconf has no pointer arguments; _SC_PAGESIZE is a valid name.
     let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -119,7 +187,17 @@ fn page_size() -> io::Result<usize> {
         .ok_or_else(io::Error::last_os_error)
 }
 
-#[cfg(windows)]
+#[cfg(miri)]
+fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
+    let layout = std::alloc::Layout::from_size_align(bytes, page_size()?)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid mock region layout"))?;
+    // SAFETY: layout is nonzero and valid. The mock keeps all bytes accessible;
+    // commit boundaries are checked by GrowingRegion before use.
+    NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
+        .ok_or_else(|| io::Error::new(io::ErrorKind::OutOfMemory, "mock region allocation"))
+}
+
+#[cfg(all(windows, not(miri)))]
 fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
     use windows_sys::Win32::System::Memory::{
         MEM_RESERVE,
@@ -132,7 +210,7 @@ fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
     NonNull::new(ptr.cast()).ok_or_else(io::Error::last_os_error)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
     #[cfg(target_os = "linux")]
     const NO_RESERVE: i32 = libc::MAP_NORESERVE;
@@ -157,7 +235,12 @@ fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
     Ok(unsafe { NonNull::new_unchecked(ptr.cast()) })
 }
 
-#[cfg(windows)]
+#[cfg(miri)]
+fn os_commit(_: *mut u8, _: usize) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(all(windows, not(miri)))]
 fn os_commit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     use windows_sys::Win32::System::Memory::{
         MEM_COMMIT,
@@ -175,7 +258,7 @@ fn os_commit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 fn os_commit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     // SAFETY: ptr and bytes cover page-aligned memory inside our mapping.
     let result = unsafe { libc::mprotect(ptr.cast(), bytes, libc::PROT_READ | libc::PROT_WRITE) };
@@ -186,7 +269,15 @@ fn os_commit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     }
 }
 
-#[cfg(windows)]
+#[cfg(miri)]
+fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
+    // SAFETY: the caller has ended all allocations in the range. The mock
+    // zeroes it to model decommit/recommit without changing pointer identity.
+    unsafe { ptr.write_bytes(0, bytes) };
+    Ok(())
+}
+
+#[cfg(all(windows, not(miri)))]
 fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     use windows_sys::Win32::System::Memory::{
         MEM_DECOMMIT,
@@ -202,7 +293,7 @@ fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     // SAFETY: ptr and bytes cover page-aligned mapped memory with no live
     // Rust references; MADV_DONTNEED discards the physical pages.
@@ -220,7 +311,7 @@ fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(miri)))]
 unsafe fn os_release(base: NonNull<u8>, _: usize) {
     use windows_sys::Win32::System::Memory::{
         MEM_RELEASE,
@@ -232,7 +323,7 @@ unsafe fn os_release(base: NonNull<u8>, _: usize) {
     debug_assert_ne!(released, 0, "VirtualFree(MEM_RELEASE) failed");
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 unsafe fn os_release(base: NonNull<u8>, bytes: usize) {
     // SAFETY: base and bytes are the original mmap result, unmapped once.
     let released = unsafe { libc::munmap(base.as_ptr().cast(), bytes) };
@@ -248,6 +339,26 @@ mod tests {
         assert_eq!(round_up(1, 4096), Some(4096));
         assert_eq!(round_up(4096, 4096), Some(4096));
         assert_eq!(round_up(usize::MAX, 4096), None);
+    }
+
+    #[test]
+    fn commit_growth_stays_page_aligned_and_within_reservation() {
+        let gib = 1024 * 1024 * 1024;
+        let reserved = 100 * gib;
+        assert_eq!(next_commit(0, 1, reserved, 4096), Some(4 * 1024 * 1024));
+        assert_eq!(
+            next_commit(4 * 1024 * 1024, 1, reserved, 4096),
+            Some(4 * 1024 * 1024)
+        );
+        assert_eq!(
+            next_commit(4 * 1024 * 1024, 9 * 1024 * 1024, reserved, 4096),
+            Some(9 * 1024 * 1024)
+        );
+        assert_eq!(
+            next_commit(reserved - 4096, reserved, reserved, 4096),
+            Some(reserved)
+        );
+        assert_eq!(next_commit(reserved, reserved + 1, reserved, 4096), None);
     }
 
     #[cfg(not(miri))]
