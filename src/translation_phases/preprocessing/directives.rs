@@ -128,6 +128,35 @@ fn invalid_header_sequence(name: &str, angle: bool) -> Option<(usize, &'static s
     })
 }
 
+/// Point into a macro-expanded token when its spelling still occupies the
+/// corresponding bytes in a source file. Pasted or rewritten tokens retain
+/// their original provenance when they cannot be narrowed this way.
+fn expanded_header_sequence_source(
+    context: &mut Context,
+    token_source: SourceVectors,
+    offset: usize,
+    sequence: &'static str,
+) -> SourceVectors {
+    let vector = context.first_source_vector(token_source).clone();
+    let Some(source) = context.source_text(vector.source_file_index) else {
+        return token_source;
+    };
+    if offset + sequence.len() > vector.length as usize {
+        return token_source;
+    }
+    let index = vector.index as usize + offset;
+    if source.get(index..index + sequence.len()) != Some(sequence) {
+        return token_source;
+    }
+    let anchor = SourcePosition {
+        index:  vector.index as usize,
+        line:   vector.line,
+        column: vector.column,
+    };
+    let position = position_after(source, anchor, index);
+    context.create_source_vectors(position, vector.source_file_index, sequence.len())
+}
+
 /// A header name read from source text, with the locations of its
 /// questionable characters as positions and source byte lengths.
 struct WrittenHeaderName {
@@ -586,8 +615,17 @@ impl Preprocessor {
             let spelling = context.string_cache.at(include_string.contents);
             let name = spelling.strip_prefix('"').unwrap_or(spelling);
             let name = name.strip_suffix('"').unwrap_or(name).to_owned();
-            let invalid = invalid_header_sequence(&name, false)
-                .map(|(_, sequence)| (sequence, include_string.source_vectors));
+            let invalid = invalid_header_sequence(&name, false).map(|(offset, sequence)| {
+                (
+                    sequence,
+                    expanded_header_sequence_source(
+                        context,
+                        include_string.source_vectors,
+                        offset + 1,
+                        sequence,
+                    ),
+                )
+            });
             let backslash = name.contains('\\').then_some(include_string.source_vectors);
             return Some(HeaderName {
                 name,
@@ -601,6 +639,9 @@ impl Preprocessor {
         }
         let mut contents = TokenString::new();
         contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
+        // Each name byte belongs to a token; keep that token's provenance so
+        // an invalid sequence does not share the whole operand's location.
+        let mut token_spans = vec![(0..contents.len(), include_string.source_vectors, 1)];
         let start_index = Context::duplicate_source_vectors(
             &mut context.source_vectors.0,
             include_string.source_vectors,
@@ -618,11 +659,15 @@ impl Preprocessor {
                         token.source_vectors,
                     );
                     if let Some(idx) = token_contents.find('>') {
+                        let start = contents.len();
                         contents.push_str(&token_contents[..idx]);
+                        token_spans.push((start..contents.len(), token.source_vectors, 0));
                         closed = true;
                         break;
                     }
+                    let start = contents.len();
                     contents.push_str(context.string_cache.at(token.contents));
+                    token_spans.push((start..contents.len(), token.source_vectors, 0));
                 },
                 | None => {
                     context.preprocessor_error(PreprocessorError {
@@ -637,8 +682,21 @@ impl Preprocessor {
         }
         let source_vectors = SourceVectors::new(start_index, context.source_vectors.0.len() as u32);
         let name = contents.as_str().to_owned();
-        let invalid =
-            invalid_header_sequence(&name, true).map(|(_, sequence)| (sequence, source_vectors));
+        let invalid = invalid_header_sequence(&name, true).map(|(offset, sequence)| {
+            let (range, token_source, token_offset) = token_spans
+                .iter()
+                .find(|(range, ..)| range.contains(&offset))
+                .expect("invalid character belongs to a header token");
+            (
+                sequence,
+                expanded_header_sequence_source(
+                    context,
+                    *token_source,
+                    offset - range.start + token_offset,
+                    sequence,
+                ),
+            )
+        });
         Some(HeaderName {
             name,
             is_system_header: true,

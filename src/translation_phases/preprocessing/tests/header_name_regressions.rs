@@ -315,6 +315,37 @@ fn undefined_sequences_are_reported_once_at_their_position() {
 }
 
 #[test]
+fn expanded_header_errors_keep_the_lookup_failure() {
+    let headers = Headers::new();
+    for source in [
+        "#define H <it's.h>\n#include H\nafter\n",
+        "#define H \"it's.h\"\n#include H\nafter\n",
+    ] {
+        let mut outcome = preprocess(&headers, source);
+        assert_eq!(outcome.identifiers, ["after"]);
+        assert!(outcome.preprocessor_errors().iter().any(|error| matches!(
+            error,
+            PreprocessorErrorType::InvalidCharacterInHeaderName("'")
+        )));
+        assert!(
+            outcome
+                .preprocessor_errors()
+                .iter()
+                .any(|error| matches!(error, PreprocessorErrorType::HeaderNotFound { .. }))
+        );
+        let invalid = outcome.location(|error| {
+            matches!(
+                error,
+                PreprocessorErrorType::InvalidCharacterInHeaderName(_)
+            )
+        });
+        assert_eq!(invalid.line, 1, "{source:?}");
+        assert_eq!(invalid.column, 14, "{source:?}");
+        assert_eq!(invalid.length, 1, "{source:?}");
+    }
+}
+
+#[test]
 fn missing_closing_delimiters_are_reported_before_lookup() {
     let headers = Headers::new();
     for (source, delimiter, column) in [
