@@ -42,6 +42,7 @@ use crate::{
         preprocessing::{
             CharacterTokenType,
             IntegerTokenType,
+            PreprocessorErrorType,
             StringTokenType,
             Token,
             TokenType,
@@ -339,11 +340,14 @@ struct DiagnosticReporter {
 
 /// One diagnostic awaiting rendering, with any later errors folded in.
 struct PendingDiagnostic {
-    diagnostic:        Diagnostic,
-    location:          Vec<SourceVector>,
+    diagnostic: Diagnostic,
+    location: Vec<SourceVector>,
     ordering_location: Option<(u32, u32)>,
     /// Whether errors at the same place may be folded into this one.
-    foldable:          bool,
+    foldable: bool,
+    /// An unclosed angle header and an empty translation unit remain two
+    /// separate diagnostics even when they point at the same EOF position.
+    preserve_empty_translation_unit: bool,
 }
 
 impl PendingDiagnostic {
@@ -383,6 +387,8 @@ impl DiagnosticReporter {
             | TranslationError::Parsing(error) => (true, error.consumed_tokens, error.may_fold()),
             | _ => (false, 0, true),
         };
+        let empty_translation_unit =
+            matches!(error, TranslationError::Parsing(error) if error.is_empty_translation_unit());
         let target =
             if diagnostic.severity == ErrorSeverity::Error && foldable && !location.is_empty() {
                 if parser {
@@ -392,10 +398,11 @@ impl DiagnosticReporter {
                         })
                         .map(|(index, _)| index)
                         .or_else(|| {
-                            self.other_errors
-                                .get(&location)
-                                .copied()
-                                .filter(|&index| self.pending[index].absorbs(&location))
+                            self.other_errors.get(&location).copied().filter(|&index| {
+                                self.pending[index].absorbs(&location)
+                                    && !(empty_translation_unit
+                                        && self.pending[index].preserve_empty_translation_unit)
+                            })
                         })
                 } else {
                     self.last_other
@@ -418,6 +425,11 @@ impl DiagnosticReporter {
                 location,
                 ordering_location,
                 foldable,
+                preserve_empty_translation_unit: matches!(
+                    error,
+                    TranslationError::Preprocessing(error)
+                        if matches!(error.error_type, PreprocessorErrorType::UnterminatedHeaderName('>'))
+                ),
             });
             self.pending.len() - 1
         };

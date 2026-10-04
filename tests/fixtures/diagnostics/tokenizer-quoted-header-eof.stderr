@@ -35,10 +35,4 @@ error: cannot find header `abc`
             . (the working directory)
   = help: add the directory containing it with `--iquote <dir>` or `--isystem <dir>`
 
-error: unexpected end of file while parsing include directive
- --> tokenizer-quoted-header-eof.c:1:14
-  |
-1 | #include "abc
-  |              ^ the file ends here
-
-4 errors and 1 warning generated.
+3 errors and 1 warning generated.

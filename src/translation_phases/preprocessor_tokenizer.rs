@@ -202,6 +202,14 @@ pub(crate) struct PreprocessorTokenizerError {
 }
 
 impl PreprocessorTokenizerError {
+    pub(crate) fn is_unclosed_header_string_at(&self, source: &SourceVector) -> bool {
+        matches!(
+            self.error_type,
+            PreprocessorTokenizerErrorType::UnterminatedString
+                | PreprocessorTokenizerErrorType::NewlineInString
+        ) && self.source_vector == *source
+    }
+
     /// Reports a phase-3 character that survived preprocessing but cannot
     /// become a C token in phase 7.
     pub(crate) fn unknown_character(source_vector: SourceVector, character: char) -> Self {

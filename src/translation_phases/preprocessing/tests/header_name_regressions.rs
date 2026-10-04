@@ -373,7 +373,6 @@ fn missing_closing_delimiters_are_reported_before_lookup() {
         ("#include <stdio.h", '>', 18),
         ("#include \"stdio.h\nafter\n", '"', 18),
         ("#include \"stdio.h", '"', 18),
-        ("#include \"dir\\\"\nafter\n", '"', 16),
     ] {
         for policy in [
             ExtensionPolicy::Allow,
@@ -407,6 +406,56 @@ fn missing_closing_delimiters_are_reported_before_lookup() {
                 }
             });
         }
+    }
+}
+
+#[test]
+fn a_backslash_before_the_first_quote_uses_the_quoted_header_extension() {
+    let headers = Headers::new();
+    for source in ["#include \"dir\\\"", "#include \"dir\\\"\nafter\n"] {
+        for policy in [ExtensionPolicy::Allow, ExtensionPolicy::Warn] {
+            with_preprocess_in(&headers, source, policy, |outcome| {
+                assert!(outcome.errors.iter().any(|error| matches!(
+                    error,
+                    TranslationError::Preprocessing(PreprocessorError {
+                        error_type: PreprocessorErrorType::HeaderNotFound { name, .. },
+                        ..
+                    }) if name == "dir\\"
+                )));
+                assert!(!outcome.errors.iter().any(|error| {
+                    matches!(error, TranslationError::PreprocessorTokenizining(_))
+                }));
+                assert!(!outcome.preprocessor_errors().iter().any(|error| {
+                    matches!(error, PreprocessorErrorType::UnterminatedHeaderName(_))
+                }));
+                assert_eq!(
+                    outcome.preprocessor_errors().iter().any(|error| matches!(
+                        error,
+                        PreprocessorErrorType::BackslashInQuotedHeaderName(_)
+                    )),
+                    policy == ExtensionPolicy::Warn
+                );
+                if source.ends_with("after\n") {
+                    assert_eq!(outcome.identifiers, ["after"]);
+                }
+            });
+        }
+        with_preprocess_in(&headers, source, ExtensionPolicy::Deny, |outcome| {
+            assert!(
+                outcome.errors.iter().any(|error| {
+                    matches!(error, TranslationError::PreprocessorTokenizining(_))
+                })
+            );
+            assert!(outcome.preprocessor_errors().iter().any(|error| {
+                matches!(error, PreprocessorErrorType::UnterminatedHeaderName('"'))
+            }));
+            assert!(
+                !outcome
+                    .preprocessor_errors()
+                    .iter()
+                    .any(|error| { matches!(error, PreprocessorErrorType::HeaderNotFound { .. }) })
+            );
+        });
     }
 }
 

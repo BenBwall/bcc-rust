@@ -207,6 +207,10 @@ impl ParserError {
         )
     }
 
+    pub(crate) fn is_empty_translation_unit(&self) -> bool {
+        matches!(self.error_type, ParserErrorType::EmptyTranslationUnit)
+    }
+
     /// Visits every provenance range this diagnostic reads from a context
     /// arena.
     pub(crate) fn for_each_source_vectors_mut(

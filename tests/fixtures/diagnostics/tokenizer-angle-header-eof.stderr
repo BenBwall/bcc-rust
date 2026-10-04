@@ -31,4 +31,12 @@ error: cannot find header `abc`
   = note: the path is absolute; no directory was searched
   = help: add the directory containing it with `--isystem <dir>`
 
-3 errors and 1 warning generated.
+error: translation unit is empty
+ --> tokenizer-angle-header-eof.c:1:14
+  |
+1 | #include <abc
+  |              ^ expected a declaration or function definition
+  |
+  = note: C99 §6.9: a translation unit contains at least one external declaration
+
+4 errors and 1 warning generated.

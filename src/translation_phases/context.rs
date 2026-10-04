@@ -631,6 +631,14 @@ impl<'tu> Context<'tu> {
         }
     }
 
+    /// The quoted include extension treats the first quote after a backslash
+    /// as the header delimiter, even though phase 3 lexed it as an escape.
+    pub(crate) fn withdraw_quoted_header_lexer_error(&mut self, source: &SourceVector) {
+        self.pending_errors.retain(|error| {
+            !matches!(error, TranslationError::PreprocessorTokenizining(error) if error.is_unclosed_header_string_at(source))
+        });
+    }
+
     #[cold]
     #[inline(never)]
     pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError) {

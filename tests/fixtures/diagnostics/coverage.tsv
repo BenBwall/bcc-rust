@@ -205,7 +205,7 @@ pp	UnknownDirective	pp-unknown-directive.c	rendered
 pp	UnknownPragmaDirective	pp-unknown-pragma-directive.c	rendered
 pp	UnknownPragmaSTDCArgument	pp-unknown-pragma-s-t-d-c-argument.c	rendered
 pp	UnterminatedEscapeSequence	pp-unterminated-escape-sequence.c	folded
-pp	UnterminatedHeaderName	pp-unterminated-header-name-quoted.c	rendered
+pp	HeaderNotFound	pp-unterminated-header-name-quoted.c	rendered
 pp	UnterminatedHeaderName	pp-unterminated-header-name.c	rendered
 pp	UnterminatedOpeningParenthesisInPreprocessorExpression	pp-unterminated-opening-parenthesis-in-preprocessor-expression.c	rendered
 pp	VariadicMacroMustBeLastParameter	pp-variadic-macro-must-be-last-parameter.c	rendered
@@ -213,6 +213,7 @@ pp	WrongNumberOfArgumentsInFunctionLikeMacroInvocation	pp-wrong-number-of-argume
 pp	HeaderNotFound	tokenizer-angle-header-eof.c	rendered
 pp	HeaderNotFound	tokenizer-angle-header-newline.c	rendered
 pp	UnterminatedHeaderName	tokenizer-angle-header-eof.c	rendered
+parser	EmptyTranslationUnit	tokenizer-angle-header-eof.c	rendered
 pp	UnterminatedHeaderName	tokenizer-angle-header-newline.c	rendered
 pp	UnterminatedHeaderName	tokenizer-newline-in-include-string.c	rendered
 pp	UnterminatedHeaderName	tokenizer-quoted-header-eof.c	rendered

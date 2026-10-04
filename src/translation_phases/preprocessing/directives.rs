@@ -551,20 +551,27 @@ impl Preprocessor {
             line:   vector.line,
             column: vector.column,
         };
-        let (written, unclosed_at) = {
+        let allow_backslash = context.configuration.extension_policy() != ExtensionPolicy::Deny;
+        let (written, unclosed_at, escaped_closing_quote) = {
             let source = context
                 .source_text(physical)
                 .expect("source files record their text");
             let characters = logical_characters(source, vector.range());
-            // The first character is the opening quote. An escaped quote
-            // does not close the literal; a missing one leaves the rest.
+            // The first character is the opening quote. With the backslash
+            // extension, a backslash is ordinary header-name text, so the
+            // first following quote closes the header even if phase 3 lexed
+            // it as an escaped quote.
             let mut close = characters.len();
             let mut index = 1;
+            let mut escaped_closing_quote = false;
             while index < characters.len() {
                 match characters[index].character {
+                    | '\\' if allow_backslash => index += 1,
                     | '\\' => index += 2,
                     | '"' => {
                         close = index;
+                        escaped_closing_quote =
+                            index > 1 && characters[index - 1].character == '\\';
                         break;
                     },
                     | _ => index += 1,
@@ -572,12 +579,22 @@ impl Preprocessor {
             }
             let written =
                 header_name_from_source(source, anchor, &characters[1.min(close)..close], false);
-            // A name ending in a backslash escapes its closing quote, which
-            // leaves the literal unterminated too.
+            // Under Deny, a trailing backslash escapes the quote during
+            // lexing and leaves the header name unterminated too.
             let unclosed_at =
                 (close == characters.len()).then(|| position_after(source, anchor, vector.end()));
-            (written, unclosed_at)
+            (written, unclosed_at, escaped_closing_quote)
         };
+        if escaped_closing_quote {
+            context.withdraw_quoted_header_lexer_error(&vector);
+        }
+        if unclosed_at.is_some()
+            && context
+                .source_text(physical)
+                .is_some_and(|source| vector.end() == source.len())
+        {
+            self.current_is_newline = true;
+        }
         HeaderName {
             name:              written.name,
             is_system_header:  false,
