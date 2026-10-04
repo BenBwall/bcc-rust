@@ -2,7 +2,6 @@
 
 use std::{
     cell::OnceCell,
-    collections::VecDeque,
     fmt::Debug,
     mem::{
         replace,
@@ -43,6 +42,7 @@ use crate::{
     },
     util::{
         HashMap,
+        bump::ArenaVec,
         string_cache::StringCacheId,
     },
 };
@@ -80,21 +80,19 @@ pub(crate) struct FunctionLikeMacroArgument {
 /// Transactional logical cursor over replacement lists and their continuations.
 /// Exhausted frames remain present until normal rescan unwinds them, preserving
 /// disabled macro names. A failed lookahead changes no real source cursor.
-struct MacroCallCursor {
-    frames:  Vec<TokenizerFrame>,
-    index:   Option<usize>,
-    floor:   usize,
-    pending: VecDeque<PreprocessorToken>,
+struct MacroCallCursor<'pp> {
+    frames:       ArenaVec<'pp, TokenizerFrame>,
+    index:        Option<usize>,
+    floor:        usize,
+    /// Consumed prefix stays in place until the queue empties.
+    pending:      ArenaVec<'pp, PreprocessorToken>,
+    pending_head: usize,
 }
 
-impl MacroCallCursor {
-    fn new(preprocessor: &Preprocessor<'_, '_>) -> Self {
-        let mut frames = preprocessor
-            .state
-            .tokenizer_stack
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
+impl<'pp> MacroCallCursor<'pp> {
+    fn new(preprocessor: &Preprocessor<'_, 'pp>) -> Self {
+        let mut frames = ArenaVec::new_in(preprocessor.state.arena);
+        frames.extend(preprocessor.state.tokenizer_stack.iter().cloned());
         frames.last_mut().unwrap().tokenizer = preprocessor.tokenizer.clone();
         Self {
             index: frames.len().checked_sub(1),
@@ -103,7 +101,8 @@ impl MacroCallCursor {
                 .operand_fence
                 .max(preprocessor.expansion_fence)
                 .saturating_sub(1),
-            pending: VecDeque::new(),
+            pending: ArenaVec::new_in(preprocessor.state.arena),
+            pending_head: 0,
         }
     }
 
@@ -113,9 +112,12 @@ impl MacroCallCursor {
         context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         loop {
-            if let Some(token) = self.pending.pop_front() {
+            if let Some(token) = self.pending.get(self.pending_head).copied() {
+                self.pending_head += 1;
                 return Some(token);
             }
+            self.pending.clear();
+            self.pending_head = 0;
             let index = self.index.filter(|index| *index >= self.floor)?;
             let frame = &mut self.frames[index];
             let position = frame.tokenizer.position(context);
@@ -244,7 +246,7 @@ impl MacroCallCursor {
             {
                 let mut expanded = preprocessor.expanded_argument(context, token, &argument);
                 while let Some(token) = expanded.next_item(context) {
-                    self.pending.push_back(token);
+                    self.pending.push(token);
                 }
                 continue;
             }
@@ -258,9 +260,9 @@ impl MacroCallCursor {
         context: &Context<'_>,
         location: crate::translation_phases::SourceVector,
     ) {
-        if !self.pending.is_empty() {
-            let tokens: Vec<_> = self.pending.drain(..).collect();
-            let tokenizer = TokenSource::replay(context, &tokens, location);
+        if self.pending_head < self.pending.len() {
+            let tokenizer =
+                TokenSource::replay(context, &self.pending[self.pending_head..], location);
             self.frames.insert(
                 self.index.unwrap() + 1,
                 TokenizerFrame {
@@ -628,7 +630,7 @@ impl Preprocessor<'_, '_> {
     ) -> Vec<PreprocessorToken> {
         let hash_hash_stack = replace(
             &mut self.hash_hash_stack,
-            crate::util::bump::ArenaVec::new_in(self.state.arena),
+            ArenaVec::new_in(self.state.arena),
         );
         let generate_placeholders = self.generate_placeholders;
         let newlines = (self.last_was_newline, self.current_is_newline);
