@@ -1,12 +1,10 @@
 //! Virtual-memory arena allocation for phase-scoped compiler data.
 //!
-//! The reservation never moves. Individual deallocation normally leaves memory
-//! in the arena; dropping releases the region and reset rewinds it. Values put
-//! here must not need destruction, since the arena does not run destructors.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Later arena migration stages use this module.")
-)]
+//! An arena reserves its region on its first allocation, so constructing one
+//! (including through `Default` or `mem::take`) costs nothing. The reservation
+//! never moves. Individual deallocation normally leaves memory in the arena;
+//! dropping releases the region and reset rewinds it. Values put here must not
+//! need destruction, since the arena does not run destructors.
 
 use std::{
     alloc::{
@@ -48,9 +46,13 @@ struct Last {
 }
 
 struct Inner {
-    region: GrowingRegion,
-    used:   usize,
-    last:   Option<Last>,
+    /// Reserved by the first allocation that needs memory.
+    region:     Option<GrowingRegion>,
+    /// Every live block lies below this offset.
+    used:       usize,
+    last:       Option<Last>,
+    /// The largest `used` since the arena was created.
+    high_water: usize,
 }
 
 /// An arena whose allocations remain at fixed addresses until it is reset or
@@ -66,15 +68,42 @@ impl Default for Bump {
 }
 
 impl Bump {
-    pub(crate) fn new() -> Self {
+    /// An empty arena. It holds no region until something is allocated.
+    pub(crate) const fn new() -> Self {
         Self {
             inner: RefCell::new(Inner {
-                region: GrowingRegion::reserve(REGION_BYTES)
-                    .expect("failed to reserve virtual address space for arena"),
-                used:   0,
-                last:   None,
+                region:     None,
+                used:       0,
+                last:       None,
+                high_water: 0,
             }),
         }
+    }
+
+    /// The most bytes this arena has held at once, including alignment
+    /// padding and blocks a reset later reclaimed.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Only measurements read the high-water mark.")
+    )]
+    pub(crate) fn high_water(&self) -> usize {
+        self.inner.borrow().high_water
+    }
+
+    /// The bytes now allocated, including alignment padding.
+    #[cfg(test)]
+    pub(crate) fn used(&self) -> usize {
+        self.inner.borrow().used
+    }
+
+    /// The bytes committed in this arena's region.
+    #[cfg(test)]
+    pub(crate) fn committed(&self) -> usize {
+        self.inner
+            .borrow()
+            .region
+            .as_ref()
+            .map_or(0, GrowingRegion::committed)
     }
 
     /// Store a value that needs no destructor.
@@ -135,6 +164,10 @@ impl Bump {
 
     /// Read a source file into stable arena storage, replacing malformed
     /// UTF-8 in the same way as `String::from_utf8_lossy`.
+    ///
+    /// Running out of arena memory is reported as
+    /// [`std::io::ErrorKind::OutOfMemory`] rather than aborting, so a caller
+    /// can turn it into a diagnostic.
     pub(crate) fn read_to_str_lossy(&self, path: &Path) -> std::io::Result<&str> {
         let mut file = std::fs::File::open(path)?;
         let mut bytes = ArenaVec::new_in(self);
@@ -142,7 +175,12 @@ impl Bump {
         loop {
             match file.read(&mut buffer) {
                 | Ok(0) => break,
-                | Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+                | Ok(count) => {
+                    bytes
+                        .try_reserve(count)
+                        .map_err(|_| out_of_arena_memory())?;
+                    bytes.extend_from_slice(&buffer[..count]);
+                },
                 | Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
                 | Err(error) => return Err(error),
             }
@@ -154,14 +192,21 @@ impl Bump {
         }
 
         let mut repaired = ArenaVec::new_in(self);
+        let mut push = |part: &[u8]| {
+            repaired
+                .try_reserve(part.len())
+                .map_err(|_| out_of_arena_memory())?;
+            repaired.extend_from_slice(part);
+            Ok::<_, std::io::Error>(())
+        };
         let mut remaining = bytes.as_slice();
         while let Err(error) = std::str::from_utf8(remaining) {
             let valid = error.valid_up_to();
-            repaired.extend_from_slice(&remaining[..valid]);
-            repaired.extend_from_slice("�".as_bytes());
+            push(&remaining[..valid])?;
+            push("�".as_bytes())?;
             remaining = &remaining[valid + error.error_len().unwrap_or(remaining.len() - valid)..];
         }
-        repaired.extend_from_slice(remaining);
+        push(remaining)?;
         let bytes = repaired.leak();
         // SAFETY: each valid run was checked above and replacements are UTF-8.
         Ok(unsafe { std::str::from_utf8_unchecked(bytes) })
@@ -187,6 +232,13 @@ impl Bump {
     }
 }
 
+fn out_of_arena_memory() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::OutOfMemory,
+        "the compiler's arena memory is exhausted",
+    )
+}
+
 fn aligned_start(base: usize, used: usize, align: usize) -> Option<usize> {
     base.checked_add(used)?
         .checked_add(align - 1)
@@ -194,26 +246,47 @@ fn aligned_start(base: usize, used: usize, align: usize) -> Option<usize> {
 }
 
 impl Inner {
-    fn allocate(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        if layout.size() == 0 {
-            let ptr = NonNull::new(layout.align() as *mut u8).ok_or(AllocError)?;
-            return Ok(NonNull::slice_from_raw_parts(ptr, 0));
+    /// The region, reserved now if this is the first allocation needing one.
+    fn region(&mut self) -> Result<&mut GrowingRegion, AllocError> {
+        match &mut self.region {
+            | Some(region) => Ok(region),
+            | region @ None =>
+                Ok(region.insert(GrowingRegion::reserve(REGION_BYTES).map_err(|_| AllocError)?)),
         }
-        let start = aligned_start(
-            self.region.as_ptr().as_ptr() as usize,
-            self.used,
-            layout.align(),
-        )
-        .ok_or(AllocError)?;
-        let end = start.checked_add(layout.size()).ok_or(AllocError)?;
-        self.region.ensure_committed(end).map_err(|_| AllocError)?;
-        self.used = end;
-        // SAFETY: the checked offset lies within the reserved region and the
-        // entire allocation was committed before constructing this pointer.
-        let address = unsafe { self.region.as_ptr().as_ptr().add(start) };
+    }
+
+    /// A pointer to `start`, which must be below the committed prefix.
+    fn pointer_at(region: &GrowingRegion, start: usize) -> NonNull<u8> {
+        // SAFETY: callers commit through the end of the block at `start`
+        // before asking, so the offset lies inside the reservation. The base
+        // is taken after that commit, so it reaches the whole block.
+        let address = unsafe { region.as_ptr().as_ptr().add(start) };
         // SAFETY: adding an in-bounds offset to a non-null pointer remains
         // non-null.
-        let ptr = unsafe { NonNull::new_unchecked(address) };
+        unsafe { NonNull::new_unchecked(address) }
+    }
+
+    fn set_used(&mut self, used: usize) {
+        self.used = used;
+        self.high_water = self.high_water.max(used);
+    }
+
+    fn allocate(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        if layout.size() == 0 {
+            // A dangling pointer aligned for the layout, as `NonNull::dangling`
+            // is for a type.
+            let ptr =
+                NonNull::new(ptr::without_provenance_mut(layout.align())).ok_or(AllocError)?;
+            return Ok(NonNull::slice_from_raw_parts(ptr, 0));
+        }
+        let used = self.used;
+        let region = self.region()?;
+        let start = aligned_start(region.as_ptr().as_ptr() as usize, used, layout.align())
+            .ok_or(AllocError)?;
+        let end = start.checked_add(layout.size()).ok_or(AllocError)?;
+        region.ensure_committed(end).map_err(|_| AllocError)?;
+        let ptr = Self::pointer_at(region, start);
+        self.set_used(end);
         self.last = Some(Last {
             ptr,
             start,
@@ -252,22 +325,29 @@ unsafe impl Allocator for Bump {
     ) -> Result<NonNull<[u8]>, AllocError> {
         if old_layout.size() != 0 {
             let mut inner = self.inner.borrow_mut();
-            if let Some(last) = inner
+            let inner = &mut *inner;
+            // A latest block exists, so the region was reserved for it.
+            let latest = inner
                 .last
                 .filter(|last| last.ptr == ptr && old_layout.size() <= last.size)
-                .filter(|_| (ptr.as_ptr() as usize).is_multiple_of(new_layout.align()))
-                .filter(|last| {
-                    last.start
-                        .checked_add(new_layout.size())
-                        .is_some_and(|end| inner.region.ensure_committed(end).is_ok())
-                })
+                .filter(|_| (ptr.as_ptr() as usize).is_multiple_of(new_layout.align()));
+            if let Some(last) = latest
+                && let Some(region) = inner.region.as_mut()
+                && last
+                    .start
+                    .checked_add(new_layout.size())
+                    .is_some_and(|end| region.ensure_committed(end).is_ok())
             {
-                inner.used = last.start + new_layout.size();
+                // The same address, reached through the newly committed
+                // pages.
+                let grown = Inner::pointer_at(region, last.start);
+                inner.set_used(last.start + new_layout.size());
                 inner.last = Some(Last {
+                    ptr: grown,
                     size: new_layout.size(),
                     ..last
                 });
-                return Ok(NonNull::slice_from_raw_parts(ptr, new_layout.size()));
+                return Ok(NonNull::slice_from_raw_parts(grown, new_layout.size()));
             }
         }
         let new_ptr = self.allocate(new_layout)?;
@@ -306,6 +386,21 @@ unsafe impl Allocator for Bump {
     ) -> Result<NonNull<[u8]>, AllocError> {
         if !(ptr.as_ptr() as usize).is_multiple_of(new_layout.align()) {
             return Err(AllocError);
+        }
+        let mut inner = self.inner.borrow_mut();
+        // Shrinking the latest block returns its tail to the arena, so a
+        // vector sized by doubling can end up exact.
+        if let Some(last) = inner
+            .last
+            .filter(|last| last.ptr == ptr && old_layout.size() <= last.size)
+            .filter(|_| new_layout.size() != 0)
+        {
+            inner.used = last.start + new_layout.size();
+            inner.last = Some(Last {
+                size: new_layout.size(),
+                ..last
+            });
+            return Ok(NonNull::slice_from_raw_parts(ptr, new_layout.size()));
         }
         Ok(NonNull::slice_from_raw_parts(ptr, old_layout.size()))
     }
@@ -408,10 +503,21 @@ impl<'a, T> ArenaQueue<'a, T> {
         self.data.len() - self.read
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Only the queue's own tests ask this so far.")
+    )]
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Only the queue's own tests read it in order so far."
+        )
+    )]
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
         self.data[self.read..]
             .iter()
@@ -467,6 +573,10 @@ mod tests {
         Bump,
         RegionVec,
     };
+    use crate::util::vm::{
+        accounting,
+        faults,
+    };
 
     #[test]
     fn alignment_and_zero_sized_values() {
@@ -494,7 +604,7 @@ mod tests {
         for index in 0..10_000 {
             assert_eq!(*arena.alloc(index), index);
         }
-        assert!(arena.inner.borrow().region.committed() >= 40_000);
+        assert!(arena.committed() >= 40_000);
         assert_eq!(*first, 0xDEAD_BEEF);
         let after: *mut u64 = first;
         assert_eq!(after, address);
@@ -530,7 +640,7 @@ mod tests {
         assert_eq!(large[0], 7);
         assert_eq!(*first, 1);
         assert_eq!(first_address as usize, std::ptr::from_ref(first) as usize);
-        assert!(arena.inner.borrow().region.committed() >= 8 * 1024 * 1024);
+        assert!(arena.committed() >= 8 * 1024 * 1024);
     }
 
     #[test]
@@ -573,7 +683,7 @@ mod tests {
             .unwrap()
             .cast::<u8>();
         assert_eq!(grown, first);
-        assert!(arena.inner.borrow().region.committed() >= new.size());
+        assert!(arena.committed() >= new.size());
         // SAFETY: all reads lie in the live grown allocation; the new tail
         // was initialized by `grow_zeroed`.
         assert_eq!(unsafe { grown.as_ptr().read() }, 0xA5);
@@ -600,7 +710,7 @@ mod tests {
         unsafe {
             arena.deallocate(ptr, small);
         }
-        assert_eq!(arena.inner.borrow().used, 0);
+        assert_eq!(arena.used(), 0);
     }
 
     #[test]
@@ -613,23 +723,23 @@ mod tests {
         unsafe {
             arena.deallocate(first, layout);
         }
-        let used = arena.inner.borrow().used;
+        let used = arena.used();
         assert_eq!(used, 16);
         // SAFETY: second is the most recent live allocation.
         unsafe {
             arena.deallocate(second, layout);
         }
-        assert_eq!(arena.inner.borrow().used, 8);
+        assert_eq!(arena.used(), 8);
         let reused = arena.allocate(layout).unwrap().cast::<u8>();
         assert_eq!(reused, second);
         _ = arena
             .allocate(Layout::from_size_align(8 * 1024 * 1024, 8).unwrap())
             .unwrap();
-        let base = arena.inner.borrow().region.as_ptr();
-        let committed = arena.inner.borrow().region.committed();
+        let base = arena.inner.borrow().region.as_ref().unwrap().as_ptr();
+        let committed = arena.committed();
         arena.reset();
-        assert_eq!(arena.inner.borrow().used, 0);
-        assert_eq!(arena.inner.borrow().region.committed(), committed);
+        assert_eq!(arena.used(), 0);
+        assert_eq!(arena.committed(), committed);
         let after = arena.allocate(layout).unwrap().cast::<u8>();
         assert_eq!(after, base);
     }
@@ -701,5 +811,116 @@ mod tests {
         assert_eq!(values.as_ptr(), first);
         assert_eq!(values[0], 42);
         assert_eq!(values[100_000], 99_999);
+    }
+
+    #[test]
+    fn arenas_reserve_on_first_allocation() {
+        let before = accounting::live();
+        let mut arena = Bump::new();
+        let taken = std::mem::take(&mut arena);
+        let empty = Bump::default();
+        assert_eq!(accounting::live(), before);
+        _ = taken.alloc_slice_copy::<u8>(&[]);
+        assert_eq!(
+            accounting::live(),
+            before,
+            "zero-sized blocks need no region"
+        );
+        _ = taken.alloc(1_u8);
+        assert_eq!(accounting::live().regions, before.regions + 1);
+        drop((arena, taken, empty));
+        assert_eq!(accounting::live(), before);
+    }
+
+    #[test]
+    fn failed_reservation_is_an_allocation_error() {
+        let arena = Bump::new();
+        let layout = Layout::new::<u64>();
+        {
+            let _failing = faults::fail_reserves(1);
+            _ = arena.allocate(layout).unwrap_err();
+            let mut values = ArenaVec::<u8>::new_in(&arena);
+            // The failure was used up; this reserves normally.
+            values.try_reserve(16).unwrap();
+        }
+        let other = Bump::new();
+        let _failing = faults::fail_reserves(1);
+        let mut values = ArenaVec::<u8>::new_in(&other);
+        _ = values.try_reserve(16).unwrap_err();
+    }
+
+    #[test]
+    fn failed_commit_is_an_allocation_error_and_the_arena_recovers() {
+        let arena = Bump::new();
+        let first = arena.alloc(1_u64);
+        let committed = arena.committed();
+        let large = Layout::from_size_align(committed, 8).unwrap();
+        {
+            let _failing = faults::fail_commits(2);
+            _ = arena.allocate(large).unwrap_err();
+        }
+        assert_eq!(arena.committed(), committed);
+        assert_eq!(arena.used(), 8);
+        let next = arena.alloc(2_u64);
+        assert_eq!(
+            std::ptr::from_mut(next) as usize,
+            std::ptr::from_mut(first) as usize + 8
+        );
+        _ = arena.allocate(large).unwrap();
+    }
+
+    #[test]
+    fn grow_copies_when_the_in_place_commit_fails() {
+        let arena = Bump::new();
+        let old = Layout::from_size_align(16, 8).unwrap();
+        let block = arena.allocate(old).unwrap().cast::<u8>();
+        // SAFETY: the block has sixteen writable bytes.
+        unsafe {
+            block.as_ptr().write_bytes(0x3C, 16);
+        }
+        let new = Layout::from_size_align(arena.committed() + 1, 8).unwrap();
+        let _failing = faults::fail_commits(2);
+        // SAFETY: `block` is live and `new` is larger.
+        let grown = unsafe { arena.grow(block, old, new) }.unwrap().cast::<u8>();
+        assert_ne!(grown, block);
+        // SAFETY: the grown block starts with the sixteen copied bytes.
+        let copied = unsafe { std::slice::from_raw_parts(grown.as_ptr(), 16) };
+        assert!(copied.iter().all(|&byte| byte == 0x3C));
+    }
+
+    #[test]
+    fn requests_beyond_the_reservation_fail() {
+        let arena = Bump::new();
+        let too_large = Layout::from_size_align(super::REGION_BYTES + 1, 1).unwrap();
+        _ = arena.allocate(too_large).unwrap_err();
+        let mut values = ArenaVec::<u8>::new_in(&arena);
+        _ = values.try_reserve(super::REGION_BYTES + 1).unwrap_err();
+        values.push(1);
+        assert_eq!(values, [1]);
+    }
+
+    #[test]
+    fn shrinking_the_latest_block_returns_its_tail() {
+        let arena = Bump::new();
+        let mut values = ArenaVec::with_capacity_in(1000, &arena);
+        values.extend(0_u32..10);
+        values.shrink_to_fit();
+        let values = values.leak();
+        assert_eq!(arena.used(), 40);
+        let next = arena.alloc(7_u32);
+        assert_eq!(
+            std::ptr::from_mut(next) as usize,
+            values.as_ptr() as usize + 40
+        );
+        assert_eq!(arena.high_water(), 4000);
+    }
+
+    #[test]
+    fn high_water_survives_reset() {
+        let mut arena = Bump::new();
+        _ = arena.alloc_slice_copy(&[0_u8; 100]);
+        arena.reset();
+        _ = arena.alloc_slice_copy(&[0_u8; 10]);
+        assert_eq!(arena.high_water(), 100);
     }
 }
