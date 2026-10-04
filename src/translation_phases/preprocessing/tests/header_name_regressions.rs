@@ -420,7 +420,7 @@ fn a_backslash_before_the_first_quote_uses_the_quoted_header_extension() {
                     TranslationError::Preprocessing(PreprocessorError {
                         error_type: PreprocessorErrorType::HeaderNotFound { name, .. },
                         ..
-                    }) if name == "dir\\"
+                    }) if *name == "dir\\"
                 )));
                 assert!(!outcome.errors.iter().any(|error| {
                     matches!(error, TranslationError::PreprocessorTokenizining(_))

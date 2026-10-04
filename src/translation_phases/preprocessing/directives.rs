@@ -385,9 +385,9 @@ impl Preprocessor<'_> {
         let Some(header) = header else {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderNotFound {
-                    name: path.to_string_lossy().into_owned(),
+                    name: context.diagnostic_text(&path.to_string_lossy()),
                     is_system_header,
-                    searched,
+                    searched: context.diagnostic_paths(&searched),
                 },
                 source_vectors: operand,
             });
@@ -875,7 +875,9 @@ impl Preprocessor<'_> {
         }
         let Ok(header_string) = context.read_source_file(header_source_index).map_err(|e| {
             context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::HeaderFileInaccessible(e),
+                error_type:     PreprocessorErrorType::HeaderFileInaccessible(
+                    context.diagnostic_text(&e.to_string()),
+                ),
                 source_vectors: directive.source_vectors,
             });
         }) else {

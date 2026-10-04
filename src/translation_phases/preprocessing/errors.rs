@@ -7,8 +7,7 @@ use std::{
         Formatter,
         Result as FmtResult,
     },
-    io::Error as IoError,
-    path::PathBuf,
+    path::Path,
 };
 
 use super::{
@@ -348,11 +347,11 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// A variadic macro invocation that supplies no argument for `...`.
     MissingVariadicArgument(ExtensionPolicy),
     HeaderNotFound {
-        name:             String,
+        name:             &'tu str,
         is_system_header: bool,
-        searched:         Vec<PathBuf>,
+        searched:         &'tu [&'tu Path],
     },
-    HeaderFileInaccessible(IoError),
+    HeaderFileInaccessible(&'tu str),
     IncludeNestingLimitExceeded(usize),
     HashHashUsedOutsideOfMacro,
     CannotUseHashHashAfterFunctionLikeMacroCall,

@@ -155,6 +155,11 @@ impl<'tu> Context<'tu> {
         self.tu.alloc_slice_copy(values)
     }
 
+    pub(crate) fn diagnostic_paths(&self, paths: &[PathBuf]) -> &'tu [&'tu Path] {
+        self.tu
+            .alloc_slice_fill_iter(paths.iter().map(|path| Self::alloc_path(self.tu, path)))
+    }
+
     pub(crate) fn new(tu: &'tu Bump) -> Self {
         Self::with_configuration(tu, CompilerConfiguration::default())
     }
