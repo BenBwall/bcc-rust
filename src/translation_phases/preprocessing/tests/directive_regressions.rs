@@ -539,3 +539,65 @@ fn terminal_angle_include_stays_in_its_source_file() {
         );
     }
 }
+
+#[test]
+fn terminal_include_variants_stay_in_their_source_file() {
+    let headers = TemporaryHeaders::new();
+    headers.write("a.h", "from_header\n");
+    for found in [true, false] {
+        let name = if found { "a.h" } else { "missing.h" };
+        for (operand, prefix) in [
+            (format!("<{name}> "), String::new()),
+            (format!("\"{name}\" "), String::new()),
+            ("H".to_owned(), format!("#define H <{name}>\n")),
+        ] {
+            for nested in [false, true] {
+                let terminal = format!("{prefix}#include {operand}");
+                let source = if nested {
+                    headers.write("middle.h", &terminal);
+                    "#include \"middle.h\"\nparent_after\n".to_owned()
+                } else {
+                    terminal
+                };
+                let (tokens, mut context) = directive_tokens_with_system_directory(
+                    &source,
+                    &headers.0.join("main.c"),
+                    &headers.0,
+                );
+                let names: Vec<_> = tokens
+                    .iter()
+                    .map(|token| context.string_cache.at(token.contents))
+                    .collect();
+                let mut expected = if found { vec!["from_header"] } else { vec![] };
+                if nested {
+                    expected.push("parent_after");
+                }
+                assert_eq!(names, expected, "{operand:?}, nested={nested}");
+                let errors = context.take_pending_errors();
+                assert_eq!(
+                    errors
+                        .iter()
+                        .filter(|error| error.to_string().contains("no newline at end of file"))
+                        .count(),
+                    1,
+                    "{operand:?}, nested={nested}: {errors:#?}"
+                );
+                assert_eq!(
+                    errors
+                        .iter()
+                        .filter(|error| error.to_string().contains("cannot find header"))
+                        .count(),
+                    usize::from(!found),
+                    "{operand:?}, nested={nested}: {errors:#?}"
+                );
+                assert!(
+                    errors.iter().all(|error| {
+                        !error.to_string().contains("unexpected end of file")
+                            && !error.to_string().contains("extra tokens")
+                    }),
+                    "{operand:?}, nested={nested}: {errors:#?}"
+                );
+            }
+        }
+    }
+}

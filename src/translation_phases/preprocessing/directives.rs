@@ -629,6 +629,44 @@ impl Preprocessor {
         })
     }
 
+    /// Whether the remainder of this directive ends before another token.
+    /// Inspect the active expansion frames and the including file without
+    /// advancing them; reading through the file's end here could enter its
+    /// parent's next line before the include frame is pushed.
+    fn include_tail_is_empty(&self, context: &mut Context) -> bool {
+        let ignored = context.ignore_tokenizer_errors();
+        context.set_ignore_tokenizer_errors(true);
+        let mut empty = false;
+        'frames: for index in (0..self.tokenizer_stack.len()).rev() {
+            let frame = &self.tokenizer_stack[index];
+            let mut tokenizer = if index + 1 == self.tokenizer_stack.len() {
+                self.tokenizer.clone()
+            } else {
+                frame.tokenizer.clone()
+            };
+            loop {
+                match tokenizer.next_item(context) {
+                    | Some(token) if token.kind == PreprocessorTokenType::Whitespace => (),
+                    | Some(token) if token.kind == PreprocessorTokenType::Newline => {
+                        empty = true;
+                        break;
+                    },
+                    | Some(_) => break 'frames,
+                    | None if matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }) => {
+                        empty = true;
+                        break;
+                    },
+                    | None => break,
+                }
+            }
+            if empty || matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }) {
+                break;
+            }
+        }
+        context.set_ignore_tokenizer_errors(ignored);
+        empty
+    }
+
     fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
         let including_file = self.physical_source_file_index();
         let header = match self.peek_include_operand(context) {
@@ -642,6 +680,12 @@ impl Preprocessor {
             }
             return;
         };
+        if header.missing_delimiter.is_none()
+            && !self.current_is_newline
+            && self.include_tail_is_empty(context)
+        {
+            self.current_is_newline = true;
+        }
         if let Some((delimiter, source_vectors)) = header.missing_delimiter {
             context.preprocessor_error(PreprocessorError {
                 error_type: PreprocessorErrorType::UnterminatedHeaderName(delimiter),
