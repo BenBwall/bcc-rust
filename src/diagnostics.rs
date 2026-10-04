@@ -350,6 +350,15 @@ impl Renderer {
         }
     }
 
+    fn paint_into(&self, out: &mut ArenaString<'_>, text: &str, style: Style) {
+        match self.color {
+            | ColorChoice::Plain => out.push_str(text),
+            | ColorChoice::Ansi => {
+                let _ = write!(out, "{}", text.style(style));
+            },
+        }
+    }
+
     fn severity_style(severity: ErrorSeverity) -> Style {
         match severity {
             | ErrorSeverity::Error => Style::new().bright_red().bold(),
@@ -608,11 +617,12 @@ impl Renderer {
                     Self::gutter_style()
                 }
             };
-            let mut underline = String::new();
-            let mut run: Option<(bool, String)> = None;
-            let flush = |run: &mut Option<(bool, String)>, underline: &mut String| {
+            let mut underline = ArenaString::new_in(scratch);
+            let mut run: Option<(bool, ArenaString<'_>)> = None;
+            let flush = |run: &mut Option<(bool, ArenaString<'_>)>,
+                         underline: &mut ArenaString<'_>| {
                 if let Some((primary, text)) = run.take() {
-                    underline.push_str(&self.paint(&text, underline_style(primary)));
+                    self.paint_into(underline, &text, underline_style(primary));
                 }
             };
             for cell in &cells {
@@ -625,7 +635,9 @@ impl Renderer {
                         text.push(if *primary { '^' } else { '-' }),
                     | (Some(primary), _) => {
                         flush(&mut run, &mut underline);
-                        run = Some((*primary, String::from(if *primary { '^' } else { '-' })));
+                        let mut text = ArenaString::new_in(scratch);
+                        text.push(if *primary { '^' } else { '-' });
+                        run = Some((*primary, text));
                     },
                 }
             }
@@ -649,11 +661,13 @@ impl Renderer {
                     // Remaining labels hang below their marks, rightmost first.
                     for (index, &(column, primary, label)) in rest.iter().enumerate().rev() {
                         let connectors = |upto: usize| {
-                            let mut row = String::new();
+                            let mut row = ArenaString::new_in(scratch);
                             let mut width = 0;
                             for &(column, primary, _) in &rest[..upto] {
-                                row.push_str(&" ".repeat(column - width));
-                                row.push_str(&self.paint("|", underline_style(primary)));
+                                for _ in width..column {
+                                    row.push(' ');
+                                }
+                                self.paint_into(&mut row, "|", underline_style(primary));
                                 width = column + 1;
                             }
                             (row, width)
@@ -661,8 +675,10 @@ impl Renderer {
                         let (row, _) = connectors(index + 1);
                         let _ = writeln!(out, "{pad} {bar} {row}");
                         let (mut row, width) = connectors(index);
-                        row.push_str(&" ".repeat(column - width));
-                        row.push_str(&self.paint(label, underline_style(primary)));
+                        for _ in width..column {
+                            row.push(' ');
+                        }
+                        self.paint_into(&mut row, label, underline_style(primary));
                         let _ = writeln!(out, "{pad} {bar} {row}");
                     }
                 },
