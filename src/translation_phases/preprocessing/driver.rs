@@ -134,7 +134,7 @@ pub(super) fn string_literal_spelling(value: &str) -> String {
 )]
 impl Preprocessor<'_> {
     pub(super) fn expansion_end(&self) -> Option<SourceVector> {
-        for frame in self.tokenizer_stack.iter().rev() {
+        for frame in self.state.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::ObjectLikeMacroInvocation { invocation_end, .. }
                 | TokenizerFrameType::FunctionLikeMacroInvocation { invocation_end, .. } =>
@@ -148,7 +148,7 @@ impl Preprocessor<'_> {
     }
 
     fn invocation_location(&self, context: &Context<'_>, token: PreprocessorToken) -> SourceVector {
-        for frame in self.tokenizer_stack.iter().rev() {
+        for frame in self.state.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
                 | TokenizerFrameType::FunctionLikeMacroInvocation { invocation, .. } =>
@@ -166,7 +166,8 @@ impl Preprocessor<'_> {
     }
 
     pub(super) fn physical_source_file_index(&self) -> u32 {
-        self.tokenizer_stack
+        self.state
+            .tokenizer_stack
             .iter()
             .rev()
             .find_map(|frame| match frame.frame_type {
@@ -231,13 +232,13 @@ impl Preprocessor<'_> {
         _context: &mut Context<'_>,
         frame: TokenizerFrame,
     ) {
-        self.tokenizer_stack.last_mut().unwrap().tokenizer = take(&mut self.tokenizer);
+        self.state.tokenizer_stack.last_mut().unwrap().tokenizer = take(&mut self.tokenizer);
         self.tokenizer = frame.tokenizer.clone();
-        self.tokenizer_stack.push(frame);
+        self.state.tokenizer_stack.push(frame);
     }
 
     pub(super) fn pop_tokenizer_frame(&mut self, context: &mut Context<'_>) {
-        let frame = self.tokenizer_stack.pop();
+        let frame = self.state.tokenizer_stack.pop();
         if let Some(TokenizerFrame {
             frame_type:
                 TokenizerFrameType::SourceFile {
@@ -249,8 +250,8 @@ impl Preprocessor<'_> {
             // File-local openings are owned copies, so their provenance
             // survives preprocessor-arena compaction. Macro frame pops
             // leave conditional state untouched.
-            let base = conditional_base.min(self.open_conditionals.len());
-            for vectors in self.open_conditionals.split_off(base) {
+            let base = conditional_base.min(self.state.open_conditionals.len());
+            for vectors in self.state.open_conditionals.split_off(base) {
                 let source_vectors = context.push_source_vectors(&vectors.source);
                 context.preprocessor_error(PreprocessorError {
                     error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
@@ -258,7 +259,7 @@ impl Preprocessor<'_> {
                 });
             }
         }
-        if let Some(last) = self.tokenizer_stack.last() {
+        if let Some(last) = self.state.tokenizer_stack.last() {
             self.tokenizer = last.tokenizer.clone();
         }
     }
@@ -411,7 +412,7 @@ impl Preprocessor<'_> {
                 'merge: loop {
                     let next_is_end = self.macro_argument_is_at_end(context);
                     let argument_continues = matches!(
-                        self.tokenizer_stack.last(),
+                        self.state.tokenizer_stack.last(),
                         Some(TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
                             ..
@@ -494,6 +495,7 @@ impl Preprocessor<'_> {
                 break 'base Some(token);
             }
             if let Some(md) = self
+                .state
                 .macro_definitions
                 .get(&token.identifier_id(context))
                 .cloned()
@@ -523,7 +525,7 @@ impl Preprocessor<'_> {
                         is_variadic,
                     } => {
                         if !matches!(
-                            self.tokenizer_stack.last().map(|f| &f.frame_type),
+                            self.state.tokenizer_stack.last().map(|f| &f.frame_type),
                             Some(TokenizerFrameType::SourceFile { .. })
                         ) {
                             let Some((arguments, invocation_end)) = self.capture_cross_frame_call(
@@ -559,7 +561,10 @@ impl Preprocessor<'_> {
                         // the frame and must not expose the definition's
                         // following source lines to this lookahead.
                         let source_file = matches!(
-                            self.tokenizer_stack.last().map(|frame| &frame.frame_type),
+                            self.state
+                                .tokenizer_stack
+                                .last()
+                                .map(|frame| &frame.frame_type),
                             Some(TokenizerFrameType::SourceFile { .. })
                         );
                         loop {
@@ -853,6 +858,7 @@ impl Preprocessor<'_> {
                         | name @ ("__DATE__" | "__TIME__") => {
                             let is_date = name == "__DATE__";
                             let timestamp = self
+                                .state
                                 .translation_timestamp
                                 .get_or_insert_with(TranslationTimestamp::now);
                             let spelling = string_literal_spelling(if is_date {

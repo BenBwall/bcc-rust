@@ -394,7 +394,7 @@ impl Preprocessor<'_> {
             return None;
         };
         let source_file_index = context.intern_source_file(&header);
-        if self.once_set.contains(&source_file_index) {
+        if self.state.once_set.contains(&source_file_index) {
             None
         } else {
             Some(source_file_index)
@@ -406,7 +406,10 @@ impl Preprocessor<'_> {
     fn peek_include_operand(&mut self, context: &mut Context<'_>) -> IncludeOperand {
         // Only a source file's own text can be read between the delimiters.
         if !matches!(
-            self.tokenizer_stack.last().map(|frame| &frame.frame_type),
+            self.state
+                .tokenizer_stack
+                .last()
+                .map(|frame| &frame.frame_type),
             Some(TokenizerFrameType::SourceFile { .. })
         ) {
             return IncludeOperand::Other;
@@ -742,9 +745,9 @@ impl Preprocessor<'_> {
         let ignored = context.ignore_tokenizer_errors();
         context.set_ignore_tokenizer_errors(true);
         let mut empty = false;
-        'frames: for index in (0..self.tokenizer_stack.len()).rev() {
-            let frame = &self.tokenizer_stack[index];
-            let mut tokenizer = if index + 1 == self.tokenizer_stack.len() {
+        'frames: for index in (0..self.state.tokenizer_stack.len()).rev() {
+            let frame = &self.state.tokenizer_stack[index];
+            let mut tokenizer = if index + 1 == self.state.tokenizer_stack.len() {
                 self.tokenizer.clone()
             } else {
                 frame.tokenizer.clone()
@@ -860,6 +863,7 @@ impl Preprocessor<'_> {
         // The main source contributes one frame. Macro frames and headers
         // whose processing has finished do not consume the nesting limit.
         let source_depth = self
+            .state
             .tokenizer_stack
             .iter()
             .filter(|frame| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))
@@ -888,7 +892,7 @@ impl Preprocessor<'_> {
             context,
             TokenizerFrame {
                 frame_type: TokenizerFrameType::SourceFile {
-                    conditional_base:           self.open_conditionals.len(),
+                    conditional_base:           self.state.open_conditionals.len(),
                     physical_source_file_index: header_source_index,
                 },
                 tokenizer,
@@ -916,6 +920,7 @@ impl Preprocessor<'_> {
             return;
         };
         let old_definition = self
+            .state
             .macro_definitions
             .get(&name.identifier_id(context))
             .cloned();
@@ -1037,7 +1042,7 @@ impl Preprocessor<'_> {
                 }
             }
             let tokenizer = self.tokenizer.clone();
-            drop(self.macro_definitions.insert(
+            drop(self.state.macro_definitions.insert(
                 name.identifier_id(context),
                 MacroDefinition::FunctionLike {
                     tokenizer,
@@ -1061,7 +1066,7 @@ impl Preprocessor<'_> {
                     source_vectors: name.source_vectors,
                 });
             }
-            drop(self.macro_definitions.insert(
+            drop(self.state.macro_definitions.insert(
                 name.identifier_id(context),
                 MacroDefinition::ObjectLike {
                     tokenizer: tokenizer.clone(),
@@ -1073,7 +1078,9 @@ impl Preprocessor<'_> {
             // Compare replacement lists body to body, and parameter lists
             // separately (C99 §6.10.3p2).
             let (mut new_tokenizer, parameters_match) = match (
-                self.macro_definitions.get(&name.identifier_id(context)),
+                self.state
+                    .macro_definitions
+                    .get(&name.identifier_id(context)),
                 &old_definition,
             ) {
                 | (
@@ -1184,7 +1191,11 @@ impl Preprocessor<'_> {
             self.skip_until_newline(context);
             return;
         };
-        drop(self.macro_definitions.remove(&name.identifier_id(context)));
+        drop(
+            self.state
+                .macro_definitions
+                .remove(&name.identifier_id(context)),
+        );
         if self
             .expect_token_from_previous_phase::<true>(
                 context,
@@ -1386,7 +1397,10 @@ impl Preprocessor<'_> {
                                     source_vectors: token.source_vectors,
                                 });
                             }
-                            _ = self.once_set.insert(self.physical_source_file_index());
+                            _ = self
+                                .state
+                                .once_set
+                                .insert(self.physical_source_file_index());
                             match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     consumed_newline = true;

@@ -93,42 +93,46 @@ enum OutputPurpose {
     Parsing,
 }
 
+/// State retained while replacement-list and argument expansions unwind.
+#[derive(Debug)]
+struct PreprocessorState {
+    once_set:              HashSet<u32>,
+    macro_definitions:     HashMap<StringCacheId, MacroDefinition>,
+    /// Source and include frames remain between expansions. Macro frames
+    /// share this stack until the current expansion finishes.
+    tokenizer_stack:       Vec<TokenizerFrame>,
+    /// Provenance of open conditionals is owned because token iteration
+    /// compacts temporary preprocessor provenance while groups remain open.
+    open_conditionals:     Vec<ConditionalGroup>,
+    /// Fixed on first use so every `__DATE__` and `__TIME__` agrees.
+    translation_timestamp: Option<TranslationTimestamp>,
+}
+
 #[derive(Debug)]
 pub(crate) struct Preprocessor<'tu> {
-    pub(crate) tokenizer:       TokenSource,
-    pub(crate) tokenizer_stack: Vec<TokenizerFrame>,
+    state: PreprocessorState,
+    pub(crate) tokenizer: TokenSource,
     pub(crate) hash_hash_stack: Vec<HashHash>,
-    once_set:                   HashSet<u32>,
-    macro_definitions:          HashMap<StringCacheId, MacroDefinition>,
-    current_is_newline:         bool,
+    current_is_newline: bool,
     /// Collect use-site hint metadata only when a language parser will consume
     /// the output.
-    output_purpose:             OutputPurpose,
-    last_was_newline:           bool,
-    /// Provenance of the `if`, `ifdef`, or `ifndef` name of each conditional
-    /// directive still waiting for its `#endif`, outermost first. It is owned
-    /// rather than an arena range because token iteration compacts the
-    /// preprocessor arena while a conditional remains open.
-    open_conditionals:          Vec<ConditionalGroup>,
-
+    output_purpose: OutputPurpose,
+    last_was_newline: bool,
     generate_placeholders: bool,
     /// The tokenizer-stack depth of the `#` or `##` operand being replaced,
     /// at which reading stops when that operand ends, or 0 outside such
     /// replacement.
-    operand_fence:         usize,
+    operand_fence: usize,
     /// Argument prescan stops here without suppressing expansion within it.
-    expansion_fence:       usize,
-    empty_arguments:       std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
+    expansion_fence: usize,
+    empty_arguments: std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
     empty_disabled_macros: std::rc::Rc<[StringCacheId]>,
-    expression_parser:     PreprocessorExpressionParser,
-    pending_parser_token:  Option<Token>,
+    expression_parser: PreprocessorExpressionParser,
+    pending_parser_token: Option<Token>,
     pending_parser_errors: Vec<TranslationError<'tu>>,
     /// Parser-supplied provenance budget, checked within string concatenation
     /// as well as between completed output tokens.
-    source_segment_limit:  usize,
-    /// Fixed on first use so every `__DATE__` and `__TIME__` in one
-    /// translation unit agrees (C99 §6.10.8p1).
-    translation_timestamp: Option<TranslationTimestamp>,
+    source_segment_limit: usize,
 }
 
 impl GetPosition for Preprocessor<'_> {
@@ -226,20 +230,23 @@ impl<'tu> Preprocessor<'tu> {
             context.record_source_text(source_file_index, source);
         }
         Self {
-            tokenizer_stack: vec![TokenizerFrame {
-                frame_type: TokenizerFrameType::SourceFile {
-                    conditional_base:           0,
-                    physical_source_file_index: source_file_index,
-                },
-                tokenizer:  tokenizer.clone(),
-            }],
             hash_hash_stack: Vec::new(),
-            once_set: HashSet::default(),
+            state: PreprocessorState {
+                once_set: HashSet::default(),
+                macro_definitions,
+                tokenizer_stack: vec![TokenizerFrame {
+                    frame_type: TokenizerFrameType::SourceFile {
+                        conditional_base:           0,
+                        physical_source_file_index: source_file_index,
+                    },
+                    tokenizer:  tokenizer.clone(),
+                }],
+                open_conditionals: Vec::new(),
+                translation_timestamp: None,
+            },
             tokenizer,
-            macro_definitions,
             last_was_newline: true,
             current_is_newline: true,
-            open_conditionals: Vec::new(),
             generate_placeholders: false,
             operand_fence: 0,
             expansion_fence: 0,
@@ -250,7 +257,6 @@ impl<'tu> Preprocessor<'tu> {
             pending_parser_token: None,
             pending_parser_errors: Vec::new(),
             source_segment_limit: usize::MAX,
-            translation_timestamp: None,
         }
     }
 
@@ -261,7 +267,7 @@ impl<'tu> Preprocessor<'tu> {
         }
         loop {
             let Some(token) = self.next_preprocessor_token::<true>(context) else {
-                for vectors in take(&mut self.open_conditionals) {
+                for vectors in take(&mut self.state.open_conditionals) {
                     let source_vectors = context.push_source_vectors(&vectors.source);
                     context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,

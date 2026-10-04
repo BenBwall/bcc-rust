@@ -1263,6 +1263,7 @@ impl Preprocessor<'_> {
         };
         if ident_or_opening_paren.kind.is_identifier() {
             let is_defined = self
+                .state
                 .macro_definitions
                 .contains_key(&ident_or_opening_paren.identifier_id(context));
             self.expression_parser
@@ -1310,6 +1311,7 @@ impl Preprocessor<'_> {
             "parsing defined operator",
         );
         let is_defined = self
+            .state
             .macro_definitions
             .contains_key(&ident.identifier_id(context));
         self.expression_parser

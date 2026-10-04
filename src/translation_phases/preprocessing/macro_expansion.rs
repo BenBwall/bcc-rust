@@ -89,7 +89,7 @@ struct MacroCallCursor {
 
 impl MacroCallCursor {
     fn new(preprocessor: &Preprocessor<'_>) -> Self {
-        let mut frames = preprocessor.tokenizer_stack.clone();
+        let mut frames = preprocessor.state.tokenizer_stack.clone();
         frames.last_mut().unwrap().tokenizer = preprocessor.tokenizer.clone();
         Self {
             index: frames.len().checked_sub(1),
@@ -265,7 +265,7 @@ impl MacroCallCursor {
             );
         }
         preprocessor.tokenizer = self.frames.last().unwrap().tokenizer.clone();
-        preprocessor.tokenizer_stack = self.frames;
+        preprocessor.state.tokenizer_stack = self.frames;
     }
 }
 
@@ -403,7 +403,12 @@ impl Preprocessor<'_> {
         &self,
         _context: &Context<'_>,
     ) -> Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>> {
-        match self.tokenizer_stack.last().map(|frame| &frame.frame_type) {
+        match self
+            .state
+            .tokenizer_stack
+            .last()
+            .map(|frame| &frame.frame_type)
+        {
             // Argument tokens belong to the invocation's caller. Looking them
             // up in the callee's map can make a same-named parameter expand itself.
             | Some(TokenizerFrameType::FunctionLikeMacroArgument { argument, .. }) =>
@@ -423,7 +428,7 @@ impl Preprocessor<'_> {
                     ..
                 },
             ..
-        }) = self.tokenizer_stack.last()
+        }) = self.state.tokenizer_stack.last()
         else {
             return false;
         };
@@ -451,7 +456,7 @@ impl Preprocessor<'_> {
     }
 
     pub(super) fn macro_is_disabled(&self, name: StringCacheId) -> bool {
-        for frame in self.tokenizer_stack.iter().rev() {
+        for frame in self.state.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } => {
                     return argument.disabled_macros.contains(&name);
@@ -467,7 +472,7 @@ impl Preprocessor<'_> {
     }
 
     pub(super) fn disabled_macros(&self) -> Rc<[StringCacheId]> {
-        if let Some(frame) = self.tokenizer_stack.last() {
+        if let Some(frame) = self.state.tokenizer_stack.last() {
             match &frame.frame_type {
                 | TokenizerFrameType::SourceFile { .. } =>
                     return self.empty_disabled_macros.clone(),
@@ -477,7 +482,7 @@ impl Preprocessor<'_> {
             }
         }
         let mut names = Vec::new();
-        for frame in self.tokenizer_stack.iter().rev() {
+        for frame in self.state.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } => {
                     names.extend_from_slice(&argument.disabled_macros);
@@ -554,7 +559,7 @@ impl Preprocessor<'_> {
     /// Whether the token just read belongs to the `#` or `##` operand being
     /// replaced rather than to an argument substituted into it.
     pub(super) fn is_reading_operand(&self) -> bool {
-        self.operand_fence != 0 && self.tokenizer_stack.len() == self.operand_fence
+        self.operand_fence != 0 && self.state.tokenizer_stack.len() == self.operand_fence
     }
 
     /// Returns the frame that reads `token`'s argument as a `##` operand.
@@ -629,7 +634,7 @@ impl Preprocessor<'_> {
                 tokenizer:  argument.tokenizer.clone(),
             },
         );
-        let depth = self.tokenizer_stack.len();
+        let depth = self.state.tokenizer_stack.len();
         let fence = replace(&mut self.operand_fence, if expand { 0 } else { depth });
         let expansion_fence = replace(&mut self.expansion_fence, depth);
         let mut tokens = Vec::new();
@@ -781,7 +786,7 @@ impl Preprocessor<'_> {
                 source_vectors: token.source_vectors,
             };
         };
-        let argument = match self.tokenizer_stack.last().unwrap() {
+        let argument = match self.state.tokenizer_stack.last().unwrap() {
             | TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. },
                 ..
@@ -1239,11 +1244,11 @@ impl Preprocessor<'_> {
         context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
         'base: loop {
-            if self.tokenizer_stack.is_empty() {
+            if self.state.tokenizer_stack.is_empty() {
                 std::hint::cold_path();
                 break 'base None;
             }
-            if self.tokenizer_stack.len() < self.operand_fence.max(self.expansion_fence) {
+            if self.state.tokenizer_stack.len() < self.operand_fence.max(self.expansion_fence) {
                 break 'base None;
             }
             match self.tokenizer.next_item(context) {
@@ -1254,7 +1259,7 @@ impl Preprocessor<'_> {
                     continue 'base;
                 },
                 | Some(mut token) => {
-                    match self.tokenizer_stack.last_mut().unwrap() {
+                    match self.state.tokenizer_stack.last_mut().unwrap() {
                         | TokenizerFrame {
                             frame_type:
                                 TokenizerFrameType::FunctionLikeMacroInvocation { .. }
@@ -1297,7 +1302,7 @@ impl Preprocessor<'_> {
                                             ..
                                         },
                                     ..
-                                } = self.tokenizer_stack.last_mut().unwrap()
+                                } = self.state.tokenizer_stack.last_mut().unwrap()
                                 else {
                                     unreachable!();
                                 };
@@ -1335,7 +1340,7 @@ impl Preprocessor<'_> {
                     // A replayed operand ends with its tokens, and an empty
                     // one is a placeholder like any other (C99 §6.10.3.3p2).
                     let is_empty_replay = matches!(
-                        self.tokenizer_stack.last(),
+                        self.state.tokenizer_stack.last(),
                         Some(TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
                                 paren_depth: None,
@@ -1391,7 +1396,7 @@ impl Preprocessor<'_> {
 
     pub(super) fn current_is_header(&self, _context: &Context<'_>) -> bool {
         // The first in the tokenizer stack is the original source file.
-        for frame in self.tokenizer_stack.iter().skip(1).rev() {
+        for frame in self.state.tokenizer_stack.iter().skip(1).rev() {
             match frame.frame_type {
                 | TokenizerFrameType::SourceFile { .. } => return true,
                 | _ => (),
@@ -1409,7 +1414,7 @@ impl Preprocessor<'_> {
         match token.kind {
             | PreprocessorTokenType::Hash => {
                 if matches!(
-                    self.tokenizer_stack.last(),
+                    self.state.tokenizer_stack.last(),
                     Some(TokenizerFrame {
                         frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
                         ..
@@ -1432,7 +1437,11 @@ impl Preprocessor<'_> {
     ) -> Option<(PreprocessorToken, bool)> {
         'base: loop {
             let lhs = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context)?;
-            let replacement_list = match self.tokenizer_stack.last().map(|frame| &frame.frame_type)
+            let replacement_list = match self
+                .state
+                .tokenizer_stack
+                .last()
+                .map(|frame| &frame.frame_type)
             {
                 | Some(
                     TokenizerFrameType::FunctionLikeMacroInvocation { .. }

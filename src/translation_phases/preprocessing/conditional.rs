@@ -53,7 +53,8 @@ impl Preprocessor<'_> {
     /// Physical source frames own conditional groups. Presumed filenames
     /// changed by #line do not change the frame's boundary.
     fn current_file_conditional_base(&self) -> usize {
-        self.tokenizer_stack
+        self.state
+            .tokenizer_stack
             .iter()
             .rev()
             .find_map(|frame| match &frame.frame_type {
@@ -78,9 +79,9 @@ impl Preprocessor<'_> {
         mut at_line_start: bool,
         mode: SkipMode,
     ) {
-        let depth = self.open_conditionals.len();
+        let depth = self.state.open_conditionals.len();
         context.set_ignore_tokenizer_errors(true);
-        'lines: while depth > 0 && self.open_conditionals.len() >= depth {
+        'lines: while depth > 0 && self.state.open_conditionals.len() >= depth {
             if !at_line_start {
                 loop {
                     match self.tokenizer.next_item(context) {
@@ -114,13 +115,14 @@ impl Preprocessor<'_> {
                 | PreprocessorTokenType::UniversalIdentifier => {},
                 | _ => continue 'lines,
             }
-            let innermost = self.open_conditionals.len() == depth;
+            let innermost = self.state.open_conditionals.len() == depth;
             match context.string_cache.at(name.contents) {
                 | "if" | "ifdef" | "ifndef" => self
+                    .state
                     .open_conditionals
                     .push(ConditionalGroup::new(context, name)),
                 | "endif" => {
-                    drop(self.open_conditionals.pop());
+                    drop(self.state.open_conditionals.pop());
                     if innermost {
                         context.set_ignore_tokenizer_errors(false);
                         self.finish_conditional_directive(context, "endif");
@@ -172,7 +174,8 @@ impl Preprocessor<'_> {
         context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) {
-        self.open_conditionals
+        self.state
+            .open_conditionals
             .push(ConditionalGroup::new(context, directive));
         if self
             .eval_preprocessor_expression(context, PreprocessorErrorType::NoConditionInIfDirective)
@@ -216,7 +219,7 @@ impl Preprocessor<'_> {
         directive: PreprocessorToken,
         unmatched_error: PreprocessorErrorType<'tu>,
     ) {
-        if self.open_conditionals.len() <= self.current_file_conditional_base() {
+        if self.state.open_conditionals.len() <= self.current_file_conditional_base() {
             context.preprocessor_error(PreprocessorError {
                 error_type:     unmatched_error,
                 source_vectors: directive.source_vectors,
@@ -238,7 +241,7 @@ impl Preprocessor<'_> {
         directive: PreprocessorToken,
         is_else: bool,
     ) -> bool {
-        let Some(group) = self.open_conditionals.last_mut() else {
+        let Some(group) = self.state.open_conditionals.last_mut() else {
             return false;
         };
         if group.saw_else {
@@ -275,13 +278,13 @@ impl Preprocessor<'_> {
         context: &mut Context<'_>,
         directive: PreprocessorToken,
     ) {
-        if self.open_conditionals.len() <= self.current_file_conditional_base() {
+        if self.state.open_conditionals.len() <= self.current_file_conditional_base() {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
                 source_vectors: directive.source_vectors,
             });
         } else {
-            drop(self.open_conditionals.pop());
+            drop(self.state.open_conditionals.pop());
         }
         self.finish_conditional_directive(context, "endif");
     }
@@ -310,7 +313,8 @@ impl Preprocessor<'_> {
         directive: PreprocessorToken,
         wants_defined: bool,
     ) {
-        self.open_conditionals
+        self.state
+            .open_conditionals
             .push(ConditionalGroup::new(context, directive));
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             context,
@@ -355,6 +359,7 @@ impl Preprocessor<'_> {
             self.skip_until_newline(context);
         }
         if self
+            .state
             .macro_definitions
             .contains_key(&name.identifier_id(context))
             == wants_defined

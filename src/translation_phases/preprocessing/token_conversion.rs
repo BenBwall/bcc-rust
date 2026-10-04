@@ -694,7 +694,7 @@ impl<'tu> Preprocessor<'tu> {
             | PreprocessorTokenType::Newline => return None,
             | PreprocessorTokenType::Hash => {
                 if matches!(
-                    self.tokenizer_stack.last(),
+                    self.state.tokenizer_stack.last(),
                     Some(TokenizerFrame {
                         frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
                         ..
@@ -837,7 +837,7 @@ impl<'tu> Preprocessor<'tu> {
                 Self::build_operator_token(token, OperatorTokenType::Ellipsis),
             | PreprocessorTokenType::HashHash => {
                 let error_type = if matches!(
-                    self.tokenizer_stack.last(),
+                    self.state.tokenizer_stack.last(),
                     Some(TokenizerFrame {
                         frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. }
                             | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
