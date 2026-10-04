@@ -154,10 +154,10 @@ impl GrowingRegion {
         self.committed
     }
 
-    /// Commits at least the first `needed` bytes. Growth is geometric, so a
-    /// region that grows a little at a time commits rarely. If the geometric
-    /// step cannot be committed, only the pages `needed` reaches are tried
-    /// before reporting failure.
+    /// Commits at least the first `needed` bytes, plus at most one commit
+    /// step beyond them, so commit follows what callers write rather than
+    /// what they might write. If the step cannot be committed, only the pages
+    /// `needed` reaches are tried before reporting failure.
     pub(crate) fn ensure_committed(&mut self, needed: usize) -> io::Result<()> {
         let page = self.region.page;
         let target = next_commit(self.committed, needed, self.region.reserved(), page)
@@ -216,8 +216,18 @@ fn committed_view(base: NonNull<u8>, committed: usize) -> NonNull<u8> {
 }
 
 /// The first commit step: small, so a compilation touching a dozen regions
-/// commits under a mebibyte. Steps double from here.
+/// commits under a mebibyte. Steps double from here up to
+/// [`MAX_COMMIT_STEP`].
 const FIRST_COMMIT_STEP: usize = 64 * 1024;
+
+/// The most a region commits beyond what it was asked for. Commit follows
+/// the write position, so this bounds each region's untouched but committed
+/// tail. At 1 MiB (256 pages of 4 KiB) one commit call is amortized over
+/// hundreds of first-touch page faults, which cost far more, and the
+/// ten-odd regions of a compilation together leave at most about 10 MiB
+/// committed ahead of use. Doubling without a cap left up to half of a large
+/// region committed but never written.
+pub(crate) const MAX_COMMIT_STEP: usize = 1024 * 1024;
 
 /// Pure commit-charge bookkeeping, also exercised under Miri without OS calls.
 fn next_commit(committed: usize, needed: usize, reserved: usize, page: usize) -> Option<usize> {
@@ -227,7 +237,9 @@ fn next_commit(committed: usize, needed: usize, reserved: usize, page: usize) ->
     if needed <= committed {
         return Some(committed);
     }
-    let step = committed.max(FIRST_COMMIT_STEP).min(reserved - committed);
+    let step = committed
+        .clamp(FIRST_COMMIT_STEP, MAX_COMMIT_STEP)
+        .min(reserved - committed);
     let target = committed.checked_add(step)?.max(needed);
     round_up(target, page).filter(|&rounded| rounded <= reserved)
 }
@@ -586,6 +598,30 @@ mod tests {
         assert_eq!(
             next_commit(4 * 1024 * 1024, 9 * 1024 * 1024, reserved, 4096),
             Some(9 * 1024 * 1024)
+        );
+        // Doubling stops at the largest step: a large region commits one
+        // step ahead of what it is asked for, not twice its size.
+        assert_eq!(
+            next_commit(MAX_COMMIT_STEP / 2, MAX_COMMIT_STEP / 2 + 1, reserved, 4096),
+            Some(MAX_COMMIT_STEP)
+        );
+        assert_eq!(
+            next_commit(
+                64 * MAX_COMMIT_STEP,
+                64 * MAX_COMMIT_STEP + 1,
+                reserved,
+                4096
+            ),
+            Some(65 * MAX_COMMIT_STEP)
+        );
+        assert_eq!(
+            next_commit(
+                64 * MAX_COMMIT_STEP,
+                70 * MAX_COMMIT_STEP + 1,
+                reserved,
+                4096
+            ),
+            Some(70 * MAX_COMMIT_STEP + 4096)
         );
         assert_eq!(
             next_commit(reserved - 4096, reserved, reserved, 4096),
