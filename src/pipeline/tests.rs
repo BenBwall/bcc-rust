@@ -406,3 +406,121 @@ fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
     );
     assert!(parameters[0].declarator.is_some());
 }
+
+/// The regions and commit one compilation holds at its peak on this thread,
+/// rendering every diagnostic as the CLI does.
+fn compilation_peak(source: &str, path: &Path) -> crate::util::vm::accounting::Usage {
+    use crate::util::vm::accounting;
+    let before = accounting::live();
+    accounting::reset_peak();
+    {
+        let tu = Bump::new();
+        let mut context = Context::new(&tu);
+        let source = tu.alloc_str(source);
+        let _unit = parse_translation_unit(&mut context, path, source, &[], &[]);
+        let mut renderer = Renderer::new(RenderColor::Plain);
+        for error in context.take_pending_errors() {
+            let location = error.source_vectors(&mut context);
+            drop(renderer.render(&error.to_diagnostic(&context, location), &context));
+        }
+    }
+    assert_eq!(
+        accounting::live(),
+        before,
+        "a compilation releases its regions"
+    );
+    let peak = accounting::peak();
+    accounting::Usage {
+        regions:   peak.regions - before.regions,
+        reserved:  peak.reserved - before.reserved,
+        committed: peak.committed - before.committed,
+    }
+}
+
+/// A directory with a header that includes itself until the nesting limit.
+struct RecursiveHeader(PathBuf);
+
+impl RecursiveHeader {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "bcc-region-budget-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        drop(std::fs::remove_dir_all(&directory));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("loop.h"),
+            "#include \"loop.h\"\nint header_after;\n",
+        )
+        .unwrap();
+        Self(directory)
+    }
+
+    fn main(&self) -> PathBuf {
+        self.0.join("main.c")
+    }
+}
+
+impl Drop for RecursiveHeader {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.0));
+    }
+}
+
+const RECURSIVE_MAIN: &str = "#include \"loop.h\"\nint caller_after;\n";
+
+/// Regions one compilation may hold at once: the translation-unit,
+/// preprocessor, and expansion arenas, the string cache's two buffers, three
+/// provenance stores, the parser's token stream, and the renderer's scratch.
+/// Lexed files and include depth add none.
+const MAX_REGIONS_PER_COMPILATION: usize = 10;
+
+fn assert_within_budget(usage: crate::util::vm::accounting::Usage, what: &str) {
+    assert!(
+        usage.regions <= MAX_REGIONS_PER_COMPILATION,
+        "{what}: {usage:?}"
+    );
+    // At 100 GiB per region, a compilation reserves at most 1000 GiB, so
+    // over a hundred fit in 128 TiB of user address space at once.
+    assert!(
+        usage.reserved <= MAX_REGIONS_PER_COMPILATION * 100 * (1 << 30),
+        "{what}: {usage:?}"
+    );
+    // Commit starts at 64 KiB per region and grows with use.
+    assert!(usage.committed <= 1 << 20, "{what}: {usage:?}");
+}
+
+#[test]
+fn small_compilations_hold_few_regions_and_commit_little() {
+    for source in [
+        "int main(void) { return 0; }\n",
+        "#define TWICE(x) (x) + (x)\nint main(void) { return TWICE(1); }\n",
+        "int main(void) { return 0 }\n#include <nowhere.h>\nint x = ;\n",
+    ] {
+        let usage = compilation_peak(source, Path::new("<input>"));
+        assert_within_budget(usage, source);
+    }
+}
+
+#[test]
+fn include_depth_adds_no_regions() {
+    let headers = RecursiveHeader::new();
+    let usage = compilation_peak(RECURSIVE_MAIN, &headers.main());
+    assert_within_budget(usage, "recursive include to the nesting limit");
+}
+
+#[test]
+fn concurrent_deep_compilations_fit_in_the_address_space() {
+    let headers = RecursiveHeader::new();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..16)
+            .map(|_| scope.spawn(|| compilation_peak(RECURSIVE_MAIN, &headers.main())))
+            .collect();
+        for worker in workers {
+            let usage = worker.join().expect("every compilation completes");
+            assert_within_budget(usage, "concurrent recursive include");
+        }
+    });
+}
