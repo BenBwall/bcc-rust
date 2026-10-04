@@ -1,9 +1,6 @@
 //! The parser driver loop and helpers shared by every grammar frame.
 
 #[cfg(test)]
-use std::fmt::Debug;
-
-#[cfg(test)]
 use super::machine::FrameTraceEvent;
 use super::{
     ParsedTranslationUnit,
@@ -43,15 +40,8 @@ use super::{
         Expression,
         ExpressionType,
         ExternalDeclaration,
-        StatementIndex,
-        SyntaxList,
     },
-    syntax_store::{
-        StoredNode,
-        SyntaxStore,
-        SyntaxTree,
-        TreeNode,
-    },
+    syntax_log::TreeNode,
     token_cursor::{
         TokenCursor,
         Upstream,
@@ -81,6 +71,7 @@ use crate::{
             ArenaVec,
             Bump,
         },
+        region_vec::RegionVec,
         string_cache::StringCacheId,
     },
 };
@@ -156,9 +147,10 @@ impl<'tu, 'p> Parser<'tu, 'p> {
             pools: FramePools::new_in(arena),
             retained_frame_nodes: 0,
             returned: None,
-            syntax: SyntaxStore::default(),
+            #[cfg(test)]
+            syntax: super::SyntaxLog::default(),
             syntax_nodes: 0,
-            emitted_roots: Vec::new(),
+            emitted_roots: RegionVec::new(),
             scopes: ScopeStack::new_in(arena),
             label_scopes: LabelScopes::new_in(arena),
             func_name: None,
@@ -194,18 +186,8 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         self
     }
 
-    /// Returns the complete arena-backed syntax store for diagnostic output.
-    ///
-    /// External declarations contain compact handles, so the CLI prints this
-    /// view after the item stream to make those handles manually inspectable
-    /// without exposing parser storage as part of the parser interface.
-    #[cfg(test)]
-    pub(crate) fn syntax_debug(&self) -> impl Debug + '_ {
-        &self.syntax
-    }
-
     /// Parses the complete phase-7 input into one source-ordered translation
-    /// unit and transfers the validated syntax arenas to the result.
+    /// unit whose roots and syntax live in the translation-unit arena.
     ///
     /// Roots already observed through
     /// [`TranslationPhase::next_item`](crate::translation_phases::TranslationPhase::next_item)
@@ -216,13 +198,12 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         mut self,
         context: &mut Context<'_>,
     ) -> ParsedTranslationUnit<'tu> {
-        let mut roots = std::mem::take(&mut self.emitted_roots);
         while let Some(root) = self.drive(context) {
-            roots.push(root);
+            self.emitted_roots.push(root);
         }
-        let roots = roots.into_boxed_slice();
-        let syntax = SyntaxTree::new(self.syntax, &roots);
-        ParsedTranslationUnit { roots, syntax }
+        ParsedTranslationUnit {
+            roots: self.tree.alloc_slice_copy(&self.emitted_roots),
+        }
     }
 
     /// Runs owned frame actions until one external declaration reduces or EOF
@@ -339,10 +320,11 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                 depth:  self.frames.len(),
             });
 
-            debug_assert_eq!(
+            #[cfg(test)]
+            assert_eq!(
                 self.syntax_nodes,
                 self.syntax.node_count(),
-                "the running syntax-node total matches the arenas"
+                "the running syntax-node total matches the log"
             );
             // A step that crosses a limit keeps the nodes it allocated: the
             // translation-unit arena cannot take memory back while
@@ -423,27 +405,12 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         context.create_retained_source_vectors(self.position(context), self.source_file_index(), 0)
     }
 
-    /// Adds one node to the syntax arena, counts it toward the node limit,
-    /// and returns its raw handle.
-    pub(super) fn push_syntax<T: StoredNode<'tu>>(&mut self, node: T) -> u32 {
-        self.syntax_nodes += 1;
-        self.syntax.push(node)
-    }
-
-    /// Moves frame-retained nodes into one syntax list and counts them.
-    pub(super) fn append_syntax<T: StoredNode<'tu>>(
-        &mut self,
-        nodes: &mut ArenaVec<'_, T>,
-    ) -> SyntaxList<T> {
-        self.syntax_nodes += nodes.len();
-        self.syntax.append(nodes)
-    }
-
     /// Allocates one node in the translation-unit arena and counts it toward
     /// the node limit.
     pub(super) fn alloc_syntax<T: TreeNode<'tu>>(&mut self, node: T) -> &'tu T {
         let node = &*self.tree.alloc(node);
         self.syntax_nodes += 1;
+        #[cfg(test)]
         self.syntax.record(node);
         node
     }
@@ -461,7 +428,10 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         };
         nodes.clear();
         self.syntax_nodes += list.len();
-        self.syntax.record_list(list);
+        #[cfg(test)]
+        for node in list {
+            self.syntax.record(node);
+        }
         list
     }
 
@@ -1025,10 +995,6 @@ impl<'tu, 'p> Parser<'tu, 'p> {
             self.cursor.lookahead(context, index),
             OperatorTokenType::Asterisk,
         )
-    }
-
-    pub(super) fn statement_source(&self, index: StatementIndex) -> SourceVectors {
-        self.syntax[index].source_vectors
     }
 
     pub(super) fn store_expression(

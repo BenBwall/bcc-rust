@@ -114,7 +114,7 @@ pub(super) enum DeclarationPhase {
     AwaitInitializer,
     /// Push another declarator after consuming `,`.
     BeforeNextDeclarator,
-    /// Store the declaration and return its arena handle.
+    /// Store the declaration and return it.
     Finish,
 }
 
@@ -530,8 +530,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     "this frame phase cannot receive a child value"
                 );
                 // Arena insertion is the reduction boundary: all child
-                // slices and source ranges are
-                // stable before the handle is returned.
+                // slices and source ranges are complete before the
+                // declaration is stored and returned.
                 let source_vectors = context.merge_vector_list(&self.source_vectors);
                 let init_declarators = parser.alloc_syntax_list(&mut self.init_declarators);
                 let declaration = parser.alloc_syntax(Declaration {

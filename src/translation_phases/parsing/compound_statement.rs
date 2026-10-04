@@ -23,7 +23,6 @@ use super::{
     syntax::{
         BlockItem,
         Statement,
-        StatementIndex,
         StatementType,
     },
 };
@@ -162,7 +161,7 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                 let Some(ParseValue::Statement(statement)) = returned else {
                     panic!("block statement returned an unexpected value: {returned:?}");
                 };
-                let source = parser.statement_source(statement);
+                let source = statement.source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Statement(statement));
                 self.phase = CompoundStatementPhase::ItemOrClose;
@@ -170,8 +169,8 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
             },
             | CompoundStatementPhase::Finish => {
                 debug_assert!(returned.is_none());
-                let item_start = parser.append_syntax(&mut self.items);
-                let index = parser.push_syntax(Statement {
+                let item_start = parser.alloc_syntax_list(&mut self.items);
+                let index = parser.alloc_syntax(Statement {
                     kind:           StatementType::Compound { items: item_start },
                     source_vectors: context.merge_vector_list(&self.source_vectors),
                     recovered:      parser.hard_error_count > self.starting_error_count,
@@ -180,7 +179,7 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                     self.entry_scope_depth
                         .expect("compound statement entered block scope"),
                 );
-                ParseAction::Reduce(ParseValue::CompoundStatement(StatementIndex(index)))
+                ParseAction::Reduce(ParseValue::CompoundStatement(index))
             },
         }
     }

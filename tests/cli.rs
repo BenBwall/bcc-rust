@@ -131,7 +131,7 @@ mod tests {
         let raw = run(&["--raw-syntax", "--input", "int value;\n"]);
         assert!(raw.status.success());
         assert!(
-            String::from_utf8_lossy(&raw.stderr).contains("SyntaxStore"),
+            String::from_utf8_lossy(&raw.stderr).contains("ParsedTranslationUnit"),
             "{raw:?}"
         );
     }

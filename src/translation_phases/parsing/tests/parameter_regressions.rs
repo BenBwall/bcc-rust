@@ -35,11 +35,8 @@ fn declared_suffix<'tu>(parsed: &Parsed<'_, 'tu>, item: usize) -> DirectDeclarat
 /// an expression statement (as opposed to a declaration).
 fn body_item_is_expression(parsed: &Parsed<'_, '_>, item: usize, index: usize) -> bool {
     let body = function_definition(parsed, item).body;
-    match block_items(parsed, body)[index] {
-        | BlockItem::Statement(statement) => matches!(
-            parsed.parser.syntax[statement].kind,
-            StatementType::Expression(_)
-        ),
+    match block_items(body)[index] {
+        | BlockItem::Statement(statement) => matches!(statement.kind, StatementType::Expression(_)),
         | BlockItem::Declaration(_) => false,
     }
 }
@@ -170,7 +167,7 @@ fn k_and_r_names_survive_a_mixed_prototype_parameter() {
         let DirectDeclarator::KAndRStyleFunction { parameters } = declared_suffix(parsed, 0) else {
             panic!("expected an identifier list");
         };
-        let names = parsed.parser.syntax[parameters]
+        let names = parameters
             .iter()
             .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
             .collect::<Vec<_>>();

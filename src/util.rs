@@ -1,13 +1,5 @@
 use rustc_hash::FxBuildHasher;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Syntax rollback is gone; the module goes with the last handle domain."
-    )
-)]
-pub(crate) mod arena;
 /// Compile checks import the crate-private allocator from its source file.
 ///
 /// ```compile_fail,E0080

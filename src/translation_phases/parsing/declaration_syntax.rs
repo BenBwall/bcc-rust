@@ -556,7 +556,7 @@ impl<'tu> TypeSpecifiers<'tu> {
     }
 
     /// Reports `conflicting` against the accumulated specifiers using
-    /// source spellings, so rendered diagnostics never expose arena handles.
+    /// source spellings, so rendered diagnostics never expose syntax nodes.
     fn report_conflict<'c>(
         self,
         parser: &mut Parser<'_, '_>,

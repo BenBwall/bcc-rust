@@ -393,8 +393,7 @@ pub(super) struct SwitchScope {
 
 /// Identifies a parameter list by where its slice lives in the
 /// translation-unit arena and its length, so a definition can find the
-/// bindings its prototype scope retained. Every empty list shares one key,
-/// as every empty handle list did.
+/// bindings its prototype scope retained. Every empty list shares one key.
 pub(super) fn list_key<T>(list: &[T]) -> (usize, usize) {
     (list.as_ptr().addr(), list.len())
 }

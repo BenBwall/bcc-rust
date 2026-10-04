@@ -84,7 +84,7 @@ fn long_statement_lists_keep_source_storage_linear() {
         &format!("void f(void) {{ {} }}\n", "0; ".repeat(count)),
         |parsed| {
             assert_eq!(
-                block_items(parsed, function_definition(parsed, 0).body).len(),
+                block_items(function_definition(parsed, 0).body).len(),
                 count
             );
             assert!(
@@ -626,7 +626,8 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             .nth::<InitDeclarator<'_>>(0)
             .declarator;
         assert_eq!(
-            derived.parser.syntax[derived_declarator.kind]
+            derived_declarator
+                .kind
                 .iter()
                 .filter(|direct| matches!(direct, DirectDeclarator::Array { .. }))
                 .count(),
@@ -648,7 +649,8 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             .max_by_key(|declaration| declaration.init_declarators.len())
             .expect("block fixture must contain declarations");
         assert_eq!(block_declaration.init_declarators.len(), 511);
-        let last_block_init = block.parser.syntax[block_declaration.init_declarators]
+        let last_block_init = block_declaration
+            .init_declarators
             .last()
             .expect("nonempty syntax list");
         assert_eq!(
@@ -669,7 +671,8 @@ fn remaining_c99_parser_translation_floors_are_supported() {
         assert!(parser_errors(external).next().is_none());
         let declaration = declaration(external, 0);
         assert_eq!(declaration.init_declarators.len(), 4_095);
-        let last_external_init = external.parser.syntax[declaration.init_declarators]
+        let last_external_init = declaration
+            .init_declarators
             .last()
             .expect("nonempty syntax list");
         assert_eq!(
@@ -713,11 +716,8 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             .struct_declaration_list
             .expect("struct definition must retain members");
         assert_eq!(member_list.len(), 1_023);
-        let last_member = structure.parser.syntax[member_list]
-            .last()
-            .expect("nonempty syntax list");
-        let last_member_declarator =
-            &structure.parser.syntax[last_member.struct_declarator_list][0];
+        let last_member = member_list.last().expect("nonempty syntax list");
+        let last_member_declarator = last_member.struct_declarator_list[0];
         assert_eq!(
             last_member_declarator
                 .declarator
@@ -741,9 +741,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             .enumeration_list
             .expect("enum definition must retain enumerators");
         assert_eq!(enumeration_list.len(), 1_023);
-        let last_enumerator = enumeration.parser.syntax[enumeration_list]
-            .last()
-            .expect("nonempty syntax list");
+        let last_enumerator = enumeration_list.last().expect("nonempty syntax list");
         assert_eq!(
             enumeration
                 .context

@@ -63,11 +63,7 @@ impl Outcome<'_> {
 
 fn with_run(source: &str, f: impl FnOnce(&Outcome<'_>)) {
     with_parsed(source, |unit, context| {
-        let tree = unit.syntax().inspect(
-            unit.external_declarations(),
-            context,
-            InspectionOptions::default(),
-        );
+        let tree = unit.inspect(context, InspectionOptions::default());
         let mut errors = Vec::new();
         while let Some(error) = context.pop_pending_error() {
             if let TranslationError::Parsing(error) = error {

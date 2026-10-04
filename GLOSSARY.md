@@ -43,12 +43,15 @@ The complete sequence of external declarations produced from one preprocessed C 
 _Avoid_: Source file
 
 **Parsed translation unit** *(implemented as `ParsedTranslationUnit`)*:
-The owning parser result containing source-ordered external roots and one
-validated `SyntaxTree`. It is the shared caller and behavior-test seam.
+The parser result: the source-ordered external roots, which borrow the syntax
+tree from the translation-unit arena. It is the shared caller and behavior-test
+seam.
 
-**Syntax tree** *(implemented as `SyntaxTree`)*:
-Read-only typed access to arena-backed declarations, definitions, statements,
-expressions, type names, and initializers. Raw arena storage is an opt-in debug
+**Syntax tree**:
+The declarations, definitions, statements, expressions, type names, and
+initializers reachable from the parsed roots. Nodes live in the
+translation-unit arena and refer to their children by reference and slice; a
+node never changes once allocated. The raw Rust debug form is an opt-in debug
 view, not the normal consumer interface.
 
 **External declaration**:
@@ -97,11 +100,10 @@ A syntax tree for operators and operands that may compute a value, designate an 
 The structured syntax representation produced by language parsing. It records grammatical form and provenance without deciding every semantic property of the program.
 
 **Arena**:
-An owning collection for compiler-domain objects whose relationships are represented by compact handles rather than nested ownership. Syntax nodes of every kind share one chunked arena, so it grows a block at a time instead of reallocating.
+Memory that a phase allocates from and frees all at once when the phase or translation unit ends, so objects in it refer to each other by plain reference rather than nested ownership. Syntax nodes of every kind live in the translation-unit arena.
 
 **Index handle**:
-A typed numeric reference to one object or contiguous object range owned by an arena. Handles distinguish domains such as expressions, statements, declarations, and types.
-_Avoid_: Pointer
+A small typed numeric key into one specific structure, kept where identity or compactness matters more than direct access: interned strings, literal values, source files, and source-vector ranges. Syntax nodes are references, not handles.
 
 ## Names, scopes, and ambiguity
 
@@ -136,7 +138,7 @@ translation units, declarations, function definitions, statements,
 expressions, type names, initializers, and recovery.
 
 **ParserMachine** *(implemented as `Parser`)*:
-The single driver that owns the buffered token cursor, control stack, typed child return, syntax arenas, file-scope name classification, and diagnostic/recovery state for language parsing.
+The single driver that owns the buffered token cursor, control stack, typed child return, syntax-node count, file-scope name classification, and diagnostic/recovery state for language parsing. It allocates syntax nodes in the translation-unit arena and its working memory in the parse arena.
 _Avoid_: Recursive-descent parser
 
 **ParseFrame** *(implemented)*:
@@ -163,8 +165,8 @@ _Avoid_: Global recovery point
 **Recovered declaration** *(implemented at the external-declaration boundary)*:
 A declaration AST retained after one or more hard syntax diagnostics and local
 repair. Migrated frames finish synchronization and provenance collection, then
-yield `ExternalDeclaration::RecoveredDeclaration` with the declaration's arena
-handle. Later analysis may inspect the repaired tree to find additional
+yield `ExternalDeclaration::RecoveredDeclaration` with the declaration's
+syntax. Later analysis may inspect the repaired tree to find additional
 problems, while the distinct variant prevents it from being mistaken for fully
 valid syntax.
 

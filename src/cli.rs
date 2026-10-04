@@ -38,7 +38,10 @@ use crate::{
         GetSourceVectors,
         SourceVector,
         TranslationError,
-        parsing::InspectionOptions,
+        parsing::{
+            InspectionOptions,
+            ParsedTranslationUnit,
+        },
         preprocessing::{
             CharacterTokenType,
             IntegerTokenType,
@@ -86,7 +89,7 @@ struct ParserOutput {
     /// Include line and column locations in `--syntax-tree` output.
     #[clap(long, requires = "syntax_tree")]
     syntax_locations: bool,
-    /// Print raw parser arenas for storage debugging.
+    /// Print the raw syntax tree, in Rust debug form, for storage debugging.
     #[clap(long, conflicts_with = "tokens")]
     raw_syntax:       bool,
 }
@@ -298,8 +301,7 @@ fn print_parser_output<'tu>(
     if output.syntax_tree {
         eprint!(
             "{}",
-            unit.syntax().inspect(
-                unit.external_declarations(),
+            unit.inspect(
                 context,
                 InspectionOptions {
                     show_locations: output.syntax_locations,
@@ -308,10 +310,29 @@ fn print_parser_output<'tu>(
         );
     }
     if output.raw_syntax {
-        let rendered = format!("{:#?}", unit.syntax().raw_debug());
-        eprintln!("{rendered}");
+        eprintln!("{}", render_raw_syntax(&unit));
     }
     reporter.finish(context);
+}
+
+/// Stack reserved for rendering `--raw-syntax`. The derived `Debug` output
+/// recurses once per nesting level of the tree, which the iterative parser
+/// accepts far deeper than the main thread's stack allows. The stack is
+/// reserved, not committed, so unused depth costs only address space.
+const RAW_SYNTAX_STACK_BYTES: usize = 1 << 30;
+
+/// The whole syntax tree in Rust debug form, rendered on a thread with a
+/// stack deep enough for deeply nested syntax.
+fn render_raw_syntax(unit: &ParsedTranslationUnit<'_>) -> String {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("raw-syntax".to_owned())
+            .stack_size(RAW_SYNTAX_STACK_BYTES)
+            .spawn_scoped(scope, || format!("{:#?}", unit.raw_debug()))
+            .expect("the raw syntax thread starts")
+            .join()
+            .expect("raw syntax rendering finishes")
+    })
 }
 
 /// Renders diagnostics to stderr and summarizes them at the end, like

@@ -18,7 +18,7 @@ use crate::translation_phases::{
             BlockItem,
             ExpressionSlot,
             ForInitializer,
-            StatementIndex,
+            Statement,
             StatementType,
         },
     },
@@ -38,24 +38,19 @@ fn error_offsets(parsed: &Parsed<'_, '_>) -> Vec<usize> {
 
 /// Returns the block items of the first function definition's body.
 fn body_items<'a, 'tu>(parsed: &'a Parsed<'_, 'tu>) -> &'a [BlockItem<'tu>] {
-    block_items(parsed, function_definition(parsed, 0).body)
+    block_items(function_definition(parsed, 0).body)
 }
 
-fn statement_item(items: &[BlockItem<'_>], index: usize) -> StatementIndex {
+fn statement_item<'tu>(items: &[BlockItem<'tu>], index: usize) -> &'tu Statement<'tu> {
     let BlockItem::Statement(statement) = items[index] else {
         panic!("expected a statement block item: {items:?}");
     };
     statement
 }
 
-fn expression_statement_text(parsed: &Parsed<'_, '_>, statement: StatementIndex) -> String {
-    let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
-        parsed.parser.syntax[statement].kind
-    else {
-        panic!(
-            "expected an expression statement: {:?}",
-            parsed.parser.syntax[statement].kind
-        );
+fn expression_statement_text(parsed: &Parsed<'_, '_>, statement: &Statement<'_>) -> String {
+    let StatementType::Expression(ExpressionSlot::Parsed(expression)) = statement.kind else {
+        panic!("expected an expression statement: {:?}", statement.kind);
     };
     expression_text(parsed, expression)
 }
@@ -80,12 +75,10 @@ fn stray_operand_in_while_header_keeps_the_body_attached() {
         assert_errors_only_at(parsed, source.find(" y)").unwrap() + 1);
         let items = body_items(parsed);
         assert_eq!(items.len(), 1, "{items:?}");
-        let StatementType::While { body_statement, .. } =
-            parsed.parser.syntax[statement_item(items, 0)].kind
-        else {
+        let StatementType::While { body_statement, .. } = (statement_item(items, 0)).kind else {
             panic!("expected a while statement");
         };
-        assert_eq!(block_items(parsed, body_statement).len(), 1);
+        assert_eq!(block_items(body_statement).len(), 1);
     });
 }
 
@@ -96,9 +89,7 @@ fn stray_operand_in_if_header_keeps_the_then_statement() {
         assert_errors_only_at(parsed, source.find('2').unwrap());
         let items = body_items(parsed);
         assert_eq!(items.len(), 1, "{items:?}");
-        let StatementType::If { then_statement, .. } =
-            parsed.parser.syntax[statement_item(items, 0)].kind
-        else {
+        let StatementType::If { then_statement, .. } = (statement_item(items, 0)).kind else {
             panic!("expected an if statement");
         };
         assert_eq!(expression_statement_text(parsed, then_statement), "x=4");
@@ -112,12 +103,10 @@ fn stray_operand_in_switch_header_keeps_the_body_attached() {
         assert_errors_only_at(parsed, source.find(" y)").unwrap() + 1);
         let items = body_items(parsed);
         assert_eq!(items.len(), 1, "{items:?}");
-        let StatementType::Switch { body_statement, .. } =
-            parsed.parser.syntax[statement_item(items, 0)].kind
-        else {
+        let StatementType::Switch { body_statement, .. } = (statement_item(items, 0)).kind else {
             panic!("expected a switch statement");
         };
-        assert_eq!(block_items(parsed, body_statement).len(), 1);
+        assert_eq!(block_items(body_statement).len(), 1);
     });
 }
 
@@ -129,7 +118,7 @@ fn stray_operand_in_do_while_condition_does_not_leave_a_stray_statement() {
         let items = body_items(parsed);
         assert_eq!(items.len(), 2, "{items:?}");
         assert!(matches!(
-            parsed.parser.syntax[statement_item(items, 0)].kind,
+            (statement_item(items, 0)).kind,
             StatementType::DoWhile { .. }
         ));
         assert_eq!(
@@ -146,9 +135,7 @@ fn extra_clause_in_for_header_keeps_the_body_attached() {
         assert_errors_only_at(parsed, source.find("; x)").unwrap());
         let items = body_items(parsed);
         assert_eq!(items.len(), 1, "{items:?}");
-        let StatementType::For { body_statement, .. } =
-            parsed.parser.syntax[statement_item(items, 0)].kind
-        else {
+        let StatementType::For { body_statement, .. } = (statement_item(items, 0)).kind else {
             panic!("expected a for statement");
         };
         assert_eq!(expression_statement_text(parsed, body_statement), "x--");
@@ -162,9 +149,7 @@ fn stray_operand_in_for_iteration_keeps_the_body_attached() {
         assert_errors_only_at(parsed, source.find(" y(").unwrap() + 1);
         let items = body_items(parsed);
         assert_eq!(items.len(), 1, "{items:?}");
-        let StatementType::For { body_statement, .. } =
-            parsed.parser.syntax[statement_item(items, 0)].kind
-        else {
+        let StatementType::For { body_statement, .. } = (statement_item(items, 0)).kind else {
             panic!("expected a for statement");
         };
         assert_eq!(expression_statement_text(parsed, body_statement), "x--");
@@ -201,7 +186,7 @@ fn missing_while_after_do_body_keeps_the_next_statement() {
         let StatementType::DoWhile {
             condition_expression,
             ..
-        } = parsed.parser.syntax[statement_item(items, 0)].kind
+        } = (statement_item(items, 0)).kind
         else {
             panic!("expected a do statement");
         };
@@ -235,7 +220,7 @@ fn stray_colon_at_statement_start_is_one_diagnostic() {
         assert_errors_only_at(parsed, source.find(':').unwrap());
         let items = body_items(parsed);
         assert!(matches!(
-            parsed.parser.syntax[statement_item(items, items.len() - 1)].kind,
+            (statement_item(items, items.len() - 1)).kind,
             StatementType::Break
         ));
     });
@@ -315,7 +300,7 @@ fn for_declaration_without_semicolon_names_the_initializer() {
             assert_errors_only_at(parsed, source.find(") ;").unwrap());
             let items = body_items(parsed);
             assert!(matches!(
-                parsed.parser.syntax[statement_item(items, 0)].kind,
+                (statement_item(items, 0)).kind,
                 StatementType::For {
                     initializer: Some(ForInitializer::Declaration(_)),
                     ..
@@ -357,7 +342,7 @@ fn typedef_declaration_as_substatement_is_rejected() {
             ))],
         );
         assert_errors_only_at(parsed, source.find("T *p").unwrap());
-        let items = block_items(parsed, function_definition(parsed, 1).body);
+        let items = block_items(function_definition(parsed, 1).body);
         assert_eq!(items.len(), 2, "{items:?}");
     });
 }
@@ -372,7 +357,7 @@ fn typedef_declaration_after_label_or_if_is_one_diagnostic_each() {
             "{:#?}",
             parsed.errors
         );
-        let items = block_items(parsed, function_definition(parsed, 1).body);
+        let items = block_items(function_definition(parsed, 1).body);
         assert_eq!(items.len(), 3, "{items:?}");
     });
 }
@@ -396,13 +381,11 @@ fn several_extra_for_clauses_with_nested_parentheses_are_skipped_together() {
     let source = "void f(int x) {\n  for (x; x; x; g(x, (x)); x) x--;\n  x = 1;\n}\n";
     with_parse(source, |parsed| {
         let items = body_items(parsed);
-        let StatementType::For { body_statement, .. } =
-            parsed.parser.syntax[statement_item(items, 0)].kind
-        else {
+        let StatementType::For { body_statement, .. } = (statement_item(items, 0)).kind else {
             panic!("expected a for statement");
         };
         assert_ne!(
-            parsed.parser.syntax[body_statement].kind,
+            body_statement.kind,
             StatementType::Null,
             "{:#?}",
             parsed.errors

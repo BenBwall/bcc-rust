@@ -215,11 +215,8 @@ fn old_style_head_with_recovered_error_keeps_its_declaration_list_and_body() {
                 "{source:?}"
             );
             let definition = function_definition(parsed, 0);
-            assert_eq!(
-                definition.declaration_list.length, list_length,
-                "{source:?}"
-            );
-            assert_eq!(block_items(parsed, definition.body).len(), 1, "{source:?}");
+            assert_eq!(definition.declaration_list.len(), list_length, "{source:?}");
+            assert_eq!(block_items(definition.body).len(), 1, "{source:?}");
         });
     }
 
@@ -522,7 +519,7 @@ fn recovered_old_style_head_without_body_does_not_swallow_the_file() {
     // A recovered head followed directly by its body keeps that body.
     with_parse("f(a) int a; { return a; }\n", |parsed| {
         let definition = function_definition(parsed, 0);
-        assert_eq!(block_items(parsed, definition.body).len(), 1);
+        assert_eq!(block_items(definition.body).len(), 1);
     });
 }
 

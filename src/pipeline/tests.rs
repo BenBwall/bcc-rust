@@ -235,16 +235,14 @@ fn adjacent_string_lookahead_keeps_deferred_eof_diagnostic_provenance() {
 }
 
 #[test]
-fn parser_yields_declarations_and_exposes_the_syntax_store() {
+fn parser_yields_declarations_whose_debug_view_shows_their_syntax() {
     with_parser("int value;\n", |parser, context| {
-        assert!(matches!(
-            parser.next_item(context).unwrap(),
-            ExternalDeclaration::Declaration(_)
-        ));
+        let root = parser.next_item(context).unwrap();
+        assert!(matches!(root, ExternalDeclaration::Declaration(_)));
         assert!(parser.next_item(context).is_none());
         assert!(
-            format!("{:#?}", parser.syntax_debug()).contains("SyntaxStore"),
-            "the debug view should expose the arena referenced by parser output"
+            format!("{root:#?}").contains("init_declarators"),
+            "the debug view should show the syntax the root refers to"
         );
     });
 }
@@ -531,7 +529,7 @@ fn parse_arena_high_water(source: &str) -> (usize, usize) {
         |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
     );
     let parse = Bump::new();
-    drop(parse_with_arena(preprocessed, &mut context, &parse));
+    let _unit = parse_with_arena(preprocessed, &mut context, &parse);
     (parse.high_water(), context.take_pending_errors().len())
 }
 

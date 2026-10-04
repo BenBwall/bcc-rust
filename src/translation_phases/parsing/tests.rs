@@ -33,7 +33,7 @@ use super::{
         ExpressionSlot,
         ExternalDeclaration,
         FunctionDefinition,
-        StatementIndex,
+        Statement,
         StatementType,
     },
 };
@@ -150,49 +150,37 @@ fn with_parse_with<R>(
     })
 }
 
-fn declaration<'a, 'tu>(parsed: &'a Parsed<'_, 'tu>, item: usize) -> &'a Declaration<'tu> {
-    let index = match parsed.items[item] {
-        | ExternalDeclaration::Declaration(index)
-        | ExternalDeclaration::RecoveredDeclaration(index) => index,
+fn declaration<'tu>(parsed: &Parsed<'_, 'tu>, item: usize) -> &'tu Declaration<'tu> {
+    match parsed.items[item] {
+        | ExternalDeclaration::Declaration(declaration)
+        | ExternalDeclaration::RecoveredDeclaration(declaration) => declaration,
         | ExternalDeclaration::FunctionDefinition(_)
         | ExternalDeclaration::RecoveredFunctionDefinition(_)
         | ExternalDeclaration::Error(_) => panic!("expected a declaration item"),
-    };
-    &parsed.parser.syntax[index]
+    }
 }
 
-fn function_definition<'a, 'tu>(
-    parsed: &'a Parsed<'_, 'tu>,
-    item: usize,
-) -> &'a FunctionDefinition<'tu> {
-    let (ExternalDeclaration::FunctionDefinition(index)
-    | ExternalDeclaration::RecoveredFunctionDefinition(index)) = parsed.items[item]
+fn function_definition<'tu>(parsed: &Parsed<'_, 'tu>, item: usize) -> &'tu FunctionDefinition<'tu> {
+    let (ExternalDeclaration::FunctionDefinition(definition)
+    | ExternalDeclaration::RecoveredFunctionDefinition(definition)) = parsed.items[item]
     else {
         panic!("expected a function-definition item")
     };
-    &parsed.parser.syntax[index]
+    definition
 }
 
-fn return_expression<'tu>(
-    parsed: &Parsed<'_, 'tu>,
-    statement: StatementIndex,
-) -> &'tu Expression<'tu> {
-    let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
-        parsed.parser.syntax[statement].kind
-    else {
+fn return_expression<'tu>(statement: &Statement<'tu>) -> &'tu Expression<'tu> {
+    let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) = statement.kind else {
         panic!("expected a parsed return expression")
     };
     expression
 }
 
-fn block_items<'a, 'tu>(
-    parsed: &'a Parsed<'_, 'tu>,
-    statement: StatementIndex,
-) -> &'a [BlockItem<'tu>] {
-    let StatementType::Compound { items } = parsed.parser.syntax[statement].kind else {
+fn block_items<'tu>(statement: &Statement<'tu>) -> &'tu [BlockItem<'tu>] {
+    let StatementType::Compound { items } = statement.kind else {
         panic!("expected a compound statement")
     };
-    &parsed.parser.syntax[items]
+    items
 }
 
 fn identifier_name(parsed: &Parsed<'_, '_>, declarator: Declarator<'_>) -> Option<String> {

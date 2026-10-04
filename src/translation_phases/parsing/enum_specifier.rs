@@ -103,7 +103,7 @@ pub(super) enum EnumPhase {
     AwaitEnumeratorValue,
     /// Require `,` or `}` after one enumerator.
     AfterEnumerator,
-    /// Store the completed body and return the enum-specifier handle.
+    /// Store the completed body and return the enum specifier.
     FinishBody,
 }
 

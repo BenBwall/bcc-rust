@@ -125,10 +125,7 @@ fn ordinary_pointer_and_typedef_declarations_are_reachable() {
                 .declarator
                 .pointer
                 .type_qualifiers_list;
-            assert_eq!(
-                &parsed.parser.syntax[pointer],
-                &[TypeQualifiers::CONST, TypeQualifiers::VOLATILE]
-            );
+            assert_eq!(pointer, &[TypeQualifiers::CONST, TypeQualifiers::VOLATILE]);
         },
     );
 }
@@ -406,7 +403,7 @@ fn union_kind_and_enum_arena_slice_are_correct() {
                 .expect("named enum specifier");
             let enumeration_list = enum_specifier.enumeration_list.expect("enum body");
             assert_eq!(enumeration_list.len(), 2);
-            let names = parsed.parser.syntax[enumeration_list]
+            let names = enumeration_list
                 .iter()
                 .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
                 .collect::<Vec<_>>();
@@ -592,8 +589,7 @@ fn assignments_are_rejected_in_constant_expression_owners() {
 fn braced_declarators_retain_function_definition_syntax_before_constraint_checking() {
     with_parse("int object { int retained; } int after;\n", |parsed| {
         assert!(!function_definition(parsed, 0).recovered);
-        let [BlockItem::Declaration(retained)] =
-            block_items(parsed, function_definition(parsed, 0).body)
+        let [BlockItem::Declaration(retained)] = block_items(function_definition(parsed, 0).body)
         else {
             panic!("expected the braced declarator to retain its compound body")
         };
@@ -647,9 +643,9 @@ fn declaration_lists_retain_constraint_invalid_function_definitions() {
             parsed.errors
         );
         let definition = function_definition(parsed, 0);
-        assert_eq!(definition.declaration_list.length, 1);
+        assert_eq!(definition.declaration_list.len(), 1);
         assert!(matches!(
-            parsed.parser.syntax[definition.body].kind,
+            definition.body.kind,
             StatementType::Compound { .. }
         ));
     });
@@ -676,10 +672,7 @@ fn function_body_dispatch_follows_parenthesized_pointer_binding() {
         "int (*fp)(void) { int swallowed; } int after;\n",
         |pointer| {
             assert!(!function_definition(pointer, 0).recovered);
-            assert_eq!(
-                block_items(pointer, function_definition(pointer, 0).body).len(),
-                1
-            );
+            assert_eq!(block_items(function_definition(pointer, 0).body).len(), 1);
             assert_eq!(
                 identifier_name(
                     pointer,

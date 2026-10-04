@@ -40,7 +40,7 @@ fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let initializer = init_declarator
         .initializer
         .expect("expected an initializer");
-    let InitializerType::InitializerList(elements) = parsed.parser.syntax[initializer].kind else {
+    let InitializerType::InitializerList(elements) = initializer.kind else {
         panic!("expected an initializer list")
     };
     elements.len()
@@ -54,10 +54,10 @@ fn designated_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let initializer = init_declarator
         .initializer
         .expect("expected an initializer");
-    let InitializerType::InitializerList(elements) = parsed.parser.syntax[initializer].kind else {
+    let InitializerType::InitializerList(elements) = initializer.kind else {
         panic!("expected an initializer list")
     };
-    parsed.parser.syntax[elements]
+    elements
         .iter()
         .filter(|element| element.designation.is_some())
         .count()
@@ -322,7 +322,7 @@ fn deeply_nested_function_declarators_track_whether_they_are_named() {
         let [init_declarator] = declaration.init_declarators else {
             panic!("expected one declarator")
         };
-        let directs = &parsed.parser.syntax[init_declarator.declarator.kind];
+        let directs = init_declarator.declarator.kind;
         assert!(matches!(
             directs.last(),
             Some(DirectDeclarator::KAndRStyleFunction { .. })

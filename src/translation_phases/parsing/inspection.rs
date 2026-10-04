@@ -13,6 +13,7 @@ use std::{
 };
 
 use super::{
+    ParsedTranslationUnit,
     declaration_syntax::{
         Declaration,
         Declarator,
@@ -45,14 +46,13 @@ use super::{
         ExpressionType,
         ExternalDeclaration,
         ForInitializer,
-        FunctionDefinitionIndex,
+        FunctionDefinition,
         Identifier,
-        StatementIndex,
+        Statement,
         StatementType,
         StorageClass,
         UnaryOperator,
     },
-    syntax_store::SyntaxTree,
 };
 use crate::{
     diagnostics::c_quoted,
@@ -77,7 +77,7 @@ enum Work<'tu> {
     Root(ExternalDeclaration<'tu>, usize),
     Declaration(&'tu Declaration<'tu>, usize, &'static str),
     InitDeclarator(InitDeclarator<'tu>, usize),
-    Function(FunctionDefinitionIndex, usize, &'static str),
+    Function(&'tu FunctionDefinition<'tu>, usize, &'static str),
     Declarator(Declarator<'tu>, usize, &'static str),
     DirectDeclarator(DirectDeclarator<'tu>, usize),
     Identifier(Identifier, usize, &'static str),
@@ -87,7 +87,7 @@ enum Work<'tu> {
     StructDeclarator(StructDeclarator<'tu>, usize),
     Enum(&'tu EnumSpecifier<'tu>, usize),
     Enumerator(Enumerator<'tu>, usize),
-    Statement(StatementIndex, usize, &'static str),
+    Statement(&'tu Statement<'tu>, usize, &'static str),
     Expression(&'tu Expression<'tu>, usize, &'static str),
     Missing(SourceVectors, usize, &'static str),
     Initializer(&'tu Initializer<'tu>, usize, &'static str),
@@ -97,26 +97,21 @@ enum Work<'tu> {
     TypeName(&'tu TypeName<'tu>, usize, &'static str),
 }
 
-impl<'tu> SyntaxTree<'tu> {
+impl<'tu> ParsedTranslationUnit<'tu> {
     #[expect(
         clippy::too_many_lines,
         reason = "One iterative dispatcher keeps traversal order and cycle handling centralized."
     )]
-    pub(crate) fn inspect(
-        &self,
-        roots: &[ExternalDeclaration<'tu>],
-        context: &Context<'_>,
-        options: InspectionOptions,
-    ) -> String {
+    pub(crate) fn inspect(&self, context: &Context<'_>, options: InspectionOptions) -> String {
         let mut output = String::new();
-        let mut work = roots
+        let mut work = self
+            .roots
             .iter()
             .copied()
             .enumerate()
             .rev()
             .map(|(ordinal, root)| Work::Root(root, ordinal))
             .collect::<Vec<_>>();
-        let mut seen = HashSet::new();
         let mut seen_declarators = HashSet::new();
         // Nodes reached through references, keyed by kind and address, with
         // the order in which each was first visited.
@@ -221,20 +216,19 @@ impl<'tu> SyntaxTree<'tu> {
                     }
                     work.push(Work::Declarator(init.declarator, indent + 1, "shape"));
                 },
-                | Work::Function(index, indent, role) => {
-                    if !seen.insert((1_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Function(function, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 1, function) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "function",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let function = self.function_definition(index);
                     let name = function
                         .declarator
                         .identifier()
@@ -272,11 +266,7 @@ impl<'tu> SyntaxTree<'tu> {
                         options,
                     );
                     work.push(Work::Statement(function.body, indent + 1, "body"));
-                    for declaration in self
-                        .declaration_indices(function.declaration_list)
-                        .iter()
-                        .rev()
-                    {
+                    for declaration in function.declaration_list.iter().rev() {
                         work.push(Work::Declaration(
                             declaration,
                             indent + 1,
@@ -544,20 +534,19 @@ impl<'tu> SyntaxTree<'tu> {
                         work.push(Work::Expression(expression.into(), indent + 1, "value"));
                     }
                 },
-                | Work::Statement(index, indent, role) => {
-                    if !seen.insert((2_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Statement(statement, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 2, statement) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "statement",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let statement = self.statement(index);
                     Self::line(
                         &mut output,
                         indent,
@@ -574,7 +563,7 @@ impl<'tu> SyntaxTree<'tu> {
                         context,
                         options,
                     );
-                    self.push_statement_children(&mut work, &statement.kind, indent + 1);
+                    Self::push_statement_children(&mut work, &statement.kind, indent + 1);
                 },
                 | Work::Expression(expression, indent, role) => {
                     if let Some(ordinal) = first_visit(&mut visited, 3, expression) {
@@ -808,14 +797,13 @@ impl<'tu> SyntaxTree<'tu> {
     }
 
     fn push_statement_children(
-        &self,
         work: &mut Vec<Work<'tu>>,
         kind: &StatementType<'tu>,
         indent: usize,
     ) {
         match *kind {
-            | StatementType::Compound { items } => {
-                for item in self.block_items(items).iter().rev() {
+            | StatementType::Compound { items } =>
+                for item in items.iter().rev() {
                     match *item {
                         | BlockItem::Declaration(index) => {
                             work.push(Work::Declaration(index, indent, "block-item"));
@@ -824,8 +812,7 @@ impl<'tu> SyntaxTree<'tu> {
                             work.push(Work::Statement(index, indent, "block-item"));
                         },
                     }
-                }
-            },
+                },
             | StatementType::Expression(slot) => {
                 Self::push_slot(work, slot, indent, "expression");
             },
@@ -1227,7 +1214,7 @@ fn first_visit<T>(visited: &mut HashMap<(u8, usize), usize>, kind: u8, node: &T)
 
 /// Identifies a declarator by its two lists: where each lives in the
 /// translation-unit arena and its length. Every empty list of one kind
-/// shares an address, as every empty handle list shared one handle.
+/// shares an address, so declarators with the same empty lists share a key.
 fn declarator_key(declarator: Declarator<'_>) -> (usize, usize, usize, usize) {
     (
         declarator.kind.as_ptr().addr(),

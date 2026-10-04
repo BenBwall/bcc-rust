@@ -42,7 +42,6 @@ use super::{
         ForInitializer,
         Identifier,
         Statement,
-        StatementIndex,
         StatementType,
     },
 };
@@ -106,17 +105,17 @@ pub(super) enum StatementPhase<'tu> {
     HeaderClosing(HeaderKind, ExpressionSlot<'tu>),
     PushHeaderBody(HeaderKind, ExpressionSlot<'tu>),
     AwaitHeaderBody(HeaderKind, ExpressionSlot<'tu>),
-    IfAfterThen(ExpressionSlot<'tu>, StatementIndex),
-    PushElse(ExpressionSlot<'tu>, StatementIndex),
-    AwaitElse(ExpressionSlot<'tu>, StatementIndex),
+    IfAfterThen(ExpressionSlot<'tu>, &'tu Statement<'tu>),
+    PushElse(ExpressionSlot<'tu>, &'tu Statement<'tu>),
+    AwaitElse(ExpressionSlot<'tu>, &'tu Statement<'tu>),
     DoPushBody,
     DoAwaitBody,
-    DoWhileKeyword(StatementIndex),
-    DoOpening(StatementIndex),
-    DoExpression(StatementIndex),
-    DoAwaitExpression(StatementIndex),
-    DoClosing(StatementIndex, ExpressionSlot<'tu>),
-    DoSemicolon(StatementIndex, ExpressionSlot<'tu>),
+    DoWhileKeyword(&'tu Statement<'tu>),
+    DoOpening(&'tu Statement<'tu>),
+    DoExpression(&'tu Statement<'tu>),
+    DoAwaitExpression(&'tu Statement<'tu>),
+    DoClosing(&'tu Statement<'tu>, ExpressionSlot<'tu>),
+    DoSemicolon(&'tu Statement<'tu>, ExpressionSlot<'tu>),
     ForOpening,
     ForInitializer,
     AwaitForInitializerExpression,
@@ -426,7 +425,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::CompoundStatement(statement)) = returned else {
                     panic!("compound statement returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(parser, context, statement);
+                self.merge_statement(context, statement);
                 self.finish_existing(parser, statement)
             },
             | StatementPhase::AwaitExpression => {
@@ -642,7 +641,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(statement)) = returned else {
                     panic!("labeled child returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(parser, context, statement);
+                self.merge_statement(context, statement);
                 self.finish(
                     parser,
                     context,
@@ -757,7 +756,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(body)) = returned else {
                     panic!("selection/iteration body returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(parser, context, body);
+                self.merge_statement(context, body);
                 match kind {
                     | HeaderKind::If => {
                         self.phase = StatementPhase::IfAfterThen(expression, body);
@@ -814,7 +813,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(else_statement)) = returned else {
                     panic!("else child returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(parser, context, else_statement);
+                self.merge_statement(context, else_statement);
                 self.finish(
                     parser,
                     context,
@@ -838,7 +837,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(body)) = returned else {
                     panic!("do body returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(parser, context, body);
+                self.merge_statement(context, body);
                 self.phase = StatementPhase::DoWhileKeyword(body);
                 ParseAction::Reprocess
             },
@@ -1230,7 +1229,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(body)) = returned else {
                     panic!("for body returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(parser, context, body);
+                self.merge_statement(context, body);
                 self.finish(
                     parser,
                     context,
@@ -1324,13 +1323,8 @@ impl<'tu, 'p> StatementFrame<'tu> {
         parser.merge_source(context, &mut self.source_vectors, token);
     }
 
-    fn merge_statement(
-        &mut self,
-        parser: &Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-        statement: StatementIndex,
-    ) {
-        let source = parser.statement_source(statement);
+    fn merge_statement(&mut self, context: &mut Context<'_>, statement: &'tu Statement<'tu>) {
+        let source = statement.source_vectors;
         self.source_vectors = Some(
             self.source_vectors
                 .map_or(source, |existing| context.merge_vectors(existing, source)),
@@ -1433,7 +1427,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
     fn finish_existing(
         &mut self,
         parser: &mut Parser<'tu, 'p>,
-        statement: StatementIndex,
+        statement: &'tu Statement<'tu>,
     ) -> ParseAction<'tu, 'p> {
         self.restore_scopes(parser);
         ParseAction::Reduce(ParseValue::Statement(statement))
@@ -1448,13 +1442,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
         let source_vectors = self
             .source_vectors
             .unwrap_or_else(|| parser.missing_syntax_source(context));
-        let index = parser.push_syntax(Statement {
+        let index = parser.alloc_syntax(Statement {
             kind,
             source_vectors,
             recovered: parser.hard_error_count > self.starting_error_count,
         });
         self.restore_scopes(parser);
-        ParseAction::Reduce(ParseValue::Statement(StatementIndex(index)))
+        ParseAction::Reduce(ParseValue::Statement(index))
     }
 
     fn restore_scopes(&mut self, parser: &mut Parser<'tu, 'p>) {

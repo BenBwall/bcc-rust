@@ -9,7 +9,7 @@
 //!
 //! Hard syntax diagnostics do not discard useful syntax. If a declaration can
 //! be repaired, the parser yields [`ExternalDeclaration::RecoveredDeclaration`]
-//! with its arena handle so later semantic analysis can continue. The distinct
+//! with its syntax so later semantic analysis can continue. The distinct
 //! status prevents repaired syntax from being mistaken for fully valid input.
 //!
 //! Phase 05 closes declarations, function definitions, compound blocks, every
@@ -45,7 +45,7 @@ mod scope;
 mod statement;
 mod struct_or_union;
 mod syntax;
-mod syntax_store;
+mod syntax_log;
 #[cfg(test)]
 mod tests;
 mod token_cursor;
@@ -74,10 +74,8 @@ use scope::{
     SwitchScope,
 };
 pub(crate) use syntax::ExternalDeclaration;
-use syntax_store::{
-    SyntaxStore,
-    SyntaxTree,
-};
+#[cfg(test)]
+use syntax_log::SyntaxLog;
 use token_cursor::TokenCursor;
 
 use crate::{
@@ -95,11 +93,13 @@ use crate::{
             ArenaVec,
             Bump,
         },
+        region_vec::RegionVec,
         string_cache::StringCacheId,
     },
 };
 
-/// Owns parser input, control frames, syntax arenas, scopes, and diagnostics.
+/// Owns parser input, control frames, the syntax node count, scopes, and
+/// diagnostics.
 ///
 /// Calling [`TranslationPhase::next_item`] drives the machine until one
 /// external declaration reduces or the preprocessed token stream ends.
@@ -125,13 +125,17 @@ pub(crate) struct Parser<'tu, 'p> {
     retained_frame_nodes: usize,
     /// Completed child value waiting for its parent frame.
     returned: Option<ParseValue<'tu>>,
-    /// Arenas owning every syntax node produced by this parser.
-    syntax: SyntaxStore<'tu>,
-    /// Running total of the nodes in `syntax`, maintained by
-    /// [`Self::push_syntax`] and [`Self::append_syntax`].
+    /// Every syntax node this parser allocated, by kind, for tests.
+    #[cfg(test)]
+    syntax: SyntaxLog<'tu>,
+    /// Running total of the syntax nodes allocated in the translation-unit
+    /// arena, maintained by [`Self::alloc_syntax`] and
+    /// [`Self::alloc_syntax_list`].
     syntax_nodes: usize,
-    /// Roots already returned through the streaming adapter.
-    emitted_roots: Vec<ExternalDeclaration<'tu>>,
+    /// Roots parsed so far. They are output rather than working memory, so
+    /// they grow in place in their own region instead of the parse arena,
+    /// and the finished list is copied once into the translation-unit arena.
+    emitted_roots: RegionVec<ExternalDeclaration<'tu>>,
     /// Parser-visible ordinary-name classification used for typedef ambiguity.
     scopes: ScopeStack<'p>,
     /// Function-local label namespaces, independent of ordinary identifiers.
@@ -189,24 +193,65 @@ impl Default for ParserLimits {
     }
 }
 
-/// One completely parsed translation unit and the syntax storage referenced by
-/// its source-ordered roots.
+/// One completely parsed translation unit: its source-ordered roots, which
+/// borrow the syntax tree from the translation-unit arena.
 ///
 /// This is the shared boundary for callers, inspection, tests, and the future
 /// semantic-analysis phase. Parser-machine state is deliberately not exposed.
 #[derive(Debug)]
 pub(crate) struct ParsedTranslationUnit<'tu> {
-    roots:  Box<[ExternalDeclaration<'tu>]>,
-    syntax: SyntaxTree<'tu>,
+    roots: &'tu [ExternalDeclaration<'tu>],
 }
 
 impl<'tu> ParsedTranslationUnit<'tu> {
-    pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration<'tu>] {
-        &self.roots
+    #[cfg_attr(
+        not(any(test, feature = "benchmarking-internals")),
+        expect(
+            dead_code,
+            reason = "The CLI reads roots through inspection; tests and benchmarks read them here."
+        )
+    )]
+    pub(crate) fn external_declarations(&self) -> &'tu [ExternalDeclaration<'tu>] {
+        self.roots
     }
 
-    pub(crate) fn syntax(&self) -> &SyntaxTree<'tu> {
-        &self.syntax
+    /// The whole tree as Rust debug output, for storage debugging. Each root
+    /// prints on one line in compact form even under `{:#?}`: indenting a
+    /// deeply nested tree would make the output grow with the square of its
+    /// depth.
+    pub(crate) fn raw_debug(&self) -> impl Debug + '_ {
+        RawRoots(self.roots)
+    }
+}
+
+/// [`ParsedTranslationUnit::raw_debug`]'s view.
+struct RawRoots<'a, 'tu>(&'a [ExternalDeclaration<'tu>]);
+
+/// One root in compact debug form, whatever the formatter's flags.
+struct CompactRoot<'a, 'tu>(&'a ExternalDeclaration<'tu>);
+
+impl Debug for RawRoots<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParsedTranslationUnit")
+            .field("roots", &RawList(self.0))
+            .finish()
+    }
+}
+
+/// The roots as a list of compact entries.
+struct RawList<'a, 'tu>(&'a [ExternalDeclaration<'tu>]);
+
+impl Debug for RawList<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(CompactRoot))
+            .finish()
+    }
+}
+
+impl Debug for CompactRoot<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
     }
 }
 

@@ -45,31 +45,27 @@ use crate::translation_phases::{
 #[test]
 fn primary_expressions_are_parsed_in_expression_and_return_statements() {
     with_parse("int f(void) { value; return 1; }\n", |parsed| {
-        let items = block_items(parsed, function_definition(parsed, 0).body);
+        let items = block_items(function_definition(parsed, 0).body);
 
         let BlockItem::Statement(expression_statement) = items[0] else {
             panic!("expected expression statement");
         };
         let StatementType::Expression(ExpressionSlot::Parsed(identifier)) =
-            parsed.parser.syntax[expression_statement].kind
+            expression_statement.kind
         else {
             panic!("expected parsed identifier expression");
         };
-        assert!(matches!(
-            parsed.parser.syntax[identifier].kind,
-            ExpressionType::Identifier(_)
-        ));
+        assert!(matches!(identifier.kind, ExpressionType::Identifier(_)));
 
         let BlockItem::Statement(return_statement) = items[1] else {
             panic!("expected return statement");
         };
-        let StatementType::Return(Some(ExpressionSlot::Parsed(integer))) =
-            parsed.parser.syntax[return_statement].kind
+        let StatementType::Return(Some(ExpressionSlot::Parsed(integer))) = return_statement.kind
         else {
             panic!("expected parsed return expression");
         };
         assert!(matches!(
-            parsed.parser.syntax[integer].kind,
+            integer.kind,
             ExpressionType::Constant(Constant::Integer(IntegerTokenType::Int(1)))
         ));
         assert!(parser_errors(parsed).next().is_none());
@@ -81,24 +77,23 @@ fn postfix_expression_suffixes_compose_left_to_right() {
     with_parse(
         "int f(void) { factory()(x)[i].field->member++; }\n",
         |parsed| {
-            let items = block_items(parsed, function_definition(parsed, 0).body);
+            let items = block_items(function_definition(parsed, 0).body);
             let BlockItem::Statement(statement) = items[0] else {
                 panic!("expected expression statement");
             };
-            let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
-                parsed.parser.syntax[statement].kind
+            let StatementType::Expression(ExpressionSlot::Parsed(expression)) = statement.kind
             else {
                 panic!("expected parsed postfix expression");
             };
             let ExpressionType::Unary {
                 operator: UnaryOperator::PostIncrement,
                 operand_expression,
-            } = parsed.parser.syntax[expression].kind
+            } = expression.kind
             else {
                 panic!("expected postfix increment at the root");
             };
             assert!(matches!(
-                parsed.parser.syntax[operand_expression].kind,
+                operand_expression.kind,
                 ExpressionType::IndirectMember { .. }
             ));
             assert!(parser_errors(parsed).next().is_none());
@@ -112,23 +107,19 @@ fn function_arguments_keep_postfix_calls_and_increments() {
         "int f(void) { return outer(inner(), value++); }\n",
         |parsed| {
             let [BlockItem::Statement(statement)] =
-                block_items(parsed, function_definition(parsed, 0).body)
+                block_items(function_definition(parsed, 0).body)
             else {
                 panic!("expected one return statement")
             };
-            let root = return_expression(parsed, *statement);
-            let ExpressionType::Call { arguments, .. } = parsed.parser.syntax[root].kind else {
+            let root = return_expression(statement);
+            let ExpressionType::Call { arguments, .. } = root.kind else {
                 panic!("expected an outer call")
             };
-            let arguments = &parsed.parser.syntax[arguments];
 
             assert_eq!(arguments.len(), 2);
+            assert!(matches!(arguments[0].kind, ExpressionType::Call { .. }));
             assert!(matches!(
-                parsed.parser.syntax[arguments[0]].kind,
-                ExpressionType::Call { .. }
-            ));
-            assert!(matches!(
-                parsed.parser.syntax[arguments[1]].kind,
+                arguments[1].kind,
                 ExpressionType::Unary {
                     operator: UnaryOperator::PostIncrement,
                     ..
@@ -149,15 +140,14 @@ fn function_arguments_keep_binary_operators_inside_each_argument() {
         "int f(void) { return outer(1+2, 3-4, 5*6, 7&8); }\n",
         |parsed| {
             let [BlockItem::Statement(statement)] =
-                block_items(parsed, function_definition(parsed, 0).body)
+                block_items(function_definition(parsed, 0).body)
             else {
                 panic!("expected one return statement")
             };
-            let root = return_expression(parsed, *statement);
-            let ExpressionType::Call { arguments, .. } = parsed.parser.syntax[root].kind else {
+            let root = return_expression(statement);
+            let ExpressionType::Call { arguments, .. } = root.kind else {
                 panic!("expected a function call")
             };
-            let arguments = &parsed.parser.syntax[arguments];
 
             assert_eq!(arguments.len(), 4);
             assert_eq!(
@@ -182,16 +172,13 @@ fn return_expression_keeps_a_typedef_spelled_call() {
         "typedef int T; int f(int *p) { return T(*p); }\n",
         |parsed| {
             let [BlockItem::Statement(statement)] =
-                block_items(parsed, function_definition(parsed, 1).body)
+                block_items(function_definition(parsed, 1).body)
             else {
                 panic!("expected one return statement")
             };
-            let root = return_expression(parsed, *statement);
+            let root = return_expression(statement);
 
-            assert!(matches!(
-                parsed.parser.syntax[root].kind,
-                ExpressionType::Call { .. }
-            ));
+            assert!(matches!(root.kind, ExpressionType::Call { .. }));
             assert_eq!(expression_text(parsed, root), "T(*p)");
             assert!(
                 parser_errors(parsed).next().is_none(),
@@ -205,13 +192,13 @@ fn return_expression_keeps_a_typedef_spelled_call() {
 #[test]
 fn nested_expression_recovery_honors_the_enclosing_semicolon() {
     with_parse("int f(void) { ( ; return 1; }\n", |parsed| {
-        let items = block_items(parsed, function_definition(parsed, 0).body);
+        let items = block_items(function_definition(parsed, 0).body);
 
         assert_eq!(items.len(), 2, "{items:#?}");
         assert!(matches!(items[0], BlockItem::Statement(_)));
         assert!(
             matches!(items[1], BlockItem::Statement(statement) if matches!(
-                parsed.parser.syntax[statement].kind,
+                statement.kind,
                 StatementType::Return(Some(ExpressionSlot::Parsed(_)))
             ))
         );
@@ -225,15 +212,14 @@ fn nested_expression_recovery_honors_the_enclosing_semicolon() {
 #[test]
 fn conditional_middle_recovery_honors_enclosing_boundaries() {
     with_parse("int f(void) { return 1 ? ; return 2; }\n", |parsed| {
-        let items = block_items(parsed, function_definition(parsed, 0).body);
+        let items = block_items(function_definition(parsed, 0).body);
 
         assert_eq!(items.len(), 2, "{items:#?}");
         assert!(matches!(items[0], BlockItem::Statement(_)));
         let BlockItem::Statement(following_return) = items[1] else {
             panic!("expected the following return statement")
         };
-        let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
-            parsed.parser.syntax[following_return].kind
+        let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) = following_return.kind
         else {
             panic!("expected an exact following return expression")
         };
@@ -245,16 +231,15 @@ fn conditional_middle_recovery_honors_enclosing_boundaries() {
     });
     with_parse("int f(void) { if (1 ? ) return 2; }\n", |parenthesis| {
         let [BlockItem::Statement(if_statement)] =
-            block_items(parenthesis, function_definition(parenthesis, 0).body)
+            block_items(function_definition(parenthesis, 0).body)
         else {
             panic!("expected one recovered if statement")
         };
-        let StatementType::If { then_statement, .. } = parenthesis.parser.syntax[if_statement].kind
-        else {
+        let StatementType::If { then_statement, .. } = if_statement.kind else {
             panic!("expected recovered if syntax")
         };
         assert!(matches!(
-            parenthesis.parser.syntax[then_statement].kind,
+            then_statement.kind,
             StatementType::Return(Some(ExpressionSlot::Parsed(_)))
         ));
         assert!(!parser_errors(parenthesis).any(|error| matches!(
@@ -265,11 +250,11 @@ fn conditional_middle_recovery_honors_enclosing_boundaries() {
     with_parse(
         "int f(void) { return array[1 ? ]; return 2; }\n",
         |bracket| {
-            let items = block_items(bracket, function_definition(bracket, 0).body);
+            let items = block_items(function_definition(bracket, 0).body);
             assert_eq!(items.len(), 2, "{items:#?}");
             assert!(
                 matches!(items[1], BlockItem::Statement(statement) if matches!(
-                    bracket.parser.syntax[statement].kind,
+                    statement.kind,
                     StatementType::Return(Some(ExpressionSlot::Parsed(_)))
                 ))
             );
@@ -287,8 +272,7 @@ fn conditional_middle_recovery_honors_enclosing_boundaries() {
         let outer = init_declarator
             .initializer
             .expect("expected an initializer list");
-        let InitializerType::InitializerList(elements) = initializer.parser.syntax[outer].kind
-        else {
+        let InitializerType::InitializerList(elements) = outer.kind else {
             panic!("expected an initializer list")
         };
         assert_eq!(elements.len(), 2);
@@ -325,12 +309,11 @@ fn unary_cast_and_sizeof_forms_use_parsed_type_names() {
         "typedef int T; int f(void) { -(T)value; sizeof value; return sizeof(T); }\n",
         |parsed| {
             let definition = function_definition(parsed, 1);
-            let items = block_items(parsed, definition.body);
+            let items = block_items(definition.body);
             let BlockItem::Statement(statement) = items[2] else {
                 panic!("expected return statement");
             };
-            let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
-                parsed.parser.syntax[statement].kind
+            let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) = statement.kind
             else {
                 panic!(
                     "expected parsed return expression: {:#?}",
@@ -341,10 +324,7 @@ fn unary_cast_and_sizeof_forms_use_parsed_type_names() {
                         .collect::<Vec<_>>()
                 );
             };
-            assert!(matches!(
-                parsed.parser.syntax[expression].kind,
-                ExpressionType::SizeofType(_)
-            ));
+            assert!(matches!(expression.kind, ExpressionType::SizeofType(_)));
             assert_eq!(parsed.parser.syntax.count::<TypeName<'_>>(), 2);
             assert!(parser_errors(parsed).next().is_none());
         },
@@ -358,7 +338,7 @@ fn type_names_retain_typedef_specifiers_after_primitive_specifiers() {
         |parsed| {
             assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
             let definition = function_definition(parsed, 1);
-            let items = block_items(parsed, definition.body);
+            let items = block_items(definition.body);
             assert_eq!(items.len(), 1, "{items:#?}");
             assert_eq!(parsed.parser.syntax.count::<TypeName<'_>>(), 2);
             assert_eq!(
@@ -387,44 +367,42 @@ fn cast_and_sizeof_classification_tracks_typedef_shadowing() {
          sizeof(T); }\nint block(void) { int T; return (T); }\nint iteration(void) { for (int T; \
          ; ) return (T); }\n",
         |parsed| {
-            let unshadowed = block_items(parsed, function_definition(parsed, 1).body);
+            let unshadowed = block_items(function_definition(parsed, 1).body);
             let BlockItem::Statement(unshadowed_return) = unshadowed[0] else {
                 panic!("expected unshadowed return statement")
             };
             assert!(matches!(
-                parsed.parser.syntax[return_expression(parsed, unshadowed_return)].kind,
+                (return_expression(unshadowed_return)).kind,
                 ExpressionType::Cast { .. }
             ));
 
-            let parameter = block_items(parsed, function_definition(parsed, 2).body);
+            let parameter = block_items(function_definition(parsed, 2).body);
             let BlockItem::Statement(parameter_return) = parameter[0] else {
                 panic!("expected parameter-shadowed return statement")
             };
             assert!(matches!(
-                parsed.parser.syntax[return_expression(parsed, parameter_return)].kind,
+                (return_expression(parameter_return)).kind,
                 ExpressionType::SizeofExpr(_)
             ));
 
-            let block = block_items(parsed, function_definition(parsed, 3).body);
+            let block = block_items(function_definition(parsed, 3).body);
             let BlockItem::Statement(block_return) = block[1] else {
                 panic!("expected block-shadowed return statement")
             };
             assert!(matches!(
-                parsed.parser.syntax[return_expression(parsed, block_return)].kind,
+                (return_expression(block_return)).kind,
                 ExpressionType::Parenthesized { .. }
             ));
 
-            let iteration = block_items(parsed, function_definition(parsed, 4).body);
+            let iteration = block_items(function_definition(parsed, 4).body);
             let BlockItem::Statement(for_statement) = iteration[0] else {
                 panic!("expected for statement")
             };
-            let StatementType::For { body_statement, .. } =
-                parsed.parser.syntax[for_statement].kind
-            else {
+            let StatementType::For { body_statement, .. } = for_statement.kind else {
                 panic!("expected for statement syntax")
             };
             assert!(matches!(
-                parsed.parser.syntax[return_expression(parsed, body_statement)].kind,
+                (return_expression(body_statement)).kind,
                 ExpressionType::Parenthesized { .. }
             ));
             assert!(
@@ -441,7 +419,7 @@ fn declarator_binding_shadows_a_typedef_inside_its_own_initializer() {
     with_parse(
         "typedef int T; int f(void) { int T = sizeof(T); }\n",
         |parsed| {
-            let items = block_items(parsed, function_definition(parsed, 1).body);
+            let items = block_items(function_definition(parsed, 1).body);
             let BlockItem::Declaration(declaration) = items[0] else {
                 panic!("expected a block declaration")
             };
@@ -449,16 +427,11 @@ fn declarator_binding_shadows_a_typedef_inside_its_own_initializer() {
                 panic!("expected one initialized declarator")
             };
             let initializer = init_declarator.initializer.expect("parsed initializer");
-            let InitializerType::AssignmentExpression(expression) =
-                parsed.parser.syntax[initializer].kind
-            else {
+            let InitializerType::AssignmentExpression(expression) = initializer.kind else {
                 panic!("expected a scalar initializer")
             };
 
-            assert!(matches!(
-                parsed.parser.syntax[expression].kind,
-                ExpressionType::SizeofExpr(_)
-            ));
+            assert!(matches!(expression.kind, ExpressionType::SizeofExpr(_)));
             assert!(
                 parser_errors(parsed).next().is_none(),
                 "{:#?}",
@@ -473,7 +446,7 @@ fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
     with_parse(
         "int f(void) { a = b = c; a ? (b, c) : d ? e : f; call(a, b); call((a, b)); }\n",
         |parsed| {
-            let items = block_items(parsed, function_definition(parsed, 0).body);
+            let items = block_items(function_definition(parsed, 0).body);
             let roots = items
                 .iter()
                 .map(|item| {
@@ -481,7 +454,7 @@ fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
                         panic!("expected expression statement");
                     };
                     let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
-                        parsed.parser.syntax[statement].kind
+                        statement.kind
                     else {
                         panic!("expected parsed expression");
                     };
@@ -490,13 +463,13 @@ fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
                 .collect::<Vec<_>>();
 
             assert!(matches!(
-                parsed.parser.syntax[roots[0]].kind,
+                roots[0].kind,
                 ExpressionType::Binary {
                     operator: BinaryOperator::Assignment,
                     right_expression,
                     ..
                 } if matches!(
-                    parsed.parser.syntax[right_expression].kind,
+                    right_expression.kind,
                     ExpressionType::Binary {
                         operator: BinaryOperator::Assignment,
                         ..
@@ -504,16 +477,16 @@ fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
                 )
             ));
             assert!(matches!(
-                parsed.parser.syntax[roots[1]].kind,
+                roots[1].kind,
                 ExpressionType::Conditional { else_expression, .. }
                     if matches!(
-                        parsed.parser.syntax[else_expression].kind,
+                        else_expression.kind,
                         ExpressionType::Conditional { .. }
                     )
             ));
             let argument_lengths = roots[2..]
                 .iter()
-                .map(|root| match parsed.parser.syntax[root].kind {
+                .map(|root| match root.kind {
                     | ExpressionType::Call { arguments, .. } => arguments.len(),
                     | _ => panic!("expected call expression"),
                 })
@@ -527,22 +500,22 @@ fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
 #[test]
 fn conditional_middle_accepts_an_unparenthesized_comma_expression() {
     with_parse("int f(void) { return a ? b, c : d; }\n", |parsed| {
-        let items = block_items(parsed, function_definition(parsed, 0).body);
+        let items = block_items(function_definition(parsed, 0).body);
         let BlockItem::Statement(statement) = items[0] else {
             panic!("expected a return statement")
         };
-        let root = return_expression(parsed, statement);
+        let root = return_expression(statement);
         let ExpressionType::Conditional {
             then_expression,
             else_expression,
             ..
-        } = parsed.parser.syntax[root].kind
+        } = root.kind
         else {
             panic!("expected a conditional expression")
         };
 
         assert!(matches!(
-            parsed.parser.syntax[then_expression].kind,
+            then_expression.kind,
             ExpressionType::Binary {
                 operator: BinaryOperator::Comma,
                 ..
@@ -561,22 +534,20 @@ fn conditional_middle_accepts_an_unparenthesized_comma_expression() {
 #[test]
 fn missing_call_argument_comma_preserves_later_arguments() {
     with_parse("int f(void) { foo(a b, c); return; }\n", |parsed| {
-        let items = block_items(parsed, function_definition(parsed, 0).body);
+        let items = block_items(function_definition(parsed, 0).body);
 
         assert_eq!(items.len(), 2, "{items:#?}");
         let BlockItem::Statement(statement) = items[0] else {
             panic!("expected expression statement")
         };
-        let StatementType::Expression(ExpressionSlot::Parsed(root)) =
-            parsed.parser.syntax[statement].kind
-        else {
+        let StatementType::Expression(ExpressionSlot::Parsed(root)) = statement.kind else {
             panic!("expected parsed expression")
         };
-        let ExpressionType::Call { arguments, .. } = parsed.parser.syntax[root].kind else {
+        let ExpressionType::Call { arguments, .. } = root.kind else {
             panic!("expected call expression")
         };
         assert_eq!(
-            parsed.parser.syntax[arguments]
+            arguments
                 .iter()
                 .map(|expression| expression_text(parsed, expression))
                 .collect::<Vec<_>>(),
@@ -596,7 +567,7 @@ fn equal_precedence_chains_nested_conditionals_and_casts_keep_their_associativit
     with_parse(
         "int f(void) { a-b-c; a ? b ? c : d : e; (int)(long)a; a+b=c; }\n",
         |parsed| {
-            let items = block_items(parsed, function_definition(parsed, 0).body);
+            let items = block_items(function_definition(parsed, 0).body);
             let roots = items
                 .iter()
                 .map(|item| {
@@ -604,7 +575,7 @@ fn equal_precedence_chains_nested_conditionals_and_casts_keep_their_associativit
                         panic!("expected expression statement");
                     };
                     let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
-                        parsed.parser.syntax[statement].kind
+                        statement.kind
                     else {
                         panic!("expected parsed expression");
                     };
@@ -613,13 +584,13 @@ fn equal_precedence_chains_nested_conditionals_and_casts_keep_their_associativit
                 .collect::<Vec<_>>();
 
             assert!(matches!(
-                parsed.parser.syntax[roots[0]].kind,
+                roots[0].kind,
                 ExpressionType::Binary {
                     operator: BinaryOperator::Subtraction,
                     left_expression,
                     ..
                 } if matches!(
-                    parsed.parser.syntax[left_expression].kind,
+                    left_expression.kind,
                     ExpressionType::Binary {
                         operator: BinaryOperator::Subtraction,
                         ..
@@ -627,18 +598,18 @@ fn equal_precedence_chains_nested_conditionals_and_casts_keep_their_associativit
                 )
             ));
             assert!(matches!(
-                parsed.parser.syntax[roots[1]].kind,
+                roots[1].kind,
                 ExpressionType::Conditional { then_expression, .. }
                     if matches!(
-                        parsed.parser.syntax[then_expression].kind,
+                        then_expression.kind,
                         ExpressionType::Conditional { .. }
                     )
             ));
             assert!(matches!(
-                parsed.parser.syntax[roots[2]].kind,
+                roots[2].kind,
                 ExpressionType::Cast { operand_expression, .. }
                     if matches!(
-                        parsed.parser.syntax[operand_expression].kind,
+                        operand_expression.kind,
                         ExpressionType::Cast { .. }
                     )
             ));
@@ -692,12 +663,11 @@ fn every_equal_precedence_operator_pair_has_explicit_tree_coverage() {
                 let source = format!("int f(void) {{ a{first_spelling}b{second_spelling}c; }}\n");
                 with_parse(&source, |parsed| {
                     let [BlockItem::Statement(statement)] =
-                        block_items(parsed, function_definition(parsed, 0).body)
+                        block_items(function_definition(parsed, 0).body)
                     else {
                         panic!("expected one expression statement for {source:?}")
                     };
-                    let StatementType::Expression(ExpressionSlot::Parsed(root)) =
-                        parsed.parser.syntax[statement].kind
+                    let StatementType::Expression(ExpressionSlot::Parsed(root)) = statement.kind
                     else {
                         panic!("expected a parsed expression for {source:?}")
                     };
@@ -705,13 +675,13 @@ fn every_equal_precedence_operator_pair_has_explicit_tree_coverage() {
                         operator,
                         left_expression,
                         ..
-                    } = parsed.parser.syntax[root].kind
+                    } = root.kind
                     else {
                         panic!("expected a binary root for {source:?}")
                     };
                     assert_eq!(operator, second_operator, "wrong root for {source:?}");
                     assert!(matches!(
-                        parsed.parser.syntax[left_expression].kind,
+                        left_expression.kind,
                         ExpressionType::Binary { operator, .. } if operator == first_operator
                     ));
                     assert!(
@@ -742,26 +712,24 @@ fn every_equal_precedence_operator_pair_has_explicit_tree_coverage() {
             let source = format!("int f(void) {{ a{first_spelling}b{second_spelling}c; }}\n");
             with_parse(&source, |parsed| {
                 let [BlockItem::Statement(statement)] =
-                    block_items(parsed, function_definition(parsed, 0).body)
+                    block_items(function_definition(parsed, 0).body)
                 else {
                     panic!("expected one assignment statement for {source:?}")
                 };
-                let StatementType::Expression(ExpressionSlot::Parsed(root)) =
-                    parsed.parser.syntax[statement].kind
-                else {
+                let StatementType::Expression(ExpressionSlot::Parsed(root)) = statement.kind else {
                     panic!("expected a parsed assignment for {source:?}")
                 };
                 let ExpressionType::Binary {
                     operator,
                     right_expression,
                     ..
-                } = parsed.parser.syntax[root].kind
+                } = root.kind
                 else {
                     panic!("expected an assignment root for {source:?}")
                 };
                 assert_eq!(operator, first_operator, "wrong root for {source:?}");
                 assert!(matches!(
-                    parsed.parser.syntax[right_expression].kind,
+                    right_expression.kind,
                     ExpressionType::Binary { operator, .. } if operator == second_operator
                 ));
                 assert!(
@@ -792,16 +760,14 @@ fn typedef_spelled_expressions_remain_inside_braced_initializers() {
                     panic!("expected one initialized declarator")
                 };
                 let initializer = init_declarator.initializer.expect("braced initializer");
-                let InitializerType::InitializerList(elements) =
-                    parsed.parser.syntax[initializer].kind
-                else {
+                let InitializerType::InitializerList(elements) = initializer.kind else {
                     panic!("expected an initializer list")
                 };
-                let [element] = &parsed.parser.syntax[elements] else {
+                let [element] = elements else {
                     panic!("expected one initializer element")
                 };
                 let InitializerType::AssignmentExpression(expression_index) =
-                    parsed.parser.syntax[element.initializer].kind
+                    element.initializer.kind
                 else {
                     panic!("expected a scalar initializer element")
                 };
@@ -833,7 +799,7 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
             let initializer = init_declarator
                 .initializer
                 .expect("initializer must be attached to its declarator");
-            let outer_initializer = &parsed.parser.syntax[initializer];
+            let outer_initializer = initializer;
             let InitializerType::InitializerList(elements) = outer_initializer.kind else {
                 panic!("expected outer initializer list");
             };
@@ -855,13 +821,12 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
                 ),
                 "}"
             );
-            let outer = &parsed.parser.syntax[elements];
+            let outer = elements;
             assert_eq!(outer.len(), 2);
             assert!(outer.iter().all(|element| element.designation.is_some()));
 
             let field_designation = outer[0].designation.expect("field designation");
-            let field_designation = parsed.parser.syntax[field_designation];
-            let field_designators = &parsed.parser.syntax[field_designation.designators];
+            let field_designators = field_designation.designators;
             assert!(matches!(
                 field_designators,
                 [Designator {
@@ -883,15 +848,14 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
                 "="
             );
 
-            let nested_initializer = &parsed.parser.syntax[outer[0].initializer];
+            let nested_initializer = outer[0].initializer;
             let InitializerType::InitializerList(nested_elements) = nested_initializer.kind else {
                 panic!("expected nested initializer list");
             };
             assert_eq!(nested_elements.len(), 2);
-            let nested = &parsed.parser.syntax[nested_elements];
+            let nested = nested_elements;
             let array_designation = nested[0].designation.expect("array designation");
-            let array_designation = parsed.parser.syntax[array_designation];
-            let array_designator = parsed.parser.syntax[array_designation.designators][0];
+            let array_designator = array_designation.designators[0];
             assert!(matches!(
                 array_designator.kind,
                 DesignatorType::Array(expression) if constant_expression_text(parsed, expression) == "2"
@@ -910,8 +874,7 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
                 "]"
             );
             let scalar_text = |element: InitializerElement<'_>| {
-                let InitializerType::AssignmentExpression(expression) =
-                    parsed.parser.syntax[element.initializer].kind
+                let InitializerType::AssignmentExpression(expression) = element.initializer.kind
                 else {
                     panic!("expected scalar initializer")
                 };
@@ -955,16 +918,14 @@ fn chained_designators_retain_their_order_and_initializer() {
             let initializer = init_declarator
                 .initializer
                 .expect("initializer must be attached to its declarator");
-            let InitializerType::InitializerList(elements) = parsed.parser.syntax[initializer].kind
-            else {
+            let InitializerType::InitializerList(elements) = initializer.kind else {
                 panic!("expected an initializer list")
             };
-            let [element] = &parsed.parser.syntax[elements] else {
+            let [element] = elements else {
                 panic!("expected one designated element")
             };
             let designation = element.designation.expect("expected a designation");
-            let designation = parsed.parser.syntax[designation];
-            let designators = &parsed.parser.syntax[designation.designators];
+            let designators = designation.designators;
 
             assert!(matches!(
                 designators,
@@ -989,9 +950,7 @@ fn chained_designators_retain_their_order_and_initializer() {
                 sourced_text(parsed, designation.source_vectors),
                 ".member[0][1]="
             );
-            let InitializerType::AssignmentExpression(expression) =
-                parsed.parser.syntax[element.initializer].kind
-            else {
+            let InitializerType::AssignmentExpression(expression) = element.initializer.kind else {
                 panic!("expected a scalar initializer")
             };
             assert_eq!(expression_text(parsed, expression), "3");
@@ -1014,17 +973,14 @@ fn array_designators_accept_conditional_and_parenthesized_comma_expressions() {
                 panic!("expected one initialized declarator")
             };
             let initializer = init_declarator.initializer.expect("parsed initializer");
-            let InitializerType::InitializerList(elements) = parsed.parser.syntax[initializer].kind
-            else {
+            let InitializerType::InitializerList(elements) = initializer.kind else {
                 panic!("expected an initializer list")
             };
-            let elements = &parsed.parser.syntax[elements];
             let expressions = elements
                 .iter()
                 .map(|element| {
                     let designation = element.designation.expect("array designation");
-                    let designation = parsed.parser.syntax[designation];
-                    let designator = parsed.parser.syntax[designation.designators][0];
+                    let designator = designation.designators[0];
                     let DesignatorType::Array(expression) = designator.kind else {
                         panic!("expected an array designator")
                     };
@@ -1046,14 +1002,14 @@ fn array_designators_accept_conditional_and_parenthesized_comma_expressions() {
                 .collect::<Vec<_>>();
 
             assert!(matches!(
-                parsed.parser.syntax[expressions[0]].kind,
+                expressions[0].kind,
                 ExpressionType::Conditional { .. }
             ));
             assert!(matches!(
-                parsed.parser.syntax[expressions[1]].kind,
+                expressions[1].kind,
                 ExpressionType::Parenthesized { expression }
                     if matches!(
-                        parsed.parser.syntax[expression].kind,
+                        expression.kind,
                         ExpressionType::Binary {
                             operator: BinaryOperator::Comma,
                             ..
@@ -1211,16 +1167,14 @@ fn each_unary_spelling_maps_to_its_ast_operator() {
         let source = format!("int f(void) {{ {source_expression}; }}\n");
         with_parse(&source, |parsed| {
             let [BlockItem::Statement(statement)] =
-                block_items(parsed, function_definition(parsed, 0).body)
+                block_items(function_definition(parsed, 0).body)
             else {
                 panic!("expected one expression statement for {source_expression}")
             };
-            let StatementType::Expression(ExpressionSlot::Parsed(expression)) =
-                parsed.parser.syntax[statement].kind
+            let StatementType::Expression(ExpressionSlot::Parsed(expression)) = statement.kind
             else {
                 panic!("expected a parsed expression for {source_expression}")
             };
-            let expression = &parsed.parser.syntax[expression];
             assert!(matches!(
                 expression.kind,
                 ExpressionType::Unary { operator, .. } if operator == expected_operator

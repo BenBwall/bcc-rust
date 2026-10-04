@@ -35,8 +35,8 @@ use super::{
         ConstantExpression,
         Expression,
         ExternalDeclaration,
-        FunctionDefinitionIndex,
-        StatementIndex,
+        FunctionDefinition,
+        Statement,
     },
     type_name::TypeNameFrame,
 };
@@ -142,20 +142,20 @@ pub(super) enum ParseValue<'tu> {
     Declarator(Option<Declarator<'tu>>),
     /// Completed function or K&R parameter-list suffix.
     ParameterList(ParameterListResult<'tu>),
-    /// Arena handle for a completed struct or union specifier.
+    /// Completed struct or union specifier.
     StructOrUnionSpecifier(&'tu StructOrUnionSpecifier<'tu>),
     /// Completed enum specifier and its recovery handoff.
     EnumSpecifier(EnumSpecifierResult<'tu>),
-    /// Arena handle for a completed type name.
+    /// Completed type name.
     TypeName(&'tu TypeName<'tu>),
     Expression(ExpressionResult<'tu>),
     ConstantExpression(ConstantExpressionResult<'tu>),
     Initializer(InitializerResult<'tu>),
-    /// Arena handle for a completed declaration.
+    /// Completed declaration.
     Declaration(&'tu Declaration<'tu>),
-    FunctionDefinition(FunctionDefinitionIndex),
-    CompoundStatement(StatementIndex),
-    Statement(StatementIndex),
+    FunctionDefinition(&'tu FunctionDefinition<'tu>),
+    CompoundStatement(&'tu Statement<'tu>),
+    Statement(&'tu Statement<'tu>),
     /// External item ready to be yielded by the translation-phase seam.
     ExternalDeclaration(ExternalDeclaration<'tu>),
 }
@@ -176,7 +176,7 @@ pub(super) struct ParameterListResult<'tu> {
 /// Enum child result before its type specifier is merged into the parent.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct EnumSpecifierResult<'tu> {
-    /// Arena handle for the completed enum specifier.
+    /// Completed enum specifier.
     pub(super) index: &'tu EnumSpecifier<'tu>,
     /// Whether recovery stopped before a following declaration.
     pub(super) stopped_before_declaration: bool,

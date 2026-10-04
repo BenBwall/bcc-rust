@@ -2,8 +2,8 @@
 //! frames use while they run.
 //!
 //! Nearly every frame owns a few short vectors (operands, provenance
-//! segments, list elements) that it drains into the syntax arenas when it
-//! reduces. These come from the parse arena, which frees nothing until
+//! segments, list elements) that it copies into the translation-unit arena
+//! when it reduces. These come from the parse arena, which frees nothing until
 //! parsing ends, so storage a popped frame dropped would stay behind for the
 //! rest of the translation unit. Instead the driver lends each pushed frame
 //! spare vectors and takes them back, emptied, when the frame is popped;

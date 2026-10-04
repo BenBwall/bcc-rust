@@ -10,8 +10,8 @@ implemented.
 The CLI accepts a C source file or an input string, runs preprocessing and the
 language parser, and prints diagnostics. Pass `--syntax-tree` for a stable,
 source-oriented tree, `--syntax-locations` to add locations, `--raw-syntax` for
-arena debugging, or `--tokens` for parser-facing preprocessing tokens. Normal
-operation does not dump internal arenas. The CLI does not emit an object file
+the raw Rust debug form of the tree, or `--tokens` for parser-facing
+preprocessing tokens. Normal operation does not dump internal storage. The CLI does not emit an object file
 or executable.
 
 Diagnostics are rendered like `rustc`'s: a lowercase message, the
@@ -32,8 +32,8 @@ for constants the value and C type (for example
 constants as C, and `--syntax-locations` names the file for nodes outside the
 main source.
 
-`Parser::parse_translation_unit` returns an ordered `ParsedTranslationUnit` and
-validated, read-only `SyntaxTree`. Declarations, prototype-style and old-style
+`Parser::parse_translation_unit` returns an ordered `ParsedTranslationUnit`
+whose roots borrow the syntax tree from the translation-unit arena. Declarations, prototype-style and old-style
 function definitions, blocks, every C99 statement family, expressions, type
 names, and initializers run through one explicit frame stack in the parse arena.
 Malformed input retains repaired syntax where meaningful, produces a
@@ -276,7 +276,7 @@ before a real cleanup; only local branches are deleted. Run its tests with
 | [`src/translation_phases/initial_processing.rs`](src/translation_phases/initial_processing.rs) | Normalizes source characters, line endings, trigraphs, escaped newlines, and comments. |
 | [`src/translation_phases/preprocessor_tokenizer.rs`](src/translation_phases/preprocessor_tokenizer.rs) | Produces preprocessing tokens while retaining source provenance. |
 | [`src/translation_phases/preprocessing.rs`](src/translation_phases/preprocessing.rs) and [`preprocessing/`](src/translation_phases/preprocessing/) | Handles macros, directives, includes, conditional preprocessing, literals, and conversion to parser-facing tokens. It owns the preprocessor-expression evaluator and its values and diagnostics; each concern has its own submodule. |
-| [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) and [`parsing/`](src/translation_phases/parsing/) | Contains the explicit parser driver; declaration, function-definition, statement, expression, type-name, initializer, declarator, and tag frames (one submodule per frame); syntax stores and scopes; and parser diagnostics. |
+| [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) and [`parsing/`](src/translation_phases/parsing/) | Contains the explicit parser driver; declaration, function-definition, statement, expression, type-name, initializer, declarator, and tag frames (one submodule per frame); syntax nodes and scopes; and parser diagnostics. |
 | [`src/translation_phases.rs`](src/translation_phases.rs) | Defines the shared translation-phase interface and diagnostic plumbing; [`context.rs`](src/translation_phases/context.rs) and [`provenance.rs`](src/translation_phases/provenance.rs) hold the compilation context and source provenance. |
 | [`src/util/`](src/util/) | Provides project-specific arenas, interned strings, shared storage, and vector slices. |
 | [`src/diagnostics.rs`](src/diagnostics.rs) | Builds diagnostics (message, labelled source ranges, notes, help) and renders them as annotated source snippets. Each phase's error type explains itself through a `ToDiagnostic` implementation. |
@@ -286,11 +286,11 @@ before a real cleanup; only local branches are deleted. Run its tests with
 
 The language parser uses one explicit control stack of specialized, resumable
 frames. `Parser` owns the buffered cursor, frame stack, typed child result,
-syntax stores, scope and label state, recovery state, and resource ceilings.
+syntax-node count, scope and label state, recovery state, and resource ceilings.
 
 `ExpressionFrame` owns Double-E-style operator/operand reduction alongside
 `TypeNameFrame` and `InitializerFrame`, and all supported statement and
-declaration expression sites contain parsed handles. The preprocessor evaluator
+declaration expression sites contain parsed expressions. The preprocessor evaluator
 retains its independent reducer. Phase 05 closes the parser through structured
 diagnostics, cross-family recovery, syntax provenance, compatibility fixtures,
 translation floors, and opt-in inspection. See the [project glossary](GLOSSARY.md)

@@ -124,7 +124,7 @@ pub(super) enum StructOrUnionPhase {
     AwaitBitFieldWidth,
     /// Require `,` or `;` after one struct declarator.
     AfterStructDeclarator,
-    /// Store the completed body and return the tag-specifier handle.
+    /// Store the completed body and return the tag specifier.
     FinishBody,
 }
 

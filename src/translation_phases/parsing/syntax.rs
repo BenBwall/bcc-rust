@@ -1,14 +1,4 @@
-//! Syntax-tree handles, roots, statements, expressions, and identifiers.
-
-use std::{
-    fmt::{
-        Debug,
-        Formatter,
-        Result as FmtResult,
-    },
-    hash::Hash,
-    marker::PhantomData,
-};
+//! Syntax-tree roots, statements, expressions, and identifiers.
 
 use super::declaration_syntax::{
     Declaration,
@@ -28,80 +18,12 @@ use crate::{
             Token,
         },
     },
-    util::{
-        arena::ArenaRun,
-        string_cache::StringCacheId,
-    },
+    util::string_cache::StringCacheId,
 };
-
-/// Opaque parser-issued handle for one contiguous syntax list.
-///
-/// The underlying arena run stays private to this module so later compiler
-/// phases can resolve lists through
-/// [`SyntaxTree`](super::syntax_store::SyntaxTree) without manufacturing raw
-/// arena ranges.
-pub(crate) struct SyntaxList<T> {
-    pub(super) start_index: u32,
-    pub(super) length:      u32,
-    _marker:                PhantomData<fn() -> T>,
-}
-
-impl<T> Copy for SyntaxList<T> {}
-
-impl<T> Clone for SyntaxList<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Debug for SyntaxList<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        f.debug_struct("SyntaxList")
-            .field("start_index", &self.start_index)
-            .field("length", &self.length)
-            .finish()
-    }
-}
-
-impl<T> Hash for SyntaxList<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.start_index.hash(state);
-        self.length.hash(state);
-    }
-}
-
-impl<T> PartialEq for SyntaxList<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.start_index == other.start_index && self.length == other.length
-    }
-}
-
-impl<T> Eq for SyntaxList<T> {}
-
-impl<T> SyntaxList<T> {
-    pub(super) fn new(run: ArenaRun) -> Self {
-        Self {
-            start_index: run.start,
-            length:      run.length,
-            _marker:     PhantomData,
-        }
-    }
-
-    pub(super) fn run(self) -> ArenaRun {
-        ArenaRun {
-            start:  self.start_index,
-            length: self.length,
-        }
-    }
-
-    pub(super) fn empty() -> Self {
-        Self::new(ArenaRun::EMPTY)
-    }
-}
 
 /// One top-level parser result.
 ///
-/// Valid and recovered declarations both retain an arena handle. Consumers may
+/// Valid and recovered declarations both retain their syntax. Consumers may
 /// continue semantic analysis on recovered syntax while treating it as
 /// diagnostic-tainted. `Error` is reserved for a future case where recovery
 /// cannot construct a meaningful declaration at all.
@@ -116,16 +38,12 @@ pub(crate) enum ExternalDeclaration<'tu> {
     /// Repaired declaration produced after at least one hard syntax diagnostic.
     RecoveredDeclaration(&'tu Declaration<'tu>),
     /// Function definition parsed without a hard syntax diagnostic.
-    FunctionDefinition(FunctionDefinitionIndex),
+    FunctionDefinition(&'tu FunctionDefinition<'tu>),
     /// Function definition containing locally recovered syntax.
-    RecoveredFunctionDefinition(FunctionDefinitionIndex),
+    RecoveredFunctionDefinition(&'tu FunctionDefinition<'tu>),
     /// Provenance-only placeholder when no meaningful AST can be recovered.
     Error(SourceVectors),
 }
-
-/// Typed handle into the function-definition arena.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct FunctionDefinitionIndex(pub(super) u32);
 
 /// Expression whose grammar guarantees constant-expression syntax.
 ///
@@ -146,20 +64,13 @@ impl<'tu> From<ConstantExpression<'tu>> for &'tu Expression<'tu> {
     }
 }
 
-/// Typed handle into the statement arena.
-///
-/// C99: statements and blocks are §6.8-§6.8.6.4, pp. 131-139;
-/// PDF pp. 143-151.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct StatementIndex(pub(super) u32);
-
 /// Complete function-definition syntax produced at file scope.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct FunctionDefinition<'tu> {
     pub(crate) declaration_specifiers: DeclarationSpecifiers<'tu>,
     pub(crate) declarator:             Declarator<'tu>,
-    pub(crate) declaration_list:       SyntaxList<&'tu Declaration<'tu>>,
-    pub(crate) body:                   StatementIndex,
+    pub(crate) declaration_list:       &'tu [&'tu Declaration<'tu>],
+    pub(crate) body:                   &'tu Statement<'tu>,
     pub(crate) source_vectors:         SourceVectors,
     pub(crate) recovered:              bool,
 }
@@ -168,7 +79,7 @@ pub(crate) struct FunctionDefinition<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum BlockItem<'tu> {
     Declaration(&'tu Declaration<'tu>),
-    Statement(StatementIndex),
+    Statement(&'tu Statement<'tu>),
 }
 
 /// A statement expression is parsed or missing because recovery repaired a
@@ -192,52 +103,52 @@ pub(crate) enum ConstantExpressionSlot<'tu> {
 /// C99: §6.8-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Statement<'tu> {
-    /// Grammar form and child handles of this statement.
+    /// Grammar form and children of this statement.
     pub(crate) kind:           StatementType<'tu>,
     pub(crate) source_vectors: SourceVectors,
     pub(crate) recovered:      bool,
 }
 
-/// C statement grammar forms represented through arena handles.
+/// C statement grammar forms and their children.
 ///
 /// C99: statement alternatives are §6.8, p. 131; PDF p. 143; their detailed
 /// productions are §6.8.1-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum StatementType<'tu> {
     Compound {
-        items: SyntaxList<BlockItem<'tu>>,
+        items: &'tu [BlockItem<'tu>],
     },
     Expression(ExpressionSlot<'tu>),
     If {
         condition_expression: ExpressionSlot<'tu>,
-        then_statement:       StatementIndex,
-        else_statement:       Option<StatementIndex>,
+        then_statement:       &'tu Statement<'tu>,
+        else_statement:       Option<&'tu Statement<'tu>>,
     },
     Switch {
         condition_expression: ExpressionSlot<'tu>,
-        body_statement:       StatementIndex,
+        body_statement:       &'tu Statement<'tu>,
     },
     While {
         condition_expression: ExpressionSlot<'tu>,
-        body_statement:       StatementIndex,
+        body_statement:       &'tu Statement<'tu>,
     },
     DoWhile {
         condition_expression: ExpressionSlot<'tu>,
-        body_statement:       StatementIndex,
+        body_statement:       &'tu Statement<'tu>,
     },
     For {
         initializer:          Option<ForInitializer<'tu>>,
         condition_expression: Option<ExpressionSlot<'tu>>,
         iteration_expression: Option<ExpressionSlot<'tu>>,
-        body_statement:       StatementIndex,
+        body_statement:       &'tu Statement<'tu>,
     },
     Return(Option<ExpressionSlot<'tu>>),
     Break,
     Continue,
     Goto(Identifier),
-    Label(Identifier, StatementIndex),
-    Case(ConstantExpressionSlot<'tu>, StatementIndex),
-    Default(StatementIndex),
+    Label(Identifier, &'tu Statement<'tu>),
+    Case(ConstantExpressionSlot<'tu>, &'tu Statement<'tu>),
+    Default(&'tu Statement<'tu>),
     Null,
 }
 

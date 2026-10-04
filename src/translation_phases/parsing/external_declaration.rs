@@ -153,7 +153,7 @@ impl<'tu, 'p> ExternalDeclarationFrame {
                 let Some(ParseValue::FunctionDefinition(definition)) = returned else {
                     panic!("function-definition frame returned an unexpected value: {returned:?}");
                 };
-                let recovered = parser.syntax[definition].recovered;
+                let recovered = definition.recovered;
                 ParseAction::Reduce(ParseValue::ExternalDeclaration(if recovered {
                     ExternalDeclaration::RecoveredFunctionDefinition(definition)
                 } else {

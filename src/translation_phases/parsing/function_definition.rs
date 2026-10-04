@@ -28,11 +28,8 @@ use super::{
     },
     syntax::{
         FunctionDefinition,
-        FunctionDefinitionIndex,
         Statement,
-        StatementIndex,
         StatementType,
-        SyntaxList,
     },
 };
 use crate::{
@@ -56,7 +53,7 @@ pub(super) struct FunctionDefinitionFrame<'tu, 'p> {
     phase: FunctionDefinitionPhase,
     head: &'tu Declaration<'tu>,
     pub(super) declaration_list: ArenaVec<'p, &'tu Declaration<'tu>>,
-    body: Option<StatementIndex>,
+    body: Option<&'tu Statement<'tu>>,
     pub(super) source_vectors: Option<SourceVectors>,
     starting_error_count: usize,
     entry_scope_depth: Option<usize>,
@@ -238,14 +235,12 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                         && (!head_is_function || self.head.recovered);
                     if token.is_none() || head_is_doubtful {
                         let body_source = parser.missing_syntax_source(context);
-                        let body = parser.push_syntax(Statement {
-                            kind:           StatementType::Compound {
-                                items: SyntaxList::empty(),
-                            },
+                        let body = parser.alloc_syntax(Statement {
+                            kind:           StatementType::Compound { items: &[] },
                             source_vectors: body_source,
                             recovered:      true,
                         });
-                        self.body = Some(StatementIndex(body));
+                        self.body = Some(body);
                         self.phase = FunctionDefinitionPhase::Finish;
                         ParseAction::Reprocess
                     } else {
@@ -295,7 +290,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                 let Some(ParseValue::CompoundStatement(body)) = returned else {
                     panic!("function body returned an unexpected value: {returned:?}");
                 };
-                let source = parser.statement_source(body);
+                let source = body.source_vectors;
                 self.source_vectors = Some(
                     self.source_vectors
                         .map_or(source, |existing| context.merge_vectors(existing, source)),
@@ -311,9 +306,9 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     .head
                     .head_declarator()
                     .expect("function definition head remains available");
-                let declaration_start = parser.append_syntax(&mut self.declaration_list);
+                let declaration_start = parser.alloc_syntax_list(&mut self.declaration_list);
                 let recovered = parser.hard_error_count > self.starting_error_count;
-                let index = parser.push_syntax(FunctionDefinition {
+                let index = parser.alloc_syntax(FunctionDefinition {
                     declaration_specifiers: head.declaration_specifiers,
                     declarator,
                     declaration_list: declaration_start,
@@ -327,9 +322,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                 );
                 let closed = parser.label_scopes.exit();
                 assert!(closed, "function definition owns a label namespace");
-                ParseAction::Reduce(ParseValue::FunctionDefinition(FunctionDefinitionIndex(
-                    index,
-                )))
+                ParseAction::Reduce(ParseValue::FunctionDefinition(index))
             },
         }
     }

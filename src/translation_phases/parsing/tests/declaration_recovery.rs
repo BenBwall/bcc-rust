@@ -215,7 +215,8 @@ fn named_parameter_declarators_retain_nested_k_and_r_identifier_lists() {
             .nth::<ParameterDeclaration<'_>>(0)
             .declarator
             .expect("named callback declarator");
-        let parameters = parsed.parser.syntax[callback.kind]
+        let parameters = callback
+            .kind
             .iter()
             .find_map(|direct| match direct {
                 | DirectDeclarator::KAndRStyleFunction { parameters } => Some(*parameters),
@@ -223,13 +224,7 @@ fn named_parameter_declarators_retain_nested_k_and_r_identifier_lists() {
             })
             .expect("callback retains a K&R identifier-list suffix");
         assert_eq!(parameters.len(), 1);
-        assert_eq!(
-            parsed
-                .context
-                .string_cache
-                .at(parsed.parser.syntax[parameters][0].name),
-            "arg"
-        );
+        assert_eq!(parsed.context.string_cache.at(parameters[0].name), "arg");
     });
 }
 
@@ -953,8 +948,7 @@ fn direct_recovery_sources_are_retained_by_the_recovered_declaration() {
     ] {
         with_parse(source, |parsed| {
             let source_vectors = match parsed.items.first() {
-                | Some(ExternalDeclaration::RecoveredDeclaration(index)) =>
-                    parsed.parser.syntax[index].source_vectors,
+                | Some(ExternalDeclaration::RecoveredDeclaration(index)) => index.source_vectors,
                 | Some(ExternalDeclaration::Error(source_vectors)) => *source_vectors,
                 | root => panic!("expected recovered syntax or an error root: {root:?}"),
             };
@@ -1059,15 +1053,15 @@ fn definition_parameter_enumerators_are_visible_in_the_function_body() {
     with_parse(
         "typedef int A; int f(enum { A } x) { A; return 0; }\n",
         |parsed| {
-            let items = block_items(parsed, function_definition(parsed, 1).body);
+            let items = block_items(function_definition(parsed, 1).body);
 
             assert_eq!(items.len(), 2);
             assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-                parsed.parser.syntax[index].kind,
+                index.kind,
                 StatementType::Expression(ExpressionSlot::Parsed(_))
             )));
             assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-                parsed.parser.syntax[index].kind,
+                index.kind,
                 StatementType::Return(Some(ExpressionSlot::Parsed(_)))
             )));
         },
@@ -1079,15 +1073,15 @@ fn nested_definition_parameter_enumerators_are_visible_in_the_function_body() {
     with_parse(
         "typedef int A; int f(struct { enum { A } e; } x) { A; return 0; }\n",
         |parsed| {
-            let items = block_items(parsed, function_definition(parsed, 1).body);
+            let items = block_items(function_definition(parsed, 1).body);
 
             assert_eq!(items.len(), 2);
             assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-                parsed.parser.syntax[index].kind,
+                index.kind,
                 StatementType::Expression(ExpressionSlot::Parsed(_))
             )));
             assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-                parsed.parser.syntax[index].kind,
+                index.kind,
                 StatementType::Return(Some(ExpressionSlot::Parsed(_)))
             )));
         },
@@ -1121,7 +1115,8 @@ fn array_recovery_consumes_nested_brackets_before_the_owning_bracket() {
         let declarator = parsed.parser.syntax.nth::<InitDeclarator<'_>>(0).declarator;
 
         assert_eq!(
-            parsed.parser.syntax[declarator.kind]
+            declarator
+                .kind
                 .iter()
                 .filter(|direct| matches!(direct, DirectDeclarator::Array { .. }))
                 .count(),
@@ -1183,7 +1178,7 @@ fn array_star_is_a_vla_marker_only_immediately_before_the_closing_bracket() {
                 saw_marker |= is_pointer && assignment_expression.is_none();
                 if let Some(expression) = assignment_expression {
                     saw_bound |= matches!(
-                        parsed.parser.syntax[expression].kind,
+                        expression.kind,
                         ExpressionType::Unary {
                             operator: UnaryOperator::Indirection,
                             ..
@@ -1210,7 +1205,7 @@ fn hard_syntax_errors_retain_an_explicitly_recovered_declaration() {
             panic!("hard syntax errors should retain a recovered declaration");
         };
 
-        let declaration = &parsed.parser.syntax[index];
+        let declaration = index;
         assert_eq!(declaration.init_declarators.len(), 1);
         assert!(parser_errors(parsed).any(|error| {
             matches!(error, ParserErrorType::ExpectedStatementExpression(..))

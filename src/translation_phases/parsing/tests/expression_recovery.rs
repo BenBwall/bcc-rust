@@ -61,12 +61,9 @@ fn adjacent_strings_merge_across_macro_expansion_and_preserve_width() {
                 let initializer = (declaration(parsed, item)).init_declarators[0]
                     .initializer
                     .expect("string initializer");
-                let InitializerType::AssignmentExpression(expression) =
-                    parsed.parser.syntax[initializer].kind
-                else {
+                let InitializerType::AssignmentExpression(expression) = initializer.kind else {
                     panic!("expected scalar string initializer")
                 };
-                let expression = &parsed.parser.syntax[expression];
                 let ExpressionType::StringLiteral(literal) = expression.kind else {
                     panic!("expected string literal expression")
                 };
@@ -92,27 +89,25 @@ fn prefix_increment_accepts_a_compound_literal_postfix_operand() {
     with_parse(
         "typedef struct { int x; } T; int f(void) { ++(T){1}.x; return 0; }\n",
         |parsed| {
-            let items = block_items(parsed, function_definition(parsed, 1).body);
+            let items = block_items(function_definition(parsed, 1).body);
             let BlockItem::Statement(statement) = items[0] else {
                 panic!("expected expression statement")
             };
-            let StatementType::Expression(ExpressionSlot::Parsed(root)) =
-                parsed.parser.syntax[statement].kind
-            else {
+            let StatementType::Expression(ExpressionSlot::Parsed(root)) = statement.kind else {
                 panic!("expected parsed prefix expression")
             };
             let ExpressionType::Unary {
                 operator: UnaryOperator::PreIncrement,
                 operand_expression,
-            } = parsed.parser.syntax[root].kind
+            } = root.kind
             else {
                 panic!("expected prefix increment")
             };
             assert!(matches!(
-                parsed.parser.syntax[operand_expression].kind,
+                operand_expression.kind,
                 ExpressionType::DirectMember { base_expression, .. }
                     if matches!(
-                        parsed.parser.syntax[base_expression].kind,
+                        base_expression.kind,
                         ExpressionType::CompoundLiteral { .. }
                     )
             ));
@@ -131,26 +126,24 @@ fn sizeof_owns_the_complete_compound_literal_postfix_operand() {
         "typedef struct { int x; } T; int f(void) { return sizeof (T){1}.x; }\n",
         |parsed| {
             let [BlockItem::Statement(statement)] =
-                block_items(parsed, function_definition(parsed, 1).body)
+                block_items(function_definition(parsed, 1).body)
             else {
                 panic!("expected one return statement")
             };
-            let StatementType::Return(Some(ExpressionSlot::Parsed(root))) =
-                parsed.parser.syntax[statement].kind
-            else {
+            let StatementType::Return(Some(ExpressionSlot::Parsed(root))) = statement.kind else {
                 panic!("expected parsed return expression")
             };
-            let ExpressionType::SizeofExpr(operand) = parsed.parser.syntax[root].kind else {
+            let ExpressionType::SizeofExpr(operand) = root.kind else {
                 panic!("expected sizeof expression")
             };
             let ExpressionType::DirectMember {
                 base_expression, ..
-            } = parsed.parser.syntax[operand].kind
+            } = operand.kind
             else {
                 panic!("sizeof must own the member suffix")
             };
             assert!(matches!(
-                parsed.parser.syntax[base_expression].kind,
+                base_expression.kind,
                 ExpressionType::CompoundLiteral { .. }
             ));
             assert_eq!(expression_text(parsed, base_expression), "(T){1}");
@@ -195,7 +188,7 @@ fn repaired_expressions_and_designations_retain_recovery_metadata() {
         };
         assert!(first.recovered);
         assert!(second.recovered);
-        let first_designator = parsed.parser.syntax[first.designators][0];
+        let first_designator = first.designators[0];
         assert!(first_designator.recovered);
         assert!(parser_errors(parsed).any(|error| matches!(
             error,
@@ -248,26 +241,24 @@ fn adjacent_precedence_levels_and_parentheses_have_explicit_tree_tests() {
     for (source, outer, inner) in cases {
         with_parse(&format!("int f(void) {{ {source}; }}\n"), |parsed| {
             let [BlockItem::Statement(statement)] =
-                block_items(parsed, function_definition(parsed, 0).body)
+                block_items(function_definition(parsed, 0).body)
             else {
                 panic!("expected one expression statement")
             };
-            let StatementType::Expression(ExpressionSlot::Parsed(root)) =
-                parsed.parser.syntax[statement].kind
-            else {
+            let StatementType::Expression(ExpressionSlot::Parsed(root)) = statement.kind else {
                 panic!("expected parsed expression")
             };
             let ExpressionType::Binary {
                 operator,
                 left_expression,
                 ..
-            } = parsed.parser.syntax[root].kind
+            } = root.kind
             else {
                 panic!("expected binary root for {source}")
             };
             assert_eq!(operator, outer, "wrong outer operator for {source}");
             assert!(matches!(
-                parsed.parser.syntax[left_expression].kind,
+                left_expression.kind,
                 ExpressionType::Binary { operator, .. } if operator == inner
             ));
             assert!(parser_errors(parsed).next().is_none());
@@ -275,27 +266,24 @@ fn adjacent_precedence_levels_and_parentheses_have_explicit_tree_tests() {
     }
 
     with_parse("int f(void) { (a+b)*c; }\n", |parsed| {
-        let [BlockItem::Statement(statement)] =
-            block_items(parsed, function_definition(parsed, 0).body)
+        let [BlockItem::Statement(statement)] = block_items(function_definition(parsed, 0).body)
         else {
             panic!("expected one expression statement")
         };
-        let StatementType::Expression(ExpressionSlot::Parsed(root)) =
-            parsed.parser.syntax[statement].kind
-        else {
+        let StatementType::Expression(ExpressionSlot::Parsed(root)) = statement.kind else {
             panic!("expected parsed expression")
         };
         assert!(matches!(
-            parsed.parser.syntax[root].kind,
+            root.kind,
             ExpressionType::Binary {
                 operator: BinaryOperator::Multiplication,
                 left_expression,
                 ..
             } if matches!(
-                parsed.parser.syntax[left_expression].kind,
+                left_expression.kind,
                 ExpressionType::Parenthesized { expression }
                     if matches!(
-                        parsed.parser.syntax[expression].kind,
+                        expression.kind,
                         ExpressionType::Binary {
                             operator: BinaryOperator::Addition,
                             ..
@@ -326,14 +314,14 @@ fn unowned_expression_closers_are_consumed_once() {
 #[test]
 fn binary_expression_recovery_synthesizes_missing_operands() {
     with_parse("int f(void) { return 1 + ); return; }\n", |parsed| {
-        let items = block_items(parsed, function_definition(parsed, 0).body);
+        let items = block_items(function_definition(parsed, 0).body);
 
         assert_eq!(items.len(), 2, "{items:#?}");
         assert!(matches!(
             items[0],
             BlockItem::Statement(index)
                 if matches!(
-                    parsed.parser.syntax[index].kind,
+                    index.kind,
                     StatementType::Return(Some(ExpressionSlot::Parsed(_)))
                 )
         ));
@@ -341,7 +329,7 @@ fn binary_expression_recovery_synthesizes_missing_operands() {
             items[1],
             BlockItem::Statement(index)
                 if matches!(
-                    parsed.parser.syntax[index].kind,
+                    index.kind,
                     StatementType::Return(None)
                 )
         ));
@@ -376,14 +364,14 @@ fn unexpected_braces_in_an_expression_do_not_close_the_function_body() {
     with_parse(
         "int f(void) { int x = 1 + {} int after; return; }\n",
         |parsed| {
-            let items = block_items(parsed, function_definition(parsed, 0).body);
+            let items = block_items(function_definition(parsed, 0).body);
 
             assert_eq!(items.len(), 3, "{items:#?}");
             assert!(matches!(items[0], BlockItem::Declaration(_)));
             assert!(matches!(items[1], BlockItem::Declaration(_)));
             assert!(
                 matches!(items[2], BlockItem::Statement(statement) if matches!(
-                    parsed.parser.syntax[statement].kind,
+                    statement.kind,
                     StatementType::Return(None)
                 ))
             );
@@ -404,14 +392,14 @@ fn unexpected_braces_in_an_expression_do_not_close_the_function_body() {
 #[test]
 fn missing_member_names_retain_the_consumed_operator_provenance() {
     with_parse("int f(void) { return a.; return p->; }\n", |parsed| {
-        let items = block_items(parsed, function_definition(parsed, 0).body);
+        let items = block_items(function_definition(parsed, 0).body);
         let roots = items
             .iter()
             .map(|item| {
                 let BlockItem::Statement(statement) = *item else {
                     panic!("expected return statement")
                 };
-                return_expression(parsed, statement)
+                return_expression(statement)
             })
             .collect::<Vec<_>>();
 
@@ -419,7 +407,7 @@ fn missing_member_names_retain_the_consumed_operator_provenance() {
         for (root, expression_source, operator_source) in
             [(roots[0], "a.", "."), (roots[1], "p->", "->")]
         {
-            let expression = &parsed.parser.syntax[root];
+            let expression = root;
             assert!(matches!(expression.kind, ExpressionType::Error));
             assert!(expression.recovered);
             assert_eq!(expression_text(parsed, root), expression_source);
@@ -507,7 +495,7 @@ fn array_designator_recovery_preserves_following_declarations() {
     with_parse(
         "int f(void) { int x = { [1 + int after; int later; }\n",
         |parsed| {
-            let items = block_items(parsed, function_definition(parsed, 0).body);
+            let items = block_items(function_definition(parsed, 0).body);
 
             assert_eq!(items.len(), 3, "{items:#?}");
             let names = items
@@ -516,7 +504,7 @@ fn array_designator_recovery_preserves_following_declarations() {
                     let BlockItem::Declaration(index) = item else {
                         panic!("expected a declaration block item")
                     };
-                    let declaration = &parsed.parser.syntax[index];
+                    let declaration = index;
                     identifier_name(parsed, declaration.init_declarators[0].declarator)
                         .expect("named declarator")
                 })
@@ -548,12 +536,12 @@ fn array_designator_recovery_consumes_parentheses_not_owned_by_the_caller() {
         "int f(){ int a[] = {[1 + )] = 2}; int after; return 0; }\n",
         |parsed| {
             assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
-            let items = block_items(parsed, function_definition(parsed, 0).body);
+            let items = block_items(function_definition(parsed, 0).body);
             assert_eq!(items.len(), 3, "{items:#?}");
             assert!(matches!(items[0], BlockItem::Declaration(_)));
             assert!(matches!(items[1], BlockItem::Declaration(_)));
             assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-                parsed.parser.syntax[index].kind,
+                index.kind,
                 StatementType::Return(Some(ExpressionSlot::Parsed(_)))
             )));
         },
@@ -566,17 +554,14 @@ fn array_designator_recovery_preserves_a_for_header_parenthesis() {
         "int f(void) { for (int a[] = {[1 + ) ; return; }\n",
         |parsed| {
             assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
-            let items = block_items(parsed, function_definition(parsed, 0).body);
+            let items = block_items(function_definition(parsed, 0).body);
             assert_eq!(items.len(), 2, "{items:#?}");
             let BlockItem::Statement(for_statement) = items[0] else {
                 panic!("expected recovered for statement")
             };
-            assert!(matches!(
-                parsed.parser.syntax[for_statement].kind,
-                StatementType::For { .. }
-            ));
+            assert!(matches!(for_statement.kind, StatementType::For { .. }));
             assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-                parsed.parser.syntax[index].kind,
+                index.kind,
                 StatementType::Return(None)
             )));
         },
@@ -590,12 +575,12 @@ fn initializer_recovery_consumes_unowned_closing_delimiters() {
             &format!("int f(void) {{ int a[] = {{1 + {closer} }}; int after; return; }}\n"),
             |parsed| {
                 assert_eq!(parsed.items.len(), 1, "{closer}: {:#?}", parsed.items);
-                let items = block_items(parsed, function_definition(parsed, 0).body);
+                let items = block_items(function_definition(parsed, 0).body);
                 assert_eq!(items.len(), 3, "{closer}: {items:#?}");
                 assert!(matches!(items[0], BlockItem::Declaration(_)));
                 assert!(matches!(items[1], BlockItem::Declaration(_)));
                 assert!(matches!(items[2], BlockItem::Statement(index) if matches!(
-                    parsed.parser.syntax[index].kind,
+                    index.kind,
                     StatementType::Return(None)
                 )));
             },
@@ -609,14 +594,14 @@ fn initializer_recovery_preserves_an_enclosing_subscript_bracket() {
         "int f(void) { return values[(int[]){1 + ]; return 0; }\n",
         |parsed| {
             assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
-            let items = block_items(parsed, function_definition(parsed, 0).body);
+            let items = block_items(function_definition(parsed, 0).body);
             assert_eq!(items.len(), 2, "{items:#?}");
             assert!(matches!(items[0], BlockItem::Statement(index) if matches!(
-                parsed.parser.syntax[index].kind,
+                index.kind,
                 StatementType::Return(Some(ExpressionSlot::Parsed(_)))
             )));
             assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
-                parsed.parser.syntax[index].kind,
+                index.kind,
                 StatementType::Return(Some(ExpressionSlot::Parsed(_)))
             )));
         },
