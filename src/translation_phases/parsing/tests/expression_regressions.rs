@@ -16,16 +16,16 @@ use crate::translation_phases::{
 };
 
 /// Selects the diagnostic a test case expects.
-type ErrorPredicate = fn(&ParserErrorType) -> bool;
+type ErrorPredicate = fn(&ParserErrorType<'_>) -> bool;
 
 /// The syntax tree and every parser diagnostic of one translation unit.
-struct Outcome {
+struct Outcome<'tu> {
     tree:   String,
     /// Each diagnostic with the byte offset where its primary span starts.
-    errors: Vec<(ParserErrorType, usize)>,
+    errors: Vec<(ParserErrorType<'tu>, usize)>,
 }
 
-impl Outcome {
+impl Outcome<'_> {
     /// Distinct diagnostic locations, the way the CLI folds diagnostics that
     /// share one location into a single report.
     fn locations(&self) -> Vec<usize> {
@@ -47,7 +47,7 @@ impl Outcome {
             .count()
     }
 
-    fn has(&self, predicate: impl Fn(&ParserErrorType) -> bool) -> bool {
+    fn has(&self, predicate: impl Fn(&ParserErrorType<'_>) -> bool) -> bool {
         self.errors.iter().any(|(error, _)| predicate(error))
     }
 
@@ -61,7 +61,7 @@ impl Outcome {
     }
 }
 
-fn with_run(source: &str, f: impl FnOnce(&Outcome)) {
+fn with_run(source: &str, f: impl FnOnce(&Outcome<'_>)) {
     with_parsed(source, |unit, context| {
         let tree = unit.syntax().inspect(
             unit.external_declarations(),

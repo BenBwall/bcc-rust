@@ -19,7 +19,7 @@ use crate::translation_phases::parsing::{
     },
 };
 
-fn errors<'a>(parsed: &'a Parsed<'_, '_, '_>) -> Vec<&'a ParserErrorType> {
+fn errors<'a, 'tu>(parsed: &'a Parsed<'_, 'tu, '_>) -> Vec<&'a ParserErrorType<'tu>> {
     parser_errors(parsed).collect()
 }
 
@@ -61,7 +61,11 @@ fn enumerators_declared_in_parameter_array_bounds_hide_typedefs_in_the_body() {
         "typedef int T;\nvoid k(int a[sizeof(enum {X = sizeof(enum {T})})]) { T * 4; }\n",
     ] {
         with_parse(source, |parsed| {
-            assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new(), "{source}");
+            assert_eq!(
+                errors(parsed),
+                Vec::<&ParserErrorType<'_>>::new(),
+                "{source}"
+            );
             assert!(body_item_is_expression(parsed, 1, 0), "{source}");
         });
     }
@@ -74,7 +78,7 @@ fn parameter_bound_enumerators_end_with_the_function_body() {
     with_parse(
         "typedef int T;\nvoid k(int a[sizeof(enum {T})]) { T * 4; }\nvoid m(void) { T * p; }\n",
         |parsed| {
-            assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new());
+            assert_eq!(errors(parsed), Vec::<&ParserErrorType<'_>>::new());
             assert!(body_item_is_expression(parsed, 1, 0));
             assert!(!body_item_is_expression(parsed, 2, 0));
         },
@@ -88,7 +92,7 @@ fn nested_prototype_enumerators_do_not_reach_the_function_body() {
     with_parse(
         "typedef int T;\nvoid k(int (*g)(int a[sizeof(enum {T})])) { T * p; }\n",
         |parsed| {
-            assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new());
+            assert_eq!(errors(parsed), Vec::<&ParserErrorType<'_>>::new());
             assert!(!body_item_is_expression(parsed, 1, 0));
         },
     );
@@ -102,7 +106,7 @@ fn only_the_definitions_own_parameter_list_reaches_the_body() {
         "typedef int T, U;\nint (*f(int a[sizeof(enum {T})]))(int b[sizeof(enum {U})]) { T * 1; U \
          * p; return 0; }\n",
         |parsed| {
-            assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new());
+            assert_eq!(errors(parsed), Vec::<&ParserErrorType<'_>>::new());
             assert!(body_item_is_expression(parsed, 1, 0));
             assert!(!body_item_is_expression(parsed, 1, 1));
         },
@@ -287,7 +291,7 @@ fn typedef_lookups_in_deep_block_nesting_use_a_bounded_number_of_probes() {
         "}".repeat(depth)
     );
     with_parse(&source, |parsed| {
-        assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new());
+        assert_eq!(errors(parsed), Vec::<&ParserErrorType<'_>>::new());
         let probes = parsed.parser.scopes.lookup_probes.get();
         assert!(
             probes <= 64 * depth,

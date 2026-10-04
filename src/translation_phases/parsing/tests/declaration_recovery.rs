@@ -1406,7 +1406,7 @@ fn empty_abstract_function_declarator_owns_both_parentheses() {
 
 #[test]
 fn malformed_and_eof_paths_terminate_with_source_backed_diagnostics() {
-    type DiagnosticMatcher = fn(&ParserErrorType) -> bool;
+    type DiagnosticMatcher = fn(&ParserErrorType<'_>) -> bool;
     let cases: &[(&str, DiagnosticMatcher)] = &[
         ("int\n", |error| {
             matches!(

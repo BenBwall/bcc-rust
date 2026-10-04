@@ -27,7 +27,7 @@ use crate::translation_phases::{
     },
 };
 
-fn errors(parsed: &Parsed<'_, '_, '_>) -> Vec<ParserErrorType> {
+fn errors<'tu>(parsed: &Parsed<'_, 'tu, '_>) -> Vec<ParserErrorType<'tu>> {
     parser_errors(parsed).cloned().collect()
 }
 

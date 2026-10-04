@@ -182,7 +182,7 @@ pub(crate) struct ParserError<'tu> {
     /// a new line.
     pub(crate) insertion_point:   Option<SourceVectors>,
     /// Dedicated diagnostic kind and its grammar-specific payload.
-    pub(crate) error_type:        ParserErrorType,
+    pub(crate) error_type:        ParserErrorType<'tu>,
     /// Source segments to underline when the diagnostic is rendered.
     pub(crate) source_vectors:    SourceVectors,
     pub(crate) ranges:            &'tu mut [SourceVectors],
@@ -337,7 +337,7 @@ impl std::error::Error for ParserError<'_> {}
 /// §5.1.1.3, p. 11; PDF p. 23. Each variant below also cites the production,
 /// constraint, or semantic rule it concerns.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum ParserErrorType {
+pub(crate) enum ParserErrorType<'tu> {
     /// The preprocessed token stream contained no external declaration.
     /// C99: §6.9, p. 140; PDF p. 152.
     EmptyTranslationUnit,
@@ -510,8 +510,8 @@ pub(crate) enum ParserErrorType {
     /// pp. 99-100; PDF pp. 111-112. Both fields are user-facing spellings
     /// resolved when the diagnostic is reported.
     ConflictingTypeSpecifiers {
-        existing:    Box<str>,
-        conflicting: Box<str>,
+        existing:    &'tu str,
+        conflicting: &'tu str,
     },
     /// A type keyword was repeated where no repetition is legal.
     /// C99: the permitted specifier sets are §6.7.2 paragraph 2,
@@ -588,7 +588,7 @@ pub(crate) enum ParserErrorType {
     EmptyStructDeclarator,
 }
 
-impl GetSeverity for ParserErrorType {
+impl GetSeverity for ParserErrorType<'_> {
     fn severity(&self) -> ErrorSeverity {
         match self {
             | Self::EmptyTranslationUnit
@@ -707,7 +707,7 @@ fn token_spelling(token: TokenType) -> String {
 const SPECIFIER_COMBINATIONS_NOTE: &str =
     "C99 §6.7.2p2 lists every valid combination of type specifiers";
 
-impl ParserErrorType {
+impl ParserErrorType<'_> {
     pub(super) fn code(&self) -> ParserDiagnosticCode {
         match self {
             | Self::ResourceLimitExceeded { .. } => ParserDiagnosticCode::ResourceLimit,
@@ -1276,7 +1276,7 @@ impl ParserErrorType {
     }
 }
 
-impl Display for ParserErrorType {
+impl Display for ParserErrorType<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str(&self.explain(None).message)
     }

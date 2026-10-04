@@ -700,10 +700,10 @@ impl<'tok> Parser<'tok> {
     /// C99: syntax-rule and constraint violations require at least one
     /// diagnostic under §5.1.1.3, p. 11; PDF p. 23: implementations must
     /// “produce at least one diagnostic message”.
-    pub(super) fn report(
+    pub(super) fn report<'tu>(
         &mut self,
-        context: &mut Context<'_>,
-        error_type: ParserErrorType,
+        context: &mut Context<'tu>,
+        error_type: ParserErrorType<'tu>,
         token: Option<Token>,
     ) {
         let warning_group = error_type.warning_group();

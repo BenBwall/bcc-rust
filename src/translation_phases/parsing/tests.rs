@@ -192,7 +192,9 @@ fn identifier_name(parsed: &Parsed<'_, '_, '_>, declarator: Declarator) -> Optio
         .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
 }
 
-fn parser_errors<'a>(parsed: &'a Parsed<'_, '_, '_>) -> impl Iterator<Item = &'a ParserErrorType> {
+fn parser_errors<'a, 'tu>(
+    parsed: &'a Parsed<'_, 'tu, '_>,
+) -> impl Iterator<Item = &'a ParserErrorType<'tu>> {
     parsed.errors.iter().filter_map(|error| match error {
         | TranslationError::Parsing(error) => Some(&error.error_type),
         | _ => None,

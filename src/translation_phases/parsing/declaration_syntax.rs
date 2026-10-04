@@ -563,17 +563,18 @@ impl TypeSpecifiers {
 
     /// Reports `conflicting` against the accumulated specifiers using
     /// source spellings, so rendered diagnostics never expose arena handles.
-    fn report_conflict(
+    fn report_conflict<'tu>(
         self,
         parser: &mut Parser<'_>,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         conflicting: StringCacheId,
         token: Token,
     ) {
-        let tagged = |keyword: &str, tag: Option<Identifier>| -> Box<str> {
+        let tagged = |keyword: &str, tag: Option<Identifier>| -> &'tu str {
             match tag {
-                | Some(tag) => format!("{keyword} {}", context.string_cache.at(tag.name)).into(),
-                | None => format!("{keyword} {{...}}").into(),
+                | Some(tag) => context
+                    .diagnostic_text(&format!("{keyword} {}", context.string_cache.at(tag.name))),
+                | None => context.diagnostic_text(&format!("{keyword} {{...}}")),
             }
         };
         let existing = match self {
@@ -586,12 +587,13 @@ impl TypeSpecifiers {
                 tagged(keyword, specifier.identifier)
             },
             | TypeSpecifiers::Enum(index) => tagged("enum", parser.syntax[index].name),
-            | TypeSpecifiers::TypedefName(name) => context.string_cache.at(name.name).into(),
-            | type_specifiers => type_specifiers.to_string().into_boxed_str(),
+            | TypeSpecifiers::TypedefName(name) =>
+                context.diagnostic_text(context.string_cache.at(name.name)),
+            | type_specifiers => context.diagnostic_text(&type_specifiers.to_string()),
         };
         let error_type = ParserErrorType::ConflictingTypeSpecifiers {
             existing,
-            conflicting: context.string_cache.at(conflicting).into(),
+            conflicting: context.diagnostic_text(context.string_cache.at(conflicting)),
         };
         parser.report(context, error_type, Some(token));
     }
