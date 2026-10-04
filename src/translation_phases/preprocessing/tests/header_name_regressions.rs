@@ -78,13 +78,13 @@ fn backslash_header() -> PathBuf {
     }
 }
 
-struct Outcome {
+struct Outcome<'a> {
     identifiers: Vec<String>,
     errors:      Vec<TranslationError>,
-    context:     Context,
+    context:     &'a mut Context,
 }
 
-impl Outcome {
+impl Outcome<'_> {
     fn preprocessor_errors(&self) -> Vec<&PreprocessorErrorType> {
         self.errors
             .iter()
@@ -105,21 +105,35 @@ impl Outcome {
                 matches!(error, TranslationError::Preprocessing(PreprocessorError { error_type, .. }) if predicate(error_type))
             })
             .expect("the error was reported");
-        let source = error.source_vectors(&mut self.context);
+        let source = error.source_vectors(self.context);
         self.context.get_source_vectors(source)[0].clone()
     }
 }
 
-fn preprocess_in(headers: &Headers, source: &str, policy: ExtensionPolicy) -> Outcome {
-    preprocess_with_directories(headers, source, policy, SharedVec::default())
+fn with_preprocess<R>(
+    headers: &Headers,
+    source: &str,
+    inspect: impl FnOnce(Outcome<'_>) -> R,
+) -> R {
+    with_preprocess_in(headers, source, ExtensionPolicy::Allow, inspect)
 }
 
-fn preprocess_with_directories(
+fn with_preprocess_in<R>(
+    headers: &Headers,
+    source: &str,
+    policy: ExtensionPolicy,
+    inspect: impl FnOnce(Outcome<'_>) -> R,
+) -> R {
+    with_preprocess_directories(headers, source, policy, SharedVec::default(), inspect)
+}
+
+fn with_preprocess_directories<R>(
     headers: &Headers,
     source: &str,
     policy: ExtensionPolicy,
     system_directories: SharedVec<PathBuf>,
-) -> Outcome {
+    inspect: impl FnOnce(Outcome<'_>) -> R,
+) -> R {
     let mut context =
         Context::with_configuration(CompilerConfiguration::new(CStandard::C99, policy));
     let mut preprocessor = Preprocessor::new(
@@ -136,15 +150,11 @@ fn preprocess_with_directories(
         }
     }
     let errors = context.take_pending_errors();
-    Outcome {
+    inspect(Outcome {
         identifiers,
         errors,
-        context,
-    }
-}
-
-fn preprocess(headers: &Headers, source: &str) -> Outcome {
-    preprocess_in(headers, source, ExtensionPolicy::Allow)
+        context: &mut context,
+    })
 }
 
 #[test]
@@ -184,66 +194,71 @@ fn written_header_names_keep_their_source_text() {
 fn characters_glued_to_angle_header_closing_are_extra_tokens() {
     let headers = Headers::new();
     headers.write(Path::new("plain.h"), "plain");
-    let preprocess_header = |source: &str| {
-        preprocess_with_directories(
+    let preprocess_header = |source: &str, inspect: &mut dyn FnMut(Outcome<'_>)| {
+        with_preprocess_directories(
             &headers,
             source,
             ExtensionPolicy::Allow,
             SharedVec::from(vec![headers.0.clone()]),
-        )
+            inspect,
+        );
     };
     for tail in [">", "=", "> extra"] {
         let source = format!("#include <plain.h>{tail}\nafter\n");
-        let mut outcome = preprocess_header(&source);
-        assert_eq!(outcome.identifiers, ["plain", "after"], "{source:?}");
-        assert!(
-            matches!(
-                outcome.preprocessor_errors().as_slice(),
-                [PreprocessorErrorType::ExtraTokensAfterIncludeDirective]
-            ),
-            "{source:?}: {:#?}",
-            outcome.errors
-        );
-        let location = outcome.location(|error| {
-            matches!(
-                error,
-                PreprocessorErrorType::ExtraTokensAfterIncludeDirective
-            )
+        preprocess_header(&source, &mut |mut outcome| {
+            assert_eq!(outcome.identifiers, ["plain", "after"], "{source:?}");
+            assert!(
+                matches!(
+                    outcome.preprocessor_errors().as_slice(),
+                    [PreprocessorErrorType::ExtraTokensAfterIncludeDirective]
+                ),
+                "{source:?}: {:#?}",
+                outcome.errors
+            );
+            let location = outcome.location(|error| {
+                matches!(
+                    error,
+                    PreprocessorErrorType::ExtraTokensAfterIncludeDirective
+                )
+            });
+            assert_eq!(location.line, 1, "{source:?}");
+            assert_eq!(location.column, 19, "{source:?}");
+            assert_eq!(location.length, 1, "{source:?}");
         });
-        assert_eq!(location.line, 1, "{source:?}");
-        assert_eq!(location.column, 19, "{source:?}");
-        assert_eq!(location.length, 1, "{source:?}");
     }
 
     std::fs::write(headers.0.join("middle.h"), "#include <plain.h>>").unwrap();
-    let outcome = preprocess_header("#include \"middle.h\"\nafter\n");
-    assert_eq!(outcome.identifiers, ["plain", "after"]);
-    assert_eq!(
-        outcome
-            .preprocessor_errors()
-            .iter()
-            .filter(|error| matches!(
-                error,
-                PreprocessorErrorType::ExtraTokensAfterIncludeDirective
-            ))
-            .count(),
-        1,
-        "{:#?}",
-        outcome.errors
-    );
+    preprocess_header("#include \"middle.h\"\nafter\n", &mut |outcome| {
+        assert_eq!(outcome.identifiers, ["plain", "after"]);
+        assert_eq!(
+            outcome
+                .preprocessor_errors()
+                .iter()
+                .filter(|error| matches!(
+                    error,
+                    PreprocessorErrorType::ExtraTokensAfterIncludeDirective
+                ))
+                .count(),
+            1,
+            "{:#?}",
+            outcome.errors
+        );
+    });
 }
 
 #[test]
 fn macro_operands_combine_token_spellings() {
     let headers = Headers::new();
     headers.write(Path::new("plain.h"), "plain");
-    let outcome = preprocess(
+    with_preprocess(
         &headers,
         "#define Q \"plain.h\"\n#include Q\n#define NAME plain\n#define S(x) #x\n#include \
          S(plain.h)\n",
+        |outcome| {
+            assert!(outcome.errors.is_empty(), "{:#?}", outcome.errors);
+            assert_eq!(outcome.identifiers, ["plain", "plain"]);
+        },
     );
-    assert!(outcome.errors.is_empty(), "{:#?}", outcome.errors);
-    assert_eq!(outcome.identifiers, ["plain", "plain"]);
 }
 
 #[test]
@@ -253,13 +268,14 @@ fn skipped_include_lines_are_ordinary_tokens() {
         "#if 0\n#include <it's.h>\n#include \"unterminated\n#include <a//b.h>\n#endif\nafter\n",
         "#ifdef NOPE\n#include <a\\b.h>\n#else\nafter\n#endif\n",
     ] {
-        let outcome = preprocess(&headers, source);
-        assert!(
-            outcome.errors.is_empty(),
-            "{source:?}: {:#?}",
-            outcome.errors
-        );
-        assert_eq!(outcome.identifiers, ["after"], "{source:?}");
+        with_preprocess(&headers, source, |outcome| {
+            assert!(
+                outcome.errors.is_empty(),
+                "{source:?}: {:#?}",
+                outcome.errors
+            );
+            assert_eq!(outcome.identifiers, ["after"], "{source:?}");
+        });
     }
 }
 
@@ -277,40 +293,41 @@ fn undefined_sequences_are_reported_once_at_their_position() {
         ("#include \"a/*b.h\"\n", "/*", 12),
         ("#include <x??/y.h>\n", "\\", 12),
     ] {
-        let mut outcome = preprocess(&headers, source);
-        let invalid: Vec<_> = outcome
-            .preprocessor_errors()
-            .into_iter()
-            .filter_map(|error| match error {
-                | PreprocessorErrorType::InvalidCharacterInHeaderName(found) => Some(*found),
-                | _ => None,
-            })
-            .collect();
-        assert_eq!(invalid, [sequence], "{source:?}: {:#?}", outcome.errors);
-        let location = outcome.location(|error| {
-            matches!(
-                error,
-                PreprocessorErrorType::InvalidCharacterInHeaderName(_)
-            )
-        });
-        assert_eq!(location.column, column, "{source:?}");
-        assert_eq!(
-            location.length as usize,
-            if source.contains("??/") {
-                3
-            } else {
-                sequence.len()
-            },
-            "{source:?}"
-        );
-        // Lookup still happens, with the name as written.
-        assert!(
-            outcome
+        with_preprocess(&headers, source, |mut outcome| {
+            let invalid: Vec<_> = outcome
                 .preprocessor_errors()
-                .iter()
-                .any(|error| matches!(error, PreprocessorErrorType::HeaderNotFound { .. })),
-            "{source:?}"
-        );
+                .into_iter()
+                .filter_map(|error| match error {
+                    | PreprocessorErrorType::InvalidCharacterInHeaderName(found) => Some(*found),
+                    | _ => None,
+                })
+                .collect();
+            assert_eq!(invalid, [sequence], "{source:?}: {:#?}", outcome.errors);
+            let location = outcome.location(|error| {
+                matches!(
+                    error,
+                    PreprocessorErrorType::InvalidCharacterInHeaderName(_)
+                )
+            });
+            assert_eq!(location.column, column, "{source:?}");
+            assert_eq!(
+                location.length as usize,
+                if source.contains("??/") {
+                    3
+                } else {
+                    sequence.len()
+                },
+                "{source:?}"
+            );
+            // Lookup still happens, with the name as written.
+            assert!(
+                outcome
+                    .preprocessor_errors()
+                    .iter()
+                    .any(|error| matches!(error, PreprocessorErrorType::HeaderNotFound { .. })),
+                "{source:?}"
+            );
+        });
     }
 }
 
@@ -321,27 +338,28 @@ fn expanded_header_errors_keep_the_lookup_failure() {
         "#define H <it's.h>\n#include H\nafter\n",
         "#define H \"it's.h\"\n#include H\nafter\n",
     ] {
-        let mut outcome = preprocess(&headers, source);
-        assert_eq!(outcome.identifiers, ["after"]);
-        assert!(outcome.preprocessor_errors().iter().any(|error| matches!(
-            error,
-            PreprocessorErrorType::InvalidCharacterInHeaderName("'")
-        )));
-        assert!(
-            outcome
-                .preprocessor_errors()
-                .iter()
-                .any(|error| matches!(error, PreprocessorErrorType::HeaderNotFound { .. }))
-        );
-        let invalid = outcome.location(|error| {
-            matches!(
+        with_preprocess(&headers, source, |mut outcome| {
+            assert_eq!(outcome.identifiers, ["after"]);
+            assert!(outcome.preprocessor_errors().iter().any(|error| matches!(
                 error,
-                PreprocessorErrorType::InvalidCharacterInHeaderName(_)
-            )
+                PreprocessorErrorType::InvalidCharacterInHeaderName("'")
+            )));
+            assert!(
+                outcome
+                    .preprocessor_errors()
+                    .iter()
+                    .any(|error| matches!(error, PreprocessorErrorType::HeaderNotFound { .. }))
+            );
+            let invalid = outcome.location(|error| {
+                matches!(
+                    error,
+                    PreprocessorErrorType::InvalidCharacterInHeaderName(_)
+                )
+            });
+            assert_eq!(invalid.line, 1, "{source:?}");
+            assert_eq!(invalid.column, 14, "{source:?}");
+            assert_eq!(invalid.length, 1, "{source:?}");
         });
-        assert_eq!(invalid.line, 1, "{source:?}");
-        assert_eq!(invalid.column, 14, "{source:?}");
-        assert_eq!(invalid.length, 1, "{source:?}");
     }
 }
 
@@ -360,31 +378,32 @@ fn missing_closing_delimiters_are_reported_before_lookup() {
             ExtensionPolicy::Warn,
             ExtensionPolicy::Deny,
         ] {
-            let mut outcome = preprocess_in(&headers, source, policy);
-            let errors = outcome.preprocessor_errors();
-            let missing = errors
-                .iter()
-                .position(|error| {
-                    matches!(error, PreprocessorErrorType::UnterminatedHeaderName(found) if *found == delimiter)
-                })
-                .unwrap_or_else(|| panic!("{source:?}: {:#?}", outcome.errors));
-            if let Some(lookup) = errors
-                .iter()
-                .position(|error| matches!(error, PreprocessorErrorType::HeaderNotFound { .. }))
-            {
-                assert!(missing < lookup, "{source:?}");
-            }
-            let location = outcome.location(|error| {
-                matches!(error, PreprocessorErrorType::UnterminatedHeaderName(_))
+            with_preprocess_in(&headers, source, policy, |mut outcome| {
+                let errors = outcome.preprocessor_errors();
+                let missing = errors
+                    .iter()
+                    .position(|error| {
+                        matches!(error, PreprocessorErrorType::UnterminatedHeaderName(found) if *found == delimiter)
+                    })
+                    .unwrap_or_else(|| panic!("{source:?}: {:#?}", outcome.errors));
+                if let Some(lookup) = errors
+                    .iter()
+                    .position(|error| matches!(error, PreprocessorErrorType::HeaderNotFound { .. }))
+                {
+                    assert!(missing < lookup, "{source:?}");
+                }
+                let location = outcome.location(|error| {
+                    matches!(error, PreprocessorErrorType::UnterminatedHeaderName(_))
+                });
+                assert_eq!(
+                    (location.column, location.length),
+                    (column, 0),
+                    "{source:?}"
+                );
+                if source.ends_with("after\n") {
+                    assert_eq!(outcome.identifiers, ["after"], "{source:?}");
+                }
             });
-            assert_eq!(
-                (location.column, location.length),
-                (column, 0),
-                "{source:?}"
-            );
-            if source.ends_with("after\n") {
-                assert_eq!(outcome.identifiers, ["after"], "{source:?}");
-            }
         }
     }
 }
@@ -395,35 +414,43 @@ fn quoted_backslashes_follow_the_extension_policy() {
     headers.write(&backslash_header(), "found");
     let source = "#include \"dir\\file.h\"\nafter\n";
 
-    let outcome = preprocess_in(&headers, source, ExtensionPolicy::Allow);
-    assert!(outcome.errors.is_empty(), "{:#?}", outcome.errors);
-    assert_eq!(outcome.identifiers, ["found", "after"]);
+    with_preprocess_in(&headers, source, ExtensionPolicy::Allow, |outcome| {
+        assert!(outcome.errors.is_empty(), "{:#?}", outcome.errors);
+        assert_eq!(outcome.identifiers, ["found", "after"]);
+    });
 
-    let mut outcome = preprocess_in(&headers, source, ExtensionPolicy::Warn);
-    assert_eq!(outcome.identifiers, ["found", "after"]);
-    assert!(matches!(
-        outcome.errors.as_slice(),
-        [TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(ExtensionPolicy::Warn),
-            ..
-        })]
-    ));
-    assert_eq!(outcome.errors[0].severity(), ErrorSeverity::Warning);
-    let location = outcome
-        .location(|error| matches!(error, PreprocessorErrorType::BackslashInQuotedHeaderName(_)));
-    assert_eq!((location.column, location.length), (14, 1));
+    with_preprocess_in(&headers, source, ExtensionPolicy::Warn, |mut outcome| {
+        assert_eq!(outcome.identifiers, ["found", "after"]);
+        assert!(matches!(
+            outcome.errors.as_slice(),
+            [TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(
+                    ExtensionPolicy::Warn
+                ),
+                ..
+            })]
+        ));
+        assert_eq!(outcome.errors[0].severity(), ErrorSeverity::Warning);
+        let location = outcome.location(|error| {
+            matches!(error, PreprocessorErrorType::BackslashInQuotedHeaderName(_))
+        });
+        assert_eq!((location.column, location.length), (14, 1));
+    });
 
-    let outcome = preprocess_in(&headers, source, ExtensionPolicy::Deny);
-    // The header is not looked up, so nothing from it appears.
-    assert_eq!(outcome.identifiers, ["after"]);
-    assert!(matches!(
-        outcome.errors.as_slice(),
-        [TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(ExtensionPolicy::Deny),
-            ..
-        })]
-    ));
-    assert_eq!(outcome.errors[0].severity(), ErrorSeverity::Error);
+    with_preprocess_in(&headers, source, ExtensionPolicy::Deny, |outcome| {
+        // The header is not looked up, so nothing from it appears.
+        assert_eq!(outcome.identifiers, ["after"]);
+        assert!(matches!(
+            outcome.errors.as_slice(),
+            [TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(
+                    ExtensionPolicy::Deny
+                ),
+                ..
+            })]
+        ));
+        assert_eq!(outcome.errors[0].severity(), ErrorSeverity::Error);
+    });
 }
 
 #[test]
@@ -434,22 +461,23 @@ fn angle_backslashes_are_errors_under_every_policy() {
         ExtensionPolicy::Warn,
         ExtensionPolicy::Deny,
     ] {
-        let outcome = preprocess_in(&headers, "#include <dir\\file.h>\n", policy);
-        assert!(
-            outcome.preprocessor_errors().iter().any(|error| matches!(
-                error,
-                PreprocessorErrorType::InvalidCharacterInHeaderName("\\")
-            )),
-            "{policy:?}: {:#?}",
-            outcome.errors
-        );
-        assert!(
-            !outcome.preprocessor_errors().iter().any(|error| matches!(
-                error,
-                PreprocessorErrorType::BackslashInQuotedHeaderName(_)
-            )),
-            "{policy:?}"
-        );
+        with_preprocess_in(&headers, "#include <dir\\file.h>\n", policy, |outcome| {
+            assert!(
+                outcome.preprocessor_errors().iter().any(|error| matches!(
+                    error,
+                    PreprocessorErrorType::InvalidCharacterInHeaderName("\\")
+                )),
+                "{policy:?}: {:#?}",
+                outcome.errors
+            );
+            assert!(
+                !outcome.preprocessor_errors().iter().any(|error| matches!(
+                    error,
+                    PreprocessorErrorType::BackslashInQuotedHeaderName(_)
+                )),
+                "{policy:?}"
+            );
+        });
     }
 }
 
@@ -457,13 +485,15 @@ fn angle_backslashes_are_errors_under_every_policy() {
 fn renamed_files_read_header_names_from_the_physical_file() {
     let headers = Headers::new();
     headers.write(Path::new("plain.h"), "plain");
-    let outcome = preprocess(
+    with_preprocess(
         &headers,
         "#line 7 \"renamed.c\"\n#include \"plain.h\"\n#include <it's.h>\n",
+        |outcome| {
+            assert_eq!(outcome.identifiers, ["plain"]);
+            assert!(outcome.preprocessor_errors().iter().any(|error| matches!(
+                error,
+                PreprocessorErrorType::InvalidCharacterInHeaderName("'")
+            )));
+        },
     );
-    assert_eq!(outcome.identifiers, ["plain"]);
-    assert!(outcome.preprocessor_errors().iter().any(|error| matches!(
-        error,
-        PreprocessorErrorType::InvalidCharacterInHeaderName("'")
-    )));
 }
