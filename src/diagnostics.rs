@@ -427,6 +427,9 @@ impl Renderer {
 
     /// Renders one diagnostic, ending with a blank line.
     pub(crate) fn render(&mut self, diagnostic: &Diagnostic, context: &Context<'_>) -> String {
+        // File indices are local to a context, so cached offsets from an
+        // earlier context cannot be reused for this diagnostic.
+        self.line_starts.clear();
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.reset();
         let mut out = String::new();
@@ -747,6 +750,22 @@ mod tests {
                  note: a declaration ends with `;`\n  = help: add `;` after `x`\n\n"
             );
             assert_eq!(renderer.render(&diagnostic, context), actual);
+        });
+    }
+
+    #[test]
+    fn reused_renderer_uses_the_current_contexts_line_starts() {
+        let mut renderer = Renderer::new(ColorChoice::Plain);
+        with_context("first line", |context, file| {
+            let source = span(context, file, "first line", "first");
+            let diagnostic = Explanation::new("first").at(ErrorSeverity::Error, source);
+            drop(renderer.render(&diagnostic, context));
+        });
+        with_context("x\ny\n", |context, file| {
+            let source = span(context, file, "x\ny\n", "y");
+            let diagnostic = Explanation::new("second").at(ErrorSeverity::Error, source);
+            let output = renderer.render(&diagnostic, context);
+            assert!(output.contains("2 | y"), "{output}");
         });
     }
 
