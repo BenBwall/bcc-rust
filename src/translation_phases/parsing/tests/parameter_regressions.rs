@@ -7,8 +7,8 @@ use super::{
     declaration,
     function_definition,
     init_declarators,
-    parse,
     parser_errors,
+    with_parse,
 };
 use crate::translation_phases::parsing::{
     declaration_syntax::DirectDeclarator,
@@ -60,9 +60,10 @@ fn enumerators_declared_in_parameter_array_bounds_hide_typedefs_in_the_body() {
         "typedef int T;\nvoid k(int a[sizeof(struct S { int q[sizeof(enum {T})]; })]) { T * 4; }\n",
         "typedef int T;\nvoid k(int a[sizeof(enum {X = sizeof(enum {T})})]) { T * 4; }\n",
     ] {
-        let parsed = parse(source);
-        assert_eq!(errors(&parsed), Vec::<&ParserErrorType>::new(), "{source}");
-        assert!(body_item_is_expression(&parsed, 1, 0), "{source}");
+        with_parse(source, |parsed| {
+            assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new(), "{source}");
+            assert!(body_item_is_expression(parsed, 1, 0), "{source}");
+        });
     }
 }
 
@@ -70,34 +71,42 @@ fn enumerators_declared_in_parameter_array_bounds_hide_typedefs_in_the_body() {
 /// the typedef is restored after the body.
 #[test]
 fn parameter_bound_enumerators_end_with_the_function_body() {
-    let parsed = parse(
+    with_parse(
         "typedef int T;\nvoid k(int a[sizeof(enum {T})]) { T * 4; }\nvoid m(void) { T * p; }\n",
+        |parsed| {
+            assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new());
+            assert!(body_item_is_expression(parsed, 1, 0));
+            assert!(!body_item_is_expression(parsed, 2, 0));
+        },
     );
-    assert_eq!(errors(&parsed), Vec::<&ParserErrorType>::new());
-    assert!(body_item_is_expression(&parsed, 1, 0));
-    assert!(!body_item_is_expression(&parsed, 2, 0));
 }
 
 /// Enumerators in a nested function declarator's parameters have their own
 /// prototype scope (§6.2.1p4) and must not leak into the outer body.
 #[test]
 fn nested_prototype_enumerators_do_not_reach_the_function_body() {
-    let parsed = parse("typedef int T;\nvoid k(int (*g)(int a[sizeof(enum {T})])) { T * p; }\n");
-    assert_eq!(errors(&parsed), Vec::<&ParserErrorType>::new());
-    assert!(!body_item_is_expression(&parsed, 1, 0));
+    with_parse(
+        "typedef int T;\nvoid k(int (*g)(int a[sizeof(enum {T})])) { T * p; }\n",
+        |parsed| {
+            assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new());
+            assert!(!body_item_is_expression(parsed, 1, 0));
+        },
+    );
 }
 
 /// The body sees the definition's own parameter list, not a later function
 /// suffix of the same declarator.
 #[test]
 fn only_the_definitions_own_parameter_list_reaches_the_body() {
-    let parsed = parse(
+    with_parse(
         "typedef int T, U;\nint (*f(int a[sizeof(enum {T})]))(int b[sizeof(enum {U})]) { T * 1; U \
          * p; return 0; }\n",
+        |parsed| {
+            assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new());
+            assert!(body_item_is_expression(parsed, 1, 0));
+            assert!(!body_item_is_expression(parsed, 1, 1));
+        },
     );
-    assert_eq!(errors(&parsed), Vec::<&ParserErrorType>::new());
-    assert!(body_item_is_expression(&parsed, 1, 0));
-    assert!(!body_item_is_expression(&parsed, 1, 1));
 }
 
 // --- corpus-triage-A:1 / aggregates-initializers:8 ---------------------------
@@ -115,24 +124,27 @@ fn mixed_prototype_parameter_after_k_and_r_name_is_diagnosed_once() {
         ("void f(a, int ok, ...);\n", 1),
         ("void f(a, struct { int q; } s, b);\n", 1),
     ] {
-        let parsed = parse(source);
-        let errors = errors(&parsed);
-        assert_eq!(errors.len(), expected, "{source}: {errors:?}");
-        assert!(
-            matches!(
-                errors.first(),
-                Some(ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator)
-            ),
-            "{source}: {errors:?}"
-        );
-        assert!(
-            !errors.iter().skip(1).any(|error| matches!(
-                error,
-                ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator
-                    | ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
-            )),
-            "{source}: {errors:?}"
-        );
+        with_parse(source, |parsed| {
+            let errors = errors(parsed);
+            assert_eq!(errors.len(), expected, "{source}: {errors:?}");
+            assert!(
+                matches!(
+                    errors.first(),
+                    Some(ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator)
+                ),
+                "{source}: {errors:?}"
+            );
+            assert!(
+                !errors.iter().skip(1).any(|error| matches!(
+                    error,
+                    ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator
+                        | ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
+                            ..
+                        )
+                )),
+                "{source}: {errors:?}"
+            );
+        });
     }
 }
 
@@ -140,26 +152,28 @@ fn mixed_prototype_parameter_after_k_and_r_name_is_diagnosed_once() {
 /// diagnosed.
 #[test]
 fn ellipsis_in_a_plain_identifier_list_is_still_diagnosed() {
-    let parsed = parse("void f(a, ...);\n");
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
-    )));
+    with_parse("void f(a, ...);\n", |parsed| {
+        assert!(parser_errors(parsed).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
+        )));
+    });
 }
 
 /// The K&R identifiers on either side of a mixed prototype parameter are kept.
 #[test]
 fn k_and_r_names_survive_a_mixed_prototype_parameter() {
-    let parsed = parse("void f(a, int *ok, b);\nint after;\n");
-    assert_eq!(parsed.items.len(), 2);
-    let DirectDeclarator::KAndRStyleFunction { parameters } = declared_suffix(&parsed, 0) else {
-        panic!("expected an identifier list");
-    };
-    let names = parsed.parser.syntax[parameters]
-        .iter()
-        .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
-        .collect::<Vec<_>>();
-    assert_eq!(names, ["a", "b"]);
+    with_parse("void f(a, int *ok, b);\nint after;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        let DirectDeclarator::KAndRStyleFunction { parameters } = declared_suffix(parsed, 0) else {
+            panic!("expected an identifier list");
+        };
+        let names = parsed.parser.syntax[parameters]
+            .iter()
+            .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["a", "b"]);
+    });
 }
 
 /// An identifier followed by `*` or a declaration-specifier keyword cannot
@@ -173,26 +187,27 @@ fn unknown_type_name_before_a_declarator_selects_prototype_syntax() {
         "int f(size_t n, int m);\n",
         "int f(size_t n, int m, ...);\n",
     ] {
-        let parsed = parse(source);
-        assert!(
-            matches!(
-                declared_suffix(&parsed, 0),
-                DirectDeclarator::Function { .. }
-            ),
-            "{source}"
-        );
-        let errors = errors(&parsed);
-        assert!(
-            !errors.iter().any(|error| matches!(
-                error,
-                ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator
-                    | ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
-                    | ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(..)
-            )),
-            "{source}: {errors:?}"
-        );
-        // At most the unknown type name and its displaced declarator name.
-        assert!(errors.len() <= 2, "{source}: {errors:?}");
+        with_parse(source, |parsed| {
+            assert!(
+                matches!(
+                    declared_suffix(parsed, 0),
+                    DirectDeclarator::Function { .. }
+                ),
+                "{source}"
+            );
+            let errors = errors(parsed);
+            assert!(
+                !errors.iter().any(|error| matches!(
+                    error,
+                    ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator
+                        | ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
+                        | ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(..)
+                )),
+                "{source}: {errors:?}"
+            );
+            // At most the unknown type name and its displaced declarator name.
+            assert!(errors.len() <= 2, "{source}: {errors:?}");
+        });
     }
 }
 
@@ -200,14 +215,15 @@ fn unknown_type_name_before_a_declarator_selects_prototype_syntax() {
 #[test]
 fn adjacent_identifiers_without_declaration_syntax_stay_an_identifier_list() {
     for source in ["int f(a b, c);\n", "int f(a b, (c));\n", "int f(x y z);\n"] {
-        let parsed = parse(source);
-        assert!(
-            matches!(
-                declared_suffix(&parsed, 0),
-                DirectDeclarator::KAndRStyleFunction { .. }
-            ),
-            "{source}"
-        );
+        with_parse(source, |parsed| {
+            assert!(
+                matches!(
+                    declared_suffix(parsed, 0),
+                    DirectDeclarator::KAndRStyleFunction { .. }
+                ),
+                "{source}"
+            );
+        });
     }
 }
 
@@ -225,20 +241,23 @@ fn identifier_list_diagnostic_has_no_typedef_note() {
         "int k(a, *);
 ",
     ] {
-        let parsed = parse(source);
-        let error = parser_errors(&parsed)
-            .find(|error| {
-                matches!(
-                    error,
-                    ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
-                )
-            })
-            .unwrap_or_else(|| panic!("{source}: no identifier-list diagnostic"));
-        let notes = error.explain(None).notes;
-        assert!(
-            notes.iter().all(|note| !note.contains("typedef")),
-            "{source}: {notes:?}"
-        );
+        with_parse(source, |parsed| {
+            let error = parser_errors(parsed)
+                .find(|error| {
+                    matches!(
+                        error,
+                        ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
+                            ..
+                        )
+                    )
+                })
+                .unwrap_or_else(|| panic!("{source}: no identifier-list diagnostic"));
+            let notes = error.explain(None).notes;
+            assert!(
+                notes.iter().all(|note| !note.contains("typedef")),
+                "{source}: {notes:?}"
+            );
+        });
     }
 }
 
@@ -267,20 +286,22 @@ fn typedef_lookups_in_deep_block_nesting_use_a_bounded_number_of_probes() {
         "{ T x;".repeat(depth),
         "}".repeat(depth)
     );
-    let parsed = parse(&source);
-    assert_eq!(errors(&parsed), Vec::<&ParserErrorType>::new());
-    let probes = parsed.parser.scopes.lookup_probes.get();
-    assert!(
-        probes <= 64 * depth,
-        "{probes} scope probes for {depth} nested lookups"
-    );
+    with_parse(&source, |parsed| {
+        assert_eq!(errors(parsed), Vec::<&ParserErrorType>::new());
+        let probes = parsed.parser.scopes.lookup_probes.get();
+        assert!(
+            probes <= 64 * depth,
+            "{probes} scope probes for {depth} nested lookups"
+        );
+    });
 }
 
 #[test]
 fn declarator_in_an_identifier_list_is_one_error() {
     // Round-2 review: `T *r` in an identifier list reported the `*` and then
     // the `r` the recovery stopped at.
-    let parsed = parse("int j(U, T *r) { return 0; }\nint after;\n");
-    assert_eq!(parser_errors(&parsed).count(), 1, "{:#?}", parsed.errors);
-    assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
+    with_parse("int j(U, T *r) { return 0; }\nint after;\n", |parsed| {
+        assert_eq!(parser_errors(parsed).count(), 1, "{:#?}", parsed.errors);
+        assert_eq!(parsed.items.len(), 2, "{:#?}", parsed.items);
+    });
 }
