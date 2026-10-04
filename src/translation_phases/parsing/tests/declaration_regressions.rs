@@ -197,46 +197,48 @@ fn old_style_head_with_recovered_error_keeps_its_declaration_list_and_body() {
         ("f(a) int a; { return a; }\n", 1),
         ("static f(a) int a; { return a; }\n", 1),
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            parser_errors(&parsed).count(),
-            1,
-            "{source:?}: {:#?}",
-            parsed.errors
-        );
-        assert_eq!(parsed.items.len(), 1, "{source:?}");
-        assert!(
-            matches!(
-                parsed.items[0],
-                ExternalDeclaration::RecoveredFunctionDefinition(_)
-            ),
-            "{source:?}"
-        );
-        let definition = function_definition(&parsed, 0);
-        assert_eq!(
-            definition.declaration_list.length(),
-            list_length,
-            "{source:?}"
-        );
-        assert_eq!(block_items(&parsed, definition.body).len(), 1, "{source:?}");
+        with_parse(source, |parsed| {
+            assert_eq!(
+                parser_errors(parsed).count(),
+                1,
+                "{source:?}: {:#?}",
+                parsed.errors
+            );
+            assert_eq!(parsed.items.len(), 1, "{source:?}");
+            assert!(
+                matches!(
+                    parsed.items[0],
+                    ExternalDeclaration::RecoveredFunctionDefinition(_)
+                ),
+                "{source:?}"
+            );
+            let definition = function_definition(parsed, 0);
+            assert_eq!(
+                definition.declaration_list.length(),
+                list_length,
+                "{source:?}"
+            );
+            assert_eq!(block_items(parsed, definition.body).len(), 1, "{source:?}");
+        });
     }
 
     // A non-function declarator with an error still resynchronizes at the
     // next declaration instead of becoming a definition head.
-    let parsed = parse("int x[3 int y;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert!(matches!(
-        parsed.items[0],
-        ExternalDeclaration::RecoveredDeclaration(_)
-    ));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("y")
-    );
+    with_parse("int x[3 int y;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items[0],
+            ExternalDeclaration::RecoveredDeclaration(_)
+        ));
+        assert_eq!(
+            identifier_name(
+                parsed,
+                init_declarators(parsed, declaration(parsed, 1))[0].declarator
+            )
+            .as_deref(),
+            Some("y")
+        );
+    });
 }
 
 /// Once a declaration recovered from a bad continuation token, reaching the
@@ -251,33 +253,35 @@ fn declaration_continuation_recovery_reports_once() {
         ("void f(void) { int x y\n int z; }\n", 1),
         ("void f(void) { int x 5 return; }\n", 1),
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            parser_errors(&parsed).count(),
-            1,
-            "{source:?}: {:#?}",
-            parsed.errors
-        );
-        assert_eq!(parsed.items.len(), items, "{source:?}");
+        with_parse(source, |parsed| {
+            assert_eq!(
+                parser_errors(parsed).count(),
+                1,
+                "{source:?}: {:#?}",
+                parsed.errors
+            );
+            assert_eq!(parsed.items.len(), items, "{source:?}");
+        });
     }
 }
 
 fn continuation_explanation(source: &str) -> (String, String) {
-    let parsed = parse(source);
-    let explanation = parsed
-        .errors
-        .iter()
-        .find_map(|error| match error {
-            | TranslationError::Parsing(error)
-                if matches!(
-                    error.error_type,
-                    ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
-                ) =>
-                Some(error.error_type.explain(None)),
-            | _ => None,
-        })
-        .unwrap_or_else(|| panic!("{source:?}: no continuation error in {:#?}", parsed.errors));
-    (explanation.message, explanation.label.unwrap_or_default())
+    with_parse(source, |parsed| {
+        let explanation = parsed
+            .errors
+            .iter()
+            .find_map(|error| match error {
+                | TranslationError::Parsing(error)
+                    if matches!(
+                        error.error_type,
+                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
+                    ) =>
+                    Some(error.error_type.explain(None)),
+                | _ => None,
+            })
+            .unwrap_or_else(|| panic!("{source:?}: no continuation error in {:#?}", parsed.errors));
+        (explanation.message, explanation.label.unwrap_or_default())
+    })
 }
 
 /// The expected continuation set depends on where the declaration is: a
