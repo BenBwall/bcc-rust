@@ -83,22 +83,13 @@ use crate::{
 };
 
 impl Parser {
-    /// Creates an idle parser over a preprocessor token source.
-    ///
-    /// C99: the input is the translation unit produced after phase 7 under
-    /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
-    pub(crate) fn new(mut preprocessor: Preprocessor) -> Self {
-        preprocessor.prepare_for_parsing();
-        Self::with_upstream(Upstream::Preprocessor(preprocessor))
-    }
-
     /// Preprocesses the whole translation unit, then creates an idle parser
     /// over the result. Every preprocessing diagnostic is pending in
     /// `context` before any parser diagnostic.
-    pub(crate) fn after_preprocessing(
-        mut preprocessor: Preprocessor,
-        context: &mut Context,
-    ) -> Self {
+    ///
+    /// C99: the input is the translation unit produced after phase 7 under
+    /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
+    pub(crate) fn new(mut preprocessor: Preprocessor, context: &mut Context) -> Self {
         preprocessor.prepare_for_parsing();
         Self::with_upstream(Upstream::preprocess_all(preprocessor, context))
     }

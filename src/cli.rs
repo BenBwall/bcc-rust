@@ -27,20 +27,21 @@ use crate::{
         ToDiagnostic,
         count_of,
     },
-    pipeline::{
-        PreprocessingStrategy,
-        PreprocessorIterator,
-    },
+    pipeline::preprocess_with_diagnostics,
     translation_phases::{
         Context,
         ErrorSeverity,
         GetSourceVectors,
         SourceVector,
         TranslationError,
-        parsing::InspectionOptions,
+        parsing::{
+            InspectionOptions,
+            Parser as LanguageParser,
+        },
         preprocessing::{
             CharacterTokenType,
             IntegerTokenType,
+            Preprocessor,
             StringTokenType,
             Token,
             TokenType,
@@ -72,10 +73,6 @@ struct Cli {
     /// Suppress the `repeated-specifiers` quality warning group.
     #[clap(long)]
     no_repeated_specifier_warnings: bool,
-    /// Schedule translation phases for performance experiments. `--tokens`
-    /// uses only the strategy's lexing.
-    #[clap(long, value_enum, default_value_t, hide = true)]
-    preprocessing_strategy: PreprocessingStrategy,
 }
 
 #[derive(Args)]
@@ -172,7 +169,6 @@ pub fn run() -> Result<(), MainError> {
 
     if args.output.tokens {
         print_preprocessor_output(
-            args.preprocessing_strategy,
             source_filename,
             input_string,
             args.quote_include.into(),
@@ -180,7 +176,6 @@ pub fn run() -> Result<(), MainError> {
         );
     } else {
         print_parser_output(
-            args.preprocessing_strategy,
             source_filename,
             input_string,
             args.quote_include.into(),
@@ -192,39 +187,33 @@ pub fn run() -> Result<(), MainError> {
     Ok(())
 }
 
+/// Prints the preprocessed translation unit, each token after the
+/// diagnostics its production reported.
 fn print_preprocessor_output(
-    strategy: PreprocessingStrategy,
     source_filename: Box<Path>,
     input_string: SharedString,
     quote_include: SharedVec<PathBuf>,
     system_include: SharedVec<PathBuf>,
 ) {
-    let mut reporter = DiagnosticReporter::new();
-    let mut iterator = PreprocessorIterator::with_lexing(
-        strategy.lexing(),
+    let mut context = Context::new();
+    let preprocessor = Preprocessor::new(
+        &mut context,
         source_filename,
         input_string,
         quote_include,
         system_include,
     );
-    loop {
-        // A deferred diagnostic's labels index the preprocessor arena, which
-        // the next poll may compact; render it while its provenance is live.
-        if iterator.compacts_on_next() {
-            reporter.flush(&iterator.context);
-        }
-        let Some(item) = iterator.next() else {
-            break;
-        };
+    let mut reporter = DiagnosticReporter::new();
+    for item in preprocess_with_diagnostics(preprocessor, &mut context) {
         match item {
             | Ok(token) => {
-                reporter.flush(&iterator.context);
-                eprintln!("{}", describe_token(token, &iterator.context));
+                reporter.flush(&context);
+                eprintln!("{}", describe_token(token, &context));
             },
-            | Err(error) => reporter.report(&error, &mut iterator.context),
+            | Err(error) => reporter.report(&error, &mut context),
         }
     }
-    reporter.finish(&iterator.context);
+    reporter.finish(&context);
 }
 
 /// One line per token: its location, kind, source spelling, and for
@@ -284,7 +273,6 @@ pub(crate) fn describe_token(token: Token, context: &Context) -> String {
 }
 
 fn print_parser_output(
-    strategy: PreprocessingStrategy,
     source_filename: Box<Path>,
     input_string: SharedString,
     quote_include: SharedVec<PathBuf>,
@@ -296,16 +284,14 @@ fn print_parser_output(
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
-    let preprocessor = strategy.preprocessor(
+    let preprocessor = Preprocessor::new(
         &mut context,
         source_filename,
         input_string,
         quote_include,
         system_include,
     );
-    let unit = strategy
-        .parser(preprocessor, &mut context)
-        .parse_translation_unit(&mut context);
+    let unit = LanguageParser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     let mut reporter = DiagnosticReporter::new();
     while let Some(error) = context.pop_pending_error() {
         reporter.report(&error, &mut context);
@@ -340,8 +326,7 @@ fn print_parser_output(
 /// into the parser error just before it when no input was consumed between
 /// them, otherwise into a lexing or preprocessing error at that place; a
 /// preprocessing error into the preprocessing error just before it. The
-/// parser and the preprocessor are considered separately, so the result does
-/// not depend on how a preprocessing strategy interleaves their diagnostics.
+/// parser and the preprocessor are considered separately.
 struct DiagnosticReporter {
     renderer:     Renderer,
     pending:      Vec<PendingDiagnostic>,

@@ -164,82 +164,6 @@ impl StringCache {
         inner(self, s.as_ref())
     }
 
-    pub(crate) fn push(&mut self, c: impl Into<char>) {
-        fn inner(interner: &mut StringCache, c: char) {
-            interner.data.push(c);
-        }
-        inner(self, c.into());
-    }
-
-    pub(crate) fn push_str(&mut self, s: impl AsRef<str>) {
-        fn inner(interner: &mut StringCache, s: &str) {
-            interner.data.push_str(s);
-        }
-        inner(self, s.as_ref());
-    }
-
-    #[expect(
-        dead_code,
-        clippy::cast_possible_truncation,
-        reason = "Incremental cache edits retain the cache-size invariant for future callers."
-    )]
-    pub(crate) fn pop(&mut self) {
-        assert!(
-            self.ends.last().copied() != Some(self.data.len() as u32),
-            "StringCache: cannot pop across string boundaries."
-        );
-        _ = self.data.pop();
-    }
-
-    #[expect(
-        dead_code,
-        clippy::cast_possible_truncation,
-        reason = "Incremental cache edits retain the cache-size invariant for future callers."
-    )]
-    pub(crate) fn pop_str(&mut self, len: u32) {
-        assert!(
-            self.ends.last().copied() < Some(self.data.len() as u32 + len - 1),
-            "StringCache: cannot pop across string boundaries."
-        );
-        self.data.truncate(self.data.len() - len as usize);
-    }
-
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "One of our invariants is that self.data.len() will never be greater than \
-                  u32::MAX."
-    )]
-    pub(crate) fn end_str(&mut self) -> StringCacheId {
-        self.ends.push(self.data.len() as u32);
-        let id = StringCacheId::from_u32(self.ends.len() as u32 - 1);
-        let s = Self::at_impl(&self.data, &self.ends, id);
-        let hash = FxBuildHasher.hash_one(s);
-        match self.dedup.entry(
-            hash,
-            |stored_id| s == Self::at_impl(&self.data, &self.ends, *stored_id),
-            |stored_id| FxBuildHasher.hash_one(Self::at_impl(&self.data, &self.ends, *stored_id)),
-        ) {
-            | Entry::Occupied(entry) => {
-                let symbol = *entry.get();
-                _ = self.ends.pop();
-                Self::undo_str_impl(&mut self.data, &self.ends);
-                symbol
-            },
-            | Entry::Vacant(entry) => {
-                _ = entry.insert(id);
-                id
-            },
-        }
-    }
-
-    pub(crate) fn undo_str(&mut self) {
-        self.data.truncate(*self.ends.last().unwrap() as usize);
-    }
-
-    fn undo_str_impl(data: &mut String, ends: &[u32]) {
-        data.truncate(*ends.last().unwrap() as usize);
-    }
-
     /// Returns the bytes for the given ID if it exists in the cache.
     pub(crate) fn get(&self, id: impl Into<StringCacheId>) -> Option<&str> {
         Self::get_impl(&self.data, &self.ends, id.into())
@@ -279,103 +203,44 @@ mod tests {
     use super::StringCache;
 
     #[test]
-    fn unfinished_new_intern_keeps_ascii_lookup_consistent_after_growth() {
+    fn interning_keeps_lookup_consistent_after_growth() {
         let mut cache = StringCache::new();
-        cache.push('a');
-        _ = cache.intern("");
         let before_growth = cache.intern("a");
-        assert_eq!(cache.at(before_growth), "a");
-        assert_eq!(cache.get_id_from_string("a"), Some(before_growth));
         for index in 0..400 {
             let spelling = format!("growth-{index}");
             let id = cache.intern(&spelling);
             assert_eq!(cache.at(id), spelling);
         }
-        let after_growth = cache.intern("a");
-        assert_eq!(cache.at(after_growth), "a");
-        assert_eq!(cache.get_id_from_string("a"), Some(after_growth));
-        cache.push('a');
-        assert_eq!(cache.end_str(), after_growth);
+        assert_eq!(cache.intern("a"), before_growth);
+        assert_eq!(cache.at(before_growth), "a");
+        assert_eq!(cache.get_id_from_string("a"), Some(before_growth));
     }
 
     #[test]
-    fn every_ascii_spelling_shares_ids_between_insertion_paths() {
+    fn every_ascii_spelling_gets_a_stable_id() {
         let mut cache = StringCache::new();
         for byte in 0_u8..=127 {
-            let character = char::from(byte);
-            let spelling = character.to_string();
-            let first = if byte % 2 == 0 {
-                cache.intern(&spelling)
-            } else {
-                cache.push(character);
-                cache.end_str()
-            };
+            let spelling = char::from(byte).to_string();
+            let first = cache.intern(&spelling);
             assert_eq!(first.to_u32(), u32::from(byte) + 1);
             assert_eq!(cache.at(first), spelling);
             assert_eq!(cache.intern(&spelling), first);
-            cache.push(character);
-            assert_eq!(cache.end_str(), first);
             assert_eq!(cache.get_id_from_string(&spelling), Some(first));
         }
     }
 
     #[test]
-    fn repeated_interning_preserves_the_unfinished_string() {
-        let mut cache = StringCache::new();
-        let existing = cache.intern("a");
-        cache.push_str("bc");
-        assert_eq!(cache.intern("a"), existing);
-        cache.push('d');
-        let built = cache.end_str();
-        assert_eq!(cache.at(built), "bcd");
-        assert_eq!(cache.intern("bcd"), built);
-
-        cache.push_str("🦀");
-        assert_eq!(cache.intern("a"), existing);
-        let crab = cache.end_str();
-        assert_eq!(cache.at(crab), "🦀");
-    }
-
-    #[test]
-    fn empty_and_multibyte_spellings_keep_distinct_shared_ids() {
+    fn empty_and_multibyte_spellings_keep_distinct_ids() {
         let mut cache = StringCache::new();
         let mut ids = Vec::new();
         for spelling in ["", "é", "λ", "🦀", "int", "0\0"] {
             let id = cache.intern(spelling);
             assert!(!ids.contains(&id));
             ids.push(id);
-            cache.push_str(spelling);
-            assert_eq!(cache.end_str(), id);
+            assert_eq!(cache.intern(spelling), id);
             assert_eq!(cache.at(id), spelling);
             assert_eq!(cache.get_id_from_string(spelling), Some(id));
         }
-    }
-
-    #[test]
-    fn a_new_intern_with_pending_bytes_does_not_poison_later_ascii_ids() {
-        let mut cache = StringCache::new();
-        cache.push_str("bc");
-        _ = cache.intern("a");
-        let canonical = cache.intern("a");
-        assert_eq!(cache.at(canonical), "a");
-        assert_eq!(cache.get_id_from_string("a"), Some(canonical));
-        cache.undo_str();
-        cache.push('a');
-        assert_eq!(cache.end_str(), canonical);
-    }
-
-    #[test]
-    fn discarded_scratch_does_not_change_committed_ids() {
-        let mut cache = StringCache::new();
-        let original = cache.intern("a");
-        cache.push('a');
-        cache.undo_str();
-        cache.push('b');
-        let built = cache.end_str();
-        assert_eq!(cache.at(built), "b");
-        assert_ne!(built, original);
-        cache.push('a');
-        assert_eq!(cache.end_str(), original);
     }
 
     #[test]
@@ -384,8 +249,6 @@ mod tests {
         let original = cache.intern("a");
         let mut cloned = cache.clone();
         assert_eq!(cloned.intern("a"), original);
-        cloned.push('a');
-        assert_eq!(cloned.end_str(), original);
         let new = cloned.intern("z");
         assert_eq!(cloned.at(new), "z");
         assert_eq!(cache.get_id_from_string("z"), None);
@@ -397,8 +260,6 @@ mod tests {
         let after_clear = cloned.intern("a");
         assert_ne!(after_clear, reused);
         assert_eq!(cloned.at(after_clear), "a");
-        cloned.push('a');
-        assert_eq!(cloned.end_str(), after_clear);
         assert_eq!(cache.at(original), "a");
     }
 }

@@ -1,6 +1,9 @@
 //! Translation limits, resource limits, and linear source storage.
 
-use std::fmt::Write as _;
+use std::{
+    fmt::Write as _,
+    path::PathBuf,
+};
 
 use super::{
     block_items,
@@ -11,27 +14,36 @@ use super::{
     parse_with_limits,
     parser_errors,
 };
-use crate::translation_phases::parsing::{
-    ParserLimits,
-    declaration_syntax::{
-        Declaration,
-        Declarator,
-        DirectDeclarator,
-        EnumSpecifier,
-        InitDeclarator,
-        StructOrUnionSpecifier,
-        TypeSpecifiers,
+use crate::{
+    translation_phases::{
+        Context,
+        TranslationPhase,
+        parsing::{
+            Parser,
+            ParserLimits,
+            declaration_syntax::{
+                Declaration,
+                Declarator,
+                DirectDeclarator,
+                EnumSpecifier,
+                InitDeclarator,
+                StructOrUnionSpecifier,
+                TypeSpecifiers,
+            },
+            errors::{
+                ParserErrorType,
+                ParserResource,
+            },
+            syntax::{
+                ExternalDeclaration,
+                Statement,
+                StatementType,
+            },
+            syntax_store::SyntaxTree,
+        },
+        preprocessing::Preprocessor,
     },
-    errors::{
-        ParserErrorType,
-        ParserResource,
-    },
-    syntax::{
-        ExternalDeclaration,
-        Statement,
-        StatementType,
-    },
-    syntax_store::SyntaxTree,
+    util::shared::SharedVec,
 };
 
 #[test]
@@ -115,18 +127,34 @@ fn source_storage_exhaustion_reports_one_resource_diagnostic() {
 }
 
 #[test]
-fn source_storage_exhaustion_stops_fetching_the_remaining_input() {
-    let parsed = parse_with_limits(
-        &"int a;\n".repeat(1_000),
-        ParserLimits {
-            source_segments: 10,
-            ..ParserLimits::default()
-        },
+fn source_storage_exhaustion_stops_parsing_the_remaining_input() {
+    // The whole unit is preprocessed before parsing, so its token
+    // provenance already exceeds the limit; parsing must stop rather than
+    // add to it.
+    let mut context = Context::new();
+    let preprocessor = Preprocessor::new(
+        &mut context,
+        PathBuf::from("<limit-test>").into_boxed_path(),
+        "int a;\n".repeat(1_000).into(),
+        SharedVec::default(),
+        SharedVec::default(),
     );
+    let mut parser = Parser::new(preprocessor, &mut context).with_limits(ParserLimits {
+        source_segments: 10,
+        ..ParserLimits::default()
+    });
+    let preprocessed = context.source_segment_count();
+    let mut items = 0;
+    while parser.next_item(&mut context).is_some() {
+        items += 1;
+    }
+    assert!(items < 2, "{items} declarations parsed after the limit");
     assert!(
-        parsed.context.source_segment_count() < 100,
-        "provenance kept growing after the limit: {} segments",
-        parsed.context.source_segment_count()
+        context.source_segment_count() < preprocessed + 100,
+        "provenance kept growing after the limit: {} segments after preprocessing, {} after \
+         parsing",
+        preprocessed,
+        context.source_segment_count()
     );
 }
 
@@ -621,14 +649,16 @@ fn remaining_c99_parser_translation_floors_are_supported() {
 }
 
 #[test]
-fn completed_roots_release_macro_hint_metadata_in_streaming_parses() {
+fn completed_roots_release_macro_hint_metadata() {
+    // The whole unit is preprocessed first, so the hints of every invocation
+    // exist at once; each completed root releases those before it.
     let source = format!("#define DECL(x) int x\n{}", "DECL(value);\n".repeat(5_000));
     let parsed = parse(&source);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
     assert_eq!(parsed.items.len(), 5_000);
     assert!(
-        parsed.context.macro_hint_storage_capacity() < 16_384,
-        "completed roots kept {} bytes of macro hint storage",
-        parsed.context.macro_hint_storage_capacity()
+        parsed.context.macro_hint_entries() < 16,
+        "completed roots kept {} macro hints",
+        parsed.context.macro_hint_entries()
     );
 }

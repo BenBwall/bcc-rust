@@ -79,7 +79,7 @@ fn parse_unit(source: &str) -> (ParsedTranslationUnit, Context) {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     (unit, context)
 }
 
@@ -97,7 +97,7 @@ fn parse_with(
         SharedVec::default(),
         SharedVec::default(),
     );
-    let mut parser = Parser::new(preprocessor)
+    let mut parser = Parser::new(preprocessor, &mut context)
         .with_action_budget(source.len().saturating_mul(256).saturating_add(4_096));
     if let Some(limits) = limits {
         parser = parser.with_limits(limits);

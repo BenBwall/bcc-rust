@@ -5,14 +5,13 @@ use std::{
     sync::OnceLock,
 };
 
-pub use crate::pipeline::PreprocessingStrategy;
 use crate::{
-    pipeline::PreprocessorIterator,
     translation_phases::{
         Context,
         TranslationPhase,
         box_path_from_str,
         parsing::Parser,
+        preprocessing::Preprocessor,
         preprocessor_tokenizer::TokenSource,
     },
     util::shared::{
@@ -24,10 +23,7 @@ use crate::{
 #[doc(hidden)]
 #[must_use]
 pub fn preprocess_one_million() -> usize {
-    preprocess(
-        BenchmarkInput::OneMillionLines,
-        PreprocessingStrategy::Streaming,
-    )
+    preprocess(BenchmarkInput::OneMillionLines)
 }
 
 /// A generated benchmark translation unit.
@@ -193,15 +189,13 @@ fn declaration_heavy_source(count: usize) -> String {
 }
 
 /// Runs translation phases 1 through 3 only and returns the number of
-/// preprocessing tokens. Every strategy but streaming lexes the whole file
-/// first.
+/// preprocessing tokens.
 #[doc(hidden)]
 #[must_use]
-pub fn lex(input: BenchmarkInput, strategy: PreprocessingStrategy) -> usize {
+pub fn lex(input: BenchmarkInput) -> usize {
     let mut context = Context::new();
-    context.set_lexing_strategy(strategy.lexing());
     let file = context.intern_source_file(box_path_from_str("<input>"));
-    let mut tokens = TokenSource::new(&mut context, file, input.shared_source());
+    let mut tokens = TokenSource::new(&mut context, file, input.source());
     let mut count = 0;
     while tokens.next_item(&mut context).is_some() {
         count += 1;
@@ -212,37 +206,27 @@ pub fn lex(input: BenchmarkInput, strategy: PreprocessingStrategy) -> usize {
     count
 }
 
-/// Runs translation phases 1 through 6 and returns the number of parser-facing
-/// tokens. Streaming strategies discard provenance as they go; the batch
-/// strategy keeps the whole translation unit, as a parser reading it later
-/// would need.
+/// Opens `input` as the main source file.
+fn preprocessor(context: &mut Context, input: BenchmarkInput) -> Preprocessor {
+    Preprocessor::new(
+        context,
+        box_path_from_str("<input>"),
+        input.shared_source(),
+        SharedVec::default(),
+        SharedVec::default(),
+    )
+}
+
+/// Runs translation phases 1 through 6 over the whole translation unit and
+/// returns the number of parser-facing tokens. Their provenance is kept, as
+/// the parser reading them would need.
 #[doc(hidden)]
 #[must_use]
-pub fn preprocess(input: BenchmarkInput, strategy: PreprocessingStrategy) -> usize {
-    match strategy {
-        | PreprocessingStrategy::Streaming | PreprocessingStrategy::BatchLexing =>
-            PreprocessorIterator::with_lexing(
-                strategy.lexing(),
-                box_path_from_str("<input>"),
-                input.shared_source(),
-                SharedVec::default(),
-                SharedVec::default(),
-            )
-            .count(),
-        | PreprocessingStrategy::Batch => {
-            let mut context = Context::new();
-            strategy
-                .preprocessor(
-                    &mut context,
-                    box_path_from_str("<input>"),
-                    input.shared_source(),
-                    SharedVec::default(),
-                    SharedVec::default(),
-                )
-                .preprocess_all(&mut context)
-                .len()
-        },
-    }
+pub fn preprocess(input: BenchmarkInput) -> usize {
+    let mut context = Context::new();
+    preprocessor(&mut context, input)
+        .preprocess_all(&mut context)
+        .len()
 }
 
 /// Summary of one benchmarked parse, returned so the work cannot be elided
@@ -257,22 +241,8 @@ pub struct ParseBenchmarkSummary {
 /// Runs translation phases 1 through 7 and summarizes the parse.
 #[doc(hidden)]
 #[must_use]
-pub fn parse(input: BenchmarkInput, strategy: PreprocessingStrategy) -> ParseBenchmarkSummary {
-    let mut context = Context::new();
-    let preprocessor = strategy.preprocessor(
-        &mut context,
-        box_path_from_str("<input>"),
-        input.shared_source(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let unit = strategy
-        .parser(preprocessor, &mut context)
-        .parse_translation_unit(&mut context);
-    ParseBenchmarkSummary {
-        external_declarations: unit.external_declarations().len(),
-        diagnostics:           context.take_pending_errors().len(),
-    }
+pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
+    prepare_parse(input).parse()
 }
 
 /// A translation unit preprocessed through phase 6 and ready to parse, so a
@@ -289,20 +259,14 @@ impl std::fmt::Debug for PreparedParse {
     }
 }
 
-/// Runs translation phases 1 through 6 under the batch strategy, leaving
-/// only parsing to [`PreparedParse::parse`].
+/// Runs translation phases 1 through 6, leaving only parsing to
+/// [`PreparedParse::parse`].
 #[doc(hidden)]
 #[must_use]
 pub fn prepare_parse(input: BenchmarkInput) -> PreparedParse {
     let mut context = Context::new();
-    let preprocessor = PreprocessingStrategy::Batch.preprocessor(
-        &mut context,
-        box_path_from_str("<input>"),
-        input.shared_source(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let parser = PreprocessingStrategy::Batch.parser(preprocessor, &mut context);
+    let preprocessor = preprocessor(&mut context, input);
+    let parser = Parser::new(preprocessor, &mut context);
     PreparedParse { context, parser }
 }
 

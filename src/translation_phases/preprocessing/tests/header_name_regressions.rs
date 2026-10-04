@@ -1,0 +1,376 @@
+//! `#include` operands read from ordinary preprocessing tokens: header names
+//! taken from the source text, the C99 §6.4.7p3 sequences, missing closing
+//! delimiters, and the backslash extension.
+
+use std::{
+    path::{
+        Path,
+        PathBuf,
+    },
+    sync::atomic::{
+        AtomicU64,
+        Ordering,
+    },
+};
+
+use super::{
+    Context,
+    Preprocessor,
+    PreprocessorError,
+    PreprocessorErrorType,
+    SharedVec,
+    TokenType,
+    TranslationError,
+    TranslationPhase,
+};
+use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+    },
+    translation_phases::{
+        ErrorSeverity,
+        GetSeverity,
+        GetSourceVectors,
+        SourceVector,
+    },
+};
+
+/// A temporary directory holding a main file's headers.
+struct Headers(PathBuf);
+
+impl Headers {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "bcc-header-names-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        drop(std::fs::remove_dir_all(&directory));
+        std::fs::create_dir_all(&directory).unwrap();
+        Self(directory)
+    }
+
+    /// Writes a header that defines `name` as an identifier, at `path`
+    /// relative to the directory.
+    fn write(&self, path: &Path, name: &str) {
+        let path = self.0.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("{name}\n")).unwrap();
+    }
+}
+
+impl Drop for Headers {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.0));
+    }
+}
+
+/// The header `"dir\file.h"` names: a file in `dir` where backslash separates
+/// directories, otherwise a file whose name contains the backslash.
+fn backslash_header() -> PathBuf {
+    if cfg!(windows) {
+        Path::new("dir").join("file.h")
+    } else {
+        PathBuf::from(r"dir\file.h")
+    }
+}
+
+struct Outcome {
+    identifiers: Vec<String>,
+    errors:      Vec<TranslationError>,
+    context:     Context,
+}
+
+impl Outcome {
+    fn preprocessor_errors(&self) -> Vec<&PreprocessorErrorType> {
+        self.errors
+            .iter()
+            .filter_map(|error| match error {
+                | TranslationError::Preprocessing(PreprocessorError { error_type, .. }) =>
+                    Some(error_type),
+                | _ => None,
+            })
+            .collect()
+    }
+
+    /// Where the first error matching `predicate` points.
+    fn location(&mut self, predicate: impl Fn(&PreprocessorErrorType) -> bool) -> SourceVector {
+        let error = self
+            .errors
+            .iter()
+            .find(|error| {
+                matches!(error, TranslationError::Preprocessing(PreprocessorError { error_type, .. }) if predicate(error_type))
+            })
+            .expect("the error was reported");
+        let source = error.source_vectors(&mut self.context);
+        self.context.get_source_vectors(source)[0].clone()
+    }
+}
+
+fn preprocess_in(headers: &Headers, source: &str, policy: ExtensionPolicy) -> Outcome {
+    let mut context =
+        Context::with_configuration(CompilerConfiguration::new(CStandard::C99, policy));
+    let mut preprocessor = Preprocessor::new(
+        &mut context,
+        headers.0.join("main.c").into_boxed_path(),
+        source.to_owned().into(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let mut identifiers = Vec::new();
+    while let Some(token) = preprocessor.next_item(&mut context) {
+        if token.kind == TokenType::Identifier {
+            identifiers.push(context.string_cache.at(token.contents).to_owned());
+        }
+    }
+    let errors = context.take_pending_errors();
+    Outcome {
+        identifiers,
+        errors,
+        context,
+    }
+}
+
+fn preprocess(headers: &Headers, source: &str) -> Outcome {
+    preprocess_in(headers, source, ExtensionPolicy::Allow)
+}
+
+#[test]
+fn written_header_names_keep_their_source_text() {
+    let headers = Headers::new();
+    headers.write(Path::new("a b.h"), "spaced");
+    headers.write(Path::new("plain.h"), "plain");
+    for source in [
+        "#include \"a b.h\"\nafter\n",
+        "#include <a b.h>\nafter\n",
+        "#  include<a b.h>\nafter\n",
+        "#include \"plain.h\"\nafter\n",
+        "#include <pl\\\nain.h>\nafter\n",
+        "??=include \"plain.h\"\nafter\n",
+    ] {
+        let directory = SharedVec::from(vec![headers.0.clone()]);
+        let mut context = Context::new();
+        let mut preprocessor = Preprocessor::new(
+            &mut context,
+            headers.0.join("main.c").into_boxed_path(),
+            source.to_owned().into(),
+            SharedVec::default(),
+            directory,
+        );
+        let mut identifiers = Vec::new();
+        while let Some(token) = preprocessor.next_item(&mut context) {
+            identifiers.push(context.string_cache.at(token.contents).to_owned());
+        }
+        let errors = context.take_pending_errors();
+        assert!(errors.is_empty(), "{source:?}: {errors:#?}");
+        assert_eq!(identifiers.len(), 2, "{source:?}: {identifiers:?}");
+        assert_eq!(identifiers[1], "after", "{source:?}");
+    }
+}
+
+#[test]
+fn macro_operands_combine_token_spellings() {
+    let headers = Headers::new();
+    headers.write(Path::new("plain.h"), "plain");
+    let outcome = preprocess(
+        &headers,
+        "#define Q \"plain.h\"\n#include Q\n#define NAME plain\n#define S(x) #x\n#include \
+         S(plain.h)\n",
+    );
+    assert!(outcome.errors.is_empty(), "{:#?}", outcome.errors);
+    assert_eq!(outcome.identifiers, ["plain", "plain"]);
+}
+
+#[test]
+fn skipped_include_lines_are_ordinary_tokens() {
+    let headers = Headers::new();
+    for source in [
+        "#if 0\n#include <it's.h>\n#include \"unterminated\n#include <a//b.h>\n#endif\nafter\n",
+        "#ifdef NOPE\n#include <a\\b.h>\n#else\nafter\n#endif\n",
+    ] {
+        let outcome = preprocess(&headers, source);
+        assert!(
+            outcome.errors.is_empty(),
+            "{source:?}: {:#?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.identifiers, ["after"], "{source:?}");
+    }
+}
+
+#[test]
+fn undefined_sequences_are_reported_once_at_their_position() {
+    let headers = Headers::new();
+    for (source, sequence, column) in [
+        ("#include <it's.h>\n", "'", 13),
+        ("#include \"it's.h\"\n", "'", 13),
+        ("#include <a\\b.h>\n", "\\", 12),
+        ("#include <a\"b.h>\n", "\"", 12),
+        ("#include <a//b.h>\n", "//", 12),
+        ("#include \"a//b.h\"\n", "//", 12),
+        ("#include <a/*b.h>\n", "/*", 12),
+        ("#include \"a/*b.h\"\n", "/*", 12),
+        ("#include <x??/y.h>\n", "\\", 12),
+    ] {
+        let mut outcome = preprocess(&headers, source);
+        let invalid: Vec<_> = outcome
+            .preprocessor_errors()
+            .into_iter()
+            .filter_map(|error| match error {
+                | PreprocessorErrorType::InvalidCharacterInHeaderName(found) => Some(*found),
+                | _ => None,
+            })
+            .collect();
+        assert_eq!(invalid, [sequence], "{source:?}: {:#?}", outcome.errors);
+        let location = outcome.location(|error| {
+            matches!(
+                error,
+                PreprocessorErrorType::InvalidCharacterInHeaderName(_)
+            )
+        });
+        assert_eq!(location.column, column, "{source:?}");
+        assert_eq!(
+            location.length as usize,
+            if source.contains("??/") {
+                3
+            } else {
+                sequence.len()
+            },
+            "{source:?}"
+        );
+        // Lookup still happens, with the name as written.
+        assert!(
+            outcome
+                .preprocessor_errors()
+                .iter()
+                .any(|error| matches!(error, PreprocessorErrorType::HeaderNotFound { .. })),
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn missing_closing_delimiters_are_reported_before_lookup() {
+    let headers = Headers::new();
+    for (source, delimiter, column) in [
+        ("#include <stdio.h\nafter\n", '>', 18),
+        ("#include <stdio.h", '>', 18),
+        ("#include \"stdio.h\nafter\n", '"', 18),
+        ("#include \"stdio.h", '"', 18),
+        ("#include \"dir\\\"\nafter\n", '"', 16),
+    ] {
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            let mut outcome = preprocess_in(&headers, source, policy);
+            let errors = outcome.preprocessor_errors();
+            let missing = errors
+                .iter()
+                .position(|error| {
+                    matches!(error, PreprocessorErrorType::UnterminatedHeaderName(found) if *found == delimiter)
+                })
+                .unwrap_or_else(|| panic!("{source:?}: {:#?}", outcome.errors));
+            if let Some(lookup) = errors
+                .iter()
+                .position(|error| matches!(error, PreprocessorErrorType::HeaderNotFound { .. }))
+            {
+                assert!(missing < lookup, "{source:?}");
+            }
+            let location = outcome.location(|error| {
+                matches!(error, PreprocessorErrorType::UnterminatedHeaderName(_))
+            });
+            assert_eq!(
+                (location.column, location.length),
+                (column, 0),
+                "{source:?}"
+            );
+            if source.ends_with("after\n") {
+                assert_eq!(outcome.identifiers, ["after"], "{source:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn quoted_backslashes_follow_the_extension_policy() {
+    let headers = Headers::new();
+    headers.write(&backslash_header(), "found");
+    let source = "#include \"dir\\file.h\"\nafter\n";
+
+    let outcome = preprocess_in(&headers, source, ExtensionPolicy::Allow);
+    assert!(outcome.errors.is_empty(), "{:#?}", outcome.errors);
+    assert_eq!(outcome.identifiers, ["found", "after"]);
+
+    let mut outcome = preprocess_in(&headers, source, ExtensionPolicy::Warn);
+    assert_eq!(outcome.identifiers, ["found", "after"]);
+    assert!(matches!(
+        outcome.errors.as_slice(),
+        [TranslationError::Preprocessing(PreprocessorError {
+            error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(ExtensionPolicy::Warn),
+            ..
+        })]
+    ));
+    assert_eq!(outcome.errors[0].severity(), ErrorSeverity::Warning);
+    let location = outcome
+        .location(|error| matches!(error, PreprocessorErrorType::BackslashInQuotedHeaderName(_)));
+    assert_eq!((location.column, location.length), (14, 1));
+
+    let outcome = preprocess_in(&headers, source, ExtensionPolicy::Deny);
+    // The header is not looked up, so nothing from it appears.
+    assert_eq!(outcome.identifiers, ["after"]);
+    assert!(matches!(
+        outcome.errors.as_slice(),
+        [TranslationError::Preprocessing(PreprocessorError {
+            error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(ExtensionPolicy::Deny),
+            ..
+        })]
+    ));
+    assert_eq!(outcome.errors[0].severity(), ErrorSeverity::Error);
+}
+
+#[test]
+fn angle_backslashes_are_errors_under_every_policy() {
+    let headers = Headers::new();
+    for policy in [
+        ExtensionPolicy::Allow,
+        ExtensionPolicy::Warn,
+        ExtensionPolicy::Deny,
+    ] {
+        let outcome = preprocess_in(&headers, "#include <dir\\file.h>\n", policy);
+        assert!(
+            outcome.preprocessor_errors().iter().any(|error| matches!(
+                error,
+                PreprocessorErrorType::InvalidCharacterInHeaderName("\\")
+            )),
+            "{policy:?}: {:#?}",
+            outcome.errors
+        );
+        assert!(
+            !outcome.preprocessor_errors().iter().any(|error| matches!(
+                error,
+                PreprocessorErrorType::BackslashInQuotedHeaderName(_)
+            )),
+            "{policy:?}"
+        );
+    }
+}
+
+#[test]
+fn renamed_files_read_header_names_from_the_physical_file() {
+    let headers = Headers::new();
+    headers.write(Path::new("plain.h"), "plain");
+    let outcome = preprocess(
+        &headers,
+        "#line 7 \"renamed.c\"\n#include \"plain.h\"\n#include <it's.h>\n",
+    );
+    assert_eq!(outcome.identifiers, ["plain"]);
+    assert!(outcome.preprocessor_errors().iter().any(|error| matches!(
+        error,
+        PreprocessorErrorType::InvalidCharacterInHeaderName("'")
+    )));
+}

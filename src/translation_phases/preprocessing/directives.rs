@@ -25,18 +25,26 @@ use super::{
     },
 };
 use crate::{
+    configuration::{
+        CStandard,
+        ExtensionPolicy,
+    },
     translation_phases::{
         Context,
         SetPosition,
         SetSourceFileIndex,
+        SourcePosition,
         SourceVectors,
         StrExt,
         TokenString,
         TranslationPhase,
         preprocessor_tokenizer::{
+            LogicalCharacter,
             PreprocessorToken,
             PreprocessorTokenType,
             TokenSource,
+            logical_characters,
+            position_after,
         },
     },
     util::{
@@ -69,6 +77,101 @@ fn same_replacement_token(
                     || context.string_cache.at(old.contents)
                         == context.string_cache.at(new.contents)),
         | _ => false,
+    }
+}
+
+/// How an `#include` operand is written, judged from its first token.
+enum IncludeOperand {
+    /// `<…>`, read from the source text.
+    Angle,
+    /// `"…"`, read from the source text.
+    Quoted,
+    /// Anything else, which macro replacement must turn into a header name.
+    Other,
+}
+
+/// The header name of an `#include` directive.
+struct HeaderName {
+    name:              String,
+    is_system_header:  bool,
+    /// The whole operand.
+    source_vectors:    SourceVectors,
+    /// The closing delimiter the operand lacks, and where it was expected.
+    missing_delimiter: Option<(char, SourceVectors)>,
+    /// The first sequence C99 §6.4.7p3 does not allow in a header name, and
+    /// where it is.
+    invalid:           Option<(&'static str, SourceVectors)>,
+    /// Where a `"…"` name first uses a backslash, which only the backslash
+    /// extension accepts.
+    backslash:         Option<SourceVectors>,
+}
+
+/// The first sequence in `name` whose behavior in a header name C99 §6.4.7p3
+/// leaves undefined, with its byte offset: `'`, `//`, or `/*` in either
+/// form, and also `\` or `"` between `<` and `>`. A backslash in a `"…"`
+/// name is the backslash extension, which the configured
+/// [`ExtensionPolicy`] governs instead.
+fn invalid_header_sequence(name: &str, angle: bool) -> Option<(usize, &'static str)> {
+    let bytes = name.as_bytes();
+    bytes.iter().enumerate().find_map(|(offset, &byte)| {
+        let sequence = match (byte, bytes.get(offset + 1)) {
+            | (b'\'', _) => "'",
+            | (b'\\', _) if angle => "\\",
+            | (b'"', _) if angle => "\"",
+            | (b'/', Some(b'/')) => "//",
+            | (b'/', Some(b'*')) => "/*",
+            | _ => return None,
+        };
+        Some((offset, sequence))
+    })
+}
+
+/// A header name read from source text, with the locations of its
+/// questionable characters as positions and source byte lengths.
+struct WrittenHeaderName {
+    name:      String,
+    /// The first sequence C99 §6.4.7p3 does not allow.
+    invalid:   Option<(&'static str, SourcePosition, usize)>,
+    /// The first backslash of a `"…"` name.
+    backslash: Option<(SourcePosition, usize)>,
+}
+
+/// The header name that `characters` of `source` spell. `anchor` is a known
+/// position at or before the characters.
+fn header_name_from_source(
+    source: &str,
+    anchor: SourcePosition,
+    characters: &[LogicalCharacter],
+    angle: bool,
+) -> WrittenHeaderName {
+    let name: String = characters
+        .iter()
+        .map(|character| character.character)
+        .collect();
+    // Locates `length` characters starting at byte `offset` of the name.
+    let locate = |offset: usize, length: usize| {
+        let first = name[..offset].chars().count();
+        let last = &characters[first + length - 1];
+        let start = characters[first].index;
+        (
+            position_after(source, anchor, start),
+            last.index + last.length - start,
+        )
+    };
+    // Every sequence is ASCII, so its length counts its characters.
+    let invalid = invalid_header_sequence(&name, angle).map(|(offset, sequence)| {
+        let (start, length) = locate(offset, sequence.len());
+        (sequence, start, length)
+    });
+    let backslash = if angle {
+        None
+    } else {
+        name.find('\\').map(|offset| locate(offset, 1))
+    };
+    WrittenHeaderName {
+        name,
+        invalid,
+        backslash,
     }
 }
 
@@ -208,7 +311,7 @@ impl Preprocessor {
         &mut self,
         context: &mut Context,
         including_file: u32,
-        include_token: PreprocessorToken,
+        operand: SourceVectors,
         path: &Path,
         is_system_header: bool,
     ) -> Option<u32> {
@@ -246,7 +349,7 @@ impl Preprocessor {
                     is_system_header,
                     searched,
                 },
-                source_vectors: include_token.source_vectors,
+                source_vectors: operand,
             });
             return None;
         };
@@ -258,18 +361,186 @@ impl Preprocessor {
         }
     }
 
-    fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
-        let including_file = self.physical_source_file_index();
-        context.set_is_tokenizing_include_string(true);
+    /// Judges an `#include` operand by its first token as written, without
+    /// consuming it or reporting what reading it reports.
+    fn peek_include_operand(&mut self, context: &mut Context) -> IncludeOperand {
+        // Only a source file's own text can be read between the delimiters.
+        if !matches!(
+            self.tokenizer_stack.last().map(|frame| &frame.frame_type),
+            Some(TokenizerFrameType::SourceFile { .. })
+        ) {
+            return IncludeOperand::Other;
+        }
+        let saved = self.tokenizer.clone();
+        let ignored = context.ignore_tokenizer_errors();
+        context.set_ignore_tokenizer_errors(true);
+        let first = Self::next_ignore_whitespace(&mut self.tokenizer, context);
+        context.set_ignore_tokenizer_errors(ignored);
+        self.tokenizer = saved;
+        let Some(first) = first else {
+            return IncludeOperand::Other;
+        };
+        let spelling = context.string_cache.at(first.contents);
+        if first.kind == PreprocessorTokenType::String && spelling.starts_with('"') {
+            IncludeOperand::Quoted
+        } else if spelling.starts_with('<') {
+            IncludeOperand::Angle
+        } else {
+            IncludeOperand::Other
+        }
+    }
+
+    /// Reads a `<…>` operand as written: tokens through the first one that
+    /// contains `>`. The name is the source text between the delimiters, so
+    /// it keeps the whitespace that the tokens between them do not spell.
+    fn read_written_angle_header(
+        &mut self,
+        context: &mut Context,
+        directive: PreprocessorToken,
+    ) -> HeaderName {
+        let open = Self::next_ignore_whitespace(&mut self.tokenizer, context)
+            .expect("the operand was peeked");
+        let open_vector = context.first_source_vector(open.source_vectors).clone();
+        let file = open_vector.source_file_index;
+        // `#line` may rename the file; its text is the physical file's.
+        let physical = self.physical_source_file_index();
+        // Where the operand ends when no token closes it.
+        let mut end = open_vector.end();
+        let mut closing = None;
+        loop {
+            let Some(token) = self.tokenizer.next_item(context) else {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                        "parsing include directive",
+                    ),
+                    source_vectors: directive.source_vectors,
+                });
+                self.current_is_newline = true;
+                break;
+            };
+            if token.kind == PreprocessorTokenType::Newline {
+                self.current_is_newline = true;
+                break;
+            }
+            let vector = context.first_source_vector(token.source_vectors).clone();
+            if context.string_cache.at(token.contents).contains('>') {
+                let source = context
+                    .source_text(physical)
+                    .expect("source files record their text");
+                closing = logical_characters(source, vector.range())
+                    .into_iter()
+                    .find(|character| character.character == '>')
+                    .map(|character| character.index);
+                if closing.is_some() {
+                    break;
+                }
+            }
+            end = vector.end();
+        }
+        let anchor = SourcePosition {
+            index:  open_vector.index as usize,
+            line:   open_vector.line,
+            column: open_vector.column,
+        };
+        let (name, invalid, unclosed_at) = {
+            let source = context
+                .source_text(physical)
+                .expect("source files record their text");
+            let open_index = logical_characters(source, open_vector.range())
+                .first()
+                .expect("the operand starts with `<`")
+                .index;
+            let characters = logical_characters(source, open_index + 1..closing.unwrap_or(end));
+            let written = header_name_from_source(source, anchor, &characters, true);
+            let unclosed_at = closing
+                .is_none()
+                .then(|| position_after(source, anchor, end));
+            (written.name, written.invalid, unclosed_at)
+        };
+        let length = closing.map_or(end, |index| index + 1) - anchor.index;
+        HeaderName {
+            name,
+            is_system_header: true,
+            source_vectors: context.create_source_vectors(anchor, file, length),
+            missing_delimiter: unclosed_at
+                .map(|position| ('>', context.create_source_vectors(position, file, 0))),
+            invalid: invalid.map(|(sequence, start, length)| {
+                (sequence, context.create_source_vectors(start, file, length))
+            }),
+            backslash: None,
+        }
+    }
+
+    /// Reads a `"…"` operand as written: one string literal, whose source
+    /// text between its quotes is the name.
+    fn read_written_quoted_header(&mut self, context: &mut Context) -> HeaderName {
+        let token = Self::next_ignore_whitespace(&mut self.tokenizer, context)
+            .expect("the operand was peeked");
+        let vector = context.first_source_vector(token.source_vectors).clone();
+        let file = vector.source_file_index;
+        // `#line` may rename the file; its text is the physical file's.
+        let physical = self.physical_source_file_index();
+        let anchor = SourcePosition {
+            index:  vector.index as usize,
+            line:   vector.line,
+            column: vector.column,
+        };
+        let (written, unclosed_at) = {
+            let source = context
+                .source_text(physical)
+                .expect("source files record their text");
+            let characters = logical_characters(source, vector.range());
+            // The first character is the opening quote. An escaped quote
+            // does not close the literal; a missing one leaves the rest.
+            let mut close = characters.len();
+            let mut index = 1;
+            while index < characters.len() {
+                match characters[index].character {
+                    | '\\' => index += 2,
+                    | '"' => {
+                        close = index;
+                        break;
+                    },
+                    | _ => index += 1,
+                }
+            }
+            let written =
+                header_name_from_source(source, anchor, &characters[1.min(close)..close], false);
+            // A name ending in a backslash escapes its closing quote, which
+            // leaves the literal unterminated too.
+            let unclosed_at =
+                (close == characters.len()).then(|| position_after(source, anchor, vector.end()));
+            (written, unclosed_at)
+        };
+        HeaderName {
+            name:              written.name,
+            is_system_header:  false,
+            source_vectors:    token.source_vectors,
+            missing_delimiter: unclosed_at
+                .map(|position| ('"', context.create_source_vectors(position, file, 0))),
+            invalid:           written.invalid.map(|(sequence, start, length)| {
+                (sequence, context.create_source_vectors(start, file, length))
+            }),
+            backslash:         written
+                .backslash
+                .map(|(start, length)| context.create_source_vectors(start, file, length)),
+        }
+    }
+
+    /// Reads an operand not written as a header name: macros that expand to
+    /// one (C99 §6.10.2p4), whose tokens are combined by their spellings.
+    fn read_expanded_header(
+        &mut self,
+        context: &mut Context,
+        directive: PreprocessorToken,
+    ) -> Option<HeaderName> {
         let include_string =
             self.expect_token_without_rewind::<true>(
                 context,
-                |_, context, token| match token.kind {
-                    | PreprocessorTokenType::AngleBracketString
-                    | PreprocessorTokenType::IncludeString
-                    | PreprocessorTokenType::String => true,
-                    | _ if context.string_cache.at(token.contents).starts_with('<') => true,
-                    | _ => false,
+                |_, context, token| {
+                    let spelling = context.string_cache.at(token.contents);
+                    (token.kind == PreprocessorTokenType::String && spelling.starts_with('"'))
+                        || spelling.starts_with('<')
                 },
                 |_, _, token| {
                     ControlFlow::Break(PreprocessorError {
@@ -281,81 +552,121 @@ impl Preprocessor {
                     })
                 },
                 "parsing include directive",
-            );
-        context.set_is_tokenizing_include_string(false);
-        let Some(include_string) = include_string else {
+            )?;
+        if include_string.kind == PreprocessorTokenType::String {
+            let spelling = context.string_cache.at(include_string.contents);
+            let name = spelling.strip_prefix('"').unwrap_or(spelling);
+            let name = name.strip_suffix('"').unwrap_or(name).to_owned();
+            let invalid = invalid_header_sequence(&name, false)
+                .map(|(_, sequence)| (sequence, include_string.source_vectors));
+            let backslash = name.contains('\\').then_some(include_string.source_vectors);
+            return Some(HeaderName {
+                name,
+                is_system_header: false,
+                source_vectors: include_string.source_vectors,
+                missing_delimiter: None,
+                invalid,
+                backslash,
+            });
+        }
+        let mut contents = TokenString::new();
+        contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
+        let start_index = Context::duplicate_source_vectors(
+            &mut context.source_vectors.0,
+            include_string.source_vectors,
+        );
+        let mut closed = false;
+        loop {
+            match self.next_preprocessor_token::<false>(context) {
+                | Some(token) => {
+                    if token.kind == PreprocessorTokenType::Newline {
+                        break;
+                    }
+                    let token_contents = context.string_cache.at(token.contents);
+                    _ = Context::duplicate_source_vectors(
+                        &mut context.source_vectors.0,
+                        token.source_vectors,
+                    );
+                    if let Some(idx) = token_contents.find('>') {
+                        contents.push_str(&token_contents[..idx]);
+                        closed = true;
+                        break;
+                    }
+                    contents.push_str(context.string_cache.at(token.contents));
+                },
+                | None => {
+                    context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                            "parsing include directive",
+                        ),
+                        source_vectors: directive.source_vectors,
+                    });
+                    break;
+                },
+            }
+        }
+        let source_vectors = SourceVectors::new(start_index, context.source_vectors.0.len() as u32);
+        let name = contents.as_str().to_owned();
+        let invalid =
+            invalid_header_sequence(&name, true).map(|(_, sequence)| (sequence, source_vectors));
+        Some(HeaderName {
+            name,
+            is_system_header: true,
+            source_vectors,
+            missing_delimiter: (!closed).then_some(('>', source_vectors)),
+            invalid,
+            backslash: None,
+        })
+    }
+
+    fn parse_include_directive(&mut self, context: &mut Context, directive: PreprocessorToken) {
+        let including_file = self.physical_source_file_index();
+        let header = match self.peek_include_operand(context) {
+            | IncludeOperand::Angle => Some(self.read_written_angle_header(context, directive)),
+            | IncludeOperand::Quoted => Some(self.read_written_quoted_header(context)),
+            | IncludeOperand::Other => self.read_expanded_header(context, directive),
+        };
+        let Some(header) = header else {
             if !self.current_is_newline {
                 self.skip_and_expand_until_newline(context);
             }
             return;
         };
-        let header_source_index = match include_string.kind {
-            | PreprocessorTokenType::IncludeString | PreprocessorTokenType::String => {
-                let contents = context
-                    .string_cache
-                    .at(include_string.contents)
-                    .strip_circumfix('"', '"')
-                    .expect("Include strings must be enclosed in double quotes.")
-                    .to_token_string();
-                let path = Path::new(contents.as_str());
-                self.find_header_from_path(context, including_file, include_string, path, false)
-            },
-            | PreprocessorTokenType::AngleBracketString => {
-                let contents = context
-                    .string_cache
-                    .at(include_string.contents)
-                    .strip_circumfix('<', '>')
-                    .expect("Angle-bracket strings must be enclosed in angle brackets.")
-                    .to_token_string();
-                let path = Path::new(contents.as_str());
-                self.find_header_from_path(context, including_file, include_string, path, true)
-            },
-            | _ => {
-                let mut contents = TokenString::new();
-                contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
-                let start_index = Context::duplicate_source_vectors(
-                    &mut context.source_vectors.0,
-                    include_string.source_vectors,
-                );
-                loop {
-                    match self.next_preprocessor_token::<false>(context) {
-                        | Some(token) => {
-                            if token.kind == PreprocessorTokenType::Newline {
-                                break;
-                            }
-                            let token_contents = context.string_cache.at(token.contents);
-                            _ = Context::duplicate_source_vectors(
-                                &mut context.source_vectors.0,
-                                token.source_vectors,
-                            );
-                            if let Some(idx) = token_contents.find('>') {
-                                contents.push_str(&token_contents[..idx]);
-                                break;
-                            }
-                            contents.push_str(context.string_cache.at(token.contents));
-                        },
-                        | None => {
-                            context.preprocessor_error(PreprocessorError {
-                                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                                    "parsing include directive",
-                                ),
-                                source_vectors: directive.source_vectors,
-                            });
-                            break;
-                        },
-                    }
-                }
-                let path = Path::new(contents.as_str());
-                let synthetic_token = PreprocessorToken {
-                    source_vectors: SourceVectors::new(
-                        start_index,
-                        context.source_vectors.0.len() as u32,
-                    ),
-                    contents:       context.string_cache.intern(&contents),
-                    kind:           PreprocessorTokenType::AngleBracketString,
-                };
-                self.find_header_from_path(context, including_file, synthetic_token, path, true)
-            },
+        if let Some((delimiter, source_vectors)) = header.missing_delimiter {
+            context.preprocessor_error(PreprocessorError {
+                error_type: PreprocessorErrorType::UnterminatedHeaderName(delimiter),
+                source_vectors,
+            });
+        }
+        if let Some((sequence, source_vectors)) = header.invalid {
+            context.preprocessor_error(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidCharacterInHeaderName(sequence),
+                source_vectors,
+            });
+        }
+        let mut look_up = true;
+        if let Some(source_vectors) = header.backslash {
+            let policy = match context.configuration.standard() {
+                | CStandard::C99 => context.configuration.extension_policy(),
+            };
+            if policy != ExtensionPolicy::Allow {
+                context.preprocessor_error(PreprocessorError {
+                    error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(policy),
+                    source_vectors,
+                });
+            }
+            look_up = policy != ExtensionPolicy::Deny;
+        }
+        let header_source_index = if look_up {
+            self.find_header_from_path(
+                context,
+                including_file,
+                header.source_vectors,
+                Path::new(&header.name),
+                header.is_system_header,
+            )
+        } else {
+            None
         };
         if !self.current_is_newline
             && self
@@ -404,7 +715,7 @@ impl Preprocessor {
         };
         let header_string = SharedString::from(header_string);
         context.record_source_text(header_source_index, header_string.clone());
-        let tokenizer = TokenSource::new(context, header_source_index, header_string);
+        let tokenizer = TokenSource::new(context, header_source_index, &header_string);
         self.push_tokenizer_frame(
             context,
             TokenizerFrame {

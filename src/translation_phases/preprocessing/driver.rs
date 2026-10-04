@@ -243,7 +243,7 @@ impl Preprocessor {
         }) = frame
         {
             // File-local openings are owned copies, so their provenance
-            // survives streaming token-arena compaction. Macro frame pops
+            // survives preprocessor-arena compaction. Macro frame pops
             // leave conditional state untouched.
             let base = conditional_base.min(self.open_conditionals.len());
             for vectors in self.open_conditionals.split_off(base) {
@@ -900,7 +900,7 @@ impl Preprocessor {
                                 PathBuf::from("<pragma string>").into_boxed_path(),
                                 input.clone(),
                             );
-                            self.tokenizer = TokenSource::new(context, pragma_string, input);
+                            self.tokenizer = TokenSource::new(context, pragma_string, &input);
                             _ = self.parse_pragma_directive(context, string_token);
                             if self.tokenizer.next_item(context).is_some() {
                                 let source_vectors = self.current_location(context);

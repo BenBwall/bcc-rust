@@ -1,4 +1,4 @@
-//! Whole-file lexing for the batch strategy.
+//! Whole-file lexing: translation phases 1 through 3.
 //!
 //! Translation phases 1 and 2 run over the entire buffer first: one
 //! vectorized scan finds every byte that could start a trigraph, a line
@@ -7,15 +7,20 @@
 //! completion into the struct-of-arrays [`LexedFile`], which
 //! [`super::token_source`] replays to phase 4.
 //!
-//! The lexer reproduces the streaming tokenizer token for token, including
-//! provenance and diagnostics: positions refer to the original source, a
-//! token after a deleted splice starts at the splice, and the newline supplied
-//! for a file without a final one is consumed by whichever token first looks
-//! at the end of input.
+//! Provenance and diagnostics follow reading order: positions refer to the
+//! original source, a token after a deleted splice starts at the splice, the
+//! newline supplied for a file without a final one is consumed by whichever
+//! token first looks at the end of input, and a final newline escaped by a
+//! line splice is reported once each time the end of input is read after a
+//! real character.
 
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    ops::Range,
+};
 
 use super::{
+    super::initial_processing::terminal_splice_length,
     PreprocessorTokenType,
     PreprocessorTokenizerError,
     PreprocessorTokenizerErrorType,
@@ -29,7 +34,6 @@ use crate::{
     },
     util::{
         byte_scan,
-        shared::SharedString,
         string_cache::StringCacheId,
     },
 };
@@ -74,6 +78,77 @@ fn trigraph_replacement(byte: u8) -> Option<char> {
         | b'-' => '~',
         | _ => return None,
     })
+}
+
+/// One character after translation phases 1 and 2, with the source bytes
+/// that spell it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LogicalCharacter {
+    pub(crate) character: char,
+    /// Offset of its spelling in the source.
+    pub(crate) index:     usize,
+    /// Length of its spelling in bytes: 3 for a trigraph.
+    pub(crate) length:    usize,
+}
+
+/// The characters that `source[range]` spells once trigraphs are replaced
+/// and line splices deleted (C99 §5.1.1.2p1, phases 1 and 2). The range must
+/// not end inside a trigraph or a line splice; token spans never do.
+pub(crate) fn logical_characters(source: &str, range: Range<usize>) -> Vec<LogicalCharacter> {
+    let bytes = &source.as_bytes()[..range.end];
+    let mut characters = Vec::new();
+    let mut index = range.start;
+    while index < range.end {
+        let rest = &bytes[index..];
+        let splice = match rest {
+            | [b'\\', after @ ..] => line_ending_length(after).map(|ending| 1 + ending),
+            | [b'?', b'?', b'/', after @ ..] => line_ending_length(after).map(|ending| 3 + ending),
+            | _ => None,
+        };
+        if let Some(length) = splice {
+            index += length;
+            continue;
+        }
+        let (character, length) = match rest {
+            | [b'?', b'?', third, ..] if let Some(replacement) = trigraph_replacement(*third) =>
+                (replacement, 3),
+            | _ => {
+                let character = source[index..]
+                    .chars()
+                    .next()
+                    .expect("ranges start at character boundaries");
+                (character, character.len_utf8())
+            },
+        };
+        characters.push(LogicalCharacter {
+            character,
+            index,
+            length,
+        });
+        index += length;
+    }
+    characters
+}
+
+/// The position of source offset `to`, found by reading forward from `from`
+/// in `source`.
+pub(crate) fn position_after(source: &str, from: SourcePosition, to: usize) -> SourcePosition {
+    let mut position = from;
+    let mut characters = source[from.index..to].chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            | '\r' | '\n' => {
+                if character == '\r' && characters.peek() == Some(&'\n') {
+                    _ = characters.next();
+                }
+                position.line += 1;
+                position.column = 1;
+            },
+            | _ => position.column += 1,
+        }
+    }
+    position.index = to;
+    position
 }
 
 /// Applies translation phases 1 and 2 to a whole buffer: trigraphs are
@@ -179,7 +254,7 @@ impl<'a> PositionTracker<'a> {
 
     /// Advances to spliced offset `to` and returns the position there. A splice
     /// deleted immediately before `to` is not yet skipped, because the
-    /// streaming tokenizer starts a token before the splice it reads through.
+    /// token starts before the splice it reads through.
     fn advance(&mut self, to: usize) -> SourcePosition {
         debug_assert!(to >= self.clean, "positions are queried in order");
         while let Some(&Remap { clean, kind }) = self.remaps.get(self.next_remap)
@@ -269,6 +344,7 @@ enum LexDiagnostic {
         character:  Option<char>,
     },
     MissingFinalNewline,
+    EscapedFinalNewline,
 }
 
 /// Every preprocessing token of one source buffer, stored as parallel
@@ -276,7 +352,6 @@ enum LexDiagnostic {
 /// can exclude deleted splices without changing these shared boundaries.
 pub(super) struct LexedFile {
     pub(super) source_file_index: u32,
-    pub(super) source: SharedString,
     kinds: Vec<Option<PreprocessorTokenType>>,
     contents: Vec<StringCacheId>,
     indices: Vec<u32>,
@@ -284,7 +359,7 @@ pub(super) struct LexedFile {
     columns: Vec<u32>,
     /// Where the last entry ends.
     end_of_tokens: SourcePosition,
-    /// Where reading past the last entry leaves the streaming tokenizer.
+    /// Where reading past the last entry stands: past any trailing splices.
     eof: SourcePosition,
     /// Sorted by entry.
     diagnostics: Vec<(u32, LexDiagnostic)>,
@@ -297,18 +372,69 @@ pub(super) struct LexedFile {
     /// ahead. Sorted, and empty unless the final newline is missing.
     final_newline_readers: Vec<u32>,
     lacks_final_newline: bool,
+    /// The splice that escapes the source's final newline, with its line
+    /// given before any `#line` renumbering.
+    escaped_final_newline: Option<SourceVector>,
+    /// Entries whose lexing read the end of input. Sorted, and empty unless
+    /// the final newline is escaped.
+    end_readers: Vec<u32>,
 }
 
 impl LexedFile {
     /// Runs translation phases 1 through 3 over all of `source`.
-    pub(super) fn lex(context: &mut Context, source_file_index: u32, source: SharedString) -> Self {
-        let (text, remaps) = splice(&source);
-        let file = Lexer::new(context, &text, &remaps, source.is_empty()).run();
+    pub(super) fn lex(context: &mut Context, source_file_index: u32, source: &str) -> Self {
+        let (text, remaps) = splice(source);
+        let terminal_splice = terminal_splice_length(source);
+        let file = Lexer::new(context, &text, &remaps, source.is_empty())
+            .with_terminal_splice(terminal_splice.is_some())
+            .run();
+        let escaped_final_newline = terminal_splice.map(|length| {
+            let index = source.len() - length;
+            let line_start = source[..index].rfind(['\r', '\n']).map_or(0, |i| i + 1);
+            SourceVector {
+                index: source_offset(index),
+                column: u32::try_from(source[line_start..index].chars().count() + 1)
+                    .unwrap_or(u32::MAX),
+                line: file.eof.line.saturating_sub(1),
+                source_file_index,
+                length: source_offset(length),
+            }
+        });
         Self {
             source_file_index,
-            source,
+            escaped_final_newline,
             ..file
         }
+    }
+
+    /// Reports the escaped final newline, as reading the end of input does
+    /// once after each real character.
+    pub(super) fn report_escaped_final_newline(
+        &self,
+        context: &mut Context,
+        source_file_index: u32,
+        line_delta: u32,
+    ) {
+        if let Some(vector) = &self.escaped_final_newline {
+            context.escaped_final_newline(SourceVector {
+                line: vector.line.wrapping_add(line_delta),
+                source_file_index,
+                ..vector.clone()
+            });
+        }
+    }
+
+    /// Whether the source's final newline is escaped by a line splice.
+    pub(super) fn has_escaped_final_newline(&self) -> bool {
+        self.escaped_final_newline.is_some()
+    }
+
+    /// Whether lexing `entry` read the end of input, which reports an
+    /// escaped final newline until a real character is read again.
+    pub(super) fn reads_end(&self, entry: usize) -> bool {
+        self.end_readers
+            .binary_search(&u32::try_from(entry).expect("entry indices fit in u32"))
+            .is_ok()
     }
 
     pub(super) fn len(&self) -> usize {
@@ -355,9 +481,8 @@ impl LexedFile {
         &self.other_locations[found].1
     }
 
-    /// Whether the streaming tokenizer withholds the supplied final newline
-    /// after reading `entry`, because the last character it read was a
-    /// newline.
+    /// Whether reading `entry` withholds the supplied final newline, because
+    /// the last character it read was a newline.
     #[inline(always)]
     pub(super) fn withholds_final_newline_after(&self, entry: usize) -> bool {
         self.kinds[entry] == Some(PreprocessorTokenType::Newline)
@@ -409,8 +534,13 @@ impl LexedFile {
             .then_some(entry)
     }
 
-    /// Reports the diagnostics recorded while lexing `entry`, as reading it
-    /// from the streaming tokenizer would.
+    /// The first entry starting at or after `position`.
+    pub(super) fn entry_after(&self, position: SourcePosition) -> usize {
+        self.indices
+            .partition_point(|&index| (index as usize) < position.index)
+    }
+
+    /// Reports the diagnostics recorded while lexing `entry`.
     #[inline(always)]
     pub(super) fn replay_diagnostics(
         &self,
@@ -461,19 +591,11 @@ impl LexedFile {
                 }),
                 | LexDiagnostic::MissingFinalNewline =>
                     self.report_missing_final_newline(context, source_file_index, line_delta),
+                | LexDiagnostic::EscapedFinalNewline =>
+                    self.report_escaped_final_newline(context, source_file_index, line_delta),
             }
         }
     }
-}
-
-/// Where the lexer is within a possible `#include` line, which decides
-/// whether `<` and `"` start header names.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum DirectiveState {
-    LineStart,
-    AfterHash,
-    AfterInclude,
-    Other,
 }
 
 /// A token's kind and spelling once its end is known.
@@ -483,6 +605,10 @@ struct Lexed {
     contents: StringCacheId,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is one piece of the end-of-input reading state."
+)]
 struct Lexer<'a> {
     context:             &'a mut Context,
     text:                &'a str,
@@ -492,16 +618,22 @@ struct Lexer<'a> {
     pos:                 usize,
     /// Whether the input lacks a final newline, so one is supplied.
     lacks_final_newline: bool,
-    /// Whether reading the end of input now yields the supplied newline. As
-    /// in the streaming tokenizer, reading it withholds it until a real
-    /// character is read again.
+    /// Whether reading the end of input now yields the supplied newline.
+    /// Reading it withholds it until a real character is read again.
     virtual_newline:     bool,
     /// Whether the token being lexed read through the end of input.
     reached_eof:         bool,
+    /// Whether the source's final newline is escaped by a line splice.
+    terminal_splice:     bool,
+    /// Whether reading the end of input now reports the escaped final
+    /// newline: until a real character is read again, it is reported once.
+    splice_armed:        bool,
+    /// Whether the token being lexed looked at the end of input.
+    read_end:            bool,
+    /// Whether the token being lexed read the supplied final newline.
+    read_final_newline:  bool,
     /// Diagnostics raised while lexing the current token, in order.
     pending:             Vec<LexDiagnostic>,
-    directive:           DirectiveState,
-    include:             StringCacheId,
     scratch:             String,
     file:                LexedFile,
 }
@@ -517,7 +649,6 @@ impl<'a> Lexer<'a> {
         let lacks_final_newline = !physically_empty && bytes.last() != Some(&b'\n');
         // Entries average a few bytes each.
         let capacity = bytes.len() / 3;
-        let include = context.string_cache.intern("include");
         Self {
             context,
             text,
@@ -527,13 +658,14 @@ impl<'a> Lexer<'a> {
             lacks_final_newline,
             virtual_newline: lacks_final_newline,
             reached_eof: false,
+            terminal_splice: false,
+            splice_armed: true,
+            read_end: false,
+            read_final_newline: false,
             pending: Vec::new(),
-            directive: DirectiveState::LineStart,
-            include,
             scratch: String::new(),
             file: LexedFile {
                 source_file_index: 0,
-                source: SharedString::default(),
                 kinds: Vec::with_capacity(capacity),
                 contents: Vec::with_capacity(capacity),
                 indices: Vec::with_capacity(capacity),
@@ -546,21 +678,38 @@ impl<'a> Lexer<'a> {
                 final_newline_entry: None,
                 final_newline_readers: Vec::new(),
                 lacks_final_newline,
+                escaped_final_newline: None,
+                end_readers: Vec::new(),
             },
         }
     }
 
+    fn with_terminal_splice(mut self, terminal_splice: bool) -> Self {
+        self.terminal_splice = terminal_splice;
+        self
+    }
+
     /// The spliced byte at `offset`. Looking at the end of input reads the
-    /// supplied final newline, reporting its absence.
+    /// supplied final newline, reporting its absence, or reports a final
+    /// newline that a line splice escapes.
     #[inline(always)]
     fn peek(&mut self, offset: usize) -> Option<u8> {
         if let Some(&byte) = self.bytes.get(offset) {
             self.virtual_newline = self.lacks_final_newline;
+            self.splice_armed = true;
             return Some(byte);
+        }
+        self.read_end = true;
+        if self.terminal_splice && self.splice_armed {
+            self.splice_armed = false;
+            self.pending.push(LexDiagnostic::EscapedFinalNewline);
         }
         if offset == self.bytes.len() && self.virtual_newline {
             self.virtual_newline = false;
-            self.pending.push(LexDiagnostic::MissingFinalNewline);
+            self.read_final_newline = true;
+            if !self.terminal_splice {
+                self.pending.push(LexDiagnostic::MissingFinalNewline);
+            }
             return Some(b'\n');
         }
         None
@@ -595,7 +744,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Where the streaming tokenizer stands after reading past the end:
+    /// Where reading past the end stands:
     /// beyond every trailing splice.
     fn eof_position(&self) -> SourcePosition {
         let mut tracker = self.tracker.clone();
@@ -606,6 +755,8 @@ impl<'a> Lexer<'a> {
         loop {
             let start = self.pos;
             let position = self.tracker.advance(start);
+            self.read_end = false;
+            self.read_final_newline = false;
             let Some(byte) = self.peek(start) else {
                 break;
             };
@@ -620,6 +771,8 @@ impl<'a> Lexer<'a> {
             };
             self.push(position, lexed);
         }
+        // Reading past the last entry is the cursor's to report.
+        self.pending.clear();
         let end = self.tracker.advance(self.bytes.len());
         self.file.eof = self.tracker.advance_past_deletions(self.bytes.len());
         self.file.end_of_tokens = if self.reached_eof { self.file.eof } else { end };
@@ -628,26 +781,15 @@ impl<'a> Lexer<'a> {
 
     fn push(&mut self, position: SourcePosition, lexed: Lexed) {
         let entry = u32::try_from(self.file.kinds.len()).expect("entry indices fit in u32");
-        if self
-            .pending
-            .iter()
-            .any(|diagnostic| matches!(diagnostic, LexDiagnostic::MissingFinalNewline))
-        {
+        if self.read_final_newline {
             self.file.final_newline_readers.push(entry);
+        }
+        if self.read_end && self.terminal_splice {
+            self.file.end_readers.push(entry);
         }
         self.file
             .diagnostics
             .extend(self.pending.drain(..).map(|diagnostic| (entry, diagnostic)));
-        self.directive = match (self.directive, lexed.kind) {
-            | (_, Some(PreprocessorTokenType::Newline)) => DirectiveState::LineStart,
-            | (state, Some(PreprocessorTokenType::Whitespace)) => state,
-            | (DirectiveState::LineStart, Some(PreprocessorTokenType::Hash)) =>
-                DirectiveState::AfterHash,
-            | (DirectiveState::AfterHash, Some(PreprocessorTokenType::Identifier))
-                if lexed.contents == self.include =>
-                DirectiveState::AfterInclude,
-            | _ => DirectiveState::Other,
-        };
         self.file.kinds.push(lexed.kind);
         self.file.contents.push(lexed.contents);
         self.file
@@ -657,11 +799,9 @@ impl<'a> Lexer<'a> {
         self.file.columns.push(position.column);
     }
 
-    /// Lexes the token starting with `byte` at `start`, dispatching exactly
-    /// as the streaming tokenizer does.
+    /// Lexes the token starting with `byte` at `start`.
     fn lex_token(&mut self, start: usize, position: SourcePosition, byte: u8) -> Lexed {
         use PreprocessorTokenType as T;
-        let include_line = self.directive == DirectiveState::AfterInclude;
         match byte {
             | b'\n' => self.spelled(start, start + 1, T::Newline),
             | b'0'..=b'9' => self.lex_number(start, start + 1),
@@ -673,7 +813,7 @@ impl<'a> Lexer<'a> {
             | b']' => self.spelled(start, start + 1, T::ClosingSquareBracket),
             | b'L' => match self.peek(start + 1) {
                 | Some(quote @ (b'"' | b'\'')) =>
-                    self.lex_quoted(start, position, start + 2, quote, false),
+                    self.lex_quoted(start, position, start + 2, quote),
                 | _ => self.lex_identifier(start, start + 1),
             },
             | b'\\' if super::ucn::decode(&self.text[start..], true).is_some() =>
@@ -687,8 +827,7 @@ impl<'a> Lexer<'a> {
                 | Some(b'0'..=b'9') => self.lex_number(start, start + 2),
                 | _ => self.spelled(start, start + 1, T::Period),
             },
-            | b'"' => self.lex_quoted(start, position, start + 1, b'"', include_line),
-            | b'\'' => self.lex_quoted(start, position, start + 1, b'\'', false),
+            | b'"' | b'\'' => self.lex_quoted(start, position, start + 1, byte),
             | b'#' => self.one_of(start, T::Hash, &[(b'#', T::HashHash)]),
             | b' ' | b'\t' | b'\x0b' | b'\x0c' => self.lex_whitespace(start + 1),
             | b'/' => match self.peek(start + 1) {
@@ -715,8 +854,6 @@ impl<'a> Lexer<'a> {
                 },
                 | _ => self.spelled(start, start + 1, T::Percent),
             },
-            | b'<' if include_line && let Some(end) = self.header_name_end(start) =>
-                self.spelled(start, end, T::AngleBracketString),
             | b'<' => match self.peek(start + 1) {
                 | Some(b':') => self.spelled(start, start + 2, T::OpeningSquareBracket),
                 | Some(b'%') => self.spelled(start, start + 2, T::OpeningCurlyBrace),
@@ -873,8 +1010,8 @@ impl<'a> Lexer<'a> {
                 | Some(0x80..) if self.char_at(end).is_alphanumeric() =>
                     end += self.char_at(end).len_utf8(),
                 | Some(_) => break,
-                // The streaming tokenizer keeps its position after reading the
-                // end of input, past any trailing splice.
+                // Reading the end of input leaves the position past any
+                // trailing splice.
                 | None => {
                     self.reached_eof = true;
                     break;
@@ -950,40 +1087,18 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The end of a `<...>` header name at `start`, if the line has one.
-    ///
-    /// This does not read the supplied final newline: phase 4 reads a failed
-    /// header name again as ordinary tokens, which the entries must match.
-    fn header_name_end(&self, start: usize) -> Option<usize> {
-        let mut end = start + 1;
-        loop {
-            match *self.bytes.get(end)? {
-                | b'>' => return Some(end + 1),
-                | b'\n' => return None,
-                | _ => end += 1,
-            }
-        }
-    }
-
-    /// Lexes a string or character literal, or a quoted header name when
-    /// `header` is set, whose body starts at `body`.
+    /// Lexes a string or character literal whose body starts at `body`.
     fn lex_quoted(
         &mut self,
         start: usize,
         position: SourcePosition,
         body: usize,
         quote: u8,
-        header: bool,
     ) -> Lexed {
         use PreprocessorTokenType as T;
         use PreprocessorTokenizerErrorType as E;
-        let (kind, unterminated, newline) = match (quote, header) {
-            | (b'"', true) => (
-                T::IncludeString,
-                E::UnterminatedIncludeString,
-                E::NewlineInIncludeString,
-            ),
-            | (b'"', false) => (T::String, E::UnterminatedString, E::NewlineInString),
+        let (kind, unterminated, newline) = match quote {
+            | b'"' => (T::String, E::UnterminatedString, E::NewlineInString),
             | _ => (
                 T::Character,
                 E::UnterminatedCharacter,
@@ -1005,7 +1120,7 @@ impl<'a> Lexer<'a> {
                     self.reached_eof = true;
                     return self.spelled(start, end, kind);
                 },
-                | Some(b'\\') if !header => {
+                | Some(b'\\') => {
                     end += 1;
                     match self.peek(end) {
                         | Some(b'\n') | None => {},
@@ -1020,7 +1135,7 @@ impl<'a> Lexer<'a> {
                         length:     at.index - position.index,
                         character:  None,
                     });
-                    // The streaming tokenizer closes the literal for recovery.
+                    // Close the literal for recovery.
                     let mut spelling = std::mem::take(&mut self.scratch);
                     spelling.clear();
                     spelling.push_str(&self.text[start..end]);

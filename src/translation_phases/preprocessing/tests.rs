@@ -2,12 +2,13 @@ mod conditional_boundary_regressions;
 mod directive_regressions;
 mod encoding_regressions;
 mod expression_regressions;
+mod header_name_regressions;
 mod keyword_regressions;
 mod literal_regressions;
 mod macro_regressions;
+mod observables;
 mod other_token_regressions;
 mod predefined_regressions;
-mod strategies;
 
 use std::path::PathBuf;
 
@@ -240,8 +241,6 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
 
     for kind in [
         PreprocessorTokenType::Placeholder,
-        PreprocessorTokenType::AngleBracketString,
-        PreprocessorTokenType::IncludeString,
         PreprocessorTokenType::Whitespace,
     ] {
         let token = PreprocessorToken {

@@ -28,7 +28,6 @@ pub use benchmarking::{
     BenchmarkInput,
     ParseBenchmarkSummary,
     PreparedParse,
-    PreprocessingStrategy,
     lex,
     parse,
     prepare_parse,

@@ -177,8 +177,8 @@ impl Preprocessor {
             })
             .collect();
         let source_file_index = context.intern_source_file(source_name);
-        context.record_source_text(source_file_index, source.clone());
-        let tokenizer = TokenSource::new(context, source_file_index, source);
+        let tokenizer = TokenSource::new(context, source_file_index, &source);
+        context.record_source_text(source_file_index, source);
         Self {
             tokenizer_stack: vec![TokenizerFrame {
                 frame_type: TokenizerFrameType::SourceFile {

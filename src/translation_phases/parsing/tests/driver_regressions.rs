@@ -1,29 +1,33 @@
 //! Regression tests for verified driver bugs found by the overnight bug hunt.
 
-use std::path::PathBuf;
+use std::{
+    fmt::Write,
+    path::PathBuf,
+};
 
 use crate::{
-    pipeline::PreprocessingStrategy,
     translation_phases::{
         Context,
-        parsing::inspection::InspectionOptions,
+        parsing::{
+            Parser,
+            inspection::InspectionOptions,
+        },
+        preprocessing::Preprocessor,
     },
     util::shared::SharedVec,
 };
 
-/// Parses `source` under `strategy` and renders its located syntax tree.
-fn located_tree(source: &str, strategy: PreprocessingStrategy) -> String {
+/// Parses `source` and renders its located syntax tree.
+fn located_tree(source: &str) -> String {
     let mut context = Context::new();
-    let preprocessor = strategy.preprocessor(
+    let preprocessor = Preprocessor::new(
         &mut context,
-        PathBuf::from("<strategy-test>").into_boxed_path(),
+        PathBuf::from("<located-tree-test>").into_boxed_path(),
         source.to_owned().into(),
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = strategy
-        .parser(preprocessor, &mut context)
-        .parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     unit.syntax().inspect(
         unit.external_declarations(),
         &context,
@@ -34,7 +38,8 @@ fn located_tree(source: &str, strategy: PreprocessingStrategy) -> String {
 }
 
 #[test]
-fn recovered_nodes_are_located_identically_under_every_strategy() {
+fn recovered_nodes_keep_their_locations() {
+    let mut snapshot = String::new();
     for source in [
         "void f(void) {\n  if () ;\n}\nint after;\n",
         "void f(void) {\n  )\n  x;\n}\nint after;\n",
@@ -42,53 +47,48 @@ fn recovered_nodes_are_located_identically_under_every_strategy() {
         "void f(void) {\n  goto ;\n}\n",
         "void f(int x) {\n  switch (x) { case : ; }\n}\n",
         "int a;\nvoid f(void){\n  if () ;\n  while () ;\n}\nint z;\nint y;\n",
+        "int b long; ;\nint after;\n",
     ] {
-        let streaming = located_tree(source, PreprocessingStrategy::Streaming);
-        for strategy in [
-            PreprocessingStrategy::BatchLexing,
-            PreprocessingStrategy::Batch,
-        ] {
-            assert_eq!(
-                located_tree(source, strategy),
-                streaming,
-                "{strategy:?} disagrees with streaming for {source:?}"
-            );
-        }
+        _ = writeln!(snapshot, "=== {source:?}");
+        snapshot.push_str(&located_tree(source));
     }
+    // Recorded while the streaming and batch pipelines still had to agree.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/inspection/recovered_locations.snap");
+    if std::env::var_os("BLESS").is_some_and(|value| value == "1") {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &snapshot).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("{}: {error}; run with BLESS=1 to create it", path.display())
+    });
+    pretty_assertions::assert_eq!(expected, snapshot);
 }
 
 #[test]
 fn missing_and_error_nodes_are_located_at_the_offending_token() {
-    let tree = located_tree(
-        "void f(void) {\n  if () ;\n}\n",
-        PreprocessingStrategy::Batch,
-    );
+    let tree = located_tree("void f(void) {\n  if () ;\n}\n");
     assert!(tree.contains("condition: missing @2:7"), "{tree}");
 
-    let tree = located_tree(
-        "void f(void) {\n  )\n  x;\n}\n",
-        PreprocessingStrategy::Streaming,
-    );
+    let tree = located_tree("void f(void) {\n  )\n  x;\n}\n");
     // A stray `)` at statement start is skipped as a recovered null
     // statement located at the `)` itself.
     assert!(tree.contains("null recovered @2:3"), "{tree}");
 }
 
-/// Parses `source` with the streaming strategy and returns how many source
-/// segments the context holds afterwards.
+/// Parses `source` and returns how many source segments the context holds
+/// afterwards.
 fn source_segments_after_parsing(source: &str) -> usize {
     let mut context = Context::new();
-    let strategy = PreprocessingStrategy::Streaming;
-    let preprocessor = strategy.preprocessor(
+    let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<segment-test>").into_boxed_path(),
         source.to_owned().into(),
         SharedVec::default(),
         SharedVec::default(),
     );
-    let _unit = strategy
-        .parser(preprocessor, &mut context)
-        .parse_translation_unit(&mut context);
+    let _unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     context.source_segment_count()
 }
 
@@ -120,23 +120,10 @@ fn an_error_under_deep_nesting_keeps_provenance_linear() {
 }
 
 #[test]
-fn recovered_function_bodies_use_the_current_token_in_every_strategy() {
-    let source = "int b long; ;\nint after;\n";
-    let streaming = located_tree(source, PreprocessingStrategy::Streaming);
-    for strategy in [
-        PreprocessingStrategy::BatchLexing,
-        PreprocessingStrategy::Batch,
-    ] {
-        assert_eq!(located_tree(source, strategy), streaming);
-    }
-}
-
-#[test]
 fn inspection_preserves_declaration_and_pointer_specifiers() {
     let tree = located_tree(
         "static inline const int f(register volatile int x) { const int * restrict p; return \
          (const int)x; }\n",
-        PreprocessingStrategy::Streaming,
     );
     for expected in [
         "storage=static",
@@ -152,10 +139,7 @@ fn inspection_preserves_declaration_and_pointer_specifiers() {
 
 #[test]
 fn inspection_lists_do_while_body_before_condition() {
-    let tree = located_tree(
-        "void f(void) { do { body(); } while (condition); }\n",
-        PreprocessingStrategy::Streaming,
-    );
+    let tree = located_tree("void f(void) { do { body(); } while (condition); }\n");
     assert!(
         tree.find("identifier body").unwrap() < tree.find("identifier condition").unwrap(),
         "{tree}"
@@ -165,7 +149,7 @@ fn inspection_lists_do_while_body_before_condition() {
 #[test]
 fn deeply_nested_inspection_has_bounded_indentation_and_explicit_depth() {
     let source = format!("int f(void) {{ return {}1; }}\n", "- ".repeat(1000));
-    let tree = located_tree(&source, PreprocessingStrategy::Streaming);
+    let tree = located_tree(&source);
     assert!(tree.len() < 200_000, "{} output bytes", tree.len());
     assert!(
         tree.contains("[depth="),
@@ -175,10 +159,7 @@ fn deeply_nested_inspection_has_bounded_indentation_and_explicit_depth() {
 
 #[test]
 fn abstract_empty_function_declarators_preserve_unspecified_parameters() {
-    let tree = located_tree(
-        "int f(); int (*p)(); int g(void) { return sizeof(int ()); }\n",
-        PreprocessingStrategy::Streaming,
-    );
+    let tree = located_tree("int f(); int (*p)(); int g(void) { return sizeof(int ()); }\n");
     assert_eq!(
         tree.matches("function identifier-list").count(),
         3,
@@ -188,7 +169,7 @@ fn abstract_empty_function_declarators_preserve_unspecified_parameters() {
 
 #[test]
 fn parenthesized_declarator_locations_include_the_opening_delimiter() {
-    let tree = located_tree("int (value);\n", PreprocessingStrategy::Streaming);
+    let tree = located_tree("int (value);\n");
     assert!(tree.contains("parenthesized-declarator @1:5"), "{tree}");
 }
 
@@ -198,47 +179,38 @@ fn missing_semicolon_help_uses_macro_invocations_after_full_batch_preprocessing(
         ("#define DECL int a", "DECL"),
         ("#define DECL(x) int x", "DECL(a)"),
     ] {
-        for strategy in [
-            PreprocessingStrategy::Streaming,
-            PreprocessingStrategy::BatchLexing,
-            PreprocessingStrategy::Batch,
-        ] {
-            let source = format!(
-                "{definition}\nstruct S {{\n{call}\nint b;\n}};\nstruct T {{\n{call}\nint \
-                 b;\n}};\n"
-            );
-            let mut context = Context::new();
-            let preprocessor = strategy.preprocessor(
-                &mut context,
-                PathBuf::from("<macro-help>").into_boxed_path(),
-                source.into(),
-                SharedVec::default(),
-                SharedVec::default(),
-            );
-            let _unit = strategy
-                .parser(preprocessor, &mut context)
-                .parse_translation_unit(&mut context);
-            let insertions: Vec<_> = context
-                .take_pending_errors()
-                .into_iter()
-                .filter_map(|error| match error {
-                    | crate::translation_phases::TranslationError::Parsing(error) =>
-                        error.insertion_point,
-                    | _ => None,
-                })
-                .map(|source| {
-                    let vector = &context.get_source_vectors(source)[0];
-                    (vector.line, vector.column)
-                })
-                .collect();
-            assert_eq!(
-                insertions,
-                [
-                    (3, u32::try_from(call.len()).unwrap() + 1),
-                    (7, u32::try_from(call.len()).unwrap() + 1)
-                ],
-                "{strategy:?}: {call}"
-            );
-        }
+        let source = format!(
+            "{definition}\nstruct S {{\n{call}\nint b;\n}};\nstruct T {{\n{call}\nint b;\n}};\n"
+        );
+        let mut context = Context::new();
+        let preprocessor = Preprocessor::new(
+            &mut context,
+            PathBuf::from("<macro-help>").into_boxed_path(),
+            source.into(),
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let _unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+        let insertions: Vec<_> = context
+            .take_pending_errors()
+            .into_iter()
+            .filter_map(|error| match error {
+                | crate::translation_phases::TranslationError::Parsing(error) =>
+                    error.insertion_point,
+                | _ => None,
+            })
+            .map(|source| {
+                let vector = &context.get_source_vectors(source)[0];
+                (vector.line, vector.column)
+            })
+            .collect();
+        assert_eq!(
+            insertions,
+            [
+                (3, u32::try_from(call.len()).unwrap() + 1),
+                (7, u32::try_from(call.len()).unwrap() + 1)
+            ],
+            "{call}"
+        );
     }
 }

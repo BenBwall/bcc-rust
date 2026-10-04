@@ -1,4 +1,5 @@
-//! Pipeline iterator regressions and crate-level syntax-tree consumption.
+//! Pipeline regressions: `--tokens` reporting order, and crate-level
+//! syntax-tree consumption.
 
 use std::path::PathBuf;
 
@@ -18,6 +19,7 @@ use crate::{
         Context,
         GetSourceVectors,
         TranslationError,
+        TranslationPhase,
         parsing::{
             ExternalDeclaration,
             Parser as LanguageParser,
@@ -26,22 +28,53 @@ use crate::{
             Preprocessor,
             PreprocessorError,
             PreprocessorErrorType,
+            Token,
             TokenType,
         },
     },
     util::shared::SharedVec,
 };
 
-#[test]
-fn diagnostic_is_yielded_before_the_token_produced_alongside_it() {
-    let mut iterator = PreprocessorIterator::new(
+/// Preprocesses `source` as the CLI's `--tokens` does, returning its tokens
+/// and diagnostics in reporting order.
+fn preprocessed_with(
+    source: &str,
+    configuration: CompilerConfiguration,
+) -> (std::vec::IntoIter<Result<Token, TranslationError>>, Context) {
+    let mut context = Context::with_configuration(configuration);
+    let preprocessor = Preprocessor::new(
+        &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        "#if (0, 2)\nCOMMA_RESULT_2\n#endif\n".to_owned().into(),
+        source.to_owned().into(),
         SharedVec::default(),
         SharedVec::default(),
     );
-    iterator.context.configuration =
-        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny);
+    let items = preprocess_with_diagnostics(preprocessor, &mut context);
+    (items.into_iter(), context)
+}
+
+fn preprocessed(source: &str) -> (std::vec::IntoIter<Result<Token, TranslationError>>, Context) {
+    preprocessed_with(source, CompilerConfiguration::default())
+}
+
+fn parser(source: &str) -> (LanguageParser, Context) {
+    let mut context = Context::new();
+    let preprocessor = Preprocessor::new(
+        &mut context,
+        PathBuf::from("<test>").into_boxed_path(),
+        source.to_owned().into(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    (LanguageParser::new(preprocessor, &mut context), context)
+}
+
+#[test]
+fn diagnostic_is_yielded_before_the_token_produced_alongside_it() {
+    let (mut iterator, mut context) = preprocessed_with(
+        "#if (0, 2)\nCOMMA_RESULT_2\n#endif\n",
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+    );
 
     let error = iterator.next().unwrap().unwrap_err();
     assert!(matches!(
@@ -53,46 +86,30 @@ fn diagnostic_is_yielded_before_the_token_produced_alongside_it() {
             ..
         })
     ));
-    let error_source_vectors = error.source_vectors(&mut iterator.context);
-    assert_ne!(
-        iterator.context.get_source_vectors(error_source_vectors),
-        []
-    );
+    let error_source_vectors = error.source_vectors(&mut context);
+    assert_ne!(context.get_source_vectors(error_source_vectors), []);
 
     let token = iterator.next().unwrap().unwrap();
     assert_eq!(token.kind, TokenType::Identifier);
-    assert_eq!(
-        iterator.context.string_cache.at(token.contents),
-        "COMMA_RESULT_2"
-    );
+    assert_eq!(context.string_cache.at(token.contents), "COMMA_RESULT_2");
     assert!(iterator.next().is_none());
 }
 
 #[test]
 fn nested_token_pastes_keep_their_operands_while_tokens_are_yielded() {
-    let mut iterator = PreprocessorIterator::new(
-        PathBuf::from("<test>").into_boxed_path(),
-        concat!(
-            "#define LIM1(x) x##0; x##1;\n",
-            "#define LIM2(x) LIM1(x##0) LIM1(x##1)\n",
-            "#define LIM3(x) LIM2(x##0) LIM2(x##1)\n",
-            "LIM3(int value)\n",
-        )
-        .to_owned()
-        .into(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
+    let (iterator, context) = preprocessed(concat!(
+        "#define LIM1(x) x##0; x##1;\n",
+        "#define LIM2(x) LIM1(x##0) LIM1(x##1)\n",
+        "#define LIM3(x) LIM2(x##0) LIM2(x##1)\n",
+        "LIM3(int value)\n",
+    ));
 
     let mut names = Vec::new();
-    while let Some(token) = iterator.next() {
+    for token in iterator {
         let token = token.unwrap();
-        assert_ne!(
-            iterator.context.get_source_vectors(token.source_vectors),
-            []
-        );
+        assert_ne!(context.get_source_vectors(token.source_vectors), []);
         if token.kind == TokenType::Identifier {
-            names.push(iterator.context.string_cache.at(token.contents).to_owned());
+            names.push(context.string_cache.at(token.contents).to_owned());
         }
     }
     assert_eq!(
@@ -106,38 +123,20 @@ fn nested_token_pastes_keep_their_operands_while_tokens_are_yielded() {
 
 #[test]
 fn adjacent_string_lookahead_keeps_the_buffered_token_provenance() {
-    let mut iterator = PreprocessorIterator::new(
-        PathBuf::from("<test>").into_boxed_path(),
-        "\"a\" identifier\n".to_owned().into(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
+    let (mut iterator, context) = preprocessed("\"a\" identifier\n");
 
     let string = iterator.next().unwrap().unwrap();
     assert!(matches!(string.kind, TokenType::String(_)));
     let identifier = iterator.next().unwrap().unwrap();
     assert_eq!(identifier.kind, TokenType::Identifier);
-    assert_eq!(
-        iterator.context.string_cache.at(identifier.contents),
-        "identifier"
-    );
-    assert_ne!(
-        iterator
-            .context
-            .get_source_vectors(identifier.source_vectors),
-        []
-    );
+    assert_eq!(context.string_cache.at(identifier.contents), "identifier");
+    assert_ne!(context.get_source_vectors(identifier.source_vectors), []);
     assert!(iterator.next().is_none());
 }
 
 #[test]
 fn adjacent_string_lookahead_defers_buffered_token_diagnostics() {
-    let mut iterator = PreprocessorIterator::new(
-        PathBuf::from("<test>").into_boxed_path(),
-        "\"a\" 0xg\n".to_owned().into(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
+    let (mut iterator, _context) = preprocessed("\"a\" 0xg\n");
 
     assert!(matches!(
         iterator.next().unwrap().unwrap().kind,
@@ -156,12 +155,7 @@ fn adjacent_string_lookahead_defers_buffered_token_diagnostics() {
 
 #[test]
 fn adjacent_string_lookahead_keeps_current_token_before_later_diagnostics() {
-    let mut iterator = PreprocessorIterator::new(
-        PathBuf::from("<test>").into_boxed_path(),
-        "\"\\q\" 0xg".to_owned().into(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
+    let (mut iterator, _context) = preprocessed("\"\\q\" 0xg");
 
     assert!(matches!(
         iterator.next().unwrap().unwrap_err(),
@@ -194,12 +188,7 @@ fn adjacent_string_lookahead_keeps_current_token_before_later_diagnostics() {
 
 #[test]
 fn adjacent_string_lookahead_keeps_deferred_eof_diagnostic_provenance() {
-    let mut iterator = PreprocessorIterator::new(
-        PathBuf::from("<test>").into_boxed_path(),
-        "\"a\"\n#error boom\n".to_owned().into(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
+    let (mut iterator, mut context) = preprocessed("\"a\"\n#error boom\n");
 
     assert!(matches!(
         iterator.next().unwrap().unwrap().kind,
@@ -213,45 +202,36 @@ fn adjacent_string_lookahead_keeps_deferred_eof_diagnostic_provenance() {
             ..
         }) if message.trim() == "boom"
     ));
-    let source_vectors = error.source_vectors(&mut iterator.context);
-    assert_ne!(iterator.context.get_source_vectors(source_vectors), []);
+    let source_vectors = error.source_vectors(&mut context);
+    assert_ne!(context.get_source_vectors(source_vectors), []);
     assert!(iterator.next().is_none());
 }
 
 #[test]
-fn parser_iterator_yields_declarations_and_exposes_the_syntax_store() {
-    let mut iterator = ParserIterator::new(
-        PathBuf::from("<test>").into_boxed_path(),
-        "int value;\n".to_owned().into(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
+fn parser_yields_declarations_and_exposes_the_syntax_store() {
+    let (mut parser, mut context) = parser("int value;\n");
 
     assert!(matches!(
-        iterator.next().unwrap().unwrap(),
+        parser.next_item(&mut context).unwrap(),
         ExternalDeclaration::Declaration(_)
     ));
-    assert!(iterator.next().is_none());
+    assert!(parser.next_item(&mut context).is_none());
     assert!(
-        format!("{:#?}", iterator.parser.syntax_debug()).contains("declarations:"),
+        format!("{:#?}", parser.syntax_debug()).contains("declarations:"),
         "the debug view should expose the arena referenced by parser output"
     );
 }
 
 #[test]
-fn parser_iterator_yields_a_parsed_initialized_declaration() {
-    let mut iterator = ParserIterator::new(
-        PathBuf::from("<test>").into_boxed_path(),
-        "int value = 1;\n".to_owned().into(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
+fn parser_yields_a_parsed_initialized_declaration() {
+    let (mut parser, mut context) = parser("int value = 1;\n");
 
     assert!(matches!(
-        iterator.next().unwrap().unwrap(),
+        parser.next_item(&mut context).unwrap(),
         ExternalDeclaration::Declaration(_)
     ));
-    assert!(iterator.next().is_none());
+    assert!(parser.next_item(&mut context).is_none());
+    assert!(context.take_pending_errors().is_empty());
 }
 
 #[test]
@@ -265,7 +245,7 @@ fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
         SharedVec::default(),
     );
 
-    let unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = LanguageParser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
 
     assert_eq!(unit.external_declarations().len(), 2);
     let ExternalDeclaration::Declaration(first) = unit.external_declarations()[0] else {
@@ -291,7 +271,8 @@ fn cli_parser_details_render_recovery_ranges_and_notes() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let _unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+    let _unit =
+        LanguageParser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     let errors = context.take_pending_errors();
     let diagnostic = errors
         .iter()
@@ -342,7 +323,7 @@ fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = LanguageParser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = LanguageParser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     let tree = unit.syntax();
 
     let ExternalDeclaration::Declaration(struct_root) = unit.external_declarations()[0] else {

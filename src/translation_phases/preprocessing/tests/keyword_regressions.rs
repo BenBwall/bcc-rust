@@ -16,7 +16,6 @@ fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {
                      static struct switch typedef union unsigned void volatile while _Bool \
                      _Complex _Imaginary";
     let source = format!("{spellings} integer Int _bool while_ defined identifier\n");
-    super::strategies::assert_strategies_agree(&source);
     let mut context = Context::new();
     let mut pp = Preprocessor::new(
         &mut context,
@@ -45,7 +44,6 @@ fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {
 fn keywords_remain_macro_names_and_paste_results_until_phase_seven() {
     let source =
         "#define int renamed\nint\n#undef int\n#define CAT(a,b) a##b\nCAT(in,t) CAT(wh,ile)\n";
-    super::strategies::assert_strategies_agree(source);
     let mut context = Context::new();
     let mut pp = Preprocessor::new(
         &mut context,

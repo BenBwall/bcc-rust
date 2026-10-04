@@ -1,0 +1,211 @@
+=== "a /* b */ c // d\ne\n" []
+Identifier "a" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 9 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Identifier "c" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+Whitespace " " [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 16, line: 1, column: 17 }
+Newline "\n" [SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 17, line: 2, column: 1 }
+Identifier "e" [SourceVector { index: 17, column: 1, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 18, line: 2, column: 2 }
+Newline "\n" [SourceVector { index: 18, column: 2, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 19, line: 3, column: 1 }
+end
+at SourcePosition { index: 19, line: 3, column: 1 }
+=== "#define X 1 // comment\nX\n" []
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "define" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+Whitespace " " [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Identifier "X" [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Number "1\0" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+Whitespace " " [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 11 }]
+at SourcePosition { index: 22, line: 1, column: 23 }
+Newline "\n" [SourceVector { index: 22, column: 23, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 23, line: 2, column: 1 }
+Identifier "X" [SourceVector { index: 23, column: 1, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 24, line: 2, column: 2 }
+Newline "\n" [SourceVector { index: 24, column: 2, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 25, line: 3, column: 1 }
+end
+at SourcePosition { index: 25, line: 3, column: 1 }
+=== "char *s = \"a//b\"; char c = '/*';\n" []
+Identifier "char" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+Whitespace " " [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+Asterisk "*" [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Identifier "s" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+Whitespace " " [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Equals "=" [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+String "\"a//b\"" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 16, line: 1, column: 17 }
+SemiColon ";" [SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 17, line: 1, column: 18 }
+Whitespace " " [SourceVector { index: 17, column: 18, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 18, line: 1, column: 19 }
+Identifier "char" [SourceVector { index: 18, column: 19, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 22, line: 1, column: 23 }
+Whitespace " " [SourceVector { index: 22, column: 23, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 23, line: 1, column: 24 }
+Identifier "c" [SourceVector { index: 23, column: 24, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 24, line: 1, column: 25 }
+Whitespace " " [SourceVector { index: 24, column: 25, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 25, line: 1, column: 26 }
+Equals "=" [SourceVector { index: 25, column: 26, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 26, line: 1, column: 27 }
+Whitespace " " [SourceVector { index: 26, column: 27, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 27, line: 1, column: 28 }
+Character "'/*'" [SourceVector { index: 27, column: 28, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 31, line: 1, column: 32 }
+SemiColon ";" [SourceVector { index: 31, column: 32, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 32, line: 1, column: 33 }
+Newline "\n" [SourceVector { index: 32, column: 33, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 33, line: 2, column: 1 }
+end
+at SourcePosition { index: 33, line: 2, column: 1 }
+=== "x /* multi\nline\r\ncomment */ y\n" []
+Identifier "x" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 27 }]
+at SourcePosition { index: 28, line: 3, column: 12 }
+Identifier "y" [SourceVector { index: 28, column: 12, line: 3, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 29, line: 3, column: 13 }
+Newline "\n" [SourceVector { index: 29, column: 13, line: 3, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 30, line: 4, column: 1 }
+end
+at SourcePosition { index: 30, line: 4, column: 1 }
+=== "/**/ /***/ /* ** / */z\n" []
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 21 }]
+at SourcePosition { index: 21, line: 1, column: 22 }
+Identifier "z" [SourceVector { index: 21, column: 22, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 22, line: 1, column: 23 }
+Newline "\n" [SourceVector { index: 22, column: 23, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 23, line: 2, column: 1 }
+end
+at SourcePosition { index: 23, line: 2, column: 1 }
+=== "/* unterminated" []
+diagnostic [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 0 }]
+warning: no newline at end of file
+ --> <test>:1:16
+  |
+1 | /* unterminated
+  |                ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+
+diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 15 }]
+error: unterminated block comment
+ --> <test>:1:1
+  |
+1 | /* unterminated
+  | ^^^^^^^^^^^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 15 }]
+at SourcePosition { index: 15, line: 1, column: 16 }
+end
+at SourcePosition { index: 15, line: 1, column: 16 }
+=== "/* unterminated\n" []
+diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 16 }]
+error: unterminated block comment
+ --> <test>:1:1
+  |
+1 | /* unterminated
+  | ^^^^^^^^^^^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 16 }]
+at SourcePosition { index: 16, line: 2, column: 1 }
+end
+at SourcePosition { index: 16, line: 2, column: 1 }
+=== "// no newline" []
+diagnostic [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 0 }]
+warning: no newline at end of file
+ --> <test>:1:14
+  |
+1 | // no newline
+  |              ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 13 }]
+at SourcePosition { index: 13, line: 1, column: 14 }
+end
+at SourcePosition { index: 13, line: 1, column: 14 }
+=== "a/\\\n* spliced comment *\\\n/b\n" []
+Identifier "a" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 25 }]
+at SourcePosition { index: 26, line: 3, column: 2 }
+Identifier "b" [SourceVector { index: 26, column: 2, line: 3, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 27, line: 3, column: 3 }
+Newline "\n" [SourceVector { index: 27, column: 3, line: 3, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 28, line: 4, column: 1 }
+end
+at SourcePosition { index: 28, line: 4, column: 1 }
+=== "a ??/\n// trigraph spliced comment\nb\n" []
+Identifier "a" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 32 }]
+at SourcePosition { index: 33, line: 2, column: 28 }
+Newline "\n" [SourceVector { index: 33, column: 28, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 34, line: 3, column: 1 }
+Identifier "b" [SourceVector { index: 34, column: 1, line: 3, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 35, line: 3, column: 2 }
+Newline "\n" [SourceVector { index: 35, column: 2, line: 3, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 36, line: 4, column: 1 }
+end
+at SourcePosition { index: 36, line: 4, column: 1 }
+=== "/*??/\n" []
+diagnostic [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 4 }]
+warning: final newline is escaped
+ --> <test>:1:3
+  |
+1 | /*??/
+  |   ^^^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 6 }]
+error: unterminated block comment
+ --> <test>:1:1
+  |
+1 | /*??/
+  | ^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 6, line: 2, column: 1 }
+end
+at SourcePosition { index: 6, line: 2, column: 1 }

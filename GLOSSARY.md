@@ -14,11 +14,11 @@ The character-level phase that normalizes source text before preprocessing-token
 A lexical unit recognized before macro expansion and directive handling; it preserves spellings and categories needed by the C preprocessor. Recognition replaces each comment with whitespace.
 _Avoid_: Token
 
-**Lexing strategy** *(implemented as `LexingStrategy`)*:
-When initial processing and preprocessing-token recognition run relative to preprocessing. *Streaming* lexing recognizes each preprocessing token when preprocessing asks for it; *batch* lexing recognizes all of a source buffer's preprocessing tokens when the buffer is opened and then replays them. Both yield identical preprocessing tokens, provenance, and diagnostics.
+**Batch pipeline**:
+How the front end schedules translation phases 1 through 7. Initial processing and preprocessing-token recognition run over a whole source buffer when it is opened, and preprocessing replays those tokens; nothing downstream asks the lexer to lex again. The whole translation unit is preprocessed before parsing begins, so every preprocessing diagnostic is reported before any parser diagnostic.
 
-**Preprocessing strategy** *(implemented as `PreprocessingStrategy`)*:
-How the front end schedules translation phases 1 through 7: streaming throughout, batch lexing with streaming preprocessing, or batch, which also preprocesses the whole translation unit before parsing. Batch reports every preprocessing diagnostic before any parser diagnostic.
+**Header name**:
+The `<…>` or `"…"` operand of `#include` (C99 §6.4.7). The lexer does not form header names: the operand is ordinary preprocessing tokens, and the `#include` handler takes the name from the source text between the delimiters. For a macro-expanded operand (§6.10.2p4) it combines the tokens' spellings instead.
 
 **Preprocessing**:
 The phase that expands macros, executes directives, resolves includes and conditional groups, and converts surviving preprocessing tokens into parser-facing tokens.

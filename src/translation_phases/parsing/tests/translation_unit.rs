@@ -42,7 +42,7 @@ fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
         SharedVec::default(),
     );
 
-    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
 
     assert_eq!(unit.external_declarations().len(), 3);
     assert!(
@@ -71,7 +71,7 @@ fn complete_translation_unit_retains_roots_already_streamed() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let mut parser = Parser::new(preprocessor);
+    let mut parser = Parser::new(preprocessor, &mut context);
 
     assert!(matches!(
         parser.next_item(&mut context),
@@ -120,7 +120,7 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
         vec![include_directory.clone()].into(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
 
     assert!(context.take_pending_errors().is_empty());
     assert_eq!(unit.external_declarations().len(), 2);
@@ -198,7 +198,7 @@ fn deterministic_inspection_uses_spellings_and_marks_recovery() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     let first = unit.syntax().inspect(
         unit.external_declarations(),
         &context,
@@ -232,7 +232,7 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
     let output = unit.syntax().inspect(
         unit.external_declarations(),
         &context,
@@ -261,7 +261,8 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let multi = Parser::new(preprocessor).parse_translation_unit(&mut multi_context);
+    let multi =
+        Parser::new(preprocessor, &mut multi_context).parse_translation_unit(&mut multi_context);
     let multi = multi.syntax().inspect(
         multi.external_declarations(),
         &multi_context,

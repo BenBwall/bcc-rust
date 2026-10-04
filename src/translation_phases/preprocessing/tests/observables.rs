@@ -1,6 +1,16 @@
-//! Observable phase 1-6 behavior across every preprocessing strategy.
+//! Every observable effect of phases 1-6 (tokens, provenance, and rendered
+//! diagnostics) for edge cases, compared with
+//! `tests/fixtures/lexing/preprocessing_edge_cases.snap`. Run with `BLESS=1`
+//! to rewrite it. The snapshot was first produced while the batch pipeline
+//! still had to agree with the streaming one.
 
-use std::path::PathBuf;
+use std::{
+    fmt::Write,
+    path::{
+        Path,
+        PathBuf,
+    },
+};
 
 use proptest::prelude::*;
 
@@ -11,20 +21,16 @@ use crate::{
         Renderer,
         ToDiagnostic,
     },
-    pipeline::PreprocessingStrategy,
     translation_phases::{
         Context,
         GetSourceVectors,
-        preprocessing::Token,
+        preprocessing::{
+            Preprocessor,
+            Token,
+        },
     },
     util::shared::SharedVec,
 };
-
-#[derive(Debug, PartialEq, Eq)]
-struct Snapshot {
-    tokens:      Vec<String>,
-    diagnostics: Vec<String>,
-}
 
 fn token_description(token: Token, context: &Context) -> String {
     format!(
@@ -34,61 +40,34 @@ fn token_description(token: Token, context: &Context) -> String {
     )
 }
 
-fn drain_diagnostics(context: &mut Context, snapshot: &mut Snapshot) {
-    while let Some(error) = context.pop_pending_error() {
-        let sources = error.source_vectors(context);
-        let diagnostic = error.to_diagnostic(context, sources);
-        snapshot.diagnostics.push(format!(
-            "{:?}\n{}",
-            context.get_source_vectors(sources),
-            Renderer::new(ColorChoice::Plain).render(&diagnostic, context),
-        ));
-    }
-}
-
-fn snapshot(source: &str, strategy: PreprocessingStrategy) -> Snapshot {
+/// The diagnostics, then the tokens, of preprocessing `source`.
+fn observe(source: &str) -> Vec<String> {
     let mut context = Context::new();
-    let mut preprocessor = strategy.preprocessor(
+    let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
         source.to_owned().into(),
         SharedVec::default(),
         SharedVec::default(),
     );
-    let mut snapshot = Snapshot {
-        tokens:      Vec::new(),
-        diagnostics: Vec::new(),
-    };
-    if strategy == PreprocessingStrategy::Batch {
-        let tokens = preprocessor.preprocess_all(&mut context);
-        drain_diagnostics(&mut context, &mut snapshot);
-        for token in tokens {
-            snapshot.tokens.push(token_description(token, &context));
-        }
-    } else {
-        loop {
-            let token = preprocessor.next_iterator_item(&mut context);
-            drain_diagnostics(&mut context, &mut snapshot);
-            let Some(token) = token else { break };
-            snapshot.tokens.push(token_description(token, &context));
-        }
+    let tokens = preprocessor.preprocess_all(&mut context);
+    let mut events = Vec::new();
+    while let Some(error) = context.pop_pending_error() {
+        let sources = error.source_vectors(&mut context);
+        let diagnostic = error.to_diagnostic(&context, sources);
+        events.push(format!(
+            "{:?}\n{}",
+            context.get_source_vectors(sources),
+            Renderer::new(ColorChoice::Plain).render(&diagnostic, &context),
+        ));
     }
-    snapshot
-}
-
-pub(super) fn assert_strategies_agree(source: &str) {
-    let streaming = snapshot(source, PreprocessingStrategy::Streaming);
-    for strategy in [
-        PreprocessingStrategy::BatchLexing,
-        PreprocessingStrategy::Batch,
-    ] {
-        let actual = snapshot(source, strategy);
-        pretty_assertions::assert_eq!(streaming, actual, "{strategy:?}: {source:?}");
-    }
+    events.extend(tokens.map(|token| token_description(token, &context)));
+    events
 }
 
 #[test]
-fn edge_cases_preserve_tokens_diagnostics_and_provenance_across_strategies() {
+fn edge_cases_preserve_tokens_diagnostics_and_provenance() {
+    let mut snapshot = String::new();
     for source in [
         "",
         "int x = 1;\n",
@@ -107,9 +86,26 @@ fn edge_cases_preserve_tokens_diagnostics_and_provenance_across_strategies() {
         "int sentinel; /* unterminated\n",
         "#error text here\nafter\n",
         "??=define X 1\r\nX ??/\r\n+ 2\r\n",
+        "#if 0\n#else\nyes\n#else\nwrong\n#endif\nafter\n",
+        "#if 0\n#else extra\nyes\n#endif\nafter\n",
+        "#\n#define A 1\n#undef A\n#ifdef A\nwrong\n#else\nyes\n#endif\nafter\n",
     ] {
-        assert_strategies_agree(source);
+        _ = writeln!(snapshot, "=== {source:?}");
+        for event in observe(source) {
+            snapshot.push_str(&event);
+            snapshot.push('\n');
+        }
     }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/lexing/preprocessing_edge_cases.snap");
+    if std::env::var_os("BLESS").is_some_and(|value| value == "1") {
+        std::fs::write(&path, &snapshot).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("{}: {error}; run with BLESS=1 to create it", path.display())
+    });
+    pretty_assertions::assert_eq!(expected, snapshot);
 }
 
 fn program_line() -> impl Strategy<Value = &'static str> {
@@ -140,22 +136,27 @@ fn program_line() -> impl Strategy<Value = &'static str> {
         "\"unterminated",
         "#error message",
         "#include",
+        "#include <missing.h",
+        "#include \"missing\\",
         "F(",
         ")",
+        "a\\",
     ])
 }
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(500))]
 
+    /// Generated programs preprocess to their end with renderable
+    /// diagnostics.
     #[test]
-    fn generated_programs_preserve_strategy_observables(
+    fn generated_programs_preprocess_to_their_end(
         lines in proptest::collection::vec(program_line(), 0..16),
         crlf in any::<bool>(),
         final_newline in any::<bool>(),
     ) {
         let mut source = lines.join(if crlf { "\r\n" } else { "\n" });
         if final_newline { source.push('\n'); }
-        assert_strategies_agree(&source);
+        drop(observe(&source));
     }
 }

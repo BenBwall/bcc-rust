@@ -1,0 +1,69 @@
+=== "a b\\\nc d\n" [Next, Save, Next, Next, Restore, Next]
+Identifier "a" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+Identifier "bc" [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 6, line: 2, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+Identifier "bc" [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 6, line: 2, column: 2 }
+Whitespace " " [SourceVector { index: 6, column: 2, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 2, column: 3 }
+Identifier "d" [SourceVector { index: 7, column: 3, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 2, column: 4 }
+Newline "\n" [SourceVector { index: 8, column: 4, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 3, column: 1 }
+end
+at SourcePosition { index: 9, line: 3, column: 1 }
+=== "#line 100\nx\ny\n" [Next, Next, Next, SetLine(100), Next, Next, Save, Next, Next, Restore]
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "line" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+Whitespace " " [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Number "100\0" [SourceVector { index: 6, column: 7, line: 100, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 9, line: 100, column: 10 }
+Newline "\n" [SourceVector { index: 9, column: 10, line: 100, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 101, column: 1 }
+Identifier "x" [SourceVector { index: 10, column: 1, line: 101, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 101, column: 2 }
+Newline "\n" [SourceVector { index: 11, column: 2, line: 101, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 12, line: 102, column: 1 }
+Identifier "x" [SourceVector { index: 10, column: 1, line: 101, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 101, column: 2 }
+Newline "\n" [SourceVector { index: 11, column: 2, line: 101, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 12, line: 102, column: 1 }
+Identifier "y" [SourceVector { index: 12, column: 1, line: 102, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 13, line: 102, column: 2 }
+Newline "\n" [SourceVector { index: 13, column: 2, line: 102, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 14, line: 103, column: 1 }
+end
+at SourcePosition { index: 14, line: 103, column: 1 }
+=== "" [Next, SetLine(1)]
+end
+at SourcePosition { index: 0, line: 1, column: 1 }
+end
+at SourcePosition { index: 0, line: 1, column: 1 }
+=== "0<>" [Next, Next, SetLine(1)]
+Number "0\0" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+LessThan "<" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+diagnostic [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 0 }]
+warning: no newline at end of file
+ --> <test>:1:4
+  |
+1 | 0<>
+  |    ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+
+GreaterThan ">" [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+end
+at SourcePosition { index: 3, line: 1, column: 4 }

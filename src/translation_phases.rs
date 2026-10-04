@@ -27,7 +27,6 @@ use std::{
 
 pub(crate) use context::Context;
 pub(crate) use provenance::{
-    SourceFile,
     SourcePosition,
     SourceVector,
     SourceVectors,
@@ -124,14 +123,6 @@ trait StrExt {
     /// or `None` if the index is out of bounds or is in the middle of a
     /// character.
     fn char_at(&self, index: usize) -> Option<char>;
-
-    /// Returns the string cloned into a [`TokenString`].
-    fn to_token_string(&self) -> TokenString
-    where
-        for<'a> &'a Self: Into<TokenString>,
-    {
-        self.into()
-    }
 }
 
 impl StrExt for str {

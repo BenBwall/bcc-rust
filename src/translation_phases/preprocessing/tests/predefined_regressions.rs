@@ -1,10 +1,9 @@
-//! Required C99 predefined macros under every preprocessing strategy.
+//! Required C99 predefined macros.
 
 use std::path::PathBuf;
 
-use super::strategies::assert_strategies_agree;
+use super::Preprocessor;
 use crate::{
-    pipeline::PreprocessingStrategy,
     translation_phases::{
         Context,
         SourceVector,
@@ -19,12 +18,6 @@ use crate::{
         shared::SharedVec,
     },
 };
-
-const STRATEGIES: [PreprocessingStrategy; 3] = [
-    PreprocessingStrategy::Streaming,
-    PreprocessingStrategy::BatchLexing,
-    PreprocessingStrategy::Batch,
-];
 
 #[derive(Debug, Default)]
 struct Observation {
@@ -57,9 +50,9 @@ fn record_errors(context: &mut Context, observation: &mut Observation) {
     );
 }
 
-fn observe(source: &str, strategy: PreprocessingStrategy) -> Observation {
+fn observe(source: &str) -> Observation {
     let mut context = Context::new();
-    let mut preprocessor = strategy.preprocessor(
+    let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<predefined regressions>").into_boxed_path(),
         source.to_owned().into(),
@@ -67,19 +60,10 @@ fn observe(source: &str, strategy: PreprocessingStrategy) -> Observation {
         SharedVec::default(),
     );
     let mut observation = Observation::default();
-    if strategy == PreprocessingStrategy::Batch {
-        for token in preprocessor.preprocess_all(&mut context) {
-            record_token(token, &context, &mut observation);
-        }
-        record_errors(&mut context, &mut observation);
-    } else {
-        loop {
-            let token = preprocessor.next_iterator_item(&mut context);
-            record_errors(&mut context, &mut observation);
-            let Some(token) = token else { break };
-            record_token(token, &context, &mut observation);
-        }
+    for token in preprocessor.preprocess_all(&mut context) {
+        record_token(token, &context, &mut observation);
     }
+    record_errors(&mut context, &mut observation);
     observation
 }
 
@@ -108,33 +92,27 @@ fn integer_kinds(observation: &Observation) -> Vec<IntegerTokenType> {
 #[test]
 fn standard_macros_expand_to_required_numeric_types_and_values() {
     let source = "__STDC__; __STDC_VERSION__; __STDC_HOSTED__; __STDC_MB_MIGHT_NEQ_WC__; after\n";
-    assert_strategies_agree(source);
-    for strategy in STRATEGIES {
-        let observation = observe(source, strategy);
-        assert!(
-            observation.errors.is_empty(),
-            "{strategy:?}: {observation:#?}"
-        );
+    let observation = observe(source);
+    assert!(observation.errors.is_empty(), "{observation:#?}");
+    assert_eq!(
+        integer_kinds(&observation),
+        [
+            IntegerTokenType::Int(1),
+            IntegerTokenType::Long(Packed::new(199_901)),
+            IntegerTokenType::Int(0),
+            IntegerTokenType::Int(1),
+        ]
+    );
+    assert_eq!(
+        observation.spellings,
+        ["1", ";", "199901L", ";", "0", ";", "1", ";", "after"]
+    );
+    for (index, column, length) in [(0, 1, 8), (2, 11, 16), (4, 29, 15), (6, 46, 24)] {
+        let source = &observation.sources[index][0];
         assert_eq!(
-            integer_kinds(&observation),
-            [
-                IntegerTokenType::Int(1),
-                IntegerTokenType::Long(Packed::new(199_901)),
-                IntegerTokenType::Int(0),
-                IntegerTokenType::Int(1),
-            ]
+            (source.line, source.column, source.length),
+            (1, column, length)
         );
-        assert_eq!(
-            observation.spellings,
-            ["1", ";", "199901L", ";", "0", ";", "1", ";", "after"]
-        );
-        for (index, column, length) in [(0, 1, 8), (2, 11, 16), (4, 29, 15), (6, 46, 24)] {
-            let source = &observation.sources[index][0];
-            assert_eq!(
-                (source.line, source.column, source.length),
-                (1, column, length)
-            );
-        }
     }
 }
 
@@ -142,15 +120,9 @@ fn standard_macros_expand_to_required_numeric_types_and_values() {
 fn required_standard_macros_are_available_to_both_defined_forms() {
     let source = "#if defined __STDC__ && defined(__STDC_VERSION__) && defined(__STDC_HOSTED__) \
                   && defined(__STDC_MB_MIGHT_NEQ_WC__)\nall_defined\n#endif\nafter\n";
-    assert_strategies_agree(source);
-    for strategy in STRATEGIES {
-        let observation = observe(source, strategy);
-        assert_eq!(identifier_spellings(&observation), ["all_defined", "after"]);
-        assert!(
-            observation.errors.is_empty(),
-            "{strategy:?}: {observation:#?}"
-        );
-    }
+    let observation = observe(source);
+    assert_eq!(identifier_spellings(&observation), ["all_defined", "after"]);
+    assert!(observation.errors.is_empty(), "{observation:#?}");
 }
 
 #[test]
@@ -159,24 +131,18 @@ fn required_standard_macros_are_available_to_ifdef() {
                   __STDC_VERSION__\nversion_defined\n#endif\n#ifdef \
                   __STDC_HOSTED__\nhosted_defined\n#endif\n#ifdef \
                   __STDC_MB_MIGHT_NEQ_WC__\nencoding_defined\n#endif\nafter\n";
-    assert_strategies_agree(source);
-    for strategy in STRATEGIES {
-        let observation = observe(source, strategy);
-        assert_eq!(
-            identifier_spellings(&observation),
-            [
-                "stdc_defined",
-                "version_defined",
-                "hosted_defined",
-                "encoding_defined",
-                "after"
-            ]
-        );
-        assert!(
-            observation.errors.is_empty(),
-            "{strategy:?}: {observation:#?}"
-        );
-    }
+    let observation = observe(source);
+    assert_eq!(
+        identifier_spellings(&observation),
+        [
+            "stdc_defined",
+            "version_defined",
+            "hosted_defined",
+            "encoding_defined",
+            "after"
+        ]
+    );
+    assert!(observation.errors.is_empty(), "{observation:#?}");
 }
 
 #[test]
@@ -184,40 +150,28 @@ fn standard_macro_values_select_c99_freestanding_branch() {
     let source = "#if __STDC__ == 1 && __STDC_VERSION__ == 199901L && __STDC_HOSTED__ == 0 && \
                   __STDC_MB_MIGHT_NEQ_WC__ == \
                   1\nright_values\n#else\nwrong_values\n#endif\nafter\n";
-    assert_strategies_agree(source);
-    for strategy in STRATEGIES {
-        let observation = observe(source, strategy);
-        assert_eq!(
-            identifier_spellings(&observation),
-            ["right_values", "after"]
-        );
-        assert!(
-            observation.errors.is_empty(),
-            "{strategy:?}: {observation:#?}"
-        );
-    }
+    let observation = observe(source);
+    assert_eq!(
+        identifier_spellings(&observation),
+        ["right_values", "after"]
+    );
+    assert!(observation.errors.is_empty(), "{observation:#?}");
 }
 
 #[test]
 fn standard_version_expands_inside_an_ordinary_macro_alias() {
     let source = "#define VERSION_ALIAS __STDC_VERSION__\n#define ENCODING_ALIAS \
                   __STDC_MB_MIGHT_NEQ_WC__\nVERSION_ALIAS; ENCODING_ALIAS; after\n";
-    assert_strategies_agree(source);
-    for strategy in STRATEGIES {
-        let observation = observe(source, strategy);
-        assert_eq!(
-            integer_kinds(&observation),
-            [
-                IntegerTokenType::Long(Packed::new(199_901)),
-                IntegerTokenType::Int(1)
-            ]
-        );
-        assert_eq!(identifier_spellings(&observation), ["after"]);
-        assert!(
-            observation.errors.is_empty(),
-            "{strategy:?}: {observation:#?}"
-        );
-    }
+    let observation = observe(source);
+    assert_eq!(
+        integer_kinds(&observation),
+        [
+            IntegerTokenType::Long(Packed::new(199_901)),
+            IntegerTokenType::Int(1)
+        ]
+    );
+    assert_eq!(identifier_spellings(&observation), ["after"]);
+    assert!(observation.errors.is_empty(), "{observation:#?}");
 }
 
 #[test]
@@ -227,25 +181,19 @@ fn ordinary_macro_definitions_and_undef_remain_usable() {
                   STDC_HOSTED == 9 && STDC_MB_MIGHT_NEQ_WC == 10\nnormal_defined\n#endif\nSTDC; \
                   STDC_VERSION; STDC_HOSTED; STDC_MB_MIGHT_NEQ_WC;\n#undef STDC\n#ifdef \
                   STDC\nunreachable\n#else\nnormal_undef\n#endif\nSTDC after\n";
-    assert_strategies_agree(source);
-    for strategy in STRATEGIES {
-        let observation = observe(source, strategy);
-        assert_eq!(
-            integer_kinds(&observation),
-            [
-                IntegerTokenType::Int(7),
-                IntegerTokenType::Int(8),
-                IntegerTokenType::Int(9),
-                IntegerTokenType::Int(10)
-            ]
-        );
-        assert_eq!(
-            identifier_spellings(&observation),
-            ["normal_defined", "normal_undef", "STDC", "after"]
-        );
-        assert!(
-            observation.errors.is_empty(),
-            "{strategy:?}: {observation:#?}"
-        );
-    }
+    let observation = observe(source);
+    assert_eq!(
+        integer_kinds(&observation),
+        [
+            IntegerTokenType::Int(7),
+            IntegerTokenType::Int(8),
+            IntegerTokenType::Int(9),
+            IntegerTokenType::Int(10)
+        ]
+    );
+    assert_eq!(
+        identifier_spellings(&observation),
+        ["normal_defined", "normal_undef", "STDC", "after"]
+    );
+    assert!(observation.errors.is_empty(), "{observation:#?}");
 }

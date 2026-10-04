@@ -1,9 +1,29 @@
-error: unterminated header name
+error: unterminated string literal
  --> tokenizer-newline-in-include-string.c:1:10
   |
 1 | #include "abc
-  |          ^^^^ the line ends before the closing delimiter
+  |          ^^^^ the line ends before the closing `"`
   |
-  = note: C99 §6.4.7: a header name cannot span lines
+  = note: C99 §6.4.5: a string literal cannot span lines
+  = help: close the literal on this line and start another on the next; adjacent literals are concatenated
 
-1 error generated.
+error: header name in `#include` is missing its closing `"`
+ --> tokenizer-newline-in-include-string.c:1:14
+  |
+1 | #include "abc
+  |              ^ expected `"` here
+  |
+  = note: C99 §6.4.7p1: a header name is `<h-char-sequence>` or `"q-char-sequence"`
+  = help: close the header name with `"` on this line
+
+error: cannot find header `abc`
+ --> tokenizer-newline-in-include-string.c:1:10
+  |
+1 | #include "abc
+  |          ^^^^ not found in any search directory
+  |
+  = note: searched these directories:
+            . (the working directory)
+  = help: add the directory containing it with `--iquote <dir>` or `--isystem <dir>`
+
+3 errors generated.

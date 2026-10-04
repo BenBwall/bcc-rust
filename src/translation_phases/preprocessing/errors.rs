@@ -106,6 +106,8 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(..)
             | PreprocessorErrorType::ExpectedIdentifierInDefineDirective(..)
             | PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(..)
+            | PreprocessorErrorType::InvalidCharacterInHeaderName(..)
+            | PreprocessorErrorType::UnterminatedHeaderName(..)
             | PreprocessorErrorType::HeaderNotFound { .. }
             | PreprocessorErrorType::HeaderFileInaccessible(..)
             | PreprocessorErrorType::IncludeNestingLimitExceeded(..)
@@ -199,10 +201,11 @@ impl GetSeverity for PreprocessorError {
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy)
-            | PreprocessorErrorType::MissingVariadicArgument(policy) =>
+            | PreprocessorErrorType::MissingVariadicArgument(policy)
+            | PreprocessorErrorType::BackslashInQuotedHeaderName(policy) =>
                 match policy {
                     | ExtensionPolicy::Allow => unreachable!(
-                        "allowed extensions must not produce a comma diagnostic"
+                        "allowed extensions produce no diagnostic"
                     ),
                     | ExtensionPolicy::Warn => ErrorSeverity::Warning,
                     | ExtensionPolicy::Deny => ErrorSeverity::Error,
@@ -329,6 +332,14 @@ pub(crate) enum PreprocessorErrorType {
     RedefinitionOfBuiltInMacro(String),
     UndefinedIdentifierInPreprocessorExpression(String),
     ExpectedIncludeStringOrAngleBracketString(PreprocessorTokenType),
+    /// A header name containing one of the sequences C99 §6.4.7p3 leaves
+    /// undefined there: `'`, `\`, `"`, `//`, or `/*`.
+    InvalidCharacterInHeaderName(&'static str),
+    /// A header name without its closing `>` or `"`.
+    UnterminatedHeaderName(char),
+    /// A `\` in a `"…"` header name, accepted as a path character by the
+    /// backslash extension.
+    BackslashInQuotedHeaderName(ExtensionPolicy),
     UnexpectedEndOfInput(&'static str),
     WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
         expected: usize,
@@ -734,6 +745,26 @@ impl PreprocessorErrorType {
                 "C99 §6.10.2: `#include` takes `\"name\"`, `<name>`, or macros that expand to one \
                  of them",
             ),
+            | Self::InvalidCharacterInHeaderName(sequence) => Explanation::new(format!(
+                "header name in `#include` cannot contain `{sequence}`"
+            ))
+            .label("not allowed in a header name")
+            .note(
+                "C99 §6.4.7p3: the behavior is undefined if `'`, `\\`, `//`, or `/*` occurs in a \
+                 header name, or `\"` occurs between `<` and `>`",
+            ),
+            | Self::UnterminatedHeaderName(delimiter) => Explanation::new(format!(
+                "header name in `#include` is missing its closing `{delimiter}`"
+            ))
+            .label(format!("expected `{delimiter}` here"))
+            .note("C99 §6.4.7p1: a header name is `<h-char-sequence>` or `\"q-char-sequence\"`")
+            .help(format!(
+                "close the header name with `{delimiter}` on this line"
+            )),
+            | Self::BackslashInQuotedHeaderName(_) =>
+                Explanation::new("a backslash in a header name is an extension")
+                    .label("read as a path character")
+                    .note("C99 §6.4.7p3: the behavior is undefined if `\\` occurs in a header name"),
             | Self::UnexpectedEndOfInput(activity) => Explanation::new(format!(
                 "unexpected end of file while {}",
                 activity.trim_end_matches('.')

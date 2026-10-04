@@ -1,5 +1,5 @@
-//! The preprocessing-token source that phase 4 reads, under either lexing
-//! strategy.
+//! The preprocessing-token source that phase 4 reads: a lexed source file
+//! or replayed tokens.
 
 use std::{
     fmt::{
@@ -12,76 +12,46 @@ use std::{
 
 use super::{
     PreprocessorToken,
-    PreprocessorTokenizer,
     batch::LexedFile,
     replay::ReplayCursor,
 };
-use crate::{
-    translation_phases::{
-        Context,
-        GetPosition,
-        GetSourceFileIndex,
-        SetPosition,
-        SetSourceFileIndex,
-        SourcePosition,
-        SourceVector,
-        SourceVectors,
-        TranslationPhase,
-    },
-    util::shared::SharedString,
+use crate::translation_phases::{
+    Context,
+    GetPosition,
+    GetSourceFileIndex,
+    SetPosition,
+    SetSourceFileIndex,
+    SourcePosition,
+    SourceVector,
+    SourceVectors,
+    TranslationPhase,
 };
-
-/// When translation phases 1 through 3 run relative to phase 4.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum LexingStrategy {
-    /// Lex each preprocessing token when phase 4 asks for it.
-    #[default]
-    Streaming,
-    /// Lex each source buffer completely when it is opened, then replay its
-    /// tokens.
-    Batch,
-}
 
 /// A cloneable, rewindable stream of preprocessing tokens over one source
 /// buffer. Phase 4 keeps one per source file, macro replacement list, and
 /// macro argument.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TokenSource {
-    Streaming(PreprocessorTokenizer),
-    Batch(LexedCursor),
-    /// Tokens phase 4 already produced, under either lexing strategy.
+    /// A source buffer, lexed completely when it was opened.
+    File(LexedCursor),
+    /// Tokens phase 4 already produced.
     Replay(ReplayCursor),
 }
 
 impl Default for TokenSource {
     fn default() -> Self {
-        Self::Streaming(PreprocessorTokenizer::default())
+        Self::Replay(ReplayCursor::default())
     }
 }
 
 impl TokenSource {
-    /// Opens `source` with the context's lexing strategy.
-    pub(crate) fn new(context: &mut Context, source_file_index: u32, source: SharedString) -> Self {
-        // Malformed terminal splices need reading-order EOF state, including
-        // suppressed reads and cursor rewinds. Retain the streaming cursor for
-        // this rare input; ordinary files keep the compact batch
-        // representation.
-        if crate::translation_phases::initial_processing::InitialProcessor::terminal_splice_length(
-            &source,
-        )
-        .is_some()
-        {
-            return Self::Streaming(PreprocessorTokenizer::new(source_file_index, source));
-        }
-        match context.lexing_strategy() {
-            | LexingStrategy::Streaming =>
-                Self::Streaming(PreprocessorTokenizer::new(source_file_index, source)),
-            | LexingStrategy::Batch => Self::Batch(LexedCursor::new(Rc::new(LexedFile::lex(
-                context,
-                source_file_index,
-                source,
-            )))),
-        }
+    /// Lexes all of `source` (translation phases 1 through 3) and opens it.
+    pub(crate) fn new(context: &mut Context, source_file_index: u32, source: &str) -> Self {
+        Self::File(LexedCursor::new(Rc::new(LexedFile::lex(
+            context,
+            source_file_index,
+            source,
+        ))))
     }
 
     /// Replays `tokens`; `empty_location` locates an empty replay.
@@ -102,18 +72,16 @@ impl TokenSource {
     ) -> SourceVectors {
         match self {
             | Self::Replay(cursor) => cursor.location_at(context, position),
-            | Self::Streaming(_) | Self::Batch(_) =>
-                context.create_source_vectors(position, self.source_file_index(), 0),
+            | Self::File(_) => context.create_source_vectors(position, self.source_file_index(), 0),
         }
     }
 }
 
 impl GetPosition for TokenSource {
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, _context: &Context) -> SourcePosition {
         match self {
-            | Self::Streaming(tokenizer) => tokenizer.position(context),
-            | Self::Batch(cursor) => cursor.position(context),
+            | Self::File(cursor) => cursor.position(),
             | Self::Replay(cursor) => cursor.position(),
         }
     }
@@ -121,10 +89,9 @@ impl GetPosition for TokenSource {
 
 impl SetPosition for TokenSource {
     #[inline(always)]
-    fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
+    fn set_position(&mut self, _context: &mut Context, position: SourcePosition) {
         match self {
-            | Self::Streaming(tokenizer) => tokenizer.set_position(context, position),
-            | Self::Batch(cursor) => cursor.set_position(context, position),
+            | Self::File(cursor) => cursor.set_position(position),
             | Self::Replay(cursor) => cursor.set_position(position),
         }
     }
@@ -134,24 +101,16 @@ impl GetSourceFileIndex for TokenSource {
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         match self {
-            | Self::Streaming(tokenizer) => tokenizer.source_file_index(),
-            | Self::Batch(cursor) => cursor.source_file_index,
+            | Self::File(cursor) => cursor.source_file_index,
             | Self::Replay(cursor) => cursor.source_file_index(),
         }
     }
 }
 
 impl SetSourceFileIndex for TokenSource {
-    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
+    fn set_source_file_index(&mut self, _context: &mut Context, source_file_index: u32) {
         match self {
-            | Self::Streaming(tokenizer) =>
-                tokenizer.set_source_file_index(context, source_file_index),
-            | Self::Batch(cursor) => {
-                cursor.source_file_index = source_file_index;
-                if let Some(fallback) = &mut cursor.fallback {
-                    fallback.set_source_file_index(context, source_file_index);
-                }
-            },
+            | Self::File(cursor) => cursor.source_file_index = source_file_index,
             // Replayed tokens keep the files they came from.
             | Self::Replay(_) => (),
         }
@@ -164,8 +123,7 @@ impl TranslationPhase for TokenSource {
     #[inline(always)]
     fn next_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
         match self {
-            | Self::Streaming(tokenizer) => tokenizer.next_item(context),
-            | Self::Batch(cursor) => cursor.next_item(context),
+            | Self::File(cursor) => cursor.next_item(context),
             | Self::Replay(cursor) => cursor.next_item(context),
         }
     }
@@ -174,11 +132,13 @@ impl TranslationPhase for TokenSource {
 /// A position in a [`LexedFile`].
 ///
 /// Reading an entry reports its diagnostics and records its provenance, as
-/// lexing it would. Positions the entries cannot express—a rewind into the
-/// middle of an entry, or a token lexed as a header name because phase 4 is
-/// reading an `#include` operand—are served by a streaming tokenizer over the
-/// same source until it reaches an entry boundary again.
+/// lexing it would. Phase 4 only ever rewinds to positions it read, which are
+/// entry boundaries.
 #[derive(Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is one piece of the end-of-input reading state."
+)]
 pub(crate) struct LexedCursor {
     file:                   Rc<LexedFile>,
     /// The next entry to read.
@@ -188,10 +148,16 @@ pub(crate) struct LexedCursor {
     /// Added to every line, so `#line` renumbering survives replay.
     line_delta:             u32,
     source_file_index:      u32,
-    /// Mirrors [`PreprocessorTokenizer::final_newline_withheld`] for the
-    /// entries read so far.
+    /// Whether reading at the end of the entries returns `None` rather than
+    /// supplying a missing final newline: true when the last character read,
+    /// in reading order, was a newline.
     final_newline_withheld: bool,
-    fallback:               Option<Box<PreprocessorTokenizer>>,
+    /// Whether the escaped final newline was reported since the last real
+    /// character was read, so reading the end of input stays silent.
+    splice_reported:        bool,
+    /// Whether a rewind placed the cursor at the end of input, past any
+    /// trailing splices, rather than at the end of the last entry.
+    at_eof:                 bool,
 }
 
 impl PartialEq for LexedCursor {
@@ -202,7 +168,8 @@ impl PartialEq for LexedCursor {
             && self.line_delta == other.line_delta
             && self.source_file_index == other.source_file_index
             && self.final_newline_withheld == other.final_newline_withheld
-            && self.fallback == other.fallback
+            && self.splice_reported == other.splice_reported
+            && self.at_eof == other.at_eof
     }
 }
 
@@ -217,7 +184,8 @@ impl Debug for LexedCursor {
             .field("finished", &self.finished)
             .field("line_delta", &self.line_delta)
             .field("final_newline_withheld", &self.final_newline_withheld)
-            .field("fallback", &self.fallback)
+            .field("splice_reported", &self.splice_reported)
+            .field("at_eof", &self.at_eof)
             .finish()
     }
 }
@@ -231,15 +199,13 @@ impl LexedCursor {
             finished: false,
             line_delta: 0,
             final_newline_withheld: false,
-            fallback: None,
+            splice_reported: false,
+            at_eof: false,
         }
     }
 
-    fn position(&self, context: &Context) -> SourcePosition {
-        if let Some(fallback) = &self.fallback {
-            return fallback.position(context);
-        }
-        let mut position = if self.finished {
+    fn position(&self) -> SourcePosition {
+        let mut position = if self.finished || self.at_eof {
             self.file.eof()
         } else {
             self.file.start(self.next)
@@ -248,62 +214,50 @@ impl LexedCursor {
         position
     }
 
-    fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
-        if !self.resynchronize(position) {
-            self.start_fallback(context, position);
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn start_fallback(&mut self, context: &mut Context, position: SourcePosition) {
-        let mut fallback =
-            PreprocessorTokenizer::new(self.file.source_file_index, self.file.source.clone());
-        fallback.set_source_file_index(context, self.source_file_index);
-        fallback.set_position(context, position);
-        fallback.set_final_newline_withheld(self.final_newline_withheld);
-        self.fallback = Some(Box::new(fallback));
-    }
-
-    /// Resumes replay at `position` if an entry starts there.
-    fn resynchronize(&mut self, position: SourcePosition) -> bool {
-        let Some(entry) = self.file.boundary(position) else {
-            return false;
-        };
-        self.next = entry;
+    /// Resumes reading at `position`, which must start an entry or be the
+    /// end of the entries.
+    fn set_position(&mut self, position: SourcePosition) {
+        let eof = self.file.eof();
         self.finished = false;
+        // Trailing splices put the end of input past the last entry's end.
+        if (position.index, position.column) == (eof.index, eof.column)
+            && self.file.start(self.file.len()).index != eof.index
+        {
+            self.next = self.file.len();
+            self.at_eof = true;
+            self.line_delta = position.line.wrapping_sub(eof.line);
+            return;
+        }
+        let boundary = self.file.boundary(position);
+        debug_assert!(
+            boundary.is_some(),
+            "token sources rewind only to entry boundaries, not {position:?}"
+        );
+        let entry = boundary.unwrap_or_else(|| self.file.entry_after(position));
+        self.next = entry;
+        self.at_eof = false;
         self.line_delta = position.line.wrapping_sub(self.file.start(entry).line);
-        self.fallback = None;
-        true
     }
 
-    /// Whether phase 4 wants `entry` lexed as a header name although it was
-    /// lexed differently, or wants a header name lexed as ordinary tokens.
-    #[inline(always)]
-    fn needs_relexing(&self, context: &Context, entry: usize) -> bool {
-        use super::PreprocessorTokenType as T;
-        let kind = self.file.kind(entry);
-        let header_name = matches!(kind, Some(T::AngleBracketString | T::IncludeString));
-        if context.is_tokenizing_include_string() {
-            !header_name
-                && kind.is_some()
-                && context
-                    .string_cache
-                    .at(self.file.contents(entry))
-                    .starts_with(['<', '"'])
-        } else {
-            header_name
+    /// Reading the end of input reports an escaped final newline once after
+    /// each real character.
+    fn read_end(&mut self, context: &mut Context) {
+        if !self.splice_reported && self.file.has_escaped_final_newline() {
+            self.file.report_escaped_final_newline(
+                context,
+                self.source_file_index,
+                self.line_delta,
+            );
         }
+        self.splice_reported = true;
     }
 
     #[inline(always)]
     fn next_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
         loop {
-            if self.fallback.is_some() {
-                return self.next_fallback_item(context);
-            }
             let entry = self.next;
             if entry >= self.file.len() {
+                self.read_end(context);
                 if !self.finished && !self.final_newline_withheld && self.file.lacks_final_newline()
                 {
                     return Some(self.supply_final_newline(context));
@@ -311,17 +265,16 @@ impl LexedCursor {
                 self.finished = true;
                 return None;
             }
-            if self.needs_relexing(context, entry) {
-                let position = self.position(context);
-                self.start_fallback(context, position);
-                continue;
-            }
             if self.final_newline_withheld && self.file.is_final_newline(entry) {
+                self.read_end(context);
                 self.next = self.file.len();
                 self.finished = true;
                 return None;
             }
             self.final_newline_withheld = self.file.withholds_final_newline_after(entry);
+            if self.file.has_escaped_final_newline() {
+                self.splice_reported = self.file.reads_end(entry);
+            }
             self.next += 1;
             self.file
                 .replay_diagnostics(context, entry, self.source_file_index, self.line_delta);
@@ -352,8 +305,13 @@ impl LexedCursor {
     fn supply_final_newline(&mut self, context: &mut Context) -> PreprocessorToken {
         let mut start = self.file.start(self.file.len());
         start.line = start.line.wrapping_add(self.line_delta);
-        self.file
-            .report_missing_final_newline(context, self.source_file_index, self.line_delta);
+        if !self.file.has_escaped_final_newline() {
+            self.file.report_missing_final_newline(
+                context,
+                self.source_file_index,
+                self.line_delta,
+            );
+        }
         self.final_newline_withheld = true;
         self.finished = true;
         let length = self.file.eof().index - start.index;
@@ -363,28 +321,5 @@ impl LexedCursor {
             source_vectors: SourceVectors::new(vector, vector + 1),
             contents:       context.string_cache.intern("\n"),
         }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn next_fallback_item(&mut self, context: &mut Context) -> Option<PreprocessorToken> {
-        let fallback = self
-            .fallback
-            .as_mut()
-            .expect("fallback reading requires a fallback tokenizer");
-        let token = fallback.next_item(context);
-        let position = fallback.position(context);
-        self.final_newline_withheld = fallback.final_newline_withheld();
-        if token.is_none() {
-            self.fallback = None;
-            self.next = self.file.len();
-            self.finished = true;
-            self.line_delta = position.line.wrapping_sub(self.file.eof().line);
-        } else if position.index < self.file.source.len() {
-            // At the end of input only the streaming tokenizer knows whether
-            // it already supplied the missing final newline, so it finishes.
-            _ = self.resynchronize(position);
-        }
-        token
     }
 }

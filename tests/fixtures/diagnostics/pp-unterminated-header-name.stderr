@@ -1,0 +1,19 @@
+error: header name in `#include` is missing its closing `>`
+ --> pp-unterminated-header-name.c:1:18
+  |
+1 | #include <stdio.h
+  |                  ^ expected `>` here
+  |
+  = note: C99 §6.4.7p1: a header name is `<h-char-sequence>` or `"q-char-sequence"`
+  = help: close the header name with `>` on this line
+
+error: cannot find header `stdio.h`
+ --> pp-unterminated-header-name.c:1:10
+  |
+1 | #include <stdio.h
+  |          ^^^^^^^^ not found in any search directory
+  |
+  = note: the path is absolute; no directory was searched
+  = help: add the directory containing it with `--isystem <dir>`
+
+2 errors generated.

@@ -17,7 +17,6 @@ use crate::translation_phases::SourceVector;
 fn assert_true_expression(expression: &str) {
     let source =
         format!("#define NAME 1\n#if {expression}\nselected\n#else\nwrong\n#endif\nafter\n");
-    super::strategies::assert_strategies_agree(&source);
     let (identifiers, errors) = preprocess(&source);
     assert_eq!(
         identifiers,
@@ -145,7 +144,6 @@ fn selected_arithmetic_still_reports_each_fault_once() {
         "1 / 0 ? 0 : 1",
     ] {
         let source = format!("#if {expression}\ninside\n#endif\nafter\n");
-        super::strategies::assert_strategies_agree(&source);
         let (identifiers, errors) = preprocess(&source);
         assert_eq!(identifiers.last().map(String::as_str), Some("after"));
         assert!(
@@ -194,7 +192,6 @@ fn each_evaluated_arithmetic_fault_keeps_its_diagnostic_kind() {
         ("1 >> 64", PreprocessorErrorType::RightShiftOverflow),
     ] {
         let source = format!("#if {expression}\ninside\n#endif\nafter\n");
-        super::strategies::assert_strategies_agree(&source);
         let (identifiers, errors) = preprocess(&source);
         assert_eq!(identifiers.last().map(String::as_str), Some("after"));
         let [TranslationError::Preprocessing(PreprocessorError { error_type, .. })] =
@@ -211,7 +208,6 @@ fn each_evaluated_arithmetic_fault_keeps_its_diagnostic_kind() {
 }
 
 fn divide_fault_sources(source: &str) -> Vec<SourceVector> {
-    super::strategies::assert_strategies_agree(source);
     let mut context = Context::new();
     let mut preprocessor = Preprocessor::new(
         &mut context,
@@ -269,7 +265,6 @@ fn many_dead_arithmetic_faults_reduce_without_recursion() {
 fn unsupported_function_calls_stop_recovery_at_the_directive_newline() {
     for expression in ["1(", "1((", "1(argument", "1((argument"] {
         let source = format!("#if {expression}\nselected\n#endif\nafter\n");
-        super::strategies::assert_strategies_agree(&source);
         let (identifiers, errors) = preprocess(&source);
         assert_eq!(
             identifiers,
@@ -298,7 +293,6 @@ fn malformed_ternary_groups_keep_outer_operands_and_operator_locations() {
         ),
     ] {
         let source = format!("#if {expression}\nselected\n#endif\nafter\n");
-        super::strategies::assert_strategies_agree(&source);
         let (identifiers, errors) = preprocess(&source);
         assert_eq!(identifiers, ["selected", "after"], "{errors:#?}");
         assert_eq!(errors.len(), 1, "{expression}: {errors:#?}");
@@ -334,7 +328,6 @@ fn malformed_nested_expression_groups_preserve_following_source() {
         "1?(2:3):4",
     ] {
         let source = format!("#if {expression}\nselected\n#endif\nafter\n");
-        super::strategies::assert_strategies_agree(&source);
         let (identifiers, errors) = preprocess(&source);
         assert_eq!(
             identifiers.last().map(String::as_str),

@@ -29,10 +29,7 @@ use crate::{
             LiteralUnit,
             PreprocessorError,
         },
-        preprocessor_tokenizer::{
-            LexingStrategy,
-            PreprocessorTokenizerError,
-        },
+        preprocessor_tokenizer::PreprocessorTokenizerError,
     },
     util::{
         HashMap,
@@ -127,9 +124,7 @@ pub(crate) struct Context {
     literal_values:                   DedupArena<Box<[LiteralUnit]>, FxBuildHasher>,
     /// Sparse endpoints follow their source arena's lifetime.
     expansion_sites:                  [ExpansionSites; 3],
-    is_tokenizing_include_string:     bool,
     ignore_tokenizer_errors:          bool,
-    lexing_strategy:                  LexingStrategy,
     pub(super) pending_errors:        VecDeque<TranslationError>,
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
@@ -164,9 +159,7 @@ impl Context {
             canonical_identifiers: HashMap::default(),
             literal_values: DedupArena::new(),
             expansion_sites: Default::default(),
-            is_tokenizing_include_string: false,
             ignore_tokenizer_errors: false,
-            lexing_strategy: LexingStrategy::default(),
             pending_errors: VecDeque::new(),
             relocated_errors: 0,
             source_files: DedupArena::new(),
@@ -219,14 +212,12 @@ impl Context {
         }
     }
 
+    /// How many macro invocation hints are still recorded.
     #[cfg(test)]
-    pub(crate) fn macro_hint_storage_capacity(&self) -> usize {
+    pub(crate) fn macro_hint_entries(&self) -> usize {
         self.expansion_sites
             .iter()
-            .map(|sites| {
-                sites.entries.capacity() * size_of::<(u32, u32)>()
-                    + sites.ends.capacity() * size_of::<SourceVector>()
-            })
+            .map(|sites| sites.entries.len())
             .sum()
     }
 
@@ -587,24 +578,6 @@ impl Context {
         target.extend_from_slice(source);
     }
 
-    /// When translation phases 1 through 3 run for source buffers opened
-    /// from now on.
-    pub(crate) fn lexing_strategy(&self) -> LexingStrategy {
-        self.lexing_strategy
-    }
-
-    pub(crate) fn set_lexing_strategy(&mut self, strategy: LexingStrategy) {
-        self.lexing_strategy = strategy;
-    }
-
-    pub(crate) fn is_tokenizing_include_string(&self) -> bool {
-        self.is_tokenizing_include_string
-    }
-
-    pub(crate) fn set_is_tokenizing_include_string(&mut self, value: bool) {
-        self.is_tokenizing_include_string = value;
-    }
-
     pub(crate) fn ignore_tokenizer_errors(&self) -> bool {
         self.ignore_tokenizer_errors
     }
@@ -672,8 +645,8 @@ impl Context {
         error
     }
 
-    pub(crate) fn has_pending_errors(&self) -> bool {
-        !self.pending_errors.is_empty()
+    pub(crate) fn pending_error_count(&self) -> usize {
+        self.pending_errors.len()
     }
 
     pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError> {

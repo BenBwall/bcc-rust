@@ -25,7 +25,7 @@ use crate::{
 /// position's `index` counts tokens, so rewinding is exact even when one
 /// source token is replayed twice. Its line and column, the current file,
 /// and diagnostic locations come from the next token's own provenance.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ReplayCursor {
     tokens: Rc<[ReplayedToken]>,
     /// The zero-length location just after the last token.

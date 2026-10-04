@@ -833,10 +833,7 @@ impl Preprocessor {
                 return None;
             },
 
-            | PreprocessorTokenType::Placeholder
-            | PreprocessorTokenType::AngleBracketString
-            | PreprocessorTokenType::IncludeString
-            | PreprocessorTokenType::Whitespace => {
+            | PreprocessorTokenType::Placeholder | PreprocessorTokenType::Whitespace => {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedTokenAtPhase7(token.kind),
                     source_vectors: token.source_vectors,

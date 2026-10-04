@@ -1,5 +1,5 @@
-//! Reports the peak heap use of each preprocessing strategy, which the
-//! timing benchmarks cannot show.
+//! Reports the peak heap use of each pipeline stage, which the timing
+//! benchmarks cannot show.
 
 #![expect(
     unused_crate_dependencies,
@@ -18,10 +18,7 @@ use std::{
     },
 };
 
-use bcc_rust::{
-    BenchmarkInput,
-    PreprocessingStrategy,
-};
+use bcc_rust::BenchmarkInput;
 
 /// The system allocator, counting live and peak bytes.
 struct Counting;
@@ -82,25 +79,20 @@ fn mebibytes(bytes: usize) -> f64 {
 }
 
 fn main() {
-    let strategies = [
-        ("streaming", PreprocessingStrategy::Streaming),
-        ("batch lexing", PreprocessingStrategy::BatchLexing),
-        ("batch", PreprocessingStrategy::Batch),
-    ];
+    // The strategy column keeps the table comparable with results from
+    // when the pipeline had several scheduling strategies.
     println!("| input | phases | strategy | peak heap (MiB) |");
     println!("|---|---|---|---:|");
     for input in BenchmarkInput::ALL {
-        for (name, strategy) in strategies {
-            let lexing = peak_during(|| _ = bcc_rust::lex(input, strategy));
-            let preprocessing = peak_during(|| _ = bcc_rust::preprocess(input, strategy));
-            let parsing = peak_during(|| _ = bcc_rust::parse(input, strategy));
-            for (phases, bytes) in [("1-3", lexing), ("1-6", preprocessing), ("1-7", parsing)] {
-                println!(
-                    "| {} | {phases} | {name} | {:.1} |",
-                    input.name(),
-                    mebibytes(bytes)
-                );
-            }
+        let lexing = peak_during(|| _ = bcc_rust::lex(input));
+        let preprocessing = peak_during(|| _ = bcc_rust::preprocess(input));
+        let parsing = peak_during(|| _ = bcc_rust::parse(input));
+        for (phases, bytes) in [("1-3", lexing), ("1-6", preprocessing), ("1-7", parsing)] {
+            println!(
+                "| {} | {phases} | batch | {:.1} |",
+                input.name(),
+                mebibytes(bytes)
+            );
         }
     }
 }

@@ -1,0 +1,185 @@
+=== "/* broken\n" []
+diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 10 }]
+error: unterminated block comment
+ --> <test>:1:1
+  |
+1 | /* broken
+  | ^^^^^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 10 }]
+at SourcePosition { index: 10, line: 2, column: 1 }
+end
+at SourcePosition { index: 10, line: 2, column: 1 }
+=== "  /* broken\n" []
+diagnostic [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 10 }]
+error: unterminated block comment
+ --> <test>:1:3
+  |
+1 |   /* broken
+  |   ^^^^^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 12 }]
+at SourcePosition { index: 12, line: 2, column: 1 }
+end
+at SourcePosition { index: 12, line: 2, column: 1 }
+=== "int sentinel; /* broken\n" []
+Identifier "int" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Whitespace " " [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+Identifier "sentinel" [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 8 }]
+at SourcePosition { index: 12, line: 1, column: 13 }
+SemiColon ";" [SourceVector { index: 12, column: 13, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 13, line: 1, column: 14 }
+diagnostic [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 10 }]
+error: unterminated block comment
+ --> <test>:1:15
+  |
+1 | int sentinel; /* broken
+  |               ^^^^^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 11 }]
+at SourcePosition { index: 24, line: 2, column: 1 }
+end
+at SourcePosition { index: 24, line: 2, column: 1 }
+=== " \\\n/* broken\n" []
+diagnostic [SourceVector { index: 3, column: 1, line: 2, source_file_index: 0, length: 10 }]
+error: unterminated block comment
+ --> <test>:2:1
+  |
+2 | /* broken
+  | ^^^^^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 13 }]
+at SourcePosition { index: 13, line: 3, column: 1 }
+end
+at SourcePosition { index: 13, line: 3, column: 1 }
+=== " /\\\n* broken\n" []
+diagnostic [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 12 }]
+error: unterminated block comment
+ --> <test>:1:2
+  |
+1 |  /\
+  |  ^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 13 }]
+at SourcePosition { index: 13, line: 3, column: 1 }
+end
+at SourcePosition { index: 13, line: 3, column: 1 }
+=== " /**/ /* broken\n" []
+diagnostic [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 10 }]
+error: unterminated block comment
+ --> <test>:1:7
+  |
+1 |  /**/ /* broken
+  |       ^^^^^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 16 }]
+at SourcePosition { index: 16, line: 2, column: 1 }
+end
+at SourcePosition { index: 16, line: 2, column: 1 }
+=== "/* broken" []
+diagnostic [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 0 }]
+warning: no newline at end of file
+ --> <test>:1:10
+  |
+1 | /* broken
+  |          ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+
+diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 9 }]
+error: unterminated block comment
+ --> <test>:1:1
+  |
+1 | /* broken
+  | ^^^^^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 9 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+end
+at SourcePosition { index: 9, line: 1, column: 10 }
+=== "/* broken\\\n" []
+diagnostic [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:10
+  |
+1 | /* broken\
+  |          ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 11 }]
+error: unterminated block comment
+ --> <test>:1:1
+  |
+1 | /* broken\
+  | ^^^^^^^^^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 11 }]
+at SourcePosition { index: 11, line: 2, column: 1 }
+end
+at SourcePosition { index: 11, line: 2, column: 1 }
+=== "/*" []
+diagnostic [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 0 }]
+warning: no newline at end of file
+ --> <test>:1:3
+  |
+1 | /*
+  |   ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+
+diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+error: unterminated block comment
+ --> <test>:1:1
+  |
+1 | /*
+  | ^^ the file ends before the closing `*/`
+  |
+  = note: C99 §5.1.1.2p3: a source file shall not end in a partial comment
+  = help: close the comment with `*/`
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+end
+at SourcePosition { index: 2, line: 1, column: 3 }

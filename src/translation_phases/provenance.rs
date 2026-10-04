@@ -16,10 +16,7 @@ use super::{
     GetSourceVectors,
     context::Context,
 };
-use crate::util::{
-    shared::SharedString,
-    vector_slice::VectorSlice,
-};
+use crate::util::vector_slice::VectorSlice;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub(crate) struct SourcePosition {
@@ -132,54 +129,6 @@ impl GetPosition for SourcePosition {
     #[inline(always)]
     fn position(&self, _context: &Context) -> SourcePosition {
         *self
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "I think using source and source_file_index as member names is fine here."
-)]
-pub(crate) struct SourceFile {
-    pub(crate) source_file_index: u32,
-    pub(crate) source:            SharedString,
-    pub(crate) line:              u32,
-    pub(crate) column:            u32,
-    pub(crate) index:             usize,
-}
-
-impl Default for SourceFile {
-    fn default() -> Self {
-        Self {
-            source_file_index: 0,
-            source:            SharedString::default(),
-            line:              1,
-            column:            1,
-            index:             0,
-        }
-    }
-}
-
-impl SourceFile {
-    pub(crate) fn new(source_file_index: u32, source: SharedString) -> Self {
-        Self {
-            source_file_index,
-            source,
-            line: 1,
-            column: 1,
-            index: 0,
-        }
-    }
-}
-
-impl GetPosition for SourceFile {
-    #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
-        SourcePosition {
-            index:  self.index,
-            line:   self.line,
-            column: self.column,
-        }
     }
 }
 

@@ -2,10 +2,9 @@
 
 use std::path::PathBuf;
 
-use super::strategies::assert_strategies_agree;
+use super::Preprocessor;
 use crate::{
     diagnostics::ToDiagnostic,
-    pipeline::PreprocessingStrategy,
     translation_phases::{
         Context,
         GetPosition,
@@ -21,12 +20,6 @@ use crate::{
     },
     util::shared::SharedVec,
 };
-
-const STRATEGIES: [PreprocessingStrategy; 3] = [
-    PreprocessingStrategy::Streaming,
-    PreprocessingStrategy::BatchLexing,
-    PreprocessingStrategy::Batch,
-];
 
 #[derive(Debug)]
 struct Observation {
@@ -61,9 +54,9 @@ fn record_errors(context: &mut Context, observation: &mut Observation) {
     }
 }
 
-fn observe(source: &str, strategy: PreprocessingStrategy) -> Observation {
+fn observe(source: &str) -> Observation {
     let mut context = Context::new();
-    let mut preprocessor = strategy.preprocessor(
+    let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<other tokens>").into_boxed_path(),
         source.to_owned().into(),
@@ -74,58 +67,40 @@ fn observe(source: &str, strategy: PreprocessingStrategy) -> Observation {
         tokens: Vec::new(),
         errors: Vec::new(),
     };
-    if strategy == PreprocessingStrategy::Batch {
-        let tokens = preprocessor.preprocess_all(&mut context);
-        record_errors(&mut context, &mut observation);
-        for token in tokens {
-            record_token(token, &context, &mut observation);
-        }
-    } else {
-        loop {
-            let token = preprocessor.next_iterator_item(&mut context);
-            record_errors(&mut context, &mut observation);
-            let Some(token) = token else { break };
-            record_token(token, &context, &mut observation);
-        }
+    let tokens = preprocessor.preprocess_all(&mut context);
+    record_errors(&mut context, &mut observation);
+    for token in tokens {
+        record_token(token, &context, &mut observation);
     }
     observation
 }
 
 #[test]
 fn lexers_preserve_other_tokens_before_preprocessing() {
-    for strategy in STRATEGIES {
-        let mut context = Context::new();
-        let mut preprocessor = strategy.preprocessor(
-            &mut context,
-            PathBuf::from("<other tokens>").into_boxed_path(),
-            "a\\\n@\n".to_owned().into(),
-            SharedVec::default(),
-            SharedVec::default(),
-        );
-        let mut spellings = Vec::new();
-        while let Some(token) = preprocessor.tokenizer.next_item(&mut context) {
-            spellings.push(context.string_cache.at(token.contents).to_owned());
-        }
-        assert_eq!(spellings, ["a", "@", "\n"], "{strategy:?}");
-        assert!(context.take_pending_errors().is_empty(), "{strategy:?}");
+    let mut context = Context::new();
+    let mut preprocessor = Preprocessor::new(
+        &mut context,
+        PathBuf::from("<other tokens>").into_boxed_path(),
+        "a\\\n@\n".to_owned().into(),
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let mut spellings = Vec::new();
+    while let Some(token) = preprocessor.tokenizer.next_item(&mut context) {
+        spellings.push(context.string_cache.at(token.contents).to_owned());
     }
+    assert_eq!(spellings, ["a", "@", "\n"], "");
+    assert!(context.take_pending_errors().is_empty(), "");
 }
 
 #[test]
 fn stringification_preserves_other_preprocessing_tokens() {
     for (argument, expected) in [("@", "@"), (": @", ": @"), ("$ `", "$ `")] {
         let source = format!("#define S(x) #x\nS({argument}); after\n");
-        assert_strategies_agree(&source);
-        for strategy in STRATEGIES {
-            let actual = observe(&source, strategy);
-            assert!(actual.errors.is_empty(), "{strategy:?}: {actual:#?}");
-            assert_eq!(
-                actual.tokens[0].0,
-                format!("string:{expected}"),
-                "{strategy:?}"
-            );
-            assert_eq!(actual.tokens.last().unwrap().0, "after", "{strategy:?}");
-        }
+        let actual = observe(&source);
+        assert!(actual.errors.is_empty(), "{actual:#?}");
+        assert_eq!(actual.tokens[0].0, format!("string:{expected}"), "");
+        assert_eq!(actual.tokens.last().unwrap().0, "after", "");
     }
 }
 
@@ -136,22 +111,16 @@ fn unused_other_preprocessing_tokens_do_not_diagnose() {
         "#define DISCARD(x) after\nDISCARD(@)\n",
         "#if 0\n@ $ ` ??/ ;\n#endif\nafter\n",
     ] {
-        assert_strategies_agree(source);
-        for strategy in STRATEGIES {
-            let actual = observe(source, strategy);
-            assert!(
-                actual.errors.is_empty(),
-                "{strategy:?}: {source:?}: {actual:#?}"
-            );
-            assert_eq!(
-                actual
-                    .tokens
-                    .iter()
-                    .map(|token| token.0.as_str())
-                    .collect::<Vec<_>>(),
-                ["after"]
-            );
-        }
+        let actual = observe(source);
+        assert!(actual.errors.is_empty(), "{source:?}: {actual:#?}");
+        assert_eq!(
+            actual
+                .tokens
+                .iter()
+                .map(|token| token.0.as_str())
+                .collect::<Vec<_>>(),
+            ["after"]
+        );
     }
 }
 
@@ -169,39 +138,32 @@ fn surviving_other_tokens_keep_their_actual_character_locations() {
         ("🦀 after\n", '🦀', 0, 1, 1, 4),
         ("#define BAD @\nBAD after\n", '@', 12, 1, 13, 1),
     ] {
-        assert_strategies_agree(source);
-        for strategy in STRATEGIES {
-            let actual = observe(source, strategy);
-            assert_eq!(
-                actual.errors.len(),
-                1,
-                "{strategy:?}: {source:?}: {actual:#?}"
-            );
-            let (message, vectors) = &actual.errors[0];
-            let quoted = match character {
-                | '`' => "'`'".to_owned(),
-                | c if c.is_control() => format!("U+{:04X}", u32::from(c)),
-                | c => format!("`{c}`"),
-            };
-            assert_eq!(message, &format!("unexpected character {quoted} in source"));
-            assert_eq!(vectors.len(), 1, "{strategy:?}: {vectors:#?}");
-            assert_eq!(
-                vectors[0].position(&Context::new()),
-                SourcePosition {
-                    index,
-                    line,
-                    column
-                }
-            );
-            assert_eq!(vectors[0].length, length);
-            assert_eq!(actual.tokens.last().unwrap().0, "after");
-            if source.starts_with('a') {
-                assert_eq!(actual.tokens[0].0, "a");
-                assert_eq!(
-                    actual.tokens[0].1[0].length, 1,
-                    "previous token boundary moved"
-                );
+        let actual = observe(source);
+        assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+        let (message, vectors) = &actual.errors[0];
+        let quoted = match character {
+            | '`' => "'`'".to_owned(),
+            | c if c.is_control() => format!("U+{:04X}", u32::from(c)),
+            | c => format!("`{c}`"),
+        };
+        assert_eq!(message, &format!("unexpected character {quoted} in source"));
+        assert_eq!(vectors.len(), 1, "{vectors:#?}");
+        assert_eq!(
+            vectors[0].position(&Context::new()),
+            SourcePosition {
+                index,
+                line,
+                column
             }
+        );
+        assert_eq!(vectors[0].length, length);
+        assert_eq!(actual.tokens.last().unwrap().0, "after");
+        if source.starts_with('a') {
+            assert_eq!(actual.tokens[0].0, "a");
+            assert_eq!(
+                actual.tokens[0].1[0].length, 1,
+                "previous token boundary moved"
+            );
         }
     }
 }

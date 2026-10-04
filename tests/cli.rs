@@ -23,49 +23,41 @@ mod tests {
 
     #[test]
     fn lookahead_warnings_follow_earlier_parser_errors() {
-        for strategy in ["streaming", "batch-lexing", "batch"] {
-            let output = run(&[
-                "--preprocessing-strategy",
-                strategy,
-                "--input",
-                "void f(int a){\n  a = { 1, 2\n#warning late\n  };\n}\n",
-            ]);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let error = stderr
-                .find("error: expected an expression")
-                .expect("parser error");
-            let warning = stderr
-                .find("warning: unknown preprocessing directive")
-                .expect("warning");
-            assert!(error < warning, "{strategy}: {stderr}");
-            assert!(
-                stderr.contains("1 error and 1 warning generated"),
-                "{strategy}: {stderr}"
-            );
-        }
+        let output = run(&[
+            "--input",
+            "void f(int a){\n  a = { 1, 2\n#warning late\n  };\n}\n",
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let error = stderr
+            .find("error: expected an expression")
+            .expect("parser error");
+        let warning = stderr
+            .find("warning: unknown preprocessing directive")
+            .expect("warning");
+        assert!(error < warning, "{stderr}");
+        assert!(
+            stderr.contains("1 error and 1 warning generated"),
+            "{stderr}"
+        );
     }
 
     #[test]
     fn diagnostic_order_uses_macro_invocations_instead_of_definitions() {
-        for strategy in ["streaming", "batch-lexing", "batch"] {
-            let output = run(&[
-                "--preprocessing-strategy",
-                strategy,
-                "--input",
-                "#define BAD )\nvoid f(){\nint a = ;\n#warning middle\nint b = BAD;\n}\n",
-            ]);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let first = stderr
-                .find("error: expected an expression, found `;`")
-                .expect("first error");
-            let warning = stderr
-                .find("warning: unknown preprocessing directive")
-                .expect("warning");
-            let last = stderr
-                .find("error: expected an expression, found `)`")
-                .expect("macro error");
-            assert!(first < warning && warning < last, "{strategy}: {stderr}");
-        }
+        let output = run(&[
+            "--input",
+            "#define BAD )\nvoid f(){\nint a = ;\n#warning middle\nint b = BAD;\n}\n",
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let first = stderr
+            .find("error: expected an expression, found `;`")
+            .expect("first error");
+        let warning = stderr
+            .find("warning: unknown preprocessing directive")
+            .expect("warning");
+        let last = stderr
+            .find("error: expected an expression, found `)`")
+            .expect("macro error");
+        assert!(first < warning && warning < last, "{stderr}");
     }
 
     #[test]
@@ -431,40 +423,22 @@ mod tests {
         assert!(stderr.is_empty(), "{stderr}");
     }
 
-    /// Diagnostics with the order relation dropped: batch reports every
-    /// preprocessing diagnostic first, so only the set may agree.
-    fn sorted_diagnostics(stderr: &str) -> Vec<String> {
-        let mut blocks: Vec<String> = stderr
-            .split("\n\n")
-            .map(str::to_owned)
-            .filter(|block| !block.trim().is_empty())
-            .collect();
-        blocks.sort();
-        blocks
-    }
-
     #[test]
-    fn diagnostic_folding_does_not_depend_on_the_preprocessing_strategy() {
+    fn errors_at_one_token_fold_into_the_first() {
         for input in [
             // Each unterminated constant also draws a parser error at the
             // same token, which is folded into the lexer error.
             "'a\n'b\n",
             // A preprocessing diagnostic lands between two parser errors at
-            // one token under the streaming strategies.
+            // one token.
             "int x[] = {1 B\n#error e\n};\n",
         ] {
-            let streaming = stderr_of(&["--preprocessing-strategy", "streaming", "--input", input]);
-            for strategy in ["batch-lexing", "batch"] {
-                let other = stderr_of(&["--preprocessing-strategy", strategy, "--input", input]);
-                assert_eq!(
-                    sorted_diagnostics(&other),
-                    sorted_diagnostics(&streaming),
-                    "{strategy} for {input:?}"
-                );
-            }
+            let stderr = stderr_of(&["--input", input]);
+            assert!(
+                stderr.contains("2 errors generated."),
+                "{input:?}: {stderr}"
+            );
         }
-        let stderr = stderr_of(&["--input", "'a\n'b\n"]);
-        assert!(stderr.contains("2 errors generated."), "{stderr}");
     }
 
     #[test]
