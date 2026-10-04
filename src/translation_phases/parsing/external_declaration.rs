@@ -110,18 +110,20 @@ impl ExternalDeclarationFrame {
                         } else {
                             declaration_source
                         };
+                        let related = token.map(|token| {
+                            context.diagnostic_slice(&[RelatedParserDiagnostic {
+                                message:        "parsing resumes here",
+                                source_vectors: token.source_vectors,
+                            }])
+                        });
                         if let Some(TranslationError::Parsing(error)) = context
                             .pending_errors
                             .iter_mut()
                             .skip(self.starting_diagnostic_count)
                             .find(|error| matches!(error, TranslationError::Parsing(error) if error.severity == ErrorSeverity::Error && error.recovery.is_none()))
                         {
-                            if let Some(token) = token {
-                                error.related = vec![RelatedParserDiagnostic {
-                                    message: "parsing resumes here",
-                                    source_vectors: token.source_vectors,
-                                }]
-                                .into_boxed_slice();
+                            if let Some(related) = related {
+                                error.related = related;
                             }
                             error.recovery = Some(RecoverySummary {
                                 owner: ParseFrameKind::ExternalDeclaration,

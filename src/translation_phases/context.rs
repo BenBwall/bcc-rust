@@ -151,6 +151,10 @@ impl<'tu> Context<'tu> {
         self.tu.alloc_str(text)
     }
 
+    pub(crate) fn diagnostic_slice<T: Copy>(&self, values: &[T]) -> &'tu mut [T] {
+        self.tu.alloc_slice_copy(values)
+    }
+
     pub(crate) fn new(tu: &'tu Bump) -> Self {
         Self::with_configuration(tu, CompilerConfiguration::default())
     }

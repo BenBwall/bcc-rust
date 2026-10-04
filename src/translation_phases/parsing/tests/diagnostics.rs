@@ -240,7 +240,7 @@ fn parser_diagnostics_expose_structured_context_and_fifo_recovery() {
         );
         assert!(first.source_vectors.length > 0);
         assert!(first.recovery.is_some());
-        assert!(first.ranges.is_empty());
+        assert_eq!(first.ranges, []);
         assert_eq!(first.related.len(), 1);
         assert_eq!(first.related[0].message, "parsing resumes here");
 
@@ -280,7 +280,7 @@ fn discarded_recovery_exposes_its_complete_summary() {
             Some(TokenType::Operator(OperatorTokenType::Semicolon))
         );
         assert_eq!(sourced_text(parsed, discarded), "extrajunk");
-        assert_eq!(diagnostic.ranges.as_ref(), [discarded]);
+        assert_eq!(diagnostic.ranges, [discarded]);
         assert_eq!(diagnostic.related.len(), 1);
         assert_eq!(diagnostic.related[0].message, "parsing resumes here");
         assert!(matches!(

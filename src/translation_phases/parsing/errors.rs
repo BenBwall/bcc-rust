@@ -153,7 +153,7 @@ impl DeclarationContinuation {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct RelatedParserDiagnostic {
     pub(crate) message:        &'static str,
     pub(crate) source_vectors: SourceVectors,
@@ -167,7 +167,7 @@ pub(crate) struct RecoverySummary {
     pub(crate) stopped_at:       Option<TokenType>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct ParserError<'tu> {
     pub(crate) code:              ParserDiagnosticCode,
     pub(crate) severity:          ErrorSeverity,
@@ -185,8 +185,8 @@ pub(crate) struct ParserError<'tu> {
     pub(crate) error_type:        ParserErrorType,
     /// Source segments to underline when the diagnostic is rendered.
     pub(crate) source_vectors:    SourceVectors,
-    pub(crate) ranges:            Box<[SourceVectors]>,
-    pub(crate) related:           Box<[RelatedParserDiagnostic]>,
+    pub(crate) ranges:            &'tu mut [SourceVectors],
+    pub(crate) related:           &'tu mut [RelatedParserDiagnostic],
     pub(crate) recovery:          Option<RecoverySummary>,
     /// Tokens the parser had consumed when it reported this diagnostic. Two
     /// errors at one place with no input consumed between them come from one
@@ -221,10 +221,10 @@ impl ParserError<'_> {
         if let Some(insertion_point) = &mut self.insertion_point {
             visit(insertion_point);
         }
-        for range in &mut self.ranges {
+        for range in self.ranges.iter_mut() {
             visit(range);
         }
-        for related in &mut self.related {
+        for related in self.related.iter_mut() {
             visit(&mut related.source_vectors);
         }
         if let Some(discarded) = self
@@ -267,7 +267,7 @@ impl ToDiagnostic for ParserError<'_> {
         }
         let mut diagnostic = explanation.at(self.severity, source);
         let primary = context.get_source_vectors(source);
-        for range in &self.ranges {
+        for range in self.ranges.iter() {
             // Show only input skipped beyond the token the error is about.
             let skipped: Vec<SourceVector> = context
                 .get_source_vectors(*range)
@@ -292,7 +292,7 @@ impl ToDiagnostic for ParserError<'_> {
                 .recovery
                 .is_some_and(|recovery| recovery.discarded_tokens > 0)
         {
-            for related in &self.related {
+            for related in self.related.iter() {
                 let related_line = context
                     .get_source_vectors(related.source_vectors)
                     .first()

@@ -665,21 +665,24 @@ impl<'tok> Parser<'tok> {
         }
         let stopped_token = self.cursor.current(context);
         let stopped_at = stopped_token.map(|token| token.kind);
+        let ranges = source_vectors.map(|discarded| context.diagnostic_slice(&[discarded]));
+        let related = stopped_token.map(|token| {
+            context.diagnostic_slice(&[RelatedParserDiagnostic {
+                message:        "parsing resumes here",
+                source_vectors: token.source_vectors,
+            }])
+        });
         if let Some(TranslationError::Parsing(error)) = context
             .pending_errors
             .iter_mut()
             .rev()
             .find(|error| matches!(error, TranslationError::Parsing(error) if error.recovery.is_none()))
         {
-            if let Some(discarded) = source_vectors {
-                error.ranges = vec![discarded].into_boxed_slice();
+            if let Some(ranges) = ranges {
+                error.ranges = ranges;
             }
-            if let Some(stopped_token) = stopped_token {
-                error.related = vec![RelatedParserDiagnostic {
-                    message: "parsing resumes here",
-                    source_vectors: stopped_token.source_vectors,
-                }]
-                .into_boxed_slice();
+            if let Some(related) = related {
+                error.related = related;
             }
             error.recovery = Some(RecoverySummary {
                 owner: set.target,
@@ -746,8 +749,8 @@ impl<'tok> Parser<'tok> {
             insertion_point,
             error_type,
             source_vectors,
-            ranges: Box::new([]),
-            related: Box::new([]),
+            ranges: &mut [],
+            related: &mut [],
             recovery: None,
             consumed_tokens: self.cursor.consumed,
             ordering_location: context
@@ -773,13 +776,13 @@ impl<'tok> Parser<'tok> {
             last.source_file_index,
             0,
         );
+        let related = context.diagnostic_slice(&[RelatedParserDiagnostic {
+            message:        "not a function, so later declarations were read as its parameters",
+            source_vectors: source,
+        }]);
         if let Some(TranslationError::Parsing(error)) = context.pending_errors.back_mut() {
             error.insertion_point = Some(insertion_point);
-            error.related = vec![RelatedParserDiagnostic {
-                message:        "not a function, so later declarations were read as its parameters",
-                source_vectors: source,
-            }]
-            .into_boxed_slice();
+            error.related = related;
         }
     }
 
