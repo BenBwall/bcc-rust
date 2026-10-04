@@ -50,8 +50,6 @@ pub(crate) use token::{
 
 use self::macro_expansion::FunctionLikeMacroArgument;
 #[cfg(test)]
-use crate::util::chunked_queue::ChunkedQueue;
-#[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
     translation_phases::{
@@ -300,23 +298,12 @@ impl Preprocessor {
     /// Runs translation phases 4 through 6 without the parser's resource
     /// budget, for direct preprocessing tests.
     #[cfg(test)]
-    pub(crate) fn preprocess_all(&mut self, context: &mut Context<'_>) -> ChunkedQueue<Token> {
-        self.preprocess_all_with_limit(context, usize::MAX).0
-    }
-
-    /// Collects parser tokens in the legacy test queue with the same budget
-    /// and provenance rules used by the arena-backed parser path.
-    #[cfg(test)]
-    pub(crate) fn preprocess_all_with_limit(
+    pub(crate) fn preprocess_all<'tok>(
         &mut self,
         context: &mut Context<'_>,
-        source_segment_limit: usize,
-    ) -> (ChunkedQueue<Token>, Option<Token>) {
-        let mut tokens = ChunkedQueue::default();
-        let limit_token = self.collect_with_limit(context, source_segment_limit, |token| {
-            tokens.push_back(token);
-        });
-        (tokens, limit_token)
+        tok: &'tok Bump,
+    ) -> ArenaVec<'tok, Token> {
+        self.preprocess_into_arena(context, usize::MAX, tok).0
     }
 
     /// Collects the phase-6 output in the token arena before parsing starts.

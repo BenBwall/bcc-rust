@@ -23,6 +23,7 @@ use crate::{
 fn expansion(source: &str) -> (String, Vec<TranslationError>) {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let tok = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<macro regression>").into_boxed_path(),
@@ -30,11 +31,7 @@ fn expansion(source: &str) -> (String, Vec<TranslationError>) {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let tokens = {
-        preprocessor
-            .preprocess_all(&mut context)
-            .collect::<Vec<_>>()
-    };
+    let tokens = preprocessor.preprocess_all(&mut context, &tok);
     let spellings: Vec<_> = tokens
         .iter()
         .map(|token| match token.kind {

@@ -43,6 +43,7 @@ fn record(token: Token, context: &Context<'_>, result: &mut Observation) {
 fn observe(source: &str) -> Observation {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let tok = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<encoding followup>").into_boxed_path(),
@@ -51,7 +52,7 @@ fn observe(source: &str) -> Observation {
         SharedVec::default(),
     );
     let mut result = Observation::default();
-    for token in preprocessor.preprocess_all(&mut context) {
+    for token in preprocessor.preprocess_all(&mut context, &tok) {
         record(token, &context, &mut result);
     }
     result.errors = context
