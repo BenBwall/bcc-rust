@@ -177,47 +177,42 @@ impl Bump {
     ///
     /// Running out of arena memory is reported as
     /// [`std::io::ErrorKind::OutOfMemory`] rather than aborting, so a caller
-    /// can turn it into a diagnostic.
+    /// can turn it into a diagnostic. The file is read into the arena's tail,
+    /// so it costs exactly its length and commits only what it fills.
     pub(crate) fn read_to_str_lossy(&self, path: &Path) -> std::io::Result<&str> {
         let mut file = std::fs::File::open(path)?;
-        let mut bytes = ArenaVec::new_in(self);
+        let mut bytes = self.tail_vec();
         let mut buffer = [0_u8; 8192];
         loop {
             match file.read(&mut buffer) {
                 | Ok(0) => break,
-                | Ok(count) => {
-                    bytes
-                        .try_reserve(count)
-                        .map_err(|_| out_of_arena_memory())?;
-                    bytes.extend_from_slice(&buffer[..count]);
-                },
+                | Ok(count) => bytes
+                    .try_extend_from_slice(&buffer[..count])
+                    .map_err(|_| out_of_arena_memory())?,
                 | Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
                 | Err(error) => return Err(error),
             }
         }
-        if std::str::from_utf8(&bytes).is_ok() {
-            let bytes = bytes.leak();
+        let bytes = bytes.into_slice();
+        if std::str::from_utf8(bytes).is_ok() {
             // SAFETY: UTF-8 validation above covered these exact bytes.
             return Ok(unsafe { std::str::from_utf8_unchecked(bytes) });
         }
 
-        let mut repaired = ArenaVec::new_in(self);
-        let mut push = |part: &[u8]| {
-            repaired
-                .try_reserve(part.len())
-                .map_err(|_| out_of_arena_memory())?;
-            repaired.extend_from_slice(part);
-            Ok::<_, std::io::Error>(())
-        };
-        let mut remaining = bytes.as_slice();
+        let mut repaired = self.tail_vec();
+        let mut remaining = &*bytes;
         while let Err(error) = std::str::from_utf8(remaining) {
             let valid = error.valid_up_to();
-            push(&remaining[..valid])?;
-            push("�".as_bytes())?;
+            repaired
+                .try_extend_from_slice(&remaining[..valid])
+                .and_then(|()| repaired.try_extend_from_slice("�".as_bytes()))
+                .map_err(|_| out_of_arena_memory())?;
             remaining = &remaining[valid + error.error_len().unwrap_or(remaining.len() - valid)..];
         }
-        push(remaining)?;
-        let bytes = repaired.leak();
+        repaired
+            .try_extend_from_slice(remaining)
+            .map_err(|_| out_of_arena_memory())?;
+        let bytes = repaired.into_slice();
         // SAFETY: each valid run was checked above and replacements are UTF-8.
         Ok(unsafe { std::str::from_utf8_unchecked(bytes) })
     }
@@ -510,6 +505,28 @@ impl<'a, T: Copy> TailVec<'a, T> {
         Ok(())
     }
 
+    /// Appends `values`, committing the pages they reach first.
+    pub(crate) fn try_extend_from_slice(&mut self, values: &[T]) -> Result<(), AllocError> {
+        let len = self.len.checked_add(values.len()).ok_or(AllocError)?;
+        if len > self.committed {
+            self.commit_for(len)?;
+        }
+        if values.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: `len <= committed`, so the slots from `self.len` lie inside
+        // the committed memory `ptr` was derived to reach.
+        let slots = unsafe { self.ptr.as_ptr().add(self.len) };
+        // SAFETY: the slots are committed, aligned, unused, owned by this
+        // vector alone, and cannot overlap `values`, which a shared borrow
+        // keeps outside this vector's unwritten part.
+        unsafe {
+            ptr::copy_nonoverlapping(values.as_ptr(), slots, values.len());
+        }
+        self.len = len;
+        Ok(())
+    }
+
     #[cold]
     fn commit_for(&mut self, elements: usize) -> Result<(), AllocError> {
         let end = elements
@@ -774,6 +791,25 @@ mod tests {
             arena.read_to_str_lossy(&path).unwrap_err().kind(),
             std::io::ErrorKind::NotFound
         );
+    }
+
+    #[cfg(not(miri))]
+    #[test]
+    fn file_reads_commit_their_length_and_report_exhausted_memory() {
+        let path = std::env::temp_dir().join(format!("bcc-bump-tail-{}.c", std::process::id()));
+        let source = "x".repeat(3 * MAX_COMMIT_STEP + 17);
+        std::fs::write(&path, &source).unwrap();
+        let arena = Bump::new();
+        _ = arena.alloc(1_u8);
+        assert_eq!(arena.read_to_str_lossy(&path).unwrap(), source);
+        assert_eq!(arena.used(), 1 + source.len());
+        assert!(arena.committed() <= arena.used() + MAX_COMMIT_STEP);
+        let empty = Bump::new();
+        let _failing = faults::fail_reserves(1);
+        let error = empty.read_to_str_lossy(&path).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+        assert_eq!(empty.used(), 0);
     }
 
     #[test]
