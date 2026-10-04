@@ -401,8 +401,13 @@ fn comma_in_unevaluated_conditional_middle_preserves_the_question_marker() {
     assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
 }
 
-/// Preprocesses `source` as the file `path`, returning every token.
-fn tokens_of(source: &str, path: &str) -> (Vec<Token>, Context) {
+/// Preprocesses `source` as the file `path`, keeping tokens and their context
+/// alive for the inspection callback.
+fn with_tokens_of<R>(
+    source: &str,
+    path: &str,
+    inspect: impl FnOnce(&[Token], &mut Context) -> R,
+) -> R {
     let mut context = Context::new();
     let mut preprocessor = Preprocessor::new(
         &mut context,
@@ -415,7 +420,7 @@ fn tokens_of(source: &str, path: &str) -> (Vec<Token>, Context) {
     while let Some(token) = preprocessor.next_item(&mut context) {
         tokens.push(token);
     }
-    (tokens, context)
+    inspect(&tokens, &mut context)
 }
 
 fn string_value(context: &Context, token: Token) -> (bool, String) {
@@ -443,46 +448,58 @@ fn string_value(context: &Context, token: Token) -> (bool, String) {
 #[test]
 fn wide_literal_spellings_keep_their_opening_quote() {
     // C99 §6.10.3.2p2: `#` produces each argument token's spelling.
-    let (tokens, context) = tokens_of("#define S(x) #x\nS(L'b') S(L\"w\")\n", "<test>");
-    assert_eq!(tokens.len(), 1);
-    assert_eq!(
-        string_value(&context, tokens[0]),
-        (false, "L'b'L\"w\"".to_owned())
+    with_tokens_of(
+        "#define S(x) #x\nS(L'b') S(L\"w\")\n",
+        "<test>",
+        |tokens, context| {
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(
+                string_value(context, tokens[0]),
+                (false, "L'b'L\"w\"".to_owned())
+            );
+        },
     );
 
-    let (tokens, mut context) = tokens_of("L'\"'\n", "<test>");
-    assert!(matches!(
-        tokens[0].kind,
-        TokenType::Character(CharacterTokenType::WideChar(34))
-    ));
-    assert!(context.take_pending_errors().is_empty());
+    with_tokens_of("L'\"'\n", "<test>", |tokens, context| {
+        assert!(matches!(
+            tokens[0].kind,
+            TokenType::Character(CharacterTokenType::WideChar(34))
+        ));
+        assert!(context.take_pending_errors().is_empty());
+    });
 
     // C99 §6.10.3.3p3: `L ## "ab"` pastes into the wide literal `L"ab"`.
-    let (tokens, mut context) = tokens_of("#define W(x) L ## x\nW(\"ab\")\n", "<test>");
-    assert_eq!(string_value(&context, tokens[0]), (true, "ab".to_owned()));
-    assert!(context.take_pending_errors().is_empty());
+    with_tokens_of(
+        "#define W(x) L ## x\nW(\"ab\")\n",
+        "<test>",
+        |tokens, context| {
+            assert_eq!(string_value(context, tokens[0]), (true, "ab".to_owned()));
+            assert!(context.take_pending_errors().is_empty());
+        },
+    );
 }
 
 #[test]
 fn wide_string_contents_may_start_with_a_quote() {
-    let (tokens, mut context) = tokens_of("L\"'x\"\n", "<test>");
-    assert_eq!(string_value(&context, tokens[0]), (true, "'x".to_owned()));
-    assert!(context.take_pending_errors().is_empty());
+    with_tokens_of("L\"'x\"\n", "<test>", |tokens, context| {
+        assert_eq!(string_value(context, tokens[0]), (true, "'x".to_owned()));
+        assert!(context.take_pending_errors().is_empty());
+    });
 }
 
 #[test]
 fn file_and_line_are_spelled_as_c_tokens_at_their_use() {
     let path = r"C:\dir\Lab.c";
-    let (tokens, mut context) = tokens_of("\n__FILE__ __LINE__\n", path);
-
-    assert_eq!(string_value(&context, tokens[0]), (false, path.to_owned()));
-    assert!(matches!(
-        tokens[1].kind,
-        TokenType::Integer(IntegerTokenType::Int(2))
-    ));
-    let line_vectors = context.get_source_vectors(tokens[1].source_vectors);
-    assert_eq!((line_vectors[0].line, line_vectors[0].column), (2, 10));
-    assert!(context.take_pending_errors().is_empty());
+    with_tokens_of("\n__FILE__ __LINE__\n", path, |tokens, context| {
+        assert_eq!(string_value(context, tokens[0]), (false, path.to_owned()));
+        assert!(matches!(
+            tokens[1].kind,
+            TokenType::Integer(IntegerTokenType::Int(2))
+        ));
+        let line_vectors = context.get_source_vectors(tokens[1].source_vectors);
+        assert_eq!((line_vectors[0].line, line_vectors[0].column), (2, 10));
+        assert!(context.take_pending_errors().is_empty());
+    });
 }
 
 #[test]
@@ -520,19 +537,20 @@ fn malformed_conditions_still_find_their_endif() {
 
 #[test]
 fn unterminated_conditionals_point_at_their_directive() {
-    let (tokens, mut context) = tokens_of("#if 1\nx\n", "<test>");
-    assert_eq!(tokens.len(), 1);
-    let errors = context.take_pending_errors();
-    let [
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
-            source_vectors,
-        }),
-    ] = errors.as_slice()
-    else {
-        panic!("expected one unterminated-conditional error: {errors:#?}");
-    };
-    assert_eq!(context.source_spelling(*source_vectors), Some("if"));
+    with_tokens_of("#if 1\nx\n", "<test>", |tokens, context| {
+        assert_eq!(tokens.len(), 1);
+        let errors = context.take_pending_errors();
+        let [
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
+                source_vectors,
+            }),
+        ] = errors.as_slice()
+        else {
+            panic!("expected one unterminated-conditional error: {errors:#?}");
+        };
+        assert_eq!(context.source_spelling(*source_vectors), Some("if"));
+    });
 }
 
 #[test]
@@ -574,29 +592,31 @@ fn quoted_includes_search_beside_the_including_file_not_the_working_directory() 
     std::fs::write(nested.join("sibling.h"), "from_sibling\n").unwrap();
     let main = nested.join("main.c");
 
-    let (tokens, mut context) = tokens_of(
+    with_tokens_of(
         "#include \"sibling.h\"\n#include <sibling.h>\n",
         main.to_str().unwrap(),
-    );
-    let identifiers: Vec<&str> = tokens
-        .iter()
-        .filter(|token| token.kind == TokenType::Identifier)
-        .map(|token| context.string_cache.at(token.contents))
-        .collect();
-    assert_eq!(identifiers, ["from_sibling"]);
-    let errors = context.take_pending_errors();
-    assert!(
-        matches!(
-            errors.as_slice(),
-            [TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::HeaderNotFound {
-                    is_system_header: true,
-                    ..
-                },
-                ..
-            })]
-        ),
-        "{errors:#?}"
+        |tokens, context| {
+            let identifiers: Vec<&str> = tokens
+                .iter()
+                .filter(|token| token.kind == TokenType::Identifier)
+                .map(|token| context.string_cache.at(token.contents))
+                .collect();
+            assert_eq!(identifiers, ["from_sibling"]);
+            let errors = context.take_pending_errors();
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Preprocessing(PreprocessorError {
+                        error_type: PreprocessorErrorType::HeaderNotFound {
+                            is_system_header: true,
+                            ..
+                        },
+                        ..
+                    })]
+                ),
+                "{errors:#?}"
+            );
+        },
     );
     drop(std::fs::remove_dir_all(&directory));
 }
@@ -604,25 +624,26 @@ fn quoted_includes_search_beside_the_including_file_not_the_working_directory() 
 /// Preprocesses `source`, spelling each token as written in C source with a
 /// space between tokens.
 fn expansion_of(source: &str) -> (String, Vec<TranslationError>) {
-    let (tokens, mut context) = tokens_of(source, "<test>");
-    let spellings: Vec<String> = tokens
-        .iter()
-        .map(|&token| match token.kind {
-            | TokenType::String(StringTokenType::String(contents)) => format!(
-                "{:?}",
-                context
-                    .literal_text(contents, false)
-                    .as_deref()
-                    .expect("UTF-8 test literal")
-            ),
-            | _ => context
-                .string_cache
-                .at(token.contents)
-                .trim_end_matches('\0')
-                .to_owned(),
-        })
-        .collect();
-    (spellings.join(" "), context.take_pending_errors())
+    with_tokens_of(source, "<test>", |tokens, context| {
+        let spellings: Vec<String> = tokens
+            .iter()
+            .map(|&token| match token.kind {
+                | TokenType::String(StringTokenType::String(contents)) => format!(
+                    "{:?}",
+                    context
+                        .literal_text(contents, false)
+                        .as_deref()
+                        .expect("UTF-8 test literal")
+                ),
+                | _ => context
+                    .string_cache
+                    .at(token.contents)
+                    .trim_end_matches('\0')
+                    .to_owned(),
+            })
+            .collect();
+        (spellings.join(" "), context.take_pending_errors())
+    })
 }
 
 #[track_caller]
@@ -737,27 +758,28 @@ fn numbers_paste_into_preprocessing_numbers() {
 #[test]
 fn replayed_operands_report_their_source_locations() {
     let source = "#define CAT(a, b) a ## b\n#define O(i) CAT(i, 1 / 0 + 1)\n#if O(2)\n#endif\n";
-    let (_, mut context) = tokens_of(source, "<test>");
-    let errors = context.take_pending_errors();
-    let [error] = errors.as_slice() else {
-        panic!("expected one diagnostic: {errors:#?}");
-    };
-    assert!(matches!(
-        error,
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::DivideByZero,
-            ..
-        })
-    ));
-    let source_vectors = error.source_vectors(&mut context);
-    let location = &context.get_source_vectors(source_vectors)[0];
-    assert_eq!(
-        (
-            context.get_source_file(location.source_file_index).to_str(),
-            location.line,
-        ),
-        (Some("<test>"), 2)
-    );
+    with_tokens_of(source, "<test>", |_, context| {
+        let errors = context.take_pending_errors();
+        let [error] = errors.as_slice() else {
+            panic!("expected one diagnostic: {errors:#?}");
+        };
+        assert!(matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::DivideByZero,
+                ..
+            })
+        ));
+        let source_vectors = error.source_vectors(context);
+        let location = &context.get_source_vectors(source_vectors)[0];
+        assert_eq!(
+            (
+                context.get_source_file(location.source_file_index).to_str(),
+                location.line,
+            ),
+            (Some("<test>"), 2)
+        );
+    });
 
     assert_expansion(
         "#define CAT(a, b) a ## b\n#define F(i) CAT(i, x __FILE__)\nF(y)\n",
