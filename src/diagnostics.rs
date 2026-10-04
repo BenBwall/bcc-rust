@@ -458,17 +458,29 @@ impl Renderer {
         let mut line_starts = ArenaMap::with_hasher_in(FxBuildHasher, &scratch);
         let mut out = ArenaString::new_in(&scratch);
         let severity_style = Self::severity_style(diagnostic.severity);
+        let severity = match diagnostic.severity {
+            | ErrorSeverity::Error => "error:",
+            | ErrorSeverity::Warning => "warning:",
+            | ErrorSeverity::Note => "note:",
+        };
         let _ = writeln!(
             out,
-            "{}{}",
-            self.paint(&format!("{}:", diagnostic.severity), severity_style),
-            self.paint(&format!(" {}", diagnostic.message), Style::new().bold()),
+            "{} {}",
+            self.paint(severity, severity_style),
+            self.paint(&diagnostic.message, Style::new().bold()),
         );
 
         let marks = Self::marks(diagnostic, context, &scratch, &mut line_starts);
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
-        let gutter_width = max_line.to_string().len().max(1);
-        let pad = " ".repeat(gutter_width);
+        let gutter_width = if max_line == 0 {
+            1
+        } else {
+            max_line.ilog10() as usize + 1
+        };
+        let mut pad = ArenaString::new_in(&scratch);
+        for _ in 0..gutter_width {
+            pad.push(' ');
+        }
         let bar = self.paint("|", Self::gutter_style());
 
         // Files in order of first appearance, primary file first.
@@ -532,16 +544,18 @@ impl Renderer {
         if has_snippet && (!diagnostic.notes.is_empty() || !diagnostic.help.is_empty()) {
             let _ = writeln!(out, "{pad} {bar}");
         }
-        for (kind, items) in [("note", &diagnostic.notes), ("help", &diagnostic.help)] {
+        for (heading, items) in [("note:", &diagnostic.notes), ("help:", &diagnostic.help)] {
             for item in items {
-                let heading = format!("{kind}:");
-                let continuation = " ".repeat(gutter_width + 3 + heading.len() + 1);
+                let mut continuation = ArenaString::new_in(&scratch);
+                for _ in 0..=(gutter_width + 3 + heading.len()) {
+                    continuation.push(' ');
+                }
                 let mut lines = item.lines();
                 let _ = writeln!(
                     out,
                     "{pad} {} {} {}",
                     self.paint("=", Self::gutter_style()),
-                    self.paint(&heading, Style::new().bold()),
+                    self.paint(heading, Style::new().bold()),
                     lines.next().unwrap_or_default(),
                 );
                 for line in lines {
@@ -555,6 +569,7 @@ impl Renderer {
         drop(files);
         drop(marks);
         drop(line_starts);
+        drop(pad);
         self.scratch = scratch;
         rendered
     }
