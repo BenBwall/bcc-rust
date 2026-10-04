@@ -62,8 +62,8 @@ fn parse(source: &str) -> Parsed {
     parse_with(source, CompilerConfiguration::default(), None)
 }
 
-fn with_parse<R>(source: &str, inspect: impl FnOnce(&Parsed) -> R) -> R {
-    inspect(&parse(source))
+fn with_parse<R>(source: &str, inspect: impl FnOnce(&mut Parsed) -> R) -> R {
+    inspect(&mut parse(source))
 }
 
 fn parse_with_configuration(source: &str, configuration: CompilerConfiguration) -> Parsed {

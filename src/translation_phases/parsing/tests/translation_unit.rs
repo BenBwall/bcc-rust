@@ -6,8 +6,8 @@ use proptest::prelude::*;
 
 use super::{
     Parsed,
-    parse,
     parser_errors,
+    with_parse,
     with_parsed,
 };
 use crate::{
@@ -332,22 +332,23 @@ fn every_representative_token_truncation_terminates_with_clean_state() {
             if !fixture.is_char_boundary(end) {
                 continue;
             }
-            let parsed = parse(&fixture[..end]);
-            assert!(parsed.parser.frames.is_empty(), "{fixture:?} at {end}");
-            assert!(parsed.parser.returned.is_none(), "{fixture:?} at {end}");
-            assert!(
-                parsed.parser.recovery.active.is_none(),
-                "{fixture:?} at {end}"
-            );
-            assert_eq!(parsed.parser.scopes.depth(), 0, "{fixture:?} at {end}");
-            assert!(
-                parsed.parser.label_scopes.is_empty(),
-                "{fixture:?} at {end}"
-            );
-            assert!(
-                parsed.parser.switch_scopes.is_empty(),
-                "{fixture:?} at {end}"
-            );
+            with_parse(&fixture[..end], |parsed| {
+                assert!(parsed.parser.frames.is_empty(), "{fixture:?} at {end}");
+                assert!(parsed.parser.returned.is_none(), "{fixture:?} at {end}");
+                assert!(
+                    parsed.parser.recovery.active.is_none(),
+                    "{fixture:?} at {end}"
+                );
+                assert_eq!(parsed.parser.scopes.depth(), 0, "{fixture:?} at {end}");
+                assert!(
+                    parsed.parser.label_scopes.is_empty(),
+                    "{fixture:?} at {end}"
+                );
+                assert!(
+                    parsed.parser.switch_scopes.is_empty(),
+                    "{fixture:?} at {end}"
+                );
+            });
         }
     }
 }
@@ -356,20 +357,21 @@ fn every_representative_token_truncation_terminates_with_clean_state() {
 fn declaration_only_specifiers_in_struct_members_make_progress() {
     for specifier in ["typedef", "extern", "inline"] {
         let source = format!("struct {{ {specifier} int member; }}; int after;");
-        let parsed = parse(&source);
-
-        assert!(parser_errors(&parsed).any(|error| matches!(
-            error,
-            ParserErrorType::DeclarationSpecifierNotAllowedHere(_)
-        )));
-        assert_eq!(parsed.items.len(), 2, "{specifier}: {:#?}", parsed.items);
-        assert!(parsed.parser.frames.is_empty());
-        assert!(parsed.parser.returned.is_none());
+        with_parse(&source, |parsed| {
+            assert!(parser_errors(parsed).any(|error| matches!(
+                error,
+                ParserErrorType::DeclarationSpecifierNotAllowedHere(_)
+            )));
+            assert_eq!(parsed.items.len(), 2, "{specifier}: {:#?}", parsed.items);
+            assert!(parsed.parser.frames.is_empty());
+            assert!(parsed.parser.returned.is_none());
+        });
     }
 
-    let truncated = parse("struct { typedef");
-    assert!(truncated.parser.frames.is_empty());
-    assert!(truncated.parser.returned.is_none());
+    with_parse("struct { typedef", |truncated| {
+        assert!(truncated.parser.frames.is_empty());
+        assert!(truncated.parser.returned.is_none());
+    });
 }
 
 proptest! {
@@ -389,17 +391,19 @@ proptest! {
         )
     ) {
         let source = pieces.join(" ");
-        let mut parsed = parse(&source);
-        prop_assert!(parsed.parser.frames.is_empty());
-        prop_assert!(parsed.parser.returned.is_none());
-        prop_assert!(parsed.parser.recovery.active.is_none());
-        prop_assert_eq!(parsed.parser.scopes.depth(), 0);
-        prop_assert!(parsed.parser.label_scopes.is_empty());
-        prop_assert!(parsed.parser.switch_scopes.is_empty());
-        for error in &parsed.errors {
-            let vectors = error.source_vectors(&mut parsed.context);
-            prop_assert!(vectors.length > 0 || source.is_empty());
-        }
+        with_parse(&source, |parsed| {
+            prop_assert!(parsed.parser.frames.is_empty());
+            prop_assert!(parsed.parser.returned.is_none());
+            prop_assert!(parsed.parser.recovery.active.is_none());
+            prop_assert_eq!(parsed.parser.scopes.depth(), 0);
+            prop_assert!(parsed.parser.label_scopes.is_empty());
+            prop_assert!(parsed.parser.switch_scopes.is_empty());
+            for error in &parsed.errors {
+                let vectors = error.source_vectors(&mut parsed.context);
+                prop_assert!(vectors.length > 0 || source.is_empty());
+            }
+            Ok(())
+        })?;
     }
 }
 
@@ -417,17 +421,19 @@ fn pending_preprocessing_diagnostics_survive_arena_compaction() {
             .collect()
     }
 
-    let short = parse("#undef\nint first;\n");
-    let long = parse(&format!(
-        "#undef\nint first;\n{}",
-        "int later;\n".repeat(200)
-    ));
-
-    assert_ne!(preprocessing_vectors(&short), []);
-    assert_eq!(preprocessing_vectors(&short), preprocessing_vectors(&long));
-    assert!(
-        long.context.source_vectors.0.len() < 16,
-        "the parser left {} vectors in the preprocessor arena",
-        long.context.source_vectors.0.len()
+    let short_vectors = with_parse("#undef\nint first;\n", |parsed| {
+        preprocessing_vectors(parsed)
+    });
+    with_parse(
+        &format!("#undef\nint first;\n{}", "int later;\n".repeat(200)),
+        |long| {
+            assert_ne!(short_vectors, []);
+            assert_eq!(short_vectors, preprocessing_vectors(long));
+            assert!(
+                long.context.source_vectors.0.len() < 16,
+                "the parser left {} vectors in the preprocessor arena",
+                long.context.source_vectors.0.len()
+            );
+        },
     );
 }
