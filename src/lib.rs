@@ -37,6 +37,8 @@ pub use benchmarking::{
     with_prepared_parse,
 };
 pub use cli::{
+    CompileStep,
     MainError,
+    compile_file_measured,
     run,
 };

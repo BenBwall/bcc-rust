@@ -6,6 +6,10 @@ use std::{
         split_paths,
         var_os,
     },
+    io::{
+        self,
+        Write,
+    },
     path::{
         Path,
         PathBuf,
@@ -51,7 +55,10 @@ use crate::{
             TokenType,
         },
     },
-    util::HashMap,
+    util::{
+        HashMap,
+        bump::Bump,
+    },
 };
 
 #[derive(Parser)]
@@ -109,10 +116,7 @@ struct CliInput {
 #[derive(Debug, Error)]
 pub enum MainError {
     #[error("error: cannot read `{}`: {source}", path.display())]
-    OpenInputFileError {
-        path:   PathBuf,
-        source: std::io::Error,
-    },
+    OpenInputFileError { path: PathBuf, source: io::Error },
     #[error(transparent)]
     ParseArgumentsError(#[from] clap::Error),
 }
@@ -140,7 +144,7 @@ fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
 #[doc(hidden)]
 pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
-    let tu = crate::util::bump::Bump::new();
+    let tu = Bump::new();
     let input_argument = args.input.input.take();
     let (input_string, source_filename): (&str, PathBuf) =
         match (input_argument.as_deref(), args.input.input_file.take()) {
@@ -195,7 +199,8 @@ fn print_preprocessor_output<'tu>(
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
 ) {
-    let mut reporter = DiagnosticReporter::new();
+    let mut reporter = DiagnosticReporter::new(RenderColor::for_stderr());
+    let stderr = &mut io::stderr();
     let items = with_preprocessor(
         context,
         source_filename,
@@ -207,13 +212,20 @@ fn print_preprocessor_output<'tu>(
     for item in items {
         match item {
             | Ok(token) => {
-                reporter.flush(context);
+                expect_stderr(reporter.flush(context, stderr));
                 eprintln!("{}", describe_token(token, context));
             },
             | Err(error) => reporter.report(&error, context),
         }
     }
-    reporter.finish(context);
+    expect_stderr(reporter.finish(context, stderr));
+}
+
+/// Fails like `eprint!` when stderr cannot be written.
+fn expect_stderr(result: io::Result<()>) {
+    if let Err(error) = result {
+        panic!("failed printing to stderr: {error}");
+    }
 }
 
 /// One line per token: its location, kind, source spelling, and for
@@ -291,12 +303,9 @@ fn print_parser_output<'tu>(
         quote_include,
         system_include,
     );
-    let mut reporter = DiagnosticReporter::new();
-    while let Some(error) = context.pop_pending_error() {
-        reporter.report(&error, context);
-    }
-    reporter.order_source_runs();
-    reporter.flush(context);
+    let mut reporter = DiagnosticReporter::new(RenderColor::for_stderr());
+    let stderr = &mut io::stderr();
+    expect_stderr(reporter.report_pending(context, stderr));
 
     if output.syntax_tree {
         eprint!(
@@ -312,7 +321,47 @@ fn print_parser_output<'tu>(
     if output.raw_syntax {
         eprintln!("{}", render_raw_syntax(&unit));
     }
-    reporter.finish(context);
+    expect_stderr(reporter.finish(context, stderr));
+}
+
+/// A step of [`compile_file_measured`].
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompileStep {
+    /// Preprocessing and parsing, which record the diagnostics.
+    Parse,
+    /// Building, folding, ordering, and rendering the recorded diagnostics.
+    Report,
+}
+
+/// Compiles the file at `path` as the CLI does without options, writing its
+/// diagnostics and their summary to `out` without color. Each step runs
+/// inside `measure`, so a caller can observe one step alone; the allocation
+/// tests count the global allocations each makes.
+///
+/// # Errors
+///
+/// Reading `path` or writing to `out` can fail.
+#[doc(hidden)]
+pub fn compile_file_measured(
+    path: &Path,
+    out: &mut dyn Write,
+    mut measure: impl FnMut(CompileStep, &mut dyn FnMut()),
+) -> io::Result<()> {
+    let tu = Bump::new();
+    let source = tu.read_to_str_lossy(path)?;
+    let mut context = Context::new(&tu);
+    measure(CompileStep::Parse, &mut || {
+        _ = parse_translation_unit(&mut context, path, source, &[], &[]);
+    });
+    let mut result = Ok(());
+    measure(CompileStep::Report, &mut || {
+        let mut reporter = DiagnosticReporter::new(RenderColor::Plain);
+        result = reporter
+            .report_pending(&mut context, out)
+            .and_then(|()| reporter.finish(&context, out));
+    });
+    result
 }
 
 /// Stack reserved for rendering `--raw-syntax`. The derived `Debug` output
@@ -379,9 +428,9 @@ impl PendingDiagnostic {
 }
 
 impl DiagnosticReporter {
-    fn new() -> Self {
+    fn new(color: RenderColor) -> Self {
         Self {
-            renderer:     Renderer::new(RenderColor::for_stderr()),
+            renderer:     Renderer::new(color),
             pending:      Vec::new(),
             last_parser:  None,
             last_other:   None,
@@ -460,6 +509,16 @@ impl DiagnosticReporter {
         }
     }
 
+    /// Reports every pending diagnostic of a parsed translation unit, in
+    /// source order, and writes them to `out`.
+    fn report_pending(&mut self, context: &mut Context<'_>, out: &mut dyn Write) -> io::Result<()> {
+        while let Some(error) = context.pop_pending_error() {
+            self.report(&error, context);
+        }
+        self.order_source_runs();
+        self.flush(context, out)
+    }
+
     /// Lookahead can fetch a warning beyond the current parser error. Order
     /// each file run only after folding; preprocessing errors, file transitions
     /// and unknown locations
@@ -477,29 +536,31 @@ impl DiagnosticReporter {
         self.other_errors.clear();
     }
 
-    fn flush(&mut self, context: &Context<'_>) {
+    fn flush(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
+        self.last_parser = None;
+        self.last_other = None;
+        self.other_errors.clear();
         for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
             match diagnostic.severity {
                 | ErrorSeverity::Error => self.errors += 1,
                 | ErrorSeverity::Warning => self.warnings += 1,
                 | ErrorSeverity::Note => {},
             }
-            eprint!("{}", self.renderer.render(&diagnostic, context));
+            out.write_all(self.renderer.render(&diagnostic, context).as_bytes())?;
         }
-        self.last_parser = None;
-        self.last_other = None;
-        self.other_errors.clear();
+        Ok(())
     }
 
-    fn finish(&mut self, context: &Context<'_>) {
-        self.flush(context);
+    fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
+        self.flush(context, out)?;
         let counts: Vec<String> = [(self.errors, "error"), (self.warnings, "warning")]
             .into_iter()
             .filter(|&(count, _)| count > 0)
             .map(|(count, noun)| count_of(count, noun))
             .collect();
         if !counts.is_empty() {
-            eprintln!("{} generated.", counts.join(" and "));
+            writeln!(out, "{} generated.", counts.join(" and "))?;
         }
+        Ok(())
     }
 }
