@@ -453,10 +453,10 @@ impl Renderer {
 
     /// Renders one diagnostic, ending with a blank line.
     pub(crate) fn render(&mut self, diagnostic: &Diagnostic, context: &Context<'_>) -> String {
-        let mut scratch = std::mem::take(&mut self.scratch);
-        scratch.reset();
-        let mut line_starts = ArenaMap::with_hasher_in(FxBuildHasher, &scratch);
-        let mut out = ArenaString::new_in(&scratch);
+        self.scratch.reset();
+        let scratch = &self.scratch;
+        let mut line_starts = ArenaMap::with_hasher_in(FxBuildHasher, scratch);
+        let mut out = ArenaString::new_in(scratch);
         let severity_style = Self::severity_style(diagnostic.severity);
         let severity = match diagnostic.severity {
             | ErrorSeverity::Error => "error:",
@@ -470,21 +470,21 @@ impl Renderer {
             self.paint(&diagnostic.message, Style::new().bold()),
         );
 
-        let marks = Self::marks(diagnostic, context, &scratch, &mut line_starts);
+        let marks = Self::marks(diagnostic, context, scratch, &mut line_starts);
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
         let gutter_width = if max_line == 0 {
             1
         } else {
             max_line.ilog10() as usize + 1
         };
-        let mut pad = ArenaString::new_in(&scratch);
+        let mut pad = ArenaString::new_in(scratch);
         for _ in 0..gutter_width {
             pad.push(' ');
         }
         let bar = self.paint("|", Self::gutter_style());
 
         // Files in order of first appearance, primary file first.
-        let mut files = ArenaVec::new_in(&scratch);
+        let mut files = ArenaVec::new_in(scratch);
         for mark in marks.iter().filter(|mark| mark.primary).chain(&marks) {
             if !files.contains(&mark.file) {
                 files.push(mark.file);
@@ -536,7 +536,7 @@ impl Renderer {
                 (file, text, starts),
                 diagnostic.severity,
                 gutter_width,
-                &scratch,
+                scratch,
             );
         }
 
@@ -546,7 +546,7 @@ impl Renderer {
         }
         for (heading, items) in [("note:", &diagnostic.notes), ("help:", &diagnostic.help)] {
             for item in items {
-                let mut continuation = ArenaString::new_in(&scratch);
+                let mut continuation = ArenaString::new_in(scratch);
                 for _ in 0..=(gutter_width + 3 + heading.len()) {
                     continuation.push(' ');
                 }
@@ -564,14 +564,7 @@ impl Renderer {
             }
         }
         out.push('\n');
-        let rendered = out.as_str().to_owned();
-        drop(out);
-        drop(files);
-        drop(marks);
-        drop(line_starts);
-        drop(pad);
-        self.scratch = scratch;
-        rendered
+        out.as_str().to_owned()
     }
 
     fn render_file_lines(
