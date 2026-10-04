@@ -198,8 +198,9 @@ fn print_preprocessor_output<'tu>(
         quote_include,
         system_include,
     );
+    let tok = crate::util::bump::Bump::new();
     let mut reporter = DiagnosticReporter::new();
-    for item in preprocess_with_diagnostics(preprocessor, context) {
+    for item in preprocess_with_diagnostics(preprocessor, context, &tok) {
         match item {
             | Ok(token) => {
                 reporter.flush(context);

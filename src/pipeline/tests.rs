@@ -40,9 +40,12 @@ use crate::{
 fn with_preprocessed_with<R>(
     source: &str,
     configuration: CompilerConfiguration,
-    inspect: impl FnOnce(std::vec::IntoIter<Result<Token, TranslationError>>, &mut Context<'_>) -> R,
+    inspect: impl for<'tok> FnOnce(
+        allocator_api2::vec::IntoIter<Result<Token, TranslationError>, &'tok Bump>,
+        &mut Context<'_>,
+    ) -> R,
 ) -> R {
-    let tu = crate::util::bump::Bump::new();
+    let tu = Bump::new();
     let mut context = Context::with_configuration(&tu, configuration);
     let preprocessor = Preprocessor::new(
         &mut context,
@@ -51,13 +54,17 @@ fn with_preprocessed_with<R>(
         SharedVec::default(),
         SharedVec::default(),
     );
-    let items = preprocess_with_diagnostics(preprocessor, &mut context);
+    let tok = Bump::new();
+    let items = preprocess_with_diagnostics(preprocessor, &mut context, &tok);
     inspect(items.into_iter(), &mut context)
 }
 
 fn with_preprocessed<R>(
     source: &str,
-    inspect: impl FnOnce(std::vec::IntoIter<Result<Token, TranslationError>>, &mut Context<'_>) -> R,
+    inspect: impl for<'tok> FnOnce(
+        allocator_api2::vec::IntoIter<Result<Token, TranslationError>, &'tok Bump>,
+        &mut Context<'_>,
+    ) -> R,
 ) -> R {
     with_preprocessed_with(source, CompilerConfiguration::default(), inspect)
 }
@@ -66,7 +73,7 @@ fn with_parser<R>(
     source: &str,
     inspect: impl FnOnce(&mut LanguageParser, &mut Context<'_>) -> R,
 ) -> R {
-    let tu = crate::util::bump::Bump::new();
+    let tu = Bump::new();
     let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
@@ -252,7 +259,7 @@ fn parser_yields_a_parsed_initialized_declaration() {
 
 #[test]
 fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
-    let tu = crate::util::bump::Bump::new();
+    let tu = Bump::new();
     let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
@@ -280,7 +287,7 @@ fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
 
 #[test]
 fn cli_parser_details_render_recovery_ranges_and_notes() {
-    let tu = crate::util::bump::Bump::new();
+    let tu = Bump::new();
     let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,
@@ -331,7 +338,7 @@ use crate::translation_phases::parsing::{
 
 #[test]
 fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
-    let tu = crate::util::bump::Bump::new();
+    let tu = Bump::new();
     let mut context = Context::new(&tu);
     let preprocessor = Preprocessor::new(
         &mut context,

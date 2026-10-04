@@ -5,12 +5,18 @@
 #[cfg(test)]
 mod tests;
 
-use crate::translation_phases::{
-    Context,
-    TranslationError,
-    preprocessing::{
-        Preprocessor,
-        Token,
+use crate::{
+    translation_phases::{
+        Context,
+        TranslationError,
+        preprocessing::{
+            Preprocessor,
+            Token,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -21,16 +27,17 @@ use crate::translation_phases::{
 /// Token provenance is copied to the token arena as each token is produced,
 /// and pending diagnostics keep theirs across preprocessor-arena compaction,
 /// so every item stays renderable afterwards.
-pub(crate) fn preprocess_with_diagnostics(
+pub(crate) fn preprocess_with_diagnostics<'tok>(
     mut preprocessor: Preprocessor,
     context: &mut Context<'_>,
-) -> Vec<Result<Token, TranslationError>> {
-    let mut tokens = Vec::new();
+    tok: &'tok Bump,
+) -> ArenaVec<'tok, Result<Token, TranslationError>> {
+    let mut tokens = ArenaVec::new_in(tok);
     while let Some(mut token) = preprocessor.next_iterator_item(context) {
         token.source_vectors = context.retain_token_source(token.source_vectors);
         tokens.push((token, context.pending_error_count()));
     }
-    let mut items = Vec::with_capacity(tokens.len());
+    let mut items = ArenaVec::new_in(tok);
     let mut reported = 0;
     for (token, errors_before) in tokens {
         while reported < errors_before {
