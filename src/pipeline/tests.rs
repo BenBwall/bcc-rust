@@ -35,12 +35,13 @@ use crate::{
     util::shared::SharedVec,
 };
 
-/// Preprocesses `source` as the CLI's `--tokens` does, returning its tokens
-/// and diagnostics in reporting order.
-fn preprocessed_with(
+/// Preprocesses `source` as the CLI's `--tokens` does and scopes its tokens
+/// and context together for a future translation-unit arena.
+fn with_preprocessed_with<R>(
     source: &str,
     configuration: CompilerConfiguration,
-) -> (std::vec::IntoIter<Result<Token, TranslationError>>, Context) {
+    inspect: impl FnOnce(std::vec::IntoIter<Result<Token, TranslationError>>, &mut Context) -> R,
+) -> R {
     let mut context = Context::with_configuration(configuration);
     let preprocessor = Preprocessor::new(
         &mut context,
@@ -50,14 +51,17 @@ fn preprocessed_with(
         SharedVec::default(),
     );
     let items = preprocess_with_diagnostics(preprocessor, &mut context);
-    (items.into_iter(), context)
+    inspect(items.into_iter(), &mut context)
 }
 
-fn preprocessed(source: &str) -> (std::vec::IntoIter<Result<Token, TranslationError>>, Context) {
-    preprocessed_with(source, CompilerConfiguration::default())
+fn with_preprocessed<R>(
+    source: &str,
+    inspect: impl FnOnce(std::vec::IntoIter<Result<Token, TranslationError>>, &mut Context) -> R,
+) -> R {
+    with_preprocessed_with(source, CompilerConfiguration::default(), inspect)
 }
 
-fn parser(source: &str) -> (LanguageParser, Context) {
+fn with_parser<R>(source: &str, inspect: impl FnOnce(&mut LanguageParser, &mut Context) -> R) -> R {
     let mut context = Context::new();
     let preprocessor = Preprocessor::new(
         &mut context,
@@ -66,172 +70,179 @@ fn parser(source: &str) -> (LanguageParser, Context) {
         SharedVec::default(),
         SharedVec::default(),
     );
-    (LanguageParser::new(preprocessor, &mut context), context)
+    inspect(
+        &mut LanguageParser::new(preprocessor, &mut context),
+        &mut context,
+    )
 }
 
 #[test]
 fn diagnostic_is_yielded_before_the_token_produced_alongside_it() {
-    let (mut iterator, mut context) = preprocessed_with(
+    with_preprocessed_with(
         "#if (0, 2)\nCOMMA_RESULT_2\n#endif\n",
         CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+        |mut iterator, context| {
+            let error = iterator.next().unwrap().unwrap_err();
+            assert!(matches!(
+                &error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
+                        ExtensionPolicy::Deny
+                    ),
+                    ..
+                })
+            ));
+            let error_source_vectors = error.source_vectors(context);
+            assert_ne!(context.get_source_vectors(error_source_vectors), []);
+
+            let token = iterator.next().unwrap().unwrap();
+            assert_eq!(token.kind, TokenType::Identifier);
+            assert_eq!(context.string_cache.at(token.contents), "COMMA_RESULT_2");
+            assert!(iterator.next().is_none());
+        },
     );
-
-    let error = iterator.next().unwrap().unwrap_err();
-    assert!(matches!(
-        &error,
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
-                ExtensionPolicy::Deny
-            ),
-            ..
-        })
-    ));
-    let error_source_vectors = error.source_vectors(&mut context);
-    assert_ne!(context.get_source_vectors(error_source_vectors), []);
-
-    let token = iterator.next().unwrap().unwrap();
-    assert_eq!(token.kind, TokenType::Identifier);
-    assert_eq!(context.string_cache.at(token.contents), "COMMA_RESULT_2");
-    assert!(iterator.next().is_none());
 }
 
 #[test]
 fn nested_token_pastes_keep_their_operands_while_tokens_are_yielded() {
-    let (iterator, context) = preprocessed(concat!(
-        "#define LIM1(x) x##0; x##1;\n",
-        "#define LIM2(x) LIM1(x##0) LIM1(x##1)\n",
-        "#define LIM3(x) LIM2(x##0) LIM2(x##1)\n",
-        "LIM3(int value)\n",
-    ));
-
-    let mut names = Vec::new();
-    for token in iterator {
-        let token = token.unwrap();
-        assert_ne!(context.get_source_vectors(token.source_vectors), []);
-        if token.kind == TokenType::Identifier {
-            names.push(context.string_cache.at(token.contents).to_owned());
-        }
-    }
-    assert_eq!(
-        names,
-        [
-            "value000", "value001", "value010", "value011", "value100", "value101", "value110",
-            "value111",
-        ]
+    with_preprocessed(
+        concat!(
+            "#define LIM1(x) x##0; x##1;\n",
+            "#define LIM2(x) LIM1(x##0) LIM1(x##1)\n",
+            "#define LIM3(x) LIM2(x##0) LIM2(x##1)\n",
+            "LIM3(int value)\n",
+        ),
+        |iterator, context| {
+            let mut names = Vec::new();
+            for token in iterator {
+                let token = token.unwrap();
+                assert_ne!(context.get_source_vectors(token.source_vectors), []);
+                if token.kind == TokenType::Identifier {
+                    names.push(context.string_cache.at(token.contents).to_owned());
+                }
+            }
+            assert_eq!(
+                names,
+                [
+                    "value000", "value001", "value010", "value011", "value100", "value101",
+                    "value110", "value111",
+                ]
+            );
+        },
     );
 }
 
 #[test]
 fn adjacent_string_lookahead_keeps_the_buffered_token_provenance() {
-    let (mut iterator, context) = preprocessed("\"a\" identifier\n");
-
-    let string = iterator.next().unwrap().unwrap();
-    assert!(matches!(string.kind, TokenType::String(_)));
-    let identifier = iterator.next().unwrap().unwrap();
-    assert_eq!(identifier.kind, TokenType::Identifier);
-    assert_eq!(context.string_cache.at(identifier.contents), "identifier");
-    assert_ne!(context.get_source_vectors(identifier.source_vectors), []);
-    assert!(iterator.next().is_none());
+    with_preprocessed("\"a\" identifier\n", |mut iterator, context| {
+        let string = iterator.next().unwrap().unwrap();
+        assert!(matches!(string.kind, TokenType::String(_)));
+        let identifier = iterator.next().unwrap().unwrap();
+        assert_eq!(identifier.kind, TokenType::Identifier);
+        assert_eq!(context.string_cache.at(identifier.contents), "identifier");
+        assert_ne!(context.get_source_vectors(identifier.source_vectors), []);
+        assert!(iterator.next().is_none());
+    });
 }
 
 #[test]
 fn adjacent_string_lookahead_defers_buffered_token_diagnostics() {
-    let (mut iterator, _context) = preprocessed("\"a\" 0xg\n");
-
-    assert!(matches!(
-        iterator.next().unwrap().unwrap().kind,
-        TokenType::String(_)
-    ));
-    assert!(matches!(
-        iterator.next().unwrap().unwrap_err(),
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
-            ..
-        })
-    ));
-    assert!(iterator.next().is_some());
-    assert!(iterator.next().is_none());
+    with_preprocessed("\"a\" 0xg\n", |mut iterator, _context| {
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::String(_)
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
+                ..
+            })
+        ));
+        assert!(iterator.next().is_some());
+        assert!(iterator.next().is_none());
+    });
 }
 
 #[test]
 fn adjacent_string_lookahead_keeps_current_token_before_later_diagnostics() {
-    let (mut iterator, _context) = preprocessed("\"\\q\" 0xg");
-
-    assert!(matches!(
-        iterator.next().unwrap().unwrap_err(),
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::InvalidEscapeSequence,
-            ..
-        })
-    ));
-    assert!(matches!(
-        iterator.next().unwrap().unwrap().kind,
-        TokenType::String(_)
-    ));
-    assert!(matches!(
-        iterator.next().unwrap().unwrap_err(),
-        TranslationError::InitialProcessing(_)
-    ));
-    assert!(matches!(
-        iterator.next().unwrap().unwrap_err(),
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
-            ..
-        })
-    ));
-    assert!(matches!(
-        iterator.next().unwrap().unwrap().kind,
-        TokenType::Integer(_)
-    ));
-    assert!(iterator.next().is_none());
+    with_preprocessed("\"\\q\" 0xg", |mut iterator, _context| {
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidEscapeSequence,
+                ..
+            })
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::String(_)
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
+            TranslationError::InitialProcessing(_)
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap_err(),
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
+                ..
+            })
+        ));
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::Integer(_)
+        ));
+        assert!(iterator.next().is_none());
+    });
 }
 
 #[test]
 fn adjacent_string_lookahead_keeps_deferred_eof_diagnostic_provenance() {
-    let (mut iterator, mut context) = preprocessed("\"a\"\n#error boom\n");
-
-    assert!(matches!(
-        iterator.next().unwrap().unwrap().kind,
-        TokenType::String(_)
-    ));
-    let error = iterator.next().unwrap().unwrap_err();
-    assert!(matches!(
-        &error,
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::ErrorDirective(message),
-            ..
-        }) if message.trim() == "boom"
-    ));
-    let source_vectors = error.source_vectors(&mut context);
-    assert_ne!(context.get_source_vectors(source_vectors), []);
-    assert!(iterator.next().is_none());
+    with_preprocessed("\"a\"\n#error boom\n", |mut iterator, context| {
+        assert!(matches!(
+            iterator.next().unwrap().unwrap().kind,
+            TokenType::String(_)
+        ));
+        let error = iterator.next().unwrap().unwrap_err();
+        assert!(matches!(
+            &error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::ErrorDirective(message),
+                ..
+            }) if message.trim() == "boom"
+        ));
+        let source_vectors = error.source_vectors(context);
+        assert_ne!(context.get_source_vectors(source_vectors), []);
+        assert!(iterator.next().is_none());
+    });
 }
 
 #[test]
 fn parser_yields_declarations_and_exposes_the_syntax_store() {
-    let (mut parser, mut context) = parser("int value;\n");
-
-    assert!(matches!(
-        parser.next_item(&mut context).unwrap(),
-        ExternalDeclaration::Declaration(_)
-    ));
-    assert!(parser.next_item(&mut context).is_none());
-    assert!(
-        format!("{:#?}", parser.syntax_debug()).contains("declarations:"),
-        "the debug view should expose the arena referenced by parser output"
-    );
+    with_parser("int value;\n", |parser, context| {
+        assert!(matches!(
+            parser.next_item(context).unwrap(),
+            ExternalDeclaration::Declaration(_)
+        ));
+        assert!(parser.next_item(context).is_none());
+        assert!(
+            format!("{:#?}", parser.syntax_debug()).contains("declarations:"),
+            "the debug view should expose the arena referenced by parser output"
+        );
+    });
 }
 
 #[test]
 fn parser_yields_a_parsed_initialized_declaration() {
-    let (mut parser, mut context) = parser("int value = 1;\n");
-
-    assert!(matches!(
-        parser.next_item(&mut context).unwrap(),
-        ExternalDeclaration::Declaration(_)
-    ));
-    assert!(parser.next_item(&mut context).is_none());
-    assert!(context.take_pending_errors().is_empty());
+    with_parser("int value = 1;\n", |parser, context| {
+        assert!(matches!(
+            parser.next_item(context).unwrap(),
+            ExternalDeclaration::Declaration(_)
+        ));
+        assert!(parser.next_item(context).is_none());
+        assert!(context.take_pending_errors().is_empty());
+    });
 }
 
 #[test]
