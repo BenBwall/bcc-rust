@@ -11,6 +11,7 @@ pub(crate) mod arena;
 /// ```
 pub(crate) mod bump;
 pub(crate) mod byte_scan;
+#[cfg(test)]
 pub(crate) mod chunked_queue;
 pub(crate) mod dedup_arena;
 pub(crate) mod last_entry;

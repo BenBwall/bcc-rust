@@ -15,13 +15,17 @@ use crate::{
             Token,
         },
     },
-    util::chunked_queue::ChunkedQueue,
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 /// The preprocessed translation unit that the parser reads.
-pub(super) struct Upstream {
-    /// Tokens not yet read; chunks are freed as the parser reads them.
-    tokens: ChunkedQueue<Token>,
+pub(super) struct Upstream<'tok> {
+    /// Phase-6 output remains available until parsing ends.
+    tokens: ArenaVec<'tok, Token>,
+    next_token: usize,
     /// Where the preprocessor stopped, used to locate end-of-input
     /// diagnostics.
     end: SourcePosition,
@@ -30,18 +34,20 @@ pub(super) struct Upstream {
     pub(super) preprocessing_limit_token: Option<Token>,
 }
 
-impl Upstream {
+impl<'tok> Upstream<'tok> {
     /// Runs the whole of `preprocessor`, so parsing never interleaves with
     /// preprocessing.
     pub(super) fn preprocess_all(
         mut preprocessor: Preprocessor,
         context: &mut Context<'_>,
         source_segment_limit: usize,
+        tok: &'tok Bump,
     ) -> Self {
         let (tokens, preprocessing_limit_token) =
-            preprocessor.preprocess_all_with_limit(context, source_segment_limit);
+            preprocessor.preprocess_into_arena(context, source_segment_limit, tok);
         Self {
             tokens,
+            next_token: 0,
             end: preprocessor.position(context),
             source_file_index: preprocessor.source_file_index(),
             preprocessing_limit_token,
@@ -49,25 +55,25 @@ impl Upstream {
     }
 }
 
-impl GetPosition for Upstream {
+impl GetPosition for Upstream<'_> {
     fn position(&self, _context: &Context<'_>) -> SourcePosition {
         self.end
     }
 }
 
-impl SetPosition for Upstream {
+impl SetPosition for Upstream<'_> {
     fn set_position(&mut self, _context: &mut Context<'_>, position: SourcePosition) {
         self.end = position;
     }
 }
 
-impl GetSourceFileIndex for Upstream {
+impl GetSourceFileIndex for Upstream<'_> {
     fn source_file_index(&self) -> u32 {
         self.source_file_index
     }
 }
 
-impl SetSourceFileIndex for Upstream {
+impl SetSourceFileIndex for Upstream<'_> {
     fn set_source_file_index(&mut self, _context: &mut Context<'_>, source_file_index: u32) {
         self.source_file_index = source_file_index;
     }
@@ -82,9 +88,9 @@ impl SetSourceFileIndex for Upstream {
 /// C99: this cursor consumes the phase-7 token stream described by §5.1.1.2,
 /// phases 6-7, pp. 9-10; PDF pp. 21-22. Token categories are specified by
 /// §6.4, pp. 49-50; PDF pp. 61-62.
-pub(super) struct TokenCursor {
+pub(super) struct TokenCursor<'tok> {
     /// Upstream producer of parser-facing tokens.
-    pub(super) upstream: Upstream,
+    pub(super) upstream: Upstream<'tok>,
     /// Token currently owned by the active parser frame.
     current:             Option<Token>,
     /// Tokens fetched beyond `current`, ordered nearest first.
@@ -97,9 +103,9 @@ pub(super) struct TokenCursor {
     pub(super) consumed: usize,
 }
 
-impl TokenCursor {
+impl<'tok> TokenCursor<'tok> {
     /// Creates an empty cursor over `upstream`; no token is fetched eagerly.
-    pub(super) fn new(upstream: Upstream) -> Self {
+    pub(super) fn new(upstream: Upstream<'tok>) -> Self {
         Self {
             upstream,
             current: None,
@@ -114,7 +120,11 @@ impl TokenCursor {
     /// token arena when it was preprocessed, so consecutive tokens have
     /// adjacent provenance.
     fn fetch(&mut self, _context: &mut Context<'_>) -> Option<Token> {
-        self.upstream.tokens.next()
+        let token = self.upstream.tokens.get(self.upstream.next_token).copied();
+        if token.is_some() {
+            self.upstream.next_token += 1;
+        }
+        token
     }
 
     /// Returns the current token, fetching it once if necessary.

@@ -166,7 +166,7 @@ impl InitializerFrame {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
@@ -688,7 +688,7 @@ impl InitializerFrame {
     /// Appends one element, with any designation that preceded it.
     fn push_element(
         &mut self,
-        parser: &Parser,
+        parser: &Parser<'_>,
         context: &mut Context<'_>,
         index: InitializerIndex,
     ) {
@@ -748,7 +748,7 @@ impl InitializerFrame {
 
     fn at_array_designator_sync_boundary(
         &self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Option<Token>,
         depth: DelimiterDepth,
@@ -792,7 +792,7 @@ impl InitializerFrame {
     /// `{ [1 = 2 }`, the `,` or `=` is where the bracket went missing. The
     /// scan is bounded so repeated errors in one long list stay linear.
     fn closing_bracket_follows(
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Option<Token>,
     ) -> bool {
@@ -850,7 +850,7 @@ impl InitializerFrame {
         false
     }
 
-    fn finish_designation(&mut self, parser: &mut Parser) {
+    fn finish_designation(&mut self, parser: &mut Parser<'_>) {
         let designation = self.designation_state();
         let recovered = designation.current_designation_recovered
             || designation
@@ -894,7 +894,7 @@ impl InitializerFrame {
 
     fn list_boundary(
         &self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Option<Token>,
     ) -> ListBoundary {
@@ -945,7 +945,7 @@ impl InitializerFrame {
     /// otherwise start a following declaration or statement is a malformed
     /// element when the list's own `}` comes first, as in `{ 1, int 0 }`.
     /// The scan is bounded so repeated errors in one long list stay linear.
-    fn closing_brace_follows(parser: &mut Parser, context: &mut Context<'_>) -> bool {
+    fn closing_brace_follows(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {
@@ -982,7 +982,7 @@ impl InitializerFrame {
 
     fn store_initializer(
         &self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         kind: InitializerType,
         source_vectors: SourceVectors,
     ) -> InitializerIndex {

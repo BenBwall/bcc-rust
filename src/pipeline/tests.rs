@@ -71,10 +71,11 @@ fn with_preprocessed<R>(
 
 fn with_parser<R>(
     source: &str,
-    inspect: impl FnOnce(&mut LanguageParser, &mut Context<'_>) -> R,
+    inspect: impl FnOnce(&mut LanguageParser<'_>, &mut Context<'_>) -> R,
 ) -> R {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
+    let tok = Bump::new();
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
@@ -83,7 +84,7 @@ fn with_parser<R>(
         SharedVec::default(),
     );
     inspect(
-        &mut LanguageParser::new(preprocessor, &mut context),
+        &mut LanguageParser::new(preprocessor, &mut context, &tok),
         &mut context,
     )
 }
@@ -261,6 +262,7 @@ fn parser_yields_a_parsed_initialized_declaration() {
 fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
+    let tok = Bump::new();
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
@@ -269,7 +271,8 @@ fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
         SharedVec::default(),
     );
 
-    let unit = LanguageParser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+    let unit =
+        LanguageParser::new(preprocessor, &mut context, &tok).parse_translation_unit(&mut context);
 
     assert_eq!(unit.external_declarations().len(), 2);
     let ExternalDeclaration::Declaration(first) = unit.external_declarations()[0] else {
@@ -289,6 +292,7 @@ fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
 fn cli_parser_details_render_recovery_ranges_and_notes() {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
+    let tok = Bump::new();
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
@@ -297,7 +301,7 @@ fn cli_parser_details_render_recovery_ranges_and_notes() {
         SharedVec::default(),
     );
     let _unit =
-        LanguageParser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+        LanguageParser::new(preprocessor, &mut context, &tok).parse_translation_unit(&mut context);
     let errors = context.take_pending_errors();
     let diagnostic = errors
         .iter()
@@ -340,6 +344,7 @@ use crate::translation_phases::parsing::{
 fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
+    let tok = Bump::new();
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<syntax-tree-consumer-test>").into_boxed_path(),
@@ -347,7 +352,8 @@ fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = LanguageParser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+    let unit =
+        LanguageParser::new(preprocessor, &mut context, &tok).parse_translation_unit(&mut context);
     let tree = unit.syntax();
 
     let ExternalDeclaration::Declaration(struct_root) = unit.external_declarations()[0] else {

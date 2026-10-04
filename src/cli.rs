@@ -280,6 +280,7 @@ fn print_parser_output<'tu>(
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
+    let tok = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new_with_arena_source(
         context,
         source_filename,
@@ -287,7 +288,7 @@ fn print_parser_output<'tu>(
         quote_include,
         system_include,
     );
-    let preprocessed = LanguageParser::preprocess(preprocessor, context);
+    let preprocessed = LanguageParser::preprocess(preprocessor, context, &tok);
     let unit = LanguageParser::from_preprocessed(preprocessed).parse_translation_unit(context);
     let mut reporter = DiagnosticReporter::new();
     while let Some(error) = context.pop_pending_error() {

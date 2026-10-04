@@ -50,6 +50,8 @@ pub(crate) use token::{
 
 use self::macro_expansion::FunctionLikeMacroArgument;
 #[cfg(test)]
+use crate::util::chunked_queue::ChunkedQueue;
+#[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
     translation_phases::{
@@ -66,7 +68,10 @@ use crate::{
     util::{
         HashMap,
         HashSet,
-        chunked_queue::ChunkedQueue,
+        bump::{
+            ArenaVec,
+            Bump,
+        },
         string_cache::StringCacheId,
     },
 };
@@ -293,38 +298,64 @@ impl Preprocessor {
     }
 
     /// Runs translation phases 4 through 6 without the parser's resource
-    /// budget, for direct preprocessing tests and benchmarks.
-    #[cfg(any(test, feature = "benchmarking-internals"))]
+    /// budget, for direct preprocessing tests.
+    #[cfg(test)]
     pub(crate) fn preprocess_all(&mut self, context: &mut Context<'_>) -> ChunkedQueue<Token> {
         self.preprocess_all_with_limit(context, usize::MAX).0
     }
 
-    /// Runs translation phases 4 through 6 over the whole translation unit
-    /// before any token is parsed. Diagnostics stay pending in `context`.
-    ///
-    /// Each token's provenance is copied to the token arena as it is
-    /// produced, so the preprocessor arena is compacted between tokens.
-    /// Stop after the first token that exceeds the configured provenance
-    /// budget, letting the parser report the existing resource diagnostic.
+    /// Collects parser tokens in the legacy test queue with the same budget
+    /// and provenance rules used by the arena-backed parser path.
+    #[cfg(test)]
     pub(crate) fn preprocess_all_with_limit(
         &mut self,
         context: &mut Context<'_>,
         source_segment_limit: usize,
     ) -> (ChunkedQueue<Token>, Option<Token>) {
-        self.source_segment_limit = source_segment_limit;
         let mut tokens = ChunkedQueue::default();
+        let limit_token = self.collect_with_limit(context, source_segment_limit, |token| {
+            tokens.push_back(token);
+        });
+        (tokens, limit_token)
+    }
+
+    /// Collects the phase-6 output in the token arena before parsing starts.
+    /// Diagnostics stay pending in `context`; retained provenance survives
+    /// compaction of preprocessor working storage between tokens.
+    pub(crate) fn preprocess_into_arena<'tok>(
+        &mut self,
+        context: &mut Context<'_>,
+        source_segment_limit: usize,
+        tok: &'tok Bump,
+    ) -> (ArenaVec<'tok, Token>, Option<Token>) {
+        let mut tokens = ArenaVec::new_in(tok);
+        let limit_token = self.collect_with_limit(context, source_segment_limit, |token| {
+            tokens.push(token);
+        });
+        (tokens, limit_token)
+    }
+
+    /// Stops after the first token that exceeds the configured provenance
+    /// budget, letting the parser report the existing resource diagnostic.
+    fn collect_with_limit(
+        &mut self,
+        context: &mut Context<'_>,
+        source_segment_limit: usize,
+        mut push: impl FnMut(Token),
+    ) -> Option<Token> {
+        self.source_segment_limit = source_segment_limit;
         while let Some(mut token) = self.next_iterator_item(context) {
             token.source_vectors = context.retain_token_source(token.source_vectors);
-            tokens.push_back(token);
+            push(token);
             if context.source_segment_count() > source_segment_limit {
                 let mut limit_token = self.pending_parser_token.unwrap_or(token);
                 limit_token.source_vectors =
                     context.retain_token_source(limit_token.source_vectors);
                 context.append_pending_errors(take(&mut self.pending_parser_errors));
-                return (tokens, Some(limit_token));
+                return Some(limit_token);
             }
         }
-        (tokens, None)
+        None
     }
 
     /// Whether the next [`Self::next_iterator_item`] call discards the

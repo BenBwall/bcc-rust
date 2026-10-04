@@ -138,6 +138,7 @@ fn source_storage_exhaustion_reports_one_resource_diagnostic() {
 fn source_storage_exhaustion_stops_preprocessing_the_remaining_input() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let tok = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<limit-test>").into_boxed_path(),
@@ -152,6 +153,7 @@ fn source_storage_exhaustion_stops_preprocessing_the_remaining_input() {
             source_segments: 10,
             ..ParserLimits::default()
         },
+        &tok,
     );
     let mut items = 0;
     while parser.next_item(&mut context).is_some() {
@@ -403,7 +405,7 @@ fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
     assert!(defaults.frame_depth < u32::MAX as usize);
 }
 
-fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_>) {
+fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_, '_>) {
     assert!(parsed.parser.frames.is_empty());
     assert!(parsed.parser.returned.is_none());
     assert!(parsed.parser.recovery.active.is_none());

@@ -50,22 +50,22 @@ use crate::{
     util::shared::SharedVec,
 };
 
-struct Parsed<'a, 'tu> {
-    parser:  Parser,
+struct Parsed<'a, 'tu, 'tok> {
+    parser:  Parser<'tok>,
     context: &'a mut Context<'tu>,
     items:   Vec<ExternalDeclaration>,
     errors:  Vec<TranslationError>,
     source:  String,
 }
 
-fn with_parse<R>(source: &str, inspect: impl FnOnce(&mut Parsed<'_, '_>) -> R) -> R {
+fn with_parse<R>(source: &str, inspect: impl FnOnce(&mut Parsed<'_, '_, '_>) -> R) -> R {
     with_parse_with(source, CompilerConfiguration::default(), None, inspect)
 }
 
 fn with_parse_configuration<R>(
     source: &str,
     configuration: CompilerConfiguration,
-    inspect: impl FnOnce(&Parsed<'_, '_>) -> R,
+    inspect: impl FnOnce(&Parsed<'_, '_, '_>) -> R,
 ) -> R {
     with_parse_with(source, configuration, None, |parsed| inspect(parsed))
 }
@@ -73,7 +73,7 @@ fn with_parse_configuration<R>(
 fn with_parse_limits<R>(
     source: &str,
     limits: ParserLimits,
-    inspect: impl FnOnce(&Parsed<'_, '_>) -> R,
+    inspect: impl FnOnce(&Parsed<'_, '_, '_>) -> R,
 ) -> R {
     with_parse_with(
         source,
@@ -89,6 +89,7 @@ fn with_parsed<R>(
 ) -> R {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
+    let tok = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<syntax-tree-test>").into_boxed_path(),
@@ -96,7 +97,7 @@ fn with_parsed<R>(
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context, &tok).parse_translation_unit(&mut context);
     inspect(&unit, &mut context)
 }
 
@@ -104,11 +105,12 @@ fn with_parse_with<R>(
     source: &str,
     configuration: CompilerConfiguration,
     limits: Option<ParserLimits>,
-    inspect: impl FnOnce(&mut Parsed<'_, '_>) -> R,
+    inspect: impl FnOnce(&mut Parsed<'_, '_, '_>) -> R,
 ) -> R {
     let source = source.to_owned();
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::with_configuration(&tu, configuration);
+    let tok = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &mut context,
         PathBuf::from("<parser-test>").into_boxed_path(),
@@ -117,7 +119,7 @@ fn with_parse_with<R>(
         SharedVec::default(),
     );
     let mut parser =
-        Parser::new_with_limits(preprocessor, &mut context, limits.unwrap_or_default())
+        Parser::new_with_limits(preprocessor, &mut context, limits.unwrap_or_default(), &tok)
             .with_action_budget(source.len().saturating_mul(256).saturating_add(4_096));
     let mut items = Vec::new();
     while let Some(item) = parser.next_item(&mut context) {
@@ -140,7 +142,7 @@ fn with_parse_with<R>(
     })
 }
 
-fn declaration<'a>(parsed: &'a Parsed<'_, '_>, item: usize) -> &'a Declaration {
+fn declaration<'a>(parsed: &'a Parsed<'_, '_, '_>, item: usize) -> &'a Declaration {
     let index = match parsed.items[item] {
         | ExternalDeclaration::Declaration(index)
         | ExternalDeclaration::RecoveredDeclaration(index) => index,
@@ -151,7 +153,7 @@ fn declaration<'a>(parsed: &'a Parsed<'_, '_>, item: usize) -> &'a Declaration {
     &parsed.parser.syntax[index]
 }
 
-fn function_definition<'a>(parsed: &'a Parsed<'_, '_>, item: usize) -> &'a FunctionDefinition {
+fn function_definition<'a>(parsed: &'a Parsed<'_, '_, '_>, item: usize) -> &'a FunctionDefinition {
     let (ExternalDeclaration::FunctionDefinition(index)
     | ExternalDeclaration::RecoveredFunctionDefinition(index)) = parsed.items[item]
     else {
@@ -160,7 +162,7 @@ fn function_definition<'a>(parsed: &'a Parsed<'_, '_>, item: usize) -> &'a Funct
     &parsed.parser.syntax[index]
 }
 
-fn return_expression(parsed: &Parsed<'_, '_>, statement: StatementIndex) -> ExpressionIndex {
+fn return_expression(parsed: &Parsed<'_, '_, '_>, statement: StatementIndex) -> ExpressionIndex {
     let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) =
         parsed.parser.syntax[statement].kind
     else {
@@ -169,7 +171,7 @@ fn return_expression(parsed: &Parsed<'_, '_>, statement: StatementIndex) -> Expr
     expression
 }
 
-fn block_items<'a>(parsed: &'a Parsed<'_, '_>, statement: StatementIndex) -> &'a [BlockItem] {
+fn block_items<'a>(parsed: &'a Parsed<'_, '_, '_>, statement: StatementIndex) -> &'a [BlockItem] {
     let StatementType::Compound { items } = parsed.parser.syntax[statement].kind else {
         panic!("expected a compound statement")
     };
@@ -177,27 +179,27 @@ fn block_items<'a>(parsed: &'a Parsed<'_, '_>, statement: StatementIndex) -> &'a
 }
 
 fn init_declarators<'a>(
-    parsed: &'a Parsed<'_, '_>,
+    parsed: &'a Parsed<'_, '_, '_>,
     declaration: &Declaration,
 ) -> &'a [InitDeclarator] {
     &parsed.parser.syntax[declaration.init_declarators]
 }
 
-fn identifier_name(parsed: &Parsed<'_, '_>, declarator: Declarator) -> Option<String> {
+fn identifier_name(parsed: &Parsed<'_, '_, '_>, declarator: Declarator) -> Option<String> {
     parsed
         .parser
         .declarator_identifier(declarator)
         .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
 }
 
-fn parser_errors<'a>(parsed: &'a Parsed<'_, '_>) -> impl Iterator<Item = &'a ParserErrorType> {
+fn parser_errors<'a>(parsed: &'a Parsed<'_, '_, '_>) -> impl Iterator<Item = &'a ParserErrorType> {
     parsed.errors.iter().filter_map(|error| match error {
         | TranslationError::Parsing(error) => Some(&error.error_type),
         | _ => None,
     })
 }
 
-fn sourced_text(parsed: &Parsed<'_, '_>, source_vectors: SourceVectors) -> String {
+fn sourced_text(parsed: &Parsed<'_, '_, '_>, source_vectors: SourceVectors) -> String {
     parsed
         .context
         .get_source_vectors(source_vectors)
@@ -206,12 +208,12 @@ fn sourced_text(parsed: &Parsed<'_, '_>, source_vectors: SourceVectors) -> Strin
         .collect()
 }
 
-fn expression_text(parsed: &Parsed<'_, '_>, expression: ExpressionIndex) -> String {
+fn expression_text(parsed: &Parsed<'_, '_, '_>, expression: ExpressionIndex) -> String {
     sourced_text(parsed, parsed.parser.syntax[expression].source_vectors)
 }
 
 fn constant_expression_text(
-    parsed: &Parsed<'_, '_>,
+    parsed: &Parsed<'_, '_, '_>,
     expression: ConstantExpressionIndex,
 ) -> String {
     expression_text(parsed, expression.into())

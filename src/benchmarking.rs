@@ -209,9 +209,11 @@ fn preprocessor(context: &mut Context<'_>, input: BenchmarkInput) -> Preprocesso
 #[must_use]
 pub fn preprocess(input: BenchmarkInput) -> usize {
     let tu = crate::util::bump::Bump::new();
+    let tok = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     preprocessor(&mut context, input)
-        .preprocess_all(&mut context)
+        .preprocess_into_arena(&mut context, usize::MAX, &tok)
+        .0
         .len()
 }
 
@@ -229,19 +231,20 @@ pub struct ParseBenchmarkSummary {
 #[must_use]
 pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
     let tu = crate::util::bump::Bump::new();
+    let tok = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    prepare_parse_in_context(&mut context, input).parse()
+    prepare_parse_in_context(&mut context, input, &tok).parse()
 }
 
 /// A translation unit preprocessed through phase 6 and ready to parse, so a
 /// benchmark can time phase 7 alone.
 #[doc(hidden)]
-pub struct PreparedParse<'a, 'tu> {
+pub struct PreparedParse<'a, 'tu, 'tok> {
     context: &'a mut Context<'tu>,
-    parser:  Parser,
+    parser:  Parser<'tok>,
 }
 
-impl std::fmt::Debug for PreparedParse<'_, '_> {
+impl std::fmt::Debug for PreparedParse<'_, '_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedParse").finish_non_exhaustive()
     }
@@ -252,24 +255,26 @@ impl std::fmt::Debug for PreparedParse<'_, '_> {
 #[doc(hidden)]
 pub fn with_prepared_parse<R>(
     input: BenchmarkInput,
-    inspect: impl FnOnce(PreparedParse<'_, '_>) -> R,
+    inspect: impl FnOnce(PreparedParse<'_, '_, '_>) -> R,
 ) -> R {
     let tu = crate::util::bump::Bump::new();
+    let tok = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
-    inspect(prepare_parse_in_context(&mut context, input))
+    inspect(prepare_parse_in_context(&mut context, input, &tok))
 }
 
-fn prepare_parse_in_context<'a, 'tu>(
+fn prepare_parse_in_context<'a, 'tu, 'tok>(
     context: &'a mut Context<'tu>,
     input: BenchmarkInput,
-) -> PreparedParse<'a, 'tu> {
+    tok: &'tok crate::util::bump::Bump,
+) -> PreparedParse<'a, 'tu, 'tok> {
     let preprocessor = preprocessor(context, input);
-    let preprocessed = Parser::preprocess(preprocessor, context);
+    let preprocessed = Parser::preprocess(preprocessor, context, tok);
     let parser = Parser::from_preprocessed(preprocessed);
     PreparedParse { context, parser }
 }
 
-impl PreparedParse<'_, '_> {
+impl PreparedParse<'_, '_, '_> {
     /// Runs translation phase 7 and summarizes the parse.
     #[must_use]
     pub fn parse(self) -> ParseBenchmarkSummary {

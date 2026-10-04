@@ -197,7 +197,7 @@ pub(super) fn is_postfix_starter(token: TokenType) -> bool {
 }
 
 pub(super) fn is_array_pointer_marker(
-    parser: &mut Parser,
+    parser: &mut Parser<'_>,
     context: &mut Context<'_>,
     token: Option<Token>,
 ) -> bool {

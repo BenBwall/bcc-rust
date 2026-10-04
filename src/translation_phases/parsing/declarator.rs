@@ -183,7 +183,7 @@ impl DeclaratorFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
