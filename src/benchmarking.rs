@@ -6,16 +6,12 @@ use std::{
     sync::OnceLock,
 };
 
-use crate::{
-    translation_phases::{
-        Context,
-        TranslationPhase,
-        box_path_from_str,
-        parsing::Parser,
-        preprocessing::Preprocessor,
-        preprocessor_tokenizer::TokenSource,
-    },
-    util::shared::SharedVec,
+use crate::translation_phases::{
+    Context,
+    TranslationPhase,
+    parsing::Parser,
+    preprocessing::Preprocessor,
+    preprocessor_tokenizer::TokenSource,
 };
 
 #[doc(hidden)]
@@ -203,13 +199,7 @@ pub fn lex(input: BenchmarkInput) -> usize {
 
 /// Opens `input` as the main source file.
 fn preprocessor(context: &mut Context<'_>, input: BenchmarkInput) -> Preprocessor {
-    Preprocessor::new(
-        context,
-        box_path_from_str("<input>"),
-        input.source(),
-        SharedVec::default(),
-        SharedVec::default(),
-    )
+    Preprocessor::new_with_arena_source(context, Path::new("<input>"), input.source(), &[], &[])
 }
 
 /// Runs translation phases 1 through 6 over the whole translation unit and

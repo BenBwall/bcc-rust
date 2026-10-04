@@ -49,7 +49,7 @@ pub(crate) use token::{
 };
 
 use self::macro_expansion::FunctionLikeMacroArgument;
-#[cfg(any(test, feature = "benchmarking-internals"))]
+#[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
     translation_phases::{
@@ -162,7 +162,7 @@ impl Preprocessor {
         self.output_purpose = OutputPurpose::Parsing;
     }
 
-    #[cfg(any(test, feature = "benchmarking-internals"))]
+    #[cfg(test)]
     pub(crate) fn new(
         context: &mut Context<'_>,
         source_name: Box<Path>,

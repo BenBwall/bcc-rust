@@ -9,11 +9,6 @@ pub(crate) mod preprocessing;
 pub(crate) mod preprocessor_tokenizer;
 mod provenance;
 
-#[cfg(feature = "benchmarking-internals")]
-use std::path::{
-    Path,
-    PathBuf,
-};
 use std::{
     convert::Infallible,
     fmt::{
@@ -261,9 +256,4 @@ pub(crate) trait TranslationPhase:
 {
     type Item;
     fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item>;
-}
-
-#[cfg(feature = "benchmarking-internals")]
-pub(crate) fn box_path_from_str(s: &str) -> Box<Path> {
-    PathBuf::from(s).into_boxed_path()
 }
