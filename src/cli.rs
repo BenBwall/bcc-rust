@@ -158,10 +158,11 @@ pub fn run() -> Result<(), MainError> {
     system_include.append(&mut args.system_include);
     system_include.extend(include_path_from_env("C_INCLUDE_PATH"));
     args.system_include = system_include;
+    let mut context = Context::new(&tu);
 
     if args.output.tokens {
         print_preprocessor_output(
-            &tu,
+            &mut context,
             &source_filename,
             input_string,
             &args.quote_include,
@@ -169,7 +170,7 @@ pub fn run() -> Result<(), MainError> {
         );
     } else {
         print_parser_output(
-            &tu,
+            &mut context,
             &source_filename,
             input_string,
             &args.quote_include,
@@ -184,31 +185,30 @@ pub fn run() -> Result<(), MainError> {
 /// Prints the preprocessed translation unit, each token after the
 /// diagnostics its production reported.
 fn print_preprocessor_output<'tu>(
-    tu: &'tu crate::util::bump::Bump,
+    context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
 ) {
-    let mut context = Context::new(tu);
     let preprocessor = Preprocessor::new_with_arena_source(
-        &mut context,
+        context,
         source_filename,
         input_string,
         quote_include,
         system_include,
     );
     let mut reporter = DiagnosticReporter::new();
-    for item in preprocess_with_diagnostics(preprocessor, &mut context) {
+    for item in preprocess_with_diagnostics(preprocessor, context) {
         match item {
             | Ok(token) => {
-                reporter.flush(&context);
-                eprintln!("{}", describe_token(token, &context));
+                reporter.flush(context);
+                eprintln!("{}", describe_token(token, context));
             },
-            | Err(error) => reporter.report(&error, &mut context),
+            | Err(error) => reporter.report(&error, context),
         }
     }
-    reporter.finish(&context);
+    reporter.finish(context);
 }
 
 /// One line per token: its location, kind, source spelling, and for
@@ -268,7 +268,7 @@ pub(crate) fn describe_token(token: Token, context: &Context<'_>) -> String {
 }
 
 fn print_parser_output<'tu>(
-    tu: &'tu crate::util::bump::Bump,
+    context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
     quote_include: &[PathBuf],
@@ -276,32 +276,31 @@ fn print_parser_output<'tu>(
     output: &ParserOutput,
     repeated_specifier_warnings: bool,
 ) {
-    let mut context = Context::new(tu);
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
     let preprocessor = Preprocessor::new_with_arena_source(
-        &mut context,
+        context,
         source_filename,
         input_string,
         quote_include,
         system_include,
     );
-    let preprocessed = LanguageParser::preprocess(preprocessor, &mut context);
-    let unit = LanguageParser::from_preprocessed(preprocessed).parse_translation_unit(&mut context);
+    let preprocessed = LanguageParser::preprocess(preprocessor, context);
+    let unit = LanguageParser::from_preprocessed(preprocessed).parse_translation_unit(context);
     let mut reporter = DiagnosticReporter::new();
     while let Some(error) = context.pop_pending_error() {
-        reporter.report(&error, &mut context);
+        reporter.report(&error, context);
     }
     reporter.order_source_runs();
-    reporter.flush(&context);
+    reporter.flush(context);
 
     if output.syntax_tree {
         eprint!(
             "{}",
             unit.syntax().inspect(
                 unit.external_declarations(),
-                &context,
+                context,
                 InspectionOptions {
                     show_locations: output.syntax_locations,
                 },
@@ -312,7 +311,7 @@ fn print_parser_output<'tu>(
         let rendered = format!("{:#?}", unit.syntax().raw_debug());
         eprintln!("{rendered}");
     }
-    reporter.finish(&context);
+    reporter.finish(context);
 }
 
 /// Renders diagnostics to stderr and summarizes them at the end, like
