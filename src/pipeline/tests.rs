@@ -473,8 +473,8 @@ const RECURSIVE_MAIN: &str = "#include \"loop.h\"\nint caller_after;\n";
 /// Regions one compilation may hold at once: the translation-unit,
 /// preprocessor, and expansion arenas, the string cache's two buffers, three
 /// provenance stores, the parser's token stream, and the renderer's scratch.
-/// The parse arena is reserved only after the preprocessor's arenas are
-/// released. Lexed files and include depth add none.
+/// The parse arena and the file-scope typedef set are reserved only after the
+/// preprocessor's arenas are released. Lexed files and include depth add none.
 const MAX_REGIONS_PER_COMPILATION: usize = 10;
 
 fn assert_within_budget(usage: crate::util::vm::accounting::Usage, what: &str) {
@@ -498,6 +498,7 @@ fn small_compilations_hold_few_regions_and_commit_little() {
         "int main(void) { return 0; }\n",
         "#define TWICE(x) (x) + (x)\nint main(void) { return TWICE(1); }\n",
         "int main(void) { return 0 }\n#include <nowhere.h>\nint x = ;\n",
+        "typedef int t;\nt main(void) { t x = 0; return x; }\n",
     ] {
         let usage = compilation_peak(source, Path::new("<input>"));
         assert_within_budget(usage, source);
@@ -593,4 +594,25 @@ fn parse_arena_use_does_not_grow_with_distinct_block_scope_names() {
     let (once, _) = parse_arena_high_water(&functions(400));
     let (twice, _) = parse_arena_high_water(&functions(800));
     assert_eq!(twice, once, "block-scope bookkeeping grows with the input");
+}
+
+#[test]
+fn parse_arena_use_does_not_grow_with_distinct_file_scope_names() {
+    use std::fmt::Write as _;
+    let declarations = |count: usize| {
+        let mut source = String::new();
+        for index in 0..count {
+            writeln!(
+                source,
+                "int i{index} = {index}; typedef int t{index}; t{index} v{index}; int t{index};"
+            )
+            .expect("writing to a string cannot fail");
+        }
+        source
+    };
+    let (once, once_errors) = parse_arena_high_water(&declarations(2000));
+    let (twice, _) = parse_arena_high_water(&declarations(4000));
+    assert_eq!(once_errors, 0);
+    assert!(once > 0, "declarations use the parse arena");
+    assert_eq!(twice, once, "file-scope names grow the parse arena");
 }
