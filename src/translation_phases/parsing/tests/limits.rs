@@ -139,6 +139,7 @@ fn source_storage_exhaustion_stops_preprocessing_the_remaining_input() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut context,
@@ -154,6 +155,7 @@ fn source_storage_exhaustion_stops_preprocessing_the_remaining_input() {
             source_segments: 10,
             ..ParserLimits::default()
         },
+        &parse_arena,
     );
     let mut items = 0;
     while parser.next_item(&mut context).is_some() {

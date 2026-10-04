@@ -441,7 +441,7 @@ impl ParseFrame {
     /// repeating [`ParseAction::Continue`] transitions in place.
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
@@ -459,7 +459,7 @@ impl ParseFrame {
     /// kind cannot change during a step, so the driver reads it beforehand.
     fn step_once(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,

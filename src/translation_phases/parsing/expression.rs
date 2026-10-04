@@ -181,7 +181,7 @@ const BRACE_GROUP_LOOKAHEAD: usize = 256;
 /// C99: recovery serves §5.1.1.3, p. 11; PDF p. 23. An expression never
 /// contains `;` or a statement keyword (§6.5, pp. 67-94; PDF pp. 79-106).
 pub(super) fn closer_follows_stray_run(
-    parser: &mut Parser,
+    parser: &mut Parser<'_>,
     context: &mut Context<'_>,
     closer: fn(TokenType) -> bool,
     stop_at_declarations: bool,
@@ -244,7 +244,7 @@ pub(super) fn closer_follows_stray_run(
 /// Returns whether the brace group starting at the current `{` reads as a
 /// statement block rather than a misplaced initializer list: it contains a
 /// `;` or a statement keyword, is empty, or does not close within reach.
-fn brace_group_is_block(parser: &mut Parser, context: &mut Context<'_>) -> bool {
+fn brace_group_is_block(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
     let mut depth = 0_usize;
     for index in 0..BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
@@ -285,7 +285,10 @@ const PARENTHESIZED_BRACE_GROUP_LOOKAHEAD: usize = 4096;
 /// C99: a `{` cannot start a primary expression (§6.5.1, p. 69; PDF p. 81),
 /// so the whole group is skipped as one diagnosed operand (§5.1.1.3, p. 11;
 /// PDF p. 23).
-fn brace_group_closes_before_parenthesis(parser: &mut Parser, context: &mut Context<'_>) -> bool {
+fn brace_group_closes_before_parenthesis(
+    parser: &mut Parser<'_>,
+    context: &mut Context<'_>,
+) -> bool {
     let mut depth = 0_usize;
     for index in 0..PARENTHESIZED_BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
@@ -316,7 +319,7 @@ fn brace_group_closes_before_parenthesis(parser: &mut Parser, context: &mut Cont
 /// reach and is followed by `)`, `]`, or `,`: the group then sits inside an
 /// expression, as in `if (x == {}) ...`, rather than being a statement body
 /// left after a missing `)`.
-fn brace_group_continues_expression(parser: &mut Parser, context: &mut Context<'_>) -> bool {
+fn brace_group_continues_expression(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
     let mut depth = 0_usize;
     for index in 0..PARENTHESIZED_BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
@@ -441,7 +444,7 @@ impl ExpressionFrame {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
@@ -1470,7 +1473,7 @@ impl ExpressionFrame {
     /// Returns whether the current `(` opens a type name: a type-name starter
     /// follows, or a storage-class or `inline` keyword that a type-name frame
     /// diagnoses as not allowed before one, as in `(static int)x`.
-    fn parenthesized_type_name_follows(parser: &mut Parser, context: &mut Context<'_>) -> bool {
+    fn parenthesized_type_name_follows(parser: &mut Parser<'_>, context: &mut Context<'_>) -> bool {
         let Some(following) = parser.cursor.following(context) else {
             return false;
         };
@@ -1514,7 +1517,7 @@ impl ExpressionFrame {
 
     fn pop_operand_or_error(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
     ) -> ExpressionOperand {
         if let Some(operand) = self.operands.pop() {
@@ -1541,7 +1544,7 @@ impl ExpressionFrame {
 
     fn finish_call(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         base: ExpressionIndex,
     ) {
@@ -1562,7 +1565,7 @@ impl ExpressionFrame {
         self.push_operand(index, true, true);
     }
 
-    fn reduce_one(&mut self, parser: &mut Parser, context: &mut Context<'_>) {
+    fn reduce_one(&mut self, parser: &mut Parser<'_>, context: &mut Context<'_>) {
         let operator = self
             .operators
             .pop()
@@ -1730,7 +1733,7 @@ impl ExpressionFrame {
 
     fn is_strong_grammar_boundary(
         &self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Token,
     ) -> bool {
@@ -1763,7 +1766,7 @@ impl ExpressionFrame {
     }
 
     pub(super) fn is_strong_grammar_boundary_for(
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Token,
         boundary: ExpressionBoundary,
@@ -1843,7 +1846,7 @@ impl ExpressionFrame {
 
     fn push_error(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         anchor: Option<Token>,
     ) {
@@ -1870,7 +1873,7 @@ impl ExpressionFrame {
 
     fn push_error_with_source(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         source_vectors: SourceVectors,
         operator_source_vectors: Option<SourceVectors>,
     ) {
@@ -1891,7 +1894,7 @@ impl ExpressionFrame {
         self.stray_error_operand = false;
     }
 
-    fn finish(&mut self, parser: &mut Parser, context: &mut Context<'_>) -> ParseAction {
+    fn finish(&mut self, parser: &mut Parser<'_>, context: &mut Context<'_>) -> ParseAction {
         while !self.operators.is_empty() {
             self.reduce_one(parser, context);
         }

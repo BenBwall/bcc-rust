@@ -39,7 +39,10 @@ use super::{
         SynchronizationKind,
         SynchronizationSet,
     },
-    scope::ScopeStack,
+    scope::{
+        LabelScopes,
+        ScopeStack,
+    },
     statement::is_statement_keyword,
     syntax::{
         DeclarationIndex,
@@ -80,10 +83,16 @@ use crate::{
             TokenType,
         },
     },
-    util::string_cache::StringCacheId,
+    util::{
+        bump::{
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
 };
 
-impl Parser {
+impl<'p> Parser<'p> {
     /// Preprocesses the whole translation unit, then creates an idle parser
     /// over the result. Every preprocessing diagnostic is pending in
     /// `context` before any parser diagnostic.
@@ -94,8 +103,9 @@ impl Parser {
     pub(crate) fn new<'tu>(
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
+        arena: &'p Bump,
     ) -> Self {
-        Self::new_with_config(preprocessor, context, ParserLimits::default())
+        Self::new_with_config(preprocessor, context, ParserLimits::default(), arena)
     }
 
     pub(crate) fn preprocess<'tu>(
@@ -120,8 +130,13 @@ impl Parser {
         }
     }
 
-    pub(crate) fn from_preprocessed(preprocessed: PreprocessedTranslationUnit) -> Self {
-        Self::with_upstream(preprocessed.upstream)
+    /// Creates an idle parser over `preprocessed` whose working memory comes
+    /// from the parse arena.
+    pub(crate) fn from_preprocessed(
+        preprocessed: PreprocessedTranslationUnit,
+        arena: &'p Bump,
+    ) -> Self {
+        Self::with_upstream(preprocessed.upstream, arena)
     }
 
     #[cfg(test)]
@@ -129,15 +144,16 @@ impl Parser {
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         limits: ParserLimits,
+        arena: &'p Bump,
     ) -> Self {
         let preprocessed =
             Self::preprocess_with_limit(preprocessor, context, limits.source_segments);
-        let mut parser = Self::from_preprocessed(preprocessed);
+        let mut parser = Self::from_preprocessed(preprocessed, arena);
         parser.limits = limits;
         parser
     }
 
-    fn with_upstream(upstream: Upstream) -> Self {
+    fn with_upstream(upstream: Upstream, arena: &'p Bump) -> Self {
         Self {
             cursor: TokenCursor::new(upstream),
             frames: Vec::new(),
@@ -147,10 +163,10 @@ impl Parser {
             syntax: SyntaxStore::default(),
             syntax_nodes: 0,
             emitted_roots: Vec::new(),
-            scopes: ScopeStack::default(),
-            label_scopes: Vec::new(),
+            scopes: ScopeStack::new_in(arena),
+            label_scopes: LabelScopes::new_in(arena),
             func_name: None,
-            switch_scopes: Vec::new(),
+            switch_scopes: ArenaVec::new_in(arena),
             recovery: RecoveryState::default(),
             hard_error_count: 0,
             active_frame: ParseFrameKind::ExternalDeclaration,
@@ -171,8 +187,9 @@ impl Parser {
         preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         limits: ParserLimits,
+        arena: &'p Bump,
     ) -> Self {
-        Self::new_with_config(preprocessor, context, limits)
+        Self::new_with_config(preprocessor, context, limits, arena)
     }
 
     #[cfg(test)]
@@ -488,7 +505,7 @@ impl Parser {
         self.returned = None;
         self.recovery = RecoveryState::default();
         self.scopes.restore_depth(0);
-        self.label_scopes.clear();
+        self.label_scopes.exit_all();
         self.switch_scopes.clear();
         Some(ExternalDeclaration::Error(source_vectors))
     }

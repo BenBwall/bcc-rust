@@ -14,7 +14,10 @@ use crate::{
     translation_phases::{
         Context,
         TranslationPhase,
-        parsing::Parser,
+        parsing::{
+            Parser,
+            PreprocessedTranslationUnit,
+        },
         preprocessor_tokenizer::TokenSource,
     },
     util::bump::Bump,
@@ -311,9 +314,9 @@ pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
 /// benchmark can time phase 7 alone.
 #[doc(hidden)]
 pub struct PreparedParse<'a, 'tu, 'parse> {
-    context: &'a mut Context<'tu>,
-    parser:  Parser,
-    parse:   &'parse Bump,
+    context:      &'a mut Context<'tu>,
+    preprocessed: PreprocessedTranslationUnit,
+    parse:        &'parse Bump,
 }
 
 impl std::fmt::Debug for PreparedParse<'_, '_, '_> {
@@ -331,32 +334,34 @@ pub fn with_prepared_parse<R>(
 ) -> R {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
-    let parser = prepare_parse_in_context(&mut context, input);
+    let preprocessed = prepare_parse_in_context(&mut context, input);
     let parse = Bump::new();
     inspect(PreparedParse {
         context: &mut context,
-        parser,
+        preprocessed,
         parse: &parse,
     })
 }
 
-fn prepare_parse_in_context(context: &mut Context<'_>, input: BenchmarkInput) -> Parser {
-    let preprocessed = with_preprocessor(
+fn prepare_parse_in_context(
+    context: &mut Context<'_>,
+    input: BenchmarkInput,
+) -> PreprocessedTranslationUnit {
+    with_preprocessor(
         context,
         Path::new("<input>"),
         input.source(),
         &[],
         &[],
         |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
-    );
-    Parser::from_preprocessed(preprocessed)
+    )
 }
 
 impl PreparedParse<'_, '_, '_> {
     /// Runs translation phase 7 and summarizes the parse.
     #[must_use]
     pub fn parse(self) -> ParseBenchmarkSummary {
-        let unit = parse_with_arena(self.parser, self.context, self.parse);
+        let unit = parse_with_arena(self.preprocessed, self.context, self.parse);
         ParseBenchmarkSummary {
             external_declarations: unit.external_declarations().len(),
             diagnostics:           self.context.take_pending_errors().len(),

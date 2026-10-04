@@ -18,7 +18,6 @@ use super::{
         ParseValue,
     },
     scope::{
-        LabelScope,
         NameClass,
         ScopeKind,
     },
@@ -88,7 +87,7 @@ impl FunctionDefinitionFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_>,
         context: &mut Context<'_>,
         token: Option<Token>,
         returned: Option<ParseValue>,
@@ -103,7 +102,7 @@ impl FunctionDefinitionFrame {
                 self.source_vectors = Some(declaration.source_vectors);
                 self.entry_scope_depth = Some(parser.scopes.depth());
                 parser.scopes.enter_scope(ScopeKind::Function);
-                parser.label_scopes.push(LabelScope::default());
+                parser.label_scopes.enter();
 
                 if let Some(suffix) = parser.function_suffix(declarator) {
                     match suffix {
@@ -302,12 +301,8 @@ impl FunctionDefinitionFrame {
                     self.entry_scope_depth
                         .expect("function definition entered function scope"),
                 );
-                drop(
-                    parser
-                        .label_scopes
-                        .pop()
-                        .expect("function definition owns a label namespace"),
-                );
+                let closed = parser.label_scopes.exit();
+                assert!(closed, "function definition owns a label namespace");
                 ParseAction::Reduce(ParseValue::FunctionDefinition(FunctionDefinitionIndex(
                     index,
                 )))

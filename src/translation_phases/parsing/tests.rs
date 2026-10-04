@@ -51,7 +51,7 @@ use crate::{
 };
 
 struct Parsed<'a, 'tu> {
-    parser:  Parser,
+    parser:  Parser<'a>,
     context: &'a mut Context<'tu>,
     items:   Vec<ExternalDeclaration>,
     errors:  Vec<TranslationError<'tu>>,
@@ -90,6 +90,7 @@ fn with_parsed<R>(
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut context,
@@ -98,7 +99,8 @@ fn with_parsed<R>(
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+    let unit =
+        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
     inspect(&unit, &mut context)
 }
 
@@ -112,6 +114,7 @@ fn with_parse_with<R>(
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::with_configuration(&tu, configuration);
     let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut context,
@@ -120,9 +123,13 @@ fn with_parse_with<R>(
         SharedVec::default(),
         SharedVec::default(),
     );
-    let mut parser =
-        Parser::new_with_limits(preprocessor, &mut context, limits.unwrap_or_default())
-            .with_action_budget(source.len().saturating_mul(256).saturating_add(4_096));
+    let mut parser = Parser::new_with_limits(
+        preprocessor,
+        &mut context,
+        limits.unwrap_or_default(),
+        &parse_arena,
+    )
+    .with_action_budget(source.len().saturating_mul(256).saturating_add(4_096));
     let mut items = Vec::new();
     while let Some(item) = parser.next_item(&mut context) {
         items.push(item);

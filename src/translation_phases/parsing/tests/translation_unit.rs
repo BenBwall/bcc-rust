@@ -34,6 +34,7 @@ fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut context,
@@ -43,7 +44,8 @@ fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
         SharedVec::default(),
     );
 
-    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+    let unit =
+        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
 
     assert_eq!(unit.external_declarations().len(), 3);
     assert!(
@@ -67,6 +69,7 @@ fn complete_translation_unit_retains_roots_already_streamed() {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::new(&tu);
     let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut context,
@@ -75,7 +78,7 @@ fn complete_translation_unit_retains_roots_already_streamed() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let mut parser = Parser::new(preprocessor, &mut context);
+    let mut parser = Parser::new(preprocessor, &mut context, &parse_arena);
 
     assert!(matches!(
         parser.next_item(&mut context),
@@ -117,6 +120,7 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
         .join("fixtures")
         .join("parser");
     let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut context,
@@ -125,7 +129,8 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
         vec![include_directory.clone()].into(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+    let unit =
+        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
 
     assert!(context.take_pending_errors().is_empty());
     assert_eq!(unit.external_declarations().len(), 2);
@@ -198,6 +203,7 @@ fn deterministic_inspection_uses_spellings_and_marks_recovery() {
     let mut context = Context::new(&tu);
     let source = "int good = 1; } int after;\n";
     let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut context,
@@ -206,7 +212,8 @@ fn deterministic_inspection_uses_spellings_and_marks_recovery() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+    let unit =
+        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
     let first = unit.syntax().inspect(
         unit.external_declarations(),
         &context,
@@ -235,6 +242,7 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
     let mut context = Context::new(&tu);
     let source = "struct S { int member : 3; }; int values[2] = { [1] = 7 }; int f(int arg);\n";
     let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut context,
@@ -243,7 +251,8 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+    let unit =
+        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
     let output = unit.syntax().inspect(
         unit.external_declarations(),
         &context,
@@ -267,6 +276,7 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
     let tu = crate::util::bump::Bump::new();
     let mut multi_context = Context::new(&tu);
     let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut multi_context,
@@ -275,8 +285,8 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let multi =
-        Parser::new(preprocessor, &mut multi_context).parse_translation_unit(&mut multi_context);
+    let multi = Parser::new(preprocessor, &mut multi_context, &parse_arena)
+        .parse_translation_unit(&mut multi_context);
     let multi = multi.syntax().inspect(
         multi.external_declarations(),
         &multi_context,

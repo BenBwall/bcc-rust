@@ -17,6 +17,7 @@ use crate::{
         parsing::{
             ParsedTranslationUnit,
             Parser,
+            PreprocessedTranslationUnit,
         },
         preprocessing::{
             Preprocessor,
@@ -47,7 +48,7 @@ pub(crate) fn parse_translation_unit<'tu>(
         |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
     );
     let parse = Bump::new();
-    parse_with_arena(Parser::from_preprocessed(preprocessed), context, &parse)
+    parse_with_arena(preprocessed, context, &parse)
 }
 
 /// Keeps phase-4 working storage within preprocessing. The arena is passed to
@@ -72,15 +73,15 @@ pub(crate) fn with_preprocessor<'tu, R>(
     run(preprocessor, context, &pp)
 }
 
-/// Keeps phase-7 working storage scoped to parsing. Stage 7 will allocate the
-/// parser's frames and scopes from this arena; until then it stays empty,
-/// and an empty arena reserves no memory.
+/// Keeps phase-7 working storage scoped to parsing: the parser's frames,
+/// their pools, its scopes, and its recovery state come from `parse`, which
+/// the caller frees when parsing ends.
 pub(crate) fn parse_with_arena(
-    parser: Parser,
+    preprocessed: PreprocessedTranslationUnit,
     context: &mut Context<'_>,
-    _parse: &Bump,
+    parse: &Bump,
 ) -> ParsedTranslationUnit {
-    parser.parse_translation_unit(context)
+    Parser::from_preprocessed(preprocessed, parse).parse_translation_unit(context)
 }
 
 /// Runs translation phases 4 through 6 over the whole translation unit and

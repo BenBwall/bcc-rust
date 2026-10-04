@@ -69,7 +69,7 @@ use machine::{
 };
 use recovery::RecoveryState;
 use scope::{
-    LabelScope,
+    LabelScopes,
     ScopeStack,
     SwitchScope,
 };
@@ -90,7 +90,10 @@ use crate::{
         SourcePosition,
         TranslationPhase,
     },
-    util::string_cache::StringCacheId,
+    util::{
+        bump::ArenaVec,
+        string_cache::StringCacheId,
+    },
 };
 
 /// Owns parser input, control frames, syntax arenas, scopes, and diagnostics.
@@ -101,7 +104,7 @@ use crate::{
 /// C99: translation units and external declarations are specified by §6.9,
 /// p. 140; PDF p. 152: a translation unit “consists of a sequence of external
 /// declarations.” The diagnostic obligation is §5.1.1.3, p. 11; PDF p. 23.
-pub(crate) struct Parser {
+pub(crate) struct Parser<'p> {
     /// Buffered parser-facing token stream.
     cursor: TokenCursor,
     /// Heap-backed grammar control stack; the final element is active.
@@ -120,13 +123,13 @@ pub(crate) struct Parser {
     /// Roots already returned through the streaming adapter.
     emitted_roots: Vec<ExternalDeclaration>,
     /// Parser-visible ordinary-name classification used for typedef ambiguity.
-    scopes: ScopeStack,
+    scopes: ScopeStack<'p>,
     /// Function-local label namespaces, independent of ordinary identifiers.
-    label_scopes: Vec<LabelScope>,
+    label_scopes: LabelScopes<'p>,
     /// Interned `__func__`, predeclared in every function body.
     func_name: Option<StringCacheId>,
     /// Active switch contexts used to associate `case` and `default` labels.
-    switch_scopes: Vec<SwitchScope>,
+    switch_scopes: ArenaVec<'p, SwitchScope>,
     /// Delimiter depth and ownership while a synchronization scan is active.
     recovery: RecoveryState,
     /// Number of hard parser diagnostics emitted so far.
@@ -197,25 +200,25 @@ impl ParsedTranslationUnit {
     }
 }
 
-impl GetPosition for Parser {
+impl GetPosition for Parser<'_> {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.cursor.upstream.position(context)
     }
 }
 
-impl SetPosition for Parser {
+impl SetPosition for Parser<'_> {
     fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
         self.cursor.upstream.set_position(context, position);
     }
 }
 
-impl GetSourceFileIndex for Parser {
+impl GetSourceFileIndex for Parser<'_> {
     fn source_file_index(&self) -> u32 {
         self.cursor.upstream.source_file_index()
     }
 }
 
-impl SetSourceFileIndex for Parser {
+impl SetSourceFileIndex for Parser<'_> {
     fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
         self.cursor
             .upstream
@@ -223,7 +226,7 @@ impl SetSourceFileIndex for Parser {
     }
 }
 
-impl TranslationPhase<'_> for Parser {
+impl TranslationPhase<'_> for Parser<'_> {
     type Item = ExternalDeclaration;
 
     fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item> {
