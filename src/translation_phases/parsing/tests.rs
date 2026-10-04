@@ -82,6 +82,14 @@ fn parse_with_limits(source: &str, limits: ParserLimits) -> Parsed {
     parse_with(source, CompilerConfiguration::default(), Some(limits))
 }
 
+fn with_parse_limits<R>(
+    source: &str,
+    limits: ParserLimits,
+    inspect: impl FnOnce(&Parsed) -> R,
+) -> R {
+    inspect(&parse_with_limits(source, limits))
+}
+
 fn with_parsed<R>(
     source: &str,
     inspect: impl FnOnce(&ParsedTranslationUnit, &mut Context) -> R,

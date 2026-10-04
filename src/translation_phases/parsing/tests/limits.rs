@@ -12,6 +12,8 @@ use super::{
     parse,
     parse_with_limits,
     parser_errors,
+    with_parse,
+    with_parse_limits,
     with_parsed,
 };
 use crate::{
@@ -52,55 +54,59 @@ use crate::{
 fn parenthesized_declarators_meet_the_c99_floor_and_stress_the_heap_stack() {
     for depth in [63, 4_096] {
         let source = format!("int {}deep{};\n", "(".repeat(depth), ")".repeat(depth));
-        let parsed = parse(&source);
-
-        assert_eq!(parsed.items.len(), 1);
-        assert!(
-            parser_errors(&parsed).next().is_none(),
-            "{:#?}",
-            parsed.errors
-        );
-        assert!(
-            parsed
-                .parser
-                .trace
-                .iter()
-                .map(|event| event.depth)
-                .max()
-                .expect("nonempty trace")
-                > depth,
-            "grammar depth must be represented by heap-backed frames"
-        );
-        assert!(
-            parsed.context.source_segment_count() <= depth * 8 + 32,
-            "source provenance must grow linearly with grammar depth"
-        );
+        with_parse(&source, |parsed| {
+            assert_eq!(parsed.items.len(), 1);
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert!(
+                parsed
+                    .parser
+                    .trace
+                    .iter()
+                    .map(|event| event.depth)
+                    .max()
+                    .expect("nonempty trace")
+                    > depth,
+                "grammar depth must be represented by heap-backed frames"
+            );
+            assert!(
+                parsed.context.source_segment_count() <= depth * 8 + 32,
+                "source provenance must grow linearly with grammar depth"
+            );
+        });
     }
 }
 
 #[test]
 fn long_statement_lists_keep_source_storage_linear() {
     let count = 1_024;
-    let parsed = parse(&format!("void f(void) {{ {} }}\n", "0; ".repeat(count)));
-    assert_eq!(
-        block_items(&parsed, function_definition(&parsed, 0).body).len(),
-        count
-    );
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
-    );
-    assert!(
-        parsed.context.source_segment_count() < count * 64,
-        "block provenance copied each growing prefix: {} segments",
-        parsed.context.source_segment_count()
+    with_parse(
+        &format!("void f(void) {{ {} }}\n", "0; ".repeat(count)),
+        |parsed| {
+            assert_eq!(
+                block_items(parsed, function_definition(parsed, 0).body).len(),
+                count
+            );
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert!(
+                parsed.context.source_segment_count() < count * 64,
+                "block provenance copied each growing prefix: {} segments",
+                parsed.context.source_segment_count()
+            );
+        },
     );
 }
 
 #[test]
 fn source_storage_exhaustion_reports_one_resource_diagnostic() {
-    let parsed = parse_with_limits(
+    with_parse_limits(
         // Enough tokens to pass the limit with the preprocessor arena
         // compacted between tokens.
         "int a; int b; int c; int d; int e; int f;\n",
@@ -108,24 +114,26 @@ fn source_storage_exhaustion_reports_one_resource_diagnostic() {
             source_segments: 10,
             ..ParserLimits::default()
         },
+        |parsed| {
+            assert_eq!(
+                parser_errors(parsed)
+                    .filter(|error| matches!(
+                        error,
+                        ParserErrorType::ResourceLimitExceeded {
+                            resource: ParserResource::SourceSegments,
+                            limit:    10,
+                        }
+                    ))
+                    .count(),
+                1
+            );
+            assert!(
+                parsed.parser.frames.is_empty(),
+                "resource exit retained frames"
+            );
+            assert_eq!(parsed.parser.scopes.depth(), 0);
+        },
     );
-    assert_eq!(
-        parser_errors(&parsed)
-            .filter(|error| matches!(
-                error,
-                ParserErrorType::ResourceLimitExceeded {
-                    resource: ParserResource::SourceSegments,
-                    limit:    10,
-                }
-            ))
-            .count(),
-        1
-    );
-    assert!(
-        parsed.parser.frames.is_empty(),
-        "resource exit retained frames"
-    );
-    assert_eq!(parsed.parser.scopes.depth(), 0);
 }
 
 #[test]
@@ -183,34 +191,36 @@ fn macro_expansion_stops_at_the_source_segment_limit() {
     }
     source.push_str("X12\n");
 
-    let parsed = parse_with_limits(
+    with_parse_limits(
         &source,
         ParserLimits {
             source_segments: 30,
             ..ParserLimits::default()
         },
+        |parsed| {
+            assert!(
+                parsed.context.source_segment_count() < 256,
+                "{} source segments retained",
+                parsed.context.source_segment_count()
+            );
+            assert_eq!(
+                parser_errors(parsed)
+                    .filter(|error| matches!(
+                        error,
+                        ParserErrorType::ResourceLimitExceeded {
+                            resource: ParserResource::SourceSegments,
+                            limit:    30,
+                        }
+                    ))
+                    .count(),
+                1
+            );
+            assert!(matches!(
+                parsed.items.as_slice(),
+                [ExternalDeclaration::Error(_)]
+            ));
+        },
     );
-    assert!(
-        parsed.context.source_segment_count() < 256,
-        "{} source segments retained",
-        parsed.context.source_segment_count()
-    );
-    assert_eq!(
-        parser_errors(&parsed)
-            .filter(|error| matches!(
-                error,
-                ParserErrorType::ResourceLimitExceeded {
-                    resource: ParserResource::SourceSegments,
-                    limit:    30,
-                }
-            ))
-            .count(),
-        1
-    );
-    assert!(matches!(
-        parsed.items.as_slice(),
-        [ExternalDeclaration::Error(_)]
-    ));
 }
 
 #[test]
@@ -221,25 +231,27 @@ fn adjacent_strings_stop_at_the_source_segment_limit() {
     }
     source.push_str("const char *value = X12;\n");
 
-    let parsed = parse_with_limits(
+    with_parse_limits(
         &source,
         ParserLimits {
             source_segments: 1_000,
             ..ParserLimits::default()
         },
+        |parsed| {
+            assert!(
+                parsed.context.source_segment_count() < 1_200,
+                "{} source segments retained",
+                parsed.context.source_segment_count()
+            );
+            assert!(parser_errors(parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ResourceLimitExceeded {
+                    resource: ParserResource::SourceSegments,
+                    limit:    1_000,
+                }
+            )));
+        },
     );
-    assert!(
-        parsed.context.source_segment_count() < 1_200,
-        "{} source segments retained",
-        parsed.context.source_segment_count()
-    );
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ResourceLimitExceeded {
-            resource: ParserResource::SourceSegments,
-            limit:    1_000,
-        }
-    )));
 }
 
 #[test]
@@ -262,17 +274,18 @@ fn long_declaration_lists_keep_source_storage_linear() {
         format!("struct S {{ int {}; }};\n", names.join("; int ")),
         format!("enum E {{ {} }};\n", names.join(",")),
     ] {
-        let parsed = parse(&source);
-        assert!(
-            parser_errors(&parsed).next().is_none(),
-            "{:#?}",
-            parsed.errors
-        );
-        assert!(
-            parsed.context.source_segment_count() < count * 64,
-            "list provenance copied each growing prefix: {} segments",
-            parsed.context.source_segment_count()
-        );
+        with_parse(&source, |parsed| {
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert!(
+                parsed.context.source_segment_count() < count * 64,
+                "list provenance copied each growing prefix: {} segments",
+                parsed.context.source_segment_count()
+            );
+        });
     }
 }
 
@@ -289,13 +302,14 @@ fn source_storage_is_linear_in_token_count() {
             ")".repeat(count),
             "if (x) { x = (x + 1) * (x - 2) / 3; } ".repeat(count),
         );
-        let parsed = parse(&source);
-        assert!(
-            parser_errors(&parsed).next().is_none(),
-            "{:#?}",
-            parsed.errors
-        );
-        parsed.context.source_segment_count()
+        with_parse(&source, |parsed| {
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            parsed.context.source_segment_count()
+        })
     };
     let small = source_segments(256);
     let large = source_segments(1_024);
