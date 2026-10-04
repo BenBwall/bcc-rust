@@ -5,6 +5,11 @@
 //! never moves. Individual deallocation normally leaves memory in the arena;
 //! dropping releases the region and reset rewinds it. Values put here must not
 //! need destruction, since the arena does not run destructors.
+//!
+//! Commit follows use: the region commits pages as the bump pointer reaches
+//! them, at most one commit step ahead. A [`TailVec`] takes the rest of the
+//! reservation as its capacity and commits as it is written, so a vector
+//! whose final length is unknown never commits room it does not fill.
 
 use std::{
     alloc::{
@@ -14,6 +19,8 @@ use std::{
     cell::RefCell,
     fmt,
     io::Read,
+    marker::PhantomData,
+    mem::ManuallyDrop,
     ops::Deref,
     path::Path,
     ptr::{
@@ -51,6 +58,10 @@ struct Inner {
     last:       Option<Last>,
     /// The largest `used` since the arena was created.
     high_water: usize,
+    /// Where the open [`TailVec`] starts, if one is open. It owns everything
+    /// from there to the end of the reservation, so nothing else may
+    /// allocate until it closes.
+    tail:       Option<usize>,
 }
 
 /// An arena whose allocations remain at fixed addresses until it is reset or
@@ -74,6 +85,7 @@ impl Bump {
                 used:       0,
                 last:       None,
                 high_water: 0,
+                tail:       None,
             }),
         }
     }
@@ -222,6 +234,44 @@ impl Bump {
         vec.leak()
     }
 
+    /// A vector at the end of the arena whose capacity is the rest of the
+    /// reservation, so it never moves or copies. It commits pages as it is
+    /// written. Nothing else may allocate in the arena until the vector is
+    /// finished or dropped; an allocation attempted meanwhile fails (and is
+    /// a debug assertion), so the two can never overlap.
+    pub(crate) fn tail_vec<T: Copy>(&self) -> TailVec<'_, T> {
+        const {
+            assert!(size_of::<T>() != 0, "tail vectors hold sized elements");
+        }
+        let mut inner = self.inner.borrow_mut();
+        assert!(
+            inner.tail.is_none(),
+            "an arena has one tail vector at a time"
+        );
+        // An unreserved region will start page-aligned at offset zero, so it
+        // is aligned for any element. If aligning overflows, the start lies
+        // past the reservation and every commit fails.
+        let start = inner.region.as_ref().map_or(Some(0), |region| {
+            aligned_start(
+                region.as_ptr().as_ptr() as usize,
+                inner.used,
+                align_of::<T>(),
+            )
+        });
+        let start = start.unwrap_or(usize::MAX);
+        inner.tail = Some(start);
+        inner.last = None;
+        TailVec {
+            arena: self,
+            start,
+            ptr: NonNull::dangling(),
+            len: 0,
+            committed: 0,
+            restore: inner.used,
+            elements: PhantomData,
+        }
+    }
+
     /// Rewind the arena while retaining its committed pages for reuse.
     pub(crate) fn reset(&mut self) {
         let inner = self.inner.get_mut();
@@ -276,6 +326,15 @@ impl Inner {
             let ptr =
                 NonNull::new(ptr::without_provenance_mut(layout.align())).ok_or(AllocError)?;
             return Ok(NonNull::slice_from_raw_parts(ptr, 0));
+        }
+        debug_assert!(
+            self.tail.is_none(),
+            "nothing else allocates in an arena while its tail vector is open"
+        );
+        // The open tail owns the rest of the reservation; release builds
+        // refuse rather than overlap it.
+        if self.tail.is_some() {
+            return Err(AllocError);
         }
         let used = self.used;
         let region = self.region()?;
@@ -401,6 +460,96 @@ unsafe impl Allocator for Bump {
             return Ok(NonNull::slice_from_raw_parts(ptr, new_layout.size()));
         }
         Ok(NonNull::slice_from_raw_parts(ptr, old_layout.size()))
+    }
+}
+
+/// A vector at the end of an arena that commits as it is written; see
+/// [`Bump::tail_vec`].
+pub(crate) struct TailVec<'a, T: Copy> {
+    arena:     &'a Bump,
+    /// The first element's offset in the arena's region.
+    start:     usize,
+    /// The first element, derived after the latest commit so it reaches
+    /// every committed element. Dangling until the first commit.
+    ptr:       NonNull<T>,
+    len:       usize,
+    /// How many elements fit in committed memory.
+    committed: usize,
+    /// The arena's `used` before the vector opened, restored if it is
+    /// dropped unfinished.
+    restore:   usize,
+    elements:  PhantomData<&'a mut [T]>,
+}
+
+impl<'a, T: Copy> TailVec<'a, T> {
+    pub(crate) const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn push(&mut self, value: T) {
+        if self.try_push(value).is_err() {
+            handle_alloc_error(Layout::new::<T>());
+        }
+    }
+
+    /// Appends `value`, committing another step of pages first if the
+    /// committed ones are full.
+    pub(crate) fn try_push(&mut self, value: T) -> Result<(), AllocError> {
+        if self.len == self.committed {
+            self.commit_for(self.len + 1)?;
+        }
+        // SAFETY: `len < committed`, so the slot lies inside the committed
+        // memory `ptr` was derived to reach, and it lies inside this vector.
+        let slot = unsafe { self.ptr.as_ptr().add(self.len) };
+        // SAFETY: the slot is committed, aligned (`start` was aligned for
+        // `T`), and owned by this vector alone while the tail is open.
+        unsafe {
+            slot.write(value);
+        }
+        self.len += 1;
+        Ok(())
+    }
+
+    #[cold]
+    fn commit_for(&mut self, elements: usize) -> Result<(), AllocError> {
+        let end = elements
+            .checked_mul(size_of::<T>())
+            .and_then(|bytes| bytes.checked_add(self.start))
+            .ok_or(AllocError)?;
+        let mut inner = self.arena.inner.borrow_mut();
+        let region = inner.region()?;
+        region.ensure_committed(end).map_err(|_| AllocError)?;
+        self.committed = (region.committed() - self.start) / size_of::<T>();
+        self.ptr = Inner::pointer_at(region, self.start).cast();
+        Ok(())
+    }
+
+    /// Closes the tail, keeping exactly the written elements in the arena
+    /// and returning the rest of the reservation to it.
+    pub(crate) fn into_slice(self) -> &'a mut [T] {
+        let this = ManuallyDrop::new(self);
+        let mut inner = this.arena.inner.borrow_mut();
+        inner.tail = None;
+        if this.len == 0 {
+            inner.used = this.restore;
+            return &mut [];
+        }
+        inner.set_used(this.start + this.len * size_of::<T>());
+        drop(inner);
+        // SAFETY: the first `len` elements were written into committed memory
+        // that `ptr` reaches. They now lie below the arena's `used`, so later
+        // allocations never overlap them, and they stay put until reset or
+        // drop, which need the exclusive access this `'a` borrow excludes.
+        unsafe { std::slice::from_raw_parts_mut(this.ptr.as_ptr(), this.len) }
+    }
+}
+
+impl<T: Copy> Drop for TailVec<'_, T> {
+    /// Closes the tail without keeping anything; the elements need no drop.
+    fn drop(&mut self) {
+        let mut inner = self.arena.inner.borrow_mut();
+        inner.tail = None;
+        inner.used = self.restore;
     }
 }
 
@@ -569,6 +718,7 @@ mod tests {
         Bump,
     };
     use crate::util::vm::{
+        MAX_COMMIT_STEP,
         accounting,
         faults,
     };
@@ -904,5 +1054,104 @@ mod tests {
         arena.reset();
         _ = arena.alloc_slice_copy(&[0_u8; 10]);
         assert_eq!(arena.high_water(), 100);
+    }
+
+    #[test]
+    fn tail_vector_follows_the_last_block_and_keeps_exactly_its_length() {
+        let arena = Bump::new();
+        let before: *mut u8 = arena.alloc(1_u8);
+        let mut values = arena.tail_vec::<u32>();
+        for value in 0..10_000 {
+            values.push(value);
+        }
+        assert_eq!(values.len(), 10_000);
+        let values = values.into_slice();
+        assert_eq!(values[9_999], 9_999);
+        // Aligned after the one-byte block, then exactly the elements.
+        assert_eq!(values.as_ptr() as usize, before as usize + 4);
+        assert_eq!(arena.used(), 4 + 40_000);
+        assert_eq!(arena.high_water(), arena.used());
+        let next: *mut u8 = arena.alloc(2_u8);
+        assert_eq!(next as usize, before as usize + 40_004);
+        assert_eq!(arena.tail_vec::<u64>().into_slice(), [0_u64; 0]);
+        assert_eq!(arena.used(), 40_005);
+    }
+
+    #[cfg_attr(miri, ignore = "writes megabytes an element at a time")]
+    #[test]
+    fn tail_vector_commits_by_length_not_capacity() {
+        let arena = Bump::new();
+        _ = arena.alloc_slice_copy(&[0_u8; 1000]);
+        let mut values = arena.tail_vec::<[u8; 17]>();
+        let count = 5 * MAX_COMMIT_STEP / 17;
+        for _ in 0..count {
+            values.push([3; 17]);
+        }
+        assert!(arena.committed() >= 1000 + 17 * count);
+        assert!(arena.committed() <= 1000 + 17 * count + MAX_COMMIT_STEP);
+        let values = values.into_slice();
+        assert_eq!(values.len(), count);
+        assert_eq!(arena.used(), 1000 + 17 * count);
+    }
+
+    #[test]
+    fn a_dropped_tail_vector_returns_everything() {
+        let arena = Bump::new();
+        let first: *mut u64 = arena.alloc(1_u64);
+        {
+            let mut values = arena.tail_vec::<u64>();
+            values.push(2);
+        }
+        assert_eq!(arena.used(), 8);
+        let second: *mut u64 = arena.alloc(3_u64);
+        assert_eq!(second as usize, first as usize + 8);
+        // An empty arena opens its tail before reserving a region.
+        let empty = Bump::new();
+        drop(empty.tail_vec::<u8>());
+        assert_eq!(empty.used(), 0);
+        let mut values = empty.tail_vec::<u8>();
+        values.push(4);
+        assert_eq!(values.into_slice(), [4]);
+    }
+
+    #[test]
+    fn tail_vector_commit_failure_is_an_allocation_error() {
+        let arena = Bump::new();
+        {
+            let _failing = faults::fail_reserves(1);
+            let mut values = arena.tail_vec::<u8>();
+            _ = values.try_push(1).unwrap_err();
+        }
+        let mut values = arena.tail_vec::<u8>();
+        values.try_push(1).unwrap();
+        while values.len() < arena.committed() {
+            values.push(2);
+        }
+        {
+            let _failing = faults::fail_commits(usize::MAX);
+            _ = values.try_push(3).unwrap_err();
+        }
+        {
+            // A failed step retries with only the page the push needs.
+            let _limited = faults::limit_commits(4096);
+            values.try_push(3).unwrap();
+        }
+        let length = values.len();
+        let values = values.into_slice();
+        assert_eq!(values.len(), length);
+        assert_eq!(
+            (values[0], values[length - 2], values[length - 1]),
+            (1, 2, 3)
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "nothing else allocates in an arena while its tail vector is open")]
+    fn allocating_beside_an_open_tail_vector_is_a_bug() {
+        let arena = Bump::new();
+        let mut values = arena.tail_vec::<u8>();
+        values.push(1);
+        _ = arena.alloc(2_u8);
     }
 }

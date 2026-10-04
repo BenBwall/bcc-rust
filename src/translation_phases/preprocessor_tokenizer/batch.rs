@@ -34,8 +34,8 @@ use crate::{
     },
     util::{
         bump::{
-            ArenaVec,
             Bump,
+            TailVec,
         },
         byte_scan,
         string_cache::StringCacheId,
@@ -397,10 +397,12 @@ impl Entry {
 /// where entry `i + 1` starts. Other-token provenance can exclude deleted
 /// splices without changing these shared boundaries.
 ///
-/// Lexing appends entries to one array at the end of the caller's arena.
-/// Nothing else is allocated there while a file is lexed, so the array grows
-/// in place, and the finished file gives its unused tail back: a file costs
-/// one exact-size array, written once, and holds no storage of its own.
+/// Lexing appends entries to one array at the end of the caller's arena,
+/// whose capacity is the rest of the arena's reservation. Nothing else is
+/// allocated there while a file is lexed, so the array never moves, and
+/// pages are committed as entries are written. The finished file keeps its
+/// length and gives the rest back: a file costs one exact-size array,
+/// written once, and holds no storage of its own.
 pub(super) struct LexedFile<'a> {
     pub(super) source_file_index: u32,
     /// The file's index in the preprocessor's registry of opened files, if
@@ -432,8 +434,9 @@ pub(super) struct LexedFile<'a> {
 
 /// A [`LexedFile`] while its entries are being lexed.
 struct LexingFile<'arena> {
-    /// The arena's latest block while lexing, so it grows in place.
-    entries:               ArenaVec<'arena, Entry>,
+    /// The rest of the arena's reservation while lexing, committed as
+    /// entries are written, so it never moves or overcommits.
+    entries:               TailVec<'arena, Entry>,
     end_of_tokens:         SourcePosition,
     eof:                   SourcePosition,
     diagnostics:           Vec<(u32, LexDiagnostic)>,
@@ -445,8 +448,8 @@ struct LexingFile<'arena> {
 }
 
 impl<'arena> LexingFile<'arena> {
-    /// Trims the entries to their length, returning the unused tail to
-    /// `arena`, and stores the side tables after them.
+    /// Keeps exactly the entries written, returning the rest of the
+    /// reservation to `arena`, and stores the side tables after them.
     fn finish(
         self,
         arena: &'arena Bump,
@@ -454,7 +457,7 @@ impl<'arena> LexingFile<'arena> {
         escaped_final_newline: Option<SourceVector>,
     ) -> LexedFile<'arena> {
         let Self {
-            mut entries,
+            entries,
             end_of_tokens,
             eof,
             diagnostics,
@@ -464,11 +467,10 @@ impl<'arena> LexingFile<'arena> {
             lacks_final_newline,
             end_readers,
         } = self;
-        entries.shrink_to_fit();
         LexedFile {
             source_file_index,
             registration: None,
-            entries: entries.leak(),
+            entries: entries.into_slice(),
             end_of_tokens,
             eof,
             diagnostics: arena.alloc_slice_fill_iter(diagnostics),
@@ -766,9 +768,6 @@ impl<'a, 'tu, 'arena> Lexer<'a, 'tu, 'arena> {
     ) -> Self {
         let bytes = text.as_bytes();
         let lacks_final_newline = !physically_empty && bytes.last() != Some(&b'\n');
-        // Entries average a few bytes each. Growing past this estimate stays
-        // in place, and finishing returns what is left over.
-        let capacity = bytes.len() / 3;
         Self {
             context,
             text,
@@ -785,7 +784,7 @@ impl<'a, 'tu, 'arena> Lexer<'a, 'tu, 'arena> {
             pending: Vec::new(),
             scratch: String::new(),
             file: LexingFile {
-                entries: ArenaVec::with_capacity_in(capacity, arena),
+                entries: arena.tail_vec(),
                 end_of_tokens: SourcePosition::default(),
                 eof: SourcePosition::default(),
                 diagnostics: Vec::new(),
