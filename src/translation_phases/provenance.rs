@@ -17,7 +17,7 @@ use super::{
     context::Context,
 };
 use crate::util::{
-    bump::RegionVec,
+    region_vec::RegionVec,
     vector_slice::VectorSlice,
 };
 

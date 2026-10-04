@@ -222,7 +222,7 @@ pub fn preprocess(input: BenchmarkInput) -> usize {
         &[],
         &[],
         |mut preprocessor, context, _pp| {
-            let mut tokens = crate::util::bump::RegionVec::new_in(Bump::new());
+            let mut tokens = crate::util::region_vec::RegionVec::new();
             let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
             tokens.len()
         },
@@ -266,7 +266,7 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
             &[],
             &[],
             |mut preprocessor, context, pp| {
-                let mut tokens = crate::util::bump::RegionVec::new_in(Bump::new());
+                let mut tokens = crate::util::region_vec::RegionVec::new();
                 let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
                 (pp.high_water(), preprocessor.expansion_high_water())
             },

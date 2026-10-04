@@ -41,7 +41,7 @@ fn with_preprocessed_with<R>(
     source: &str,
     configuration: CompilerConfiguration,
     inspect: impl FnOnce(
-        allocator_api2::vec::IntoIter<Result<Token, TranslationError<'_>>, Bump>,
+        crate::util::region_vec::IntoIter<Result<Token, TranslationError<'_>>>,
         &mut Context<'_>,
     ) -> R,
 ) -> R {
@@ -63,7 +63,7 @@ fn with_preprocessed_with<R>(
 fn with_preprocessed<R>(
     source: &str,
     inspect: impl FnOnce(
-        allocator_api2::vec::IntoIter<Result<Token, TranslationError<'_>>, Bump>,
+        crate::util::region_vec::IntoIter<Result<Token, TranslationError<'_>>>,
         &mut Context<'_>,
     ) -> R,
 ) -> R {

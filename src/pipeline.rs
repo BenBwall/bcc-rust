@@ -24,9 +24,9 @@ use crate::{
             Token,
         },
     },
-    util::bump::{
-        Bump,
-        RegionVec,
+    util::{
+        bump::Bump,
+        region_vec::RegionVec,
     },
 };
 
@@ -95,12 +95,12 @@ pub(crate) fn preprocess_with_diagnostics<'tu>(
     mut preprocessor: Preprocessor<'tu, '_>,
     context: &mut Context<'tu>,
 ) -> RegionVec<Result<Token, TranslationError<'tu>>> {
-    let mut tokens = RegionVec::new_in(Bump::new());
+    let mut tokens = RegionVec::new();
     preprocessor.for_each_iterator_item(context, |context, mut token| {
         token.source_vectors = context.retain_token_source(token.source_vectors);
         tokens.push((token, context.pending_error_count()));
     });
-    let mut items = RegionVec::new_in(Bump::new());
+    let mut items = RegionVec::new();
     let mut reported = 0;
     for (token, errors_before) in tokens {
         while reported < errors_before {

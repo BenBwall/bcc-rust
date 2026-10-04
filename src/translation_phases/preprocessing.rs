@@ -72,8 +72,8 @@ use crate::{
             ArenaSet,
             ArenaVec,
             Bump,
-            RegionVec,
         },
+        region_vec::RegionVec,
         string_cache::StringCacheId,
     },
 };
@@ -448,7 +448,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
     /// budget, for direct preprocessing tests.
     #[cfg(test)]
     pub(crate) fn preprocess_all(&mut self, context: &mut Context<'tu>) -> RegionVec<Token> {
-        let mut tokens = RegionVec::new_in(Bump::new());
+        let mut tokens = RegionVec::new();
         let _ = self.preprocess_into_arena(context, usize::MAX, &mut tokens);
         tokens
     }

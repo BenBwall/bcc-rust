@@ -31,12 +31,10 @@ use allocator_api2::{
 };
 use rustc_hash::FxBuildHasher;
 
-use super::vm::GrowingRegion;
-
-#[cfg(not(miri))]
-const REGION_BYTES: usize = 100 * 1024 * 1024 * 1024;
-#[cfg(miri)]
-const REGION_BYTES: usize = 16 * 1024 * 1024;
+use super::vm::{
+    GrowingRegion,
+    REGION_BYTES,
+};
 
 #[derive(Clone, Copy)]
 struct Last {
@@ -407,8 +405,6 @@ unsafe impl Allocator for Bump {
 }
 
 pub(crate) type ArenaVec<'a, T> = AllocVec<T, &'a Bump>;
-/// A growable vector that owns its own fixed-address virtual-memory region.
-pub(crate) type RegionVec<T> = AllocVec<T, Bump>;
 pub(crate) type ArenaMap<'a, K, V> = hashbrown::HashMap<K, V, FxBuildHasher, &'a Bump>;
 pub(crate) type ArenaSet<'a, T> = hashbrown::HashSet<T, FxBuildHasher, &'a Bump>;
 
@@ -571,7 +567,6 @@ mod tests {
         ArenaString,
         ArenaVec,
         Bump,
-        RegionVec,
     };
     use crate::util::vm::{
         accounting,
@@ -798,19 +793,6 @@ mod tests {
         assert_eq!(queue.back(), None);
         queue.push_back(9);
         assert_eq!(queue.pop_front(), Some(9));
-    }
-
-    #[test]
-    fn owning_vector_grows_without_moving_its_elements() {
-        let mut values = RegionVec::new_in(Bump::new());
-        values.push(42_u64);
-        let first = values.as_ptr();
-        for value in 0..100_000 {
-            values.push(value);
-        }
-        assert_eq!(values.as_ptr(), first);
-        assert_eq!(values[0], 42);
-        assert_eq!(values[100_000], 99_999);
     }
 
     #[test]

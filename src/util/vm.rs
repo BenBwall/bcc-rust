@@ -149,7 +149,7 @@ impl GrowingRegion {
         self.region.as_ptr()
     }
 
-    #[cfg(test)]
+    /// The bytes committed from the region's start.
     pub(crate) fn committed(&self) -> usize {
         self.committed
     }
@@ -214,6 +214,15 @@ fn committed_view(base: NonNull<u8>, committed: usize) -> NonNull<u8> {
     // from it may read and write exactly that range.
     NonNull::from(unsafe { &*cells }).cast()
 }
+
+/// Every region's reservation: 100 GiB of address space, which costs no
+/// commit charge until written. A few dozen of them fit easily in a 64-bit
+/// address space. Miri models a reservation as one real allocation, so it
+/// gets a small one.
+#[cfg(not(miri))]
+pub(crate) const REGION_BYTES: usize = 100 * 1024 * 1024 * 1024;
+#[cfg(miri)]
+pub(crate) const REGION_BYTES: usize = 16 * 1024 * 1024;
 
 /// The first commit step: small, so a compilation touching a dozen regions
 /// commits under a mebibyte. Steps double from here up to

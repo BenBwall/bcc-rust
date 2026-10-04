@@ -16,9 +16,9 @@ use hashbrown::{
 };
 use rustc_hash::FxBuildHasher;
 
-use super::bump::{
-    Bump,
-    RegionVec,
+use super::{
+    bump::Bump,
+    region_vec::RegionVec,
 };
 
 pub(crate) struct StringCache<'tu> {
@@ -125,12 +125,12 @@ impl<'tu> StringCache<'tu> {
 
     /// Creates a new empty `StringCache`.
     pub(crate) fn new(arena: &'tu Bump) -> Self {
-        let mut ends = RegionVec::new_in(Bump::new());
+        let mut ends = RegionVec::new();
         ends.push(0);
         Self {
             arena,
             ends,
-            data: RegionVec::new_in(Bump::new()),
+            data: RegionVec::new(),
             dedup: HashTable::new_in(arena),
         }
     }

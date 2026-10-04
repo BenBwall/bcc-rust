@@ -15,10 +15,7 @@ use crate::{
             Token,
         },
     },
-    util::bump::{
-        Bump,
-        RegionVec,
-    },
+    util::region_vec::RegionVec,
 };
 
 /// The preprocessed translation unit that the parser reads.
@@ -42,7 +39,7 @@ impl Upstream {
         context: &mut Context<'tu>,
         source_segment_limit: usize,
     ) -> Self {
-        let mut tokens = RegionVec::new_in(Bump::new());
+        let mut tokens = RegionVec::new();
         let preprocessing_limit_token =
             preprocessor.preprocess_into_arena(context, source_segment_limit, &mut tokens);
         Self {

@@ -13,6 +13,7 @@ pub(crate) mod bump;
 pub(crate) mod byte_scan;
 pub(crate) mod dedup_arena;
 pub(crate) mod packed;
+pub(crate) mod region_vec;
 pub(crate) mod shared;
 pub(crate) mod string_cache;
 pub(crate) mod vector_slice;

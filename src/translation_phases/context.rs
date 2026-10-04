@@ -40,9 +40,9 @@ use crate::{
             ArenaQueue,
             ArenaVec,
             Bump,
-            RegionVec,
         },
         dedup_arena::DedupArena,
+        region_vec::RegionVec,
         string_cache::{
             StringCache,
             StringCacheId,
@@ -177,9 +177,9 @@ impl<'tu> Context<'tu> {
         Self {
             tu,
             configuration,
-            source_vectors: SourceVectorStack(RegionVec::new_in(Bump::new())),
-            parser_token_vectors: RegionVec::new_in(Bump::new()),
-            retained_vectors: RegionVec::new_in(Bump::new()),
+            source_vectors: SourceVectorStack(RegionVec::new()),
+            parser_token_vectors: RegionVec::new(),
+            retained_vectors: RegionVec::new(),
             string_cache,
             canonical_identifiers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             literal_values: DedupArena::new(tu),
