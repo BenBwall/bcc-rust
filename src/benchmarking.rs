@@ -274,7 +274,8 @@ fn prepare_parse_in_context<'a, 'tu>(
     input: BenchmarkInput,
 ) -> PreparedParse<'a, 'tu> {
     let preprocessor = preprocessor(context, input);
-    let parser = Parser::new(preprocessor, context);
+    let preprocessed = Parser::preprocess(preprocessor, context);
+    let parser = Parser::from_preprocessed(preprocessed);
     PreparedParse { context, parser }
 }
 

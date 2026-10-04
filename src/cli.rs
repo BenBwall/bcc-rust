@@ -293,7 +293,8 @@ fn print_parser_output<'tu>(
         quote_include,
         system_include,
     );
-    let unit = LanguageParser::new(preprocessor, &mut context).parse_translation_unit(&mut context);
+    let preprocessed = LanguageParser::preprocess(preprocessor, &mut context);
+    let unit = LanguageParser::from_preprocessed(preprocessed).parse_translation_unit(&mut context);
     let mut reporter = DiagnosticReporter::new();
     while let Some(error) = context.pop_pending_error() {
         reporter.report(&error, &mut context);

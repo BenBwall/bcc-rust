@@ -9,6 +9,7 @@ use super::{
     ParsedTranslationUnit,
     Parser,
     ParserLimits,
+    PreprocessedTranslationUnit,
     declaration_syntax::{
         Declarator,
         DirectDeclarator,
@@ -89,21 +90,46 @@ impl Parser {
     ///
     /// C99: the input is the translation unit produced after phase 7 under
     /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
+    #[cfg(test)]
     pub(crate) fn new(preprocessor: Preprocessor, context: &mut Context<'_>) -> Self {
         Self::new_with_config(preprocessor, context, ParserLimits::default())
     }
 
-    fn new_with_config(
+    pub(crate) fn preprocess(
+        preprocessor: Preprocessor,
+        context: &mut Context<'_>,
+    ) -> PreprocessedTranslationUnit {
+        Self::preprocess_with_limit(
+            preprocessor,
+            context,
+            ParserLimits::default().source_segments,
+        )
+    }
+
+    fn preprocess_with_limit(
         mut preprocessor: Preprocessor,
+        context: &mut Context<'_>,
+        source_segment_limit: usize,
+    ) -> PreprocessedTranslationUnit {
+        preprocessor.prepare_for_parsing();
+        PreprocessedTranslationUnit {
+            upstream: Upstream::preprocess_all(preprocessor, context, source_segment_limit),
+        }
+    }
+
+    pub(crate) fn from_preprocessed(preprocessed: PreprocessedTranslationUnit) -> Self {
+        Self::with_upstream(preprocessed.upstream)
+    }
+
+    #[cfg(test)]
+    fn new_with_config(
+        preprocessor: Preprocessor,
         context: &mut Context<'_>,
         limits: ParserLimits,
     ) -> Self {
-        preprocessor.prepare_for_parsing();
-        let mut parser = Self::with_upstream(Upstream::preprocess_all(
-            preprocessor,
-            context,
-            limits.source_segments,
-        ));
+        let preprocessed =
+            Self::preprocess_with_limit(preprocessor, context, limits.source_segments);
+        let mut parser = Self::from_preprocessed(preprocessed);
         parser.limits = limits;
         parser
     }

@@ -151,6 +151,12 @@ pub(crate) struct Parser {
     action_budget: Option<usize>,
 }
 
+/// Fully preprocessed parser input. The preprocessor can be dropped before
+/// parser working memory is created.
+pub(crate) struct PreprocessedTranslationUnit {
+    upstream: token_cursor::Upstream,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ParserLimits {
     external_declarations: usize,
