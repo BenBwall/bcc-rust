@@ -14,7 +14,7 @@ use std::{
 use chrono::Local;
 
 use super::{
-    Preprocessor,
+    Expander,
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
@@ -140,9 +140,9 @@ pub(super) fn string_literal_spelling(value: &str) -> String {
     clippy::needless_continue,
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
 )]
-impl Preprocessor<'_, '_> {
+impl Expander<'_, '_, '_> {
     pub(super) fn expansion_end(&self) -> Option<SourceVector> {
-        for frame in self.state.tokenizer_stack.iter().rev() {
+        for frame in self.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::ObjectLikeMacroInvocation { invocation_end, .. }
                 | TokenizerFrameType::FunctionLikeMacroInvocation { invocation_end, .. } =>
@@ -156,7 +156,7 @@ impl Preprocessor<'_, '_> {
     }
 
     fn invocation_location(&self, context: &Context<'_>, token: PreprocessorToken) -> SourceVector {
-        for frame in self.state.tokenizer_stack.iter().rev() {
+        for frame in self.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
                 | TokenizerFrameType::FunctionLikeMacroInvocation { invocation, .. } =>
@@ -174,8 +174,7 @@ impl Preprocessor<'_, '_> {
     }
 
     pub(super) fn physical_source_file_index(&self) -> u32 {
-        self.state
-            .tokenizer_stack
+        self.tokenizer_stack
             .iter()
             .rev()
             .find_map(|frame| match frame.frame_type {
@@ -240,13 +239,14 @@ impl Preprocessor<'_, '_> {
         _context: &mut Context<'_>,
         frame: TokenizerFrame,
     ) {
-        self.state.tokenizer_stack.last_mut().unwrap().tokenizer = take(&mut self.tokenizer);
+        self.tokenizer_stack.last_mut().unwrap().tokenizer = take(&mut self.tokenizer);
         self.tokenizer = frame.tokenizer.clone();
-        self.state.tokenizer_stack.push(frame);
+        self.tokenizer_stack.push(frame);
+        self.pushed_frames += 1;
     }
 
     pub(super) fn pop_tokenizer_frame(&mut self, context: &mut Context<'_>) {
-        let frame = self.state.tokenizer_stack.pop();
+        let frame = self.tokenizer_stack.pop();
         if let Some(TokenizerFrame {
             frame_type:
                 TokenizerFrameType::SourceFile {
@@ -267,7 +267,7 @@ impl Preprocessor<'_, '_> {
                 });
             }
         }
-        if let Some(last) = self.state.tokenizer_stack.last() {
+        if let Some(last) = self.tokenizer_stack.last() {
             self.tokenizer = last.tokenizer.clone();
         }
     }
@@ -420,7 +420,7 @@ impl Preprocessor<'_, '_> {
                 'merge: loop {
                     let next_is_end = self.macro_argument_is_at_end(context);
                     let argument_continues = matches!(
-                        self.state.tokenizer_stack.last(),
+                        self.tokenizer_stack.last(),
                         Some(TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. },
                             ..
@@ -533,7 +533,7 @@ impl Preprocessor<'_, '_> {
                         is_variadic,
                     } => {
                         if !matches!(
-                            self.state.tokenizer_stack.last().map(|f| &f.frame_type),
+                            self.tokenizer_stack.last().map(|f| &f.frame_type),
                             Some(TokenizerFrameType::SourceFile { .. })
                         ) {
                             let Some((arguments, invocation_end)) = self.capture_cross_frame_call(
@@ -569,10 +569,7 @@ impl Preprocessor<'_, '_> {
                         // the frame and must not expose the definition's
                         // following source lines to this lookahead.
                         let source_file = matches!(
-                            self.state
-                                .tokenizer_stack
-                                .last()
-                                .map(|frame| &frame.frame_type),
+                            self.tokenizer_stack.last().map(|frame| &frame.frame_type),
                             Some(TokenizerFrameType::SourceFile { .. })
                         );
                         loop {

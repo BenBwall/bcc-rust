@@ -99,10 +99,10 @@ pub(crate) fn preprocess_with_diagnostics<'tu>(
     _tok: &Bump,
 ) -> RegionVec<Result<Token, TranslationError<'tu>>> {
     let mut tokens = RegionVec::new_in(Bump::new());
-    while let Some(mut token) = preprocessor.next_iterator_item(context) {
+    preprocessor.for_each_iterator_item(context, |context, mut token| {
         token.source_vectors = context.retain_token_source(token.source_vectors);
         tokens.push((token, context.pending_error_count()));
-    }
+    });
     let mut items = RegionVec::new_in(Bump::new());
     let mut reported = 0;
     for (token, errors_before) in tokens {

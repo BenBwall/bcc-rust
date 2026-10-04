@@ -39,7 +39,6 @@ use crate::{
         GetSourceVectors,
         SourceVectors,
         TranslationError,
-        TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,
@@ -65,11 +64,11 @@ fn preprocess_with_configuration<R>(
         SharedVec::default(),
     );
     let mut identifiers = Vec::new();
-    while let Some(token) = preprocessor.next_item(&mut context) {
+    preprocessor.for_each_item(&mut context, |context, token| {
         if token.kind == TokenType::Identifier {
             identifiers.push(context.string_cache.at(token.contents).to_owned());
         }
-    }
+    });
     let mut errors = Vec::new();
     while let Some(error) = context.pop_pending_error() {
         errors.push(error);
@@ -130,12 +129,12 @@ fn malformed_include_restores_include_tokenization_mode() {
         SharedVec::default(),
     );
     let mut tokens = Vec::new();
-    while let Some(token) = preprocessor.next_item(&mut context) {
+    preprocessor.for_each_item(&mut context, |context, token| {
         tokens.push((
             token.kind,
             context.string_cache.at(token.contents).to_owned(),
         ));
-    }
+    });
     let errors = context.take_pending_errors();
 
     assert_eq!(
@@ -262,7 +261,9 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
             contents,
         };
         assert_eq!(
-            preprocessor.map_preprocessor_token(&mut context, token),
+            preprocessor.run(&mut context, |preprocessor, context| {
+                std::ops::ControlFlow::Break(preprocessor.map_preprocessor_token(context, token))
+            }),
             None
         );
         assert!(matches!(
@@ -448,9 +449,9 @@ fn with_tokens_of<R>(
         SharedVec::default(),
     );
     let mut tokens = Vec::new();
-    while let Some(token) = preprocessor.next_item(&mut context) {
+    preprocessor.for_each_item(&mut context, |_, token| {
         tokens.push(token);
-    }
+    });
     inspect(&tokens, &mut context)
 }
 

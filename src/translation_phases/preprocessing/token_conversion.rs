@@ -1,7 +1,7 @@
 //! Conversion of preprocessing tokens into parser tokens.
 
 use super::{
-    Preprocessor,
+    Expander,
     driver::{
         TokenizerFrame,
         TokenizerFrameType,
@@ -44,7 +44,7 @@ use crate::{
     util::packed::Packed,
 };
 
-impl<'tu> Preprocessor<'tu, '_> {
+impl<'tu> Expander<'tu, '_, '_> {
     pub(super) fn concatenate_adjacent_strings(
         &mut self,
         context: &mut Context<'tu>,
@@ -694,7 +694,7 @@ impl<'tu> Preprocessor<'tu, '_> {
             | PreprocessorTokenType::Newline => return None,
             | PreprocessorTokenType::Hash => {
                 if matches!(
-                    self.state.tokenizer_stack.last(),
+                    self.tokenizer_stack.last(),
                     Some(TokenizerFrame {
                         frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
                         ..
@@ -837,7 +837,7 @@ impl<'tu> Preprocessor<'tu, '_> {
                 Self::build_operator_token(token, OperatorTokenType::Ellipsis),
             | PreprocessorTokenType::HashHash => {
                 let error_type = if matches!(
-                    self.state.tokenizer_stack.last(),
+                    self.tokenizer_stack.last(),
                     Some(TokenizerFrame {
                         frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. }
                             | TokenizerFrameType::FunctionLikeMacroInvocation { .. }

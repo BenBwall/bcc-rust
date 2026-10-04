@@ -223,7 +223,7 @@ fn divide_fault_sources(source: &str) -> Vec<SourceVector> {
         SharedVec::default(),
         SharedVec::default(),
     );
-    while preprocessor.next_iterator_item(&mut context).is_some() {}
+    preprocessor.for_each_iterator_item(&mut context, |_, _| {});
     context
         .take_pending_errors()
         .into_iter()
@@ -317,7 +317,7 @@ fn malformed_ternary_groups_keep_outer_operands_and_operator_locations() {
             SharedVec::default(),
             SharedVec::default(),
         );
-        while pp.next_iterator_item(&mut context).is_some() {}
+        pp.for_each_iterator_item(&mut context, |_, _| {});
         let error = context.take_pending_errors().remove(0);
         let sources = error.source_vectors(&mut context);
         assert_eq!(context.get_source_vectors(sources)[0].column, column);

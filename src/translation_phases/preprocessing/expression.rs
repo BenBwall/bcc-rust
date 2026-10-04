@@ -8,7 +8,7 @@ use std::{
 };
 
 use super::{
-    Preprocessor,
+    Expander,
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
@@ -505,7 +505,7 @@ impl<'pp> PreprocessorExpressionParser<'pp> {
     clippy::cast_possible_truncation,
     reason = "Integer literal values are range-checked before narrowing."
 )]
-impl Preprocessor<'_, '_> {
+impl Expander<'_, '_, '_> {
     fn map_operator(
         &mut self,
         _context: &Context<'_>,

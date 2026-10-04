@@ -6,7 +6,7 @@ use std::{
 };
 
 use super::{
-    Preprocessor,
+    Expander,
     driver::TokenizerFrameType,
     errors::{
         PreprocessorError,
@@ -47,7 +47,7 @@ impl<'pp> ConditionalGroup<'pp> {
     }
 }
 
-/// How far [`Preprocessor::skip_over_dead_code`] skips.
+/// How far [`Expander::skip_over_dead_code`] skips.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SkipMode {
     /// A group whose condition was false: stop at the matching `#elif` whose
@@ -57,12 +57,11 @@ pub(super) enum SkipMode {
     ToEndif,
 }
 
-impl Preprocessor<'_, '_> {
+impl Expander<'_, '_, '_> {
     /// Physical source frames own conditional groups. Presumed filenames
     /// changed by #line do not change the frame's boundary.
     fn current_file_conditional_base(&self) -> usize {
-        self.state
-            .tokenizer_stack
+        self.tokenizer_stack
             .iter()
             .rev()
             .find_map(|frame| match &frame.frame_type {

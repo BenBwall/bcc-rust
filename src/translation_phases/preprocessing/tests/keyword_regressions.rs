@@ -27,19 +27,22 @@ fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {
         SharedVec::default(),
         SharedVec::default(),
     );
+    let mut tokens = Vec::new();
+    pp.for_each_iterator_item(&mut context, |_, token| tokens.push(token));
+    let mut tokens = tokens.into_iter();
     for spelling in spellings.split_whitespace() {
-        let token = pp.next_iterator_item(&mut context).unwrap();
+        let token = tokens.next().unwrap();
         let TokenType::Keyword(keyword) = token.kind else {
             panic!("{spelling}: {token:?}")
         };
         assert_eq!(keyword.spelling(), spelling);
     }
     for spelling in ["integer", "Int", "_bool", "while_", "defined", "identifier"] {
-        let token = pp.next_iterator_item(&mut context).unwrap();
+        let token = tokens.next().unwrap();
         assert_eq!(token.kind, TokenType::Identifier);
         assert_eq!(context.string_cache.at(token.contents), spelling);
     }
-    assert!(pp.next_iterator_item(&mut context).is_none());
+    assert!(tokens.next().is_none());
     assert!(context.take_pending_errors().is_empty());
 }
 
@@ -58,14 +61,17 @@ fn keywords_remain_macro_names_and_paste_results_until_phase_seven() {
         SharedVec::default(),
         SharedVec::default(),
     );
+    let mut tokens = Vec::new();
+    pp.for_each_iterator_item(&mut context, |_, token| tokens.push(token));
+    let mut tokens = tokens.into_iter();
     for expected in [
         TokenType::Identifier,
         TokenType::Keyword(KeywordTokenType::Int),
         TokenType::Keyword(KeywordTokenType::While),
     ] {
-        assert_eq!(pp.next_iterator_item(&mut context).unwrap().kind, expected);
+        assert_eq!(tokens.next().unwrap().kind, expected);
     }
-    assert!(pp.next_iterator_item(&mut context).is_none());
+    assert!(tokens.next().is_none());
     assert!(context.take_pending_errors().is_empty());
 }
 

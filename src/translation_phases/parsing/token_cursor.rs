@@ -51,8 +51,8 @@ impl<'tok> Upstream<'tok> {
             tokens,
             _token_arena: std::marker::PhantomData,
             next_token: 0,
-            end: preprocessor.position(context),
-            source_file_index: preprocessor.source_file_index(),
+            end: preprocessor.end_position(),
+            source_file_index: preprocessor.end_source_file_index(),
             preprocessing_limit_token,
         }
     }

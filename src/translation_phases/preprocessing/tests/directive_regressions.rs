@@ -24,7 +24,6 @@ use super::{
     Token,
     TokenType,
     TranslationError,
-    TranslationPhase,
 };
 #[derive(Debug)]
 struct TemporaryHeaders(PathBuf);
@@ -115,9 +114,9 @@ fn with_directive_tokens<R>(
         SharedVec::default(),
     );
     let mut tokens = Vec::new();
-    while let Some(token) = preprocessor.next_item(&mut context) {
+    preprocessor.for_each_item(&mut context, |_, token| {
         tokens.push(token);
-    }
+    });
     inspect(&tokens, &mut context)
 }
 
@@ -133,7 +132,7 @@ fn pragma_destringizing_preserves_non_special_escapes() {
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
         let preprocess_arena = crate::util::bump::Bump::new();
-        let preprocessor = Preprocessor::new(
+        let mut preprocessor = Preprocessor::new(
             &preprocess_arena,
             &mut context,
             PathBuf::from("<pragma-test>").into_boxed_path(),
@@ -142,10 +141,14 @@ fn pragma_destringizing_preserves_non_special_escapes() {
             SharedVec::default(),
         );
         let literal = context.string_cache.intern(literal);
-        assert_eq!(
-            &*preprocessor.prepare_pragma_operator_string(&context, literal),
-            expected
-        );
+        let prepared = preprocessor.run(&mut context, |preprocessor, context| {
+            std::ops::ControlFlow::Break(
+                preprocessor
+                    .prepare_pragma_operator_string(context, literal)
+                    .to_string(),
+            )
+        });
+        assert_eq!(prepared, expected);
     }
 }
 

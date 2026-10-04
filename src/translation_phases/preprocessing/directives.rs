@@ -9,7 +9,7 @@ use std::{
 };
 
 use super::{
-    Preprocessor,
+    Expander,
     driver::{
         TokenizerFrame,
         TokenizerFrameType,
@@ -217,7 +217,7 @@ fn header_name_from_source(
     clippy::while_let_loop,
     reason = "The macro-parameter loop has multiple semantic exit conditions."
 )]
-impl Preprocessor<'_, '_> {
+impl Expander<'_, '_, '_> {
     pub(super) fn parse_directive(&mut self, context: &mut Context<'_>, token: PreprocessorToken) {
         if !self.last_was_newline {
             context.preprocessor_error(PreprocessorError {
@@ -406,10 +406,7 @@ impl Preprocessor<'_, '_> {
     fn peek_include_operand(&mut self, context: &mut Context<'_>) -> IncludeOperand {
         // Only a source file's own text can be read between the delimiters.
         if !matches!(
-            self.state
-                .tokenizer_stack
-                .last()
-                .map(|frame| &frame.frame_type),
+            self.tokenizer_stack.last().map(|frame| &frame.frame_type),
             Some(TokenizerFrameType::SourceFile { .. })
         ) {
             return IncludeOperand::Other;
@@ -745,9 +742,9 @@ impl Preprocessor<'_, '_> {
         let ignored = context.ignore_tokenizer_errors();
         context.set_ignore_tokenizer_errors(true);
         let mut empty = false;
-        'frames: for index in (0..self.state.tokenizer_stack.len()).rev() {
-            let frame = &self.state.tokenizer_stack[index];
-            let mut tokenizer = if index + 1 == self.state.tokenizer_stack.len() {
+        'frames: for index in (0..self.tokenizer_stack.len()).rev() {
+            let frame = &self.tokenizer_stack[index];
+            let mut tokenizer = if index + 1 == self.tokenizer_stack.len() {
                 self.tokenizer.clone()
             } else {
                 frame.tokenizer.clone()
@@ -863,7 +860,6 @@ impl Preprocessor<'_, '_> {
         // The main source contributes one frame. Macro frames and headers
         // whose processing has finished do not consume the nesting limit.
         let source_depth = self
-            .state
             .tokenizer_stack
             .iter()
             .filter(|frame| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))

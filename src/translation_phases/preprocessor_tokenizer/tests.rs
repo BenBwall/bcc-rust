@@ -373,18 +373,15 @@ fn preprocess(source: &str, path: &Path, include_directory: Option<&Path>) -> Ve
         directories,
     );
     let mut events = Vec::new();
-    loop {
-        let token = preprocessor.next_item(&mut context);
-        drain_diagnostics(&mut context, &mut events);
-        let Some(token) = token else {
-            break;
-        };
+    preprocessor.for_each_item(&mut context, |context, token| {
+        drain_diagnostics(context, &mut events);
         events.push(format!(
             "{} {:?}",
-            describe_token(token, &context),
+            describe_token(token, context),
             context.get_source_vectors(token.source_vectors)
         ));
-    }
+    });
+    drain_diagnostics(&mut context, &mut events);
     events
 }
 

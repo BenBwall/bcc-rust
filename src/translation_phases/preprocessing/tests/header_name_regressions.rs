@@ -21,7 +21,6 @@ use super::{
     SharedVec,
     TokenType,
     TranslationError,
-    TranslationPhase,
 };
 use crate::{
     configuration::{
@@ -147,11 +146,11 @@ fn with_preprocess_directories<R>(
         system_directories,
     );
     let mut identifiers = Vec::new();
-    while let Some(token) = preprocessor.next_item(&mut context) {
+    preprocessor.for_each_item(&mut context, |context, token| {
         if token.kind == TokenType::Identifier {
             identifiers.push(context.string_cache.at(token.contents).to_owned());
         }
-    }
+    });
     let errors = context.take_pending_errors();
     inspect(Outcome {
         identifiers,
@@ -186,9 +185,9 @@ fn written_header_names_keep_their_source_text() {
             directory,
         );
         let mut identifiers = Vec::new();
-        while let Some(token) = preprocessor.next_item(&mut context) {
+        preprocessor.for_each_item(&mut context, |context, token| {
             identifiers.push(context.string_cache.at(token.contents).to_owned());
-        }
+        });
         let errors = context.take_pending_errors();
         assert!(errors.is_empty(), "{source:?}: {errors:#?}");
         assert_eq!(identifiers.len(), 2, "{source:?}: {identifiers:?}");
