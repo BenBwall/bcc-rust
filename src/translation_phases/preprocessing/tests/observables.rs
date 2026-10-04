@@ -108,6 +108,11 @@ fn edge_cases_preserve_tokens_diagnostics_and_provenance() {
     pretty_assertions::assert_eq!(expected, snapshot);
 }
 
+#[test]
+fn line_directive_inside_macro_argument_does_not_rewind_another_source() {
+    drop(observe("#define F(x) [x]\nF(\n#line 10\n)"));
+}
+
 fn program_line() -> impl Strategy<Value = &'static str> {
     prop::sample::select(vec![
         "#define A 1",

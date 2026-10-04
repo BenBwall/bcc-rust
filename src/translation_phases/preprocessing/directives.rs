@@ -1181,7 +1181,7 @@ impl Preprocessor {
     }
 
     fn parse_line_directive(&mut self, context: &mut Context, _directive: PreprocessorToken) {
-        let Some(token) = self.expect_token::<true>(
+        let Some(token) = self.expect_token_without_rewind::<true>(
             context,
             |_, _, t| t.kind == PreprocessorTokenType::Number,
             |_, _, t| {
@@ -1221,7 +1221,7 @@ impl Preprocessor {
                 source_vectors: token.source_vectors,
             });
         }
-        let name = self.expect_token::<true>(
+        let name = self.expect_token_without_rewind::<true>(
             context,
             |_, _, t| {
                 matches!(
@@ -1272,7 +1272,7 @@ impl Preprocessor {
                 }
             }
             if self
-                .expect_token::<true>(
+                .expect_token_without_rewind::<true>(
                     context,
                     |_, _, t| t.kind == PreprocessorTokenType::Newline,
                     |_, _, t| {
