@@ -263,15 +263,15 @@ impl Preprocessor<'_> {
         }
     }
 
-    pub(super) fn expect_token<const SHOULD_IGNORE_WHITESPACE: bool>(
+    pub(super) fn expect_token<'tu, const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         is_correct_token: impl FnMut(&mut Self, &mut Context<'_>, PreprocessorToken) -> bool,
         on_wrong_token_type: impl FnMut(
             &mut Self,
-            &mut Context<'_>,
+            &mut Context<'tu>,
             PreprocessorToken,
-        ) -> ControlFlow<PreprocessorError>,
+        ) -> ControlFlow<PreprocessorError<'tu>>,
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
         self.expect_token_with_rewind::<SHOULD_IGNORE_WHITESPACE>(
@@ -283,15 +283,15 @@ impl Preprocessor<'_> {
         )
     }
 
-    pub(super) fn expect_token_without_rewind<const SHOULD_IGNORE_WHITESPACE: bool>(
+    pub(super) fn expect_token_without_rewind<'tu, const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         is_correct_token: impl FnMut(&mut Self, &mut Context<'_>, PreprocessorToken) -> bool,
         on_wrong_token_type: impl FnMut(
             &mut Self,
-            &mut Context<'_>,
+            &mut Context<'tu>,
             PreprocessorToken,
-        ) -> ControlFlow<PreprocessorError>,
+        ) -> ControlFlow<PreprocessorError<'tu>>,
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
         self.expect_token_with_rewind::<SHOULD_IGNORE_WHITESPACE>(
@@ -303,15 +303,15 @@ impl Preprocessor<'_> {
         )
     }
 
-    fn expect_token_with_rewind<const SHOULD_IGNORE_WHITESPACE: bool>(
+    fn expect_token_with_rewind<'tu, const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         mut is_correct_token: impl FnMut(&mut Self, &mut Context<'_>, PreprocessorToken) -> bool,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
-            &mut Context<'_>,
+            &mut Context<'tu>,
             PreprocessorToken,
-        ) -> ControlFlow<PreprocessorError>,
+        ) -> ControlFlow<PreprocessorError<'tu>>,
         eof_message: &'static str,
         rewind_on_error: bool,
     ) -> Option<PreprocessorToken> {
@@ -351,15 +351,15 @@ impl Preprocessor<'_> {
         }
     }
 
-    pub(super) fn expect_token_from_previous_phase<const SHOULD_IGNORE_WHITESPACE: bool>(
+    pub(super) fn expect_token_from_previous_phase<'tu, const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         mut is_correct_token: impl FnMut(&mut Self, &mut Context<'_>, PreprocessorToken) -> bool,
         mut on_wrong_token_type: impl FnMut(
             &mut Self,
-            &mut Context<'_>,
+            &mut Context<'tu>,
             PreprocessorToken,
-        ) -> ControlFlow<PreprocessorError>,
+        ) -> ControlFlow<PreprocessorError<'tu>>,
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
         loop {

@@ -210,11 +210,11 @@ impl Preprocessor<'_> {
         );
     }
 
-    fn skip_remaining_groups(
+    fn skip_remaining_groups<'tu>(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'tu>,
         directive: PreprocessorToken,
-        unmatched_error: PreprocessorErrorType,
+        unmatched_error: PreprocessorErrorType<'tu>,
     ) {
         if self.open_conditionals.len() <= self.current_file_conditional_base() {
             context.preprocessor_error(PreprocessorError {

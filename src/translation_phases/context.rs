@@ -655,7 +655,7 @@ impl<'tu> Context<'tu> {
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError) {
+    pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError<'tu>) {
         self.pending_errors
             .push_back(TranslationError::Preprocessing(error));
     }
@@ -664,7 +664,7 @@ impl<'tu> Context<'tu> {
     #[inline(never)]
     pub(crate) fn raw_preprocessor_error(
         self_pending_errors: &mut impl Extend<TranslationError<'tu>>,
-        error: PreprocessorError,
+        error: PreprocessorError<'tu>,
     ) {
         self_pending_errors.extend([TranslationError::Preprocessing(error)]);
     }

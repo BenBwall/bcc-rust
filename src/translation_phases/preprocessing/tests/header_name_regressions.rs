@@ -85,7 +85,7 @@ struct Outcome<'a, 'tu> {
 }
 
 impl Outcome<'_, '_> {
-    fn preprocessor_errors(&self) -> Vec<&PreprocessorErrorType> {
+    fn preprocessor_errors(&self) -> Vec<&PreprocessorErrorType<'_>> {
         self.errors
             .iter()
             .filter_map(|error| match error {
@@ -97,7 +97,7 @@ impl Outcome<'_, '_> {
     }
 
     /// Where the first error matching `predicate` points.
-    fn location(&mut self, predicate: impl Fn(&PreprocessorErrorType) -> bool) -> SourceVector {
+    fn location(&mut self, predicate: impl Fn(&PreprocessorErrorType<'_>) -> bool) -> SourceVector {
         let error = self
             .errors
             .iter()

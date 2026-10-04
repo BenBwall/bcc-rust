@@ -47,7 +47,7 @@ pub(crate) enum TranslationError<'tu> {
     #[error(transparent)]
     PreprocessorTokenizining(PreprocessorTokenizerError),
     #[error(transparent)]
-    Preprocessing(PreprocessorError),
+    Preprocessing(PreprocessorError<'tu>),
     #[error(transparent)]
     Parsing(ParserError<'tu>),
 }

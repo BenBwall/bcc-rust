@@ -199,7 +199,7 @@ enum ArithmeticFaultKind {
 }
 
 impl ArithmeticFaultKind {
-    fn error_type(self) -> PreprocessorErrorType {
+    fn error_type(self) -> PreprocessorErrorType<'static> {
         match self {
             | Self::UnaryMinusOverflow => PreprocessorErrorType::UnaryMinusOverflow,
             | Self::BinaryPlusOverflow => PreprocessorErrorType::BinaryPlusOverflow,
@@ -1339,10 +1339,10 @@ impl Preprocessor<'_> {
         stack.floor = self.expression_parser.open_parentheses.pop().unwrap_or(0);
     }
 
-    pub(super) fn eval_preprocessor_expression(
+    pub(super) fn eval_preprocessor_expression<'tu>(
         &mut self,
-        context: &mut Context<'_>,
-        on_no_expression_error: PreprocessorErrorType,
+        context: &mut Context<'tu>,
+        on_no_expression_error: PreprocessorErrorType<'tu>,
     ) -> bool {
         const UNARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Unary;
         const BINARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Binary;

@@ -125,12 +125,12 @@ impl<'tu> Preprocessor<'tu> {
     }
 
     #[inline(always)]
-    fn parse_integer_radix(
+    fn parse_integer_radix<'ctx>(
         &mut self,
-        context: &mut Context<'_>,
+        context: &mut Context<'ctx>,
         radix: u32,
         start_index: usize,
-        invalid_integer_literal_error: PreprocessorErrorType,
+        invalid_integer_literal_error: PreprocessorErrorType<'ctx>,
         token: PreprocessorToken,
     ) -> Token {
         _ = self;
@@ -385,10 +385,10 @@ impl<'tu> Preprocessor<'tu> {
     }
 
     #[inline(always)]
-    fn parse_float(
+    fn parse_float<'ctx>(
         &mut self,
-        context: &mut Context<'_>,
-        invalid_float_literal_error: PreprocessorErrorType,
+        context: &mut Context<'ctx>,
+        invalid_float_literal_error: PreprocessorErrorType<'ctx>,
         token: PreprocessorToken,
     ) -> Token {
         _ = self;

@@ -1343,7 +1343,9 @@ impl Preprocessor<'_> {
             );
         }
         context.preprocessor_error(PreprocessorError {
-            error_type:     PreprocessorErrorType::ErrorDirective(contents),
+            error_type:     PreprocessorErrorType::ErrorDirective(
+                context.diagnostic_text(&contents),
+            ),
             source_vectors: directive.source_vectors,
         });
     }

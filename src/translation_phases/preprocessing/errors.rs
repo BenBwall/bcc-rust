@@ -42,18 +42,18 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(crate) struct PreprocessorError {
-    pub(crate) error_type:     PreprocessorErrorType,
+pub(crate) struct PreprocessorError<'tu> {
+    pub(crate) error_type:     PreprocessorErrorType<'tu>,
     pub(crate) source_vectors: SourceVectors,
 }
 
-impl Display for PreprocessorError {
+impl Display for PreprocessorError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.error_type)
     }
 }
 
-impl ToDiagnostic for PreprocessorError {
+impl ToDiagnostic for PreprocessorError<'_> {
     fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic {
         self.error_type
             .explain(context.source_spelling(source))
@@ -61,21 +61,21 @@ impl ToDiagnostic for PreprocessorError {
     }
 }
 
-impl std::error::Error for PreprocessorError {}
+impl std::error::Error for PreprocessorError<'_> {}
 
-impl GetPosition for PreprocessorError {
+impl GetPosition for PreprocessorError<'_> {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.source_vectors.position(context)
     }
 }
 
-impl GetSourceVectors for PreprocessorError {
+impl GetSourceVectors for PreprocessorError<'_> {
     fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         self.source_vectors
     }
 }
 
-impl GetSeverity for PreprocessorError {
+impl GetSeverity for PreprocessorError<'_> {
     fn severity(&self) -> ErrorSeverity {
         match self.error_type {
             | PreprocessorErrorType::UnexpectedEndOfInput(_)
@@ -234,7 +234,7 @@ impl GetSeverity for PreprocessorError {
 }
 
 #[derive(Debug)]
-pub(crate) enum PreprocessorErrorType {
+pub(crate) enum PreprocessorErrorType<'tu> {
     InvalidHexadecimalFloatLiteral,
     InvalidDecimalFloatLiteral,
     FloatConstantOutOfRange {
@@ -398,7 +398,7 @@ pub(crate) enum PreprocessorErrorType {
     STDCPragmaDirectiveWithoutOnOffSwitch,
     MissingOnOffSwitchInSTDCPragma(String),
     PragmaOnceInNonHeader,
-    ErrorDirective(String),
+    ErrorDirective(&'tu str),
 }
 
 /// The directives of C99 §6.10, for suggestions.
@@ -418,7 +418,7 @@ const ESCAPE_LIST_NOTE: &str = "C99 §6.4.4.4: the escapes are `\\'`, `\\\"`, `\
                                 `\\a`, `\\b`, `\\f`, `\\n`, `\\r`, `\\t`, `\\v`, octal `\\ooo`, \
                                 hexadecimal `\\xhh`, and universal `\\uXXXX` or `\\UXXXXXXXX`";
 
-impl PreprocessorErrorType {
+impl PreprocessorErrorType<'_> {
     /// Describes the error; `spelling` is the source text it points at, used
     /// to name what was actually written.
     #[expect(
@@ -1040,7 +1040,7 @@ impl PreprocessorErrorType {
     }
 }
 
-impl Display for PreprocessorErrorType {
+impl Display for PreprocessorErrorType<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str(&self.explain(None).message)
     }
