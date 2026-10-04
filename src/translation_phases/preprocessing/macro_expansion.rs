@@ -307,8 +307,7 @@ impl Preprocessor<'_, '_> {
         if opening.kind != PreprocessorTokenType::OpeningParenthesis {
             return None;
         }
-        let mut groups = ArenaVec::new_in(self.state.arena);
-        groups.push(ArenaVec::new_in(self.state.arena));
+        let mut groups = vec![Vec::new()];
         let mut depth = 1usize;
         let closing = loop {
             let Some(token) = cursor.next(self, context) else {
@@ -331,7 +330,7 @@ impl Preprocessor<'_, '_> {
                 | PreprocessorTokenType::Comma
                     if depth == 1 && (!variadic || groups.len() <= names.len()) =>
                 {
-                    groups.push(ArenaVec::new_in(self.state.arena));
+                    groups.push(Vec::new());
                     continue;
                 },
                 | _ => (),
@@ -383,12 +382,9 @@ impl Preprocessor<'_, '_> {
         {
             // A normal argument cursor is terminated by a closing parenthesis.
             // Keep that sentinel so all existing raw #/## readers share bounds.
-            let tokenizer = if let Some(tokens) = groups.get_mut(i) {
-                tokens.push(closing);
-                TokenSource::replay(context, tokens, location.clone())
-            } else {
-                TokenSource::replay(context, &[closing], location.clone())
-            };
+            let mut tokens = groups.get_mut(i).map(take).unwrap_or_default();
+            tokens.push(closing);
+            let tokenizer = TokenSource::replay(context, &tokens, location.clone());
             drop(arguments.insert(
                 name,
                 FunctionLikeMacroArgument {
