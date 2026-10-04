@@ -167,7 +167,7 @@ impl<'p> Parser<'p> {
             label_scopes: LabelScopes::new_in(arena),
             func_name: None,
             switch_scopes: ArenaVec::new_in(arena),
-            recovery: RecoveryState::default(),
+            recovery: RecoveryState::new_in(arena),
             hard_error_count: 0,
             active_frame: ParseFrameKind::ExternalDeclaration,
             has_external_declaration: false,
@@ -503,7 +503,7 @@ impl<'p> Parser<'p> {
         self.frames.clear();
         self.retained_frame_nodes = 0;
         self.returned = None;
-        self.recovery = RecoveryState::default();
+        self.recovery.abandon();
         self.scopes.restore_depth(0);
         self.label_scopes.exit_all();
         self.switch_scopes.clear();

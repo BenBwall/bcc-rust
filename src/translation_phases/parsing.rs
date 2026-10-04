@@ -131,7 +131,7 @@ pub(crate) struct Parser<'p> {
     /// Active switch contexts used to associate `case` and `default` labels.
     switch_scopes: ArenaVec<'p, SwitchScope>,
     /// Delimiter depth and ownership while a synchronization scan is active.
-    recovery: RecoveryState,
+    recovery: RecoveryState<'p>,
     /// Number of hard parser diagnostics emitted so far.
     hard_error_count: usize,
     /// Frame currently executing, captured into every parser diagnostic.
