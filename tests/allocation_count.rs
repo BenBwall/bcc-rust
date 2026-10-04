@@ -24,10 +24,7 @@ mod measurements {
         },
     };
 
-    use bcc_rust::{
-        BenchmarkInput,
-        PreprocessingStrategy,
-    };
+    use bcc_rust::BenchmarkInput;
 
     struct Counting;
     static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -76,7 +73,7 @@ mod measurements {
         CALLS.store(0, Ordering::Relaxed);
         BYTES.store(0, Ordering::Relaxed);
         ACTIVE.store(true, Ordering::Relaxed);
-        let result = bcc_rust::parse(input, PreprocessingStrategy::Batch);
+        let result = bcc_rust::parse(input);
         ACTIVE.store(false, Ordering::Relaxed);
         println!(
             "parser mix: result={result:?}, global allocation calls={}, requested bytes={}",

@@ -30,9 +30,9 @@ pub use benchmarking::{
     PreparedParse,
     lex,
     parse,
-    prepare_parse,
     preprocess,
     preprocess_one_million,
+    with_prepared_parse,
 };
 pub use cli::{
     MainError,

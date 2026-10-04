@@ -10,7 +10,6 @@
 
 use bcc_rust::BenchmarkInput;
 use criterion::{
-    BatchSize,
     BenchmarkId,
     Criterion,
     Throughput,
@@ -95,7 +94,7 @@ fn bench_parser_only(c: &mut Criterion) {
         .chain(BenchmarkInput::PARSER_STRESS)
     {
         _ = group.throughput(throughput(input));
-        let summary = bcc_rust::prepare_parse(input).parse();
+        let summary = bcc_rust::parse(input);
         assert_eq!(
             summary.diagnostics,
             0,
@@ -106,11 +105,17 @@ fn bench_parser_only(c: &mut Criterion) {
             BenchmarkId::new(PIPELINE, input.name()),
             &input,
             |b, &input| {
-                b.iter_batched(
-                    || bcc_rust::prepare_parse(input),
-                    bcc_rust::PreparedParse::parse,
-                    BatchSize::PerIteration,
-                );
+                b.iter_custom(|iterations| {
+                    let mut elapsed = std::time::Duration::ZERO;
+                    for _ in 0..iterations {
+                        bcc_rust::with_prepared_parse(input, |prepared| {
+                            let start = std::time::Instant::now();
+                            _ = std::hint::black_box(prepared.parse());
+                            elapsed += start.elapsed();
+                        });
+                    }
+                    elapsed
+                });
             },
         );
     }

@@ -242,39 +242,46 @@ pub struct ParseBenchmarkSummary {
 #[doc(hidden)]
 #[must_use]
 pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
-    prepare_parse(input).parse()
+    let mut context = Context::new();
+    prepare_parse_in_context(&mut context, input).parse()
 }
 
 /// A translation unit preprocessed through phase 6 and ready to parse, so a
 /// benchmark can time phase 7 alone.
 #[doc(hidden)]
-pub struct PreparedParse {
-    context: Context,
+pub struct PreparedParse<'a> {
+    context: &'a mut Context,
     parser:  Parser,
 }
 
-impl std::fmt::Debug for PreparedParse {
+impl std::fmt::Debug for PreparedParse<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedParse").finish_non_exhaustive()
     }
 }
 
-/// Runs translation phases 1 through 6, leaving only parsing to
-/// [`PreparedParse::parse`].
+/// Runs translation phases 1 through 6, then passes a prepared parser to a
+/// callback while its translation context remains alive.
 #[doc(hidden)]
-#[must_use]
-pub fn prepare_parse(input: BenchmarkInput) -> PreparedParse {
+pub fn with_prepared_parse<R>(
+    input: BenchmarkInput,
+    inspect: impl FnOnce(PreparedParse<'_>) -> R,
+) -> R {
     let mut context = Context::new();
-    let preprocessor = preprocessor(&mut context, input);
-    let parser = Parser::new(preprocessor, &mut context);
+    inspect(prepare_parse_in_context(&mut context, input))
+}
+
+fn prepare_parse_in_context(context: &mut Context, input: BenchmarkInput) -> PreparedParse<'_> {
+    let preprocessor = preprocessor(context, input);
+    let parser = Parser::new(preprocessor, context);
     PreparedParse { context, parser }
 }
 
-impl PreparedParse {
+impl PreparedParse<'_> {
     /// Runs translation phase 7 and summarizes the parse.
     #[must_use]
-    pub fn parse(mut self) -> ParseBenchmarkSummary {
-        let unit = self.parser.parse_translation_unit(&mut self.context);
+    pub fn parse(self) -> ParseBenchmarkSummary {
+        let unit = self.parser.parse_translation_unit(self.context);
         ParseBenchmarkSummary {
             external_declarations: unit.external_declarations().len(),
             diagnostics:           self.context.take_pending_errors().len(),
