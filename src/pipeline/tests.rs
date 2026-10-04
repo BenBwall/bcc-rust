@@ -524,3 +524,73 @@ fn concurrent_deep_compilations_fit_in_the_address_space() {
         }
     });
 }
+
+/// The parse arena's high-water mark after parsing `source`, with the number
+/// of diagnostics reported.
+fn parse_arena_high_water(source: &str) -> (usize, usize) {
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocessed = with_preprocessor(
+        &mut context,
+        Path::new("<parse-arena-test>"),
+        source,
+        &[],
+        &[],
+        |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
+    );
+    let parse = Bump::new();
+    drop(parse_with_arena(preprocessed, &mut context, &parse));
+    (parse.high_water(), context.take_pending_errors().len())
+}
+
+/// Every frame family, the scopes and labels of a function body, and two
+/// recovery scans. Names repeat between copies, so a copy adds nothing that
+/// a parser must remember after it.
+const EVERY_FRAME: &str = "typedef int t;
+struct s { int a : 3; struct { int b; } inner; t c[2]; };
+enum e { E0, E1 = 2 };
+int (*f(int p, int (*q)(int, ...)))(char);
+int k(a, b) int a; char *b; { return a; }
+int g(int x) {
+    int y = x, z[3] = { [1] = 2, 3 }, *w = &y;
+    struct s v = { .a = 1, .inner = { .b = 2 }, .c = { [0] = 1 } };
+    switch (x) { case 1: y++; break; default: y--; }
+    for (int i = 0; i < 3; i++) { if (i) continue; else y += i; }
+    while (y > 0) { t u = y; y = u - 1; }
+    do { y++; } while (y < 2);
+  again:
+    y = (int)sizeof(struct s) + k(y, 0) + f(1, 0)('a') + z[1] + (t){ 0 } + *w;
+    if (y < 0) goto again;
+    return y ? x : -x;
+}
+void h(void) { int q = ; q = (1 + ; }
+";
+
+#[test]
+fn parse_arena_use_does_not_grow_with_repeated_declarations() {
+    let (once, once_errors) = parse_arena_high_water(&EVERY_FRAME.repeat(40));
+    let (twice, twice_errors) = parse_arena_high_water(&EVERY_FRAME.repeat(80));
+    assert!(once_errors > 0, "the input exercises recovery");
+    assert_eq!(twice_errors, 2 * once_errors);
+    assert!(once > 0, "frames and scopes use the parse arena");
+    assert_eq!(twice, once, "parse arena use grows with the input");
+}
+
+#[test]
+fn parse_arena_use_does_not_grow_with_distinct_block_scope_names() {
+    use std::fmt::Write as _;
+    let functions = |count: usize| {
+        let mut source = String::new();
+        for index in 0..count {
+            writeln!(
+                source,
+                "int g(int p{index}) {{ int l{index} = p{index}; {{ typedef int t{index};                  t{index} m{index} = l{index}; }} return l{index}; }}"
+            )
+            .expect("writing to a string cannot fail");
+        }
+        source
+    };
+    let (once, _) = parse_arena_high_water(&functions(400));
+    let (twice, _) = parse_arena_high_water(&functions(800));
+    assert_eq!(twice, once, "block-scope bookkeeping grows with the input");
+}
