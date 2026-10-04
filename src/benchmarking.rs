@@ -210,7 +210,6 @@ pub fn lex(input: BenchmarkInput) -> usize {
 #[must_use]
 pub fn preprocess(input: BenchmarkInput) -> usize {
     let tu = Bump::new();
-    let tok = Bump::new();
     let mut context = Context::new(&tu);
     with_preprocessor(
         &mut context,
@@ -219,10 +218,9 @@ pub fn preprocess(input: BenchmarkInput) -> usize {
         &[],
         &[],
         |mut preprocessor, context, _pp| {
-            preprocessor
-                .preprocess_into_arena(context, usize::MAX, &tok)
-                .0
-                .len()
+            let mut tokens = crate::util::bump::RegionVec::new_in(Bump::new());
+            let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
+            tokens.len()
         },
     )
 }

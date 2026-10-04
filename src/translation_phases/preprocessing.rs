@@ -50,6 +50,8 @@ pub(crate) use token::{
 
 use self::macro_expansion::FunctionLikeMacroArgument;
 #[cfg(test)]
+use crate::util::bump::Bump;
+#[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
     translation_phases::{
@@ -66,10 +68,7 @@ use crate::{
     util::{
         HashMap,
         HashSet,
-        bump::{
-            Bump,
-            RegionVec,
-        },
+        bump::RegionVec,
         string_cache::StringCacheId,
     },
 };
@@ -301,25 +300,23 @@ impl<'tu> Preprocessor<'tu> {
     pub(crate) fn preprocess_all(
         &mut self,
         context: &mut Context<'tu>,
-        tok: &Bump,
+        _tok: &Bump,
     ) -> RegionVec<Token> {
-        self.preprocess_into_arena(context, usize::MAX, tok).0
+        let mut tokens = RegionVec::new_in(Bump::new());
+        let _ = self.preprocess_into_arena(context, usize::MAX, &mut tokens);
+        tokens
     }
 
-    /// Collects the phase-6 output in the token arena before parsing starts.
-    /// Diagnostics stay pending in `context`; retained provenance survives
-    /// compaction of preprocessor working storage between tokens.
+    /// Appends phase-6 output to the caller's token buffer before parsing
+    /// starts. Diagnostics stay pending in `context`; retained provenance
+    /// survives compaction of preprocessor working storage between tokens.
     pub(crate) fn preprocess_into_arena(
         &mut self,
         context: &mut Context<'tu>,
         source_segment_limit: usize,
-        _tok: &Bump,
-    ) -> (RegionVec<Token>, Option<Token>) {
-        let mut tokens = RegionVec::new_in(Bump::new());
-        let limit_token = self.collect_with_limit(context, source_segment_limit, |token| {
-            tokens.push(token);
-        });
-        (tokens, limit_token)
+        tokens: &mut RegionVec<Token>,
+    ) -> Option<Token> {
+        self.collect_with_limit(context, source_segment_limit, |token| tokens.push(token))
     }
 
     /// Stops after the first token that exceeds the configured provenance

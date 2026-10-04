@@ -42,10 +42,11 @@ impl<'tok> Upstream<'tok> {
         mut preprocessor: Preprocessor<'tu>,
         context: &mut Context<'tu>,
         source_segment_limit: usize,
-        tok: &'tok Bump,
+        _tok: &'tok Bump,
     ) -> Self {
-        let (tokens, preprocessing_limit_token) =
-            preprocessor.preprocess_into_arena(context, source_segment_limit, tok);
+        let mut tokens = RegionVec::new_in(Bump::new());
+        let preprocessing_limit_token =
+            preprocessor.preprocess_into_arena(context, source_segment_limit, &mut tokens);
         Self {
             tokens,
             _token_arena: std::marker::PhantomData,
