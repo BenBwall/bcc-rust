@@ -49,7 +49,6 @@ pub(crate) use token::{
     TokenType,
 };
 
-use self::macro_expansion::FunctionLikeMacroArgument;
 #[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
@@ -68,7 +67,6 @@ use crate::{
         },
     },
     util::{
-        HashMap,
         bump::{
             ArenaMap,
             ArenaSet,
@@ -153,7 +151,6 @@ struct Resting<'tu, 'pp> {
     current_is_newline:    bool,
     last_was_newline:      bool,
     output_purpose:        OutputPurpose,
-    empty_disabled_macros: std::rc::Rc<[StringCacheId]>,
     expression_parser:     PreprocessorExpressionParser<'pp>,
     pending_parser_token:  Option<Token>,
     pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
@@ -207,8 +204,6 @@ pub(crate) struct Expander<'tu, 'pp: 'x, 'x> {
     operand_fence:         usize,
     /// Argument prescan stops here without suppressing expansion within it.
     expansion_fence:       usize,
-    empty_arguments:       std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument<'x>>>,
-    empty_disabled_macros: std::rc::Rc<[StringCacheId]>,
     expression_parser:     PreprocessorExpressionParser<'pp>,
     pending_parser_token:  Option<Token>,
     pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
@@ -307,10 +302,8 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         context.set_include_directories(quote_include_directories, system_include_directories);
         let mut macro_definitions = ArenaMap::with_hasher_in(FxBuildHasher, pp);
         for name in PREDEFINED_MACRO_NAMES {
-            drop(
-                macro_definitions
-                    .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn),
-            );
+            _ = macro_definitions
+                .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn);
         }
         let source_file_index = context.intern_source_file(source_name);
         let mut lexed_files = LexedFiles::new_in(pp);
@@ -342,7 +335,6 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                 last_was_newline: true,
                 current_is_newline: true,
                 output_purpose: OutputPurpose::Preprocessing,
-                empty_disabled_macros: std::rc::Rc::from([]),
                 expression_parser: PreprocessorExpressionParser::new(pp),
                 pending_parser_token: None,
                 pending_parser_errors: ArenaVec::new_in(pp),
@@ -508,7 +500,6 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             current_is_newline,
             last_was_newline,
             output_purpose,
-            empty_disabled_macros,
             expression_parser,
             pending_parser_token,
             pending_parser_errors,
@@ -534,8 +525,6 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             generate_placeholders: false,
             operand_fence: 0,
             expansion_fence: 0,
-            empty_arguments: std::rc::Rc::default(),
-            empty_disabled_macros,
             expression_parser,
             pending_parser_token,
             pending_parser_errors,
@@ -571,7 +560,6 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             current_is_newline,
             output_purpose,
             last_was_newline,
-            empty_disabled_macros,
             expression_parser,
             pending_parser_token,
             pending_parser_errors,
@@ -600,7 +588,6 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             current_is_newline,
             last_was_newline,
             output_purpose,
-            empty_disabled_macros,
             expression_parser,
             pending_parser_token,
             pending_parser_errors,

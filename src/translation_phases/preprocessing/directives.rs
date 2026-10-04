@@ -1040,14 +1040,14 @@ impl Expander<'_, '_, '_> {
                 }
             }
             let tokenizer = self.tokenizer.clone();
-            drop(self.state.macro_definitions.insert(
+            _ = self.state.macro_definitions.insert(
                 name.identifier_id(context),
                 MacroDefinition::FunctionLike {
                     tokenizer: self.state.lexed_files.persist(&tokenizer),
                     argument_names: self.state.arena.alloc_slice_copy(&argument_names),
                     is_variadic,
                 },
-            ));
+            );
         } else {
             if old_definition.as_ref().is_some_and(|d| match d {
                 | MacroDefinition::ObjectLike { .. } => false,
@@ -1064,12 +1064,12 @@ impl Expander<'_, '_, '_> {
                     source_vectors: name.source_vectors,
                 });
             }
-            drop(self.state.macro_definitions.insert(
+            _ = self.state.macro_definitions.insert(
                 name.identifier_id(context),
                 MacroDefinition::ObjectLike {
                     tokenizer: self.state.lexed_files.persist(&tokenizer),
                 },
-            ));
+            );
         }
         let mut last = Option::<PreprocessorToken>::None;
         if let Some(mut old_tokenizer) = old_tokenizer {
@@ -1189,11 +1189,10 @@ impl Expander<'_, '_, '_> {
             self.skip_until_newline(context);
             return;
         };
-        drop(
-            self.state
-                .macro_definitions
-                .remove(&name.identifier_id(context)),
-        );
+        _ = self
+            .state
+            .macro_definitions
+            .remove(&name.identifier_id(context));
         if self
             .expect_token_from_previous_phase::<true>(
                 context,

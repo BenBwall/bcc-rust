@@ -11,7 +11,6 @@ use std::{
         ControlFlow,
         RangeBounds,
     },
-    rc::Rc,
 };
 
 use super::{
@@ -41,7 +40,6 @@ use crate::{
         },
     },
     util::{
-        HashMap,
         bump::ArenaVec,
         string_cache::StringCacheId,
     },
@@ -67,15 +65,32 @@ pub(crate) enum HashHash {
     Empty,
 }
 
+/// One argument of a function-like macro invocation. Its data lives in the
+/// expansion arena and is shared by reference between the invocation and
+/// the frames that read it.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) struct FunctionLikeMacroArgument<'a> {
+pub(crate) struct FunctionLikeMacroArgument<'x> {
     pub(super) name:                StringCacheId,
-    pub(super) tokenizer:           TokenSource<'a>,
-    pub(super) enclosing_arguments:
-        Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument<'a>>>>,
-    pub(super) disabled_macros:     Rc<[StringCacheId]>,
+    pub(super) tokenizer:           TokenSource<'x>,
+    pub(super) enclosing_arguments: Option<MacroArguments<'x>>,
+    pub(super) disabled_macros:     &'x [StringCacheId],
     /// Shared once-only argument prescan; raw #/## operands bypass it.
-    pub(super) expanded:            Rc<OnceCell<TokenSource<'a>>>,
+    pub(super) expanded:            &'x OnceCell<TokenSource<'x>>,
+}
+
+/// The arguments of one invocation, each under its parameter's name.
+pub(crate) type MacroArguments<'x> = &'x [FunctionLikeMacroArgument<'x>];
+
+/// The argument for parameter `name`. Excess arguments kept for recovery
+/// share one name; as with a map insert, the last one wins.
+pub(super) fn find_argument(
+    arguments: MacroArguments<'_>,
+    name: StringCacheId,
+) -> Option<&FunctionLikeMacroArgument<'_>> {
+    arguments
+        .iter()
+        .rev()
+        .find(|argument| argument.name == name)
 }
 
 /// Transactional logical cursor over replacement lists and their continuations.
@@ -162,9 +177,9 @@ impl<'x> MacroCallCursor<'x> {
             let mut token = token?;
             let arguments = match &frame.frame_type {
                 | TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. } =>
-                    Some(arguments.clone()),
+                    Some(*arguments),
                 | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } =>
-                    argument.enclosing_arguments.clone(),
+                    argument.enclosing_arguments,
                 | _ => None,
             };
             let replacement = matches!(
@@ -176,9 +191,9 @@ impl<'x> MacroCallCursor<'x> {
                 let position = frame.tokenizer.position(context);
                 let operand = Expander::next_ignore_whitespace(&mut frame.tokenizer, context);
                 if let Some(operand) = operand
-                    && let Some(argument) = arguments
-                        .as_ref()
-                        .and_then(|arguments| arguments.get(&operand.identifier_id(context)))
+                    && let Some(argument) = arguments.and_then(|arguments| {
+                        find_argument(arguments, operand.identifier_id(context))
+                    })
                 {
                     let raw = preprocessor.read_argument(context, argument, false);
                     token.contents = Expander::stringify(context, &raw);
@@ -189,7 +204,7 @@ impl<'x> MacroCallCursor<'x> {
                     frame.tokenizer.set_position(context, position);
                 }
             }
-            let mut tokens = Vec::new();
+            let mut tokens = ArenaVec::new_in(preprocessor.scratch);
             let mut pasted = false;
             if replacement {
                 loop {
@@ -206,22 +221,24 @@ impl<'x> MacroCallCursor<'x> {
                         break;
                     };
                     if !pasted {
-                        tokens = if let Some(argument) = arguments
-                            .as_ref()
-                            .and_then(|arguments| arguments.get(&token.identifier_id(context)))
-                        {
+                        tokens = if let Some(argument) = arguments.and_then(|arguments| {
+                            find_argument(arguments, token.identifier_id(context))
+                        }) {
                             preprocessor.read_argument(context, argument, false)
                         } else {
-                            vec![token]
+                            let mut tokens = ArenaVec::new_in(preprocessor.scratch);
+                            tokens.push(token);
+                            tokens
                         };
                     }
                     let mut right = if let Some(argument) = arguments
-                        .as_ref()
-                        .and_then(|arguments| arguments.get(&rhs.identifier_id(context)))
+                        .and_then(|arguments| find_argument(arguments, rhs.identifier_id(context)))
                     {
                         preprocessor.read_argument(context, argument, false)
                     } else {
-                        vec![rhs]
+                        let mut right = ArenaVec::new_in(preprocessor.scratch);
+                        right.push(rhs);
+                        right
                     };
                     if !tokens.is_empty() && !right.is_empty() {
                         let lhs = tokens.pop().unwrap();
@@ -240,11 +257,9 @@ impl<'x> MacroCallCursor<'x> {
             }
             if token.kind.is_identifier()
                 && let Some(argument) = arguments
-                    .as_ref()
-                    .and_then(|arguments| arguments.get(&token.identifier_id(context)))
-                    .cloned()
+                    .and_then(|arguments| find_argument(arguments, token.identifier_id(context)))
             {
-                let mut expanded = preprocessor.expanded_argument(context, token, &argument);
+                let mut expanded = preprocessor.expanded_argument(context, token, argument);
                 while let Some(token) = expanded.next_item(context) {
                     self.pending.push(token);
                 }
@@ -261,8 +276,12 @@ impl<'x> MacroCallCursor<'x> {
         location: crate::translation_phases::SourceVector,
     ) {
         if self.pending_head < self.pending.len() {
-            let tokenizer =
-                TokenSource::replay(context, &self.pending[self.pending_head..], location);
+            let tokenizer = TokenSource::replay(
+                context,
+                preprocessor.scratch,
+                &[&self.pending[self.pending_head..]],
+                location,
+            );
             self.frames.insert(
                 self.index.unwrap() + 1,
                 TokenizerFrame {
@@ -290,10 +309,7 @@ impl<'x> Expander<'_, '_, 'x> {
         invocation: PreprocessorToken,
         names: &[StringCacheId],
         variadic: bool,
-    ) -> Option<(
-        HashMap<StringCacheId, FunctionLikeMacroArgument<'x>>,
-        crate::translation_phases::SourceVector,
-    )> {
+    ) -> Option<(MacroArguments<'x>, crate::translation_phases::SourceVector)> {
         let mut cursor = MacroCallCursor::new(self);
         let opening = loop {
             let token = cursor.next(self, context)?;
@@ -307,7 +323,9 @@ impl<'x> Expander<'_, '_, 'x> {
         if opening.kind != PreprocessorTokenType::OpeningParenthesis {
             return None;
         }
-        let mut groups = vec![Vec::new()];
+        // Argument tokens in order, and where each argument's tokens end.
+        let mut grouped = ArenaVec::new_in(self.scratch);
+        let mut group_ends = ArenaVec::new_in(self.scratch);
         let mut depth = 1usize;
         let closing = loop {
             let Some(token) = cursor.next(self, context) else {
@@ -328,17 +346,18 @@ impl<'x> Expander<'_, '_, 'x> {
                     }
                 },
                 | PreprocessorTokenType::Comma
-                    if depth == 1 && (!variadic || groups.len() <= names.len()) =>
+                    if depth == 1 && (!variadic || group_ends.len() < names.len()) =>
                 {
-                    groups.push(Vec::new());
+                    group_ends.push(grouped.len());
                     continue;
                 },
                 | _ => (),
             }
-            groups.last_mut().unwrap().push(token);
+            grouped.push(token);
         };
-        let empty = groups.len() == 1
-            && groups[0].iter().all(|token| {
+        group_ends.push(grouped.len());
+        let empty = group_ends.len() == 1
+            && grouped.iter().all(|token: &PreprocessorToken| {
                 matches!(
                     token.kind,
                     PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
@@ -347,7 +366,7 @@ impl<'x> Expander<'_, '_, 'x> {
         let count = if names.is_empty() && !variadic && empty {
             0
         } else {
-            groups.len()
+            group_ends.len()
         };
         if (!variadic && count != names.len()) || (variadic && count < names.len()) {
             context.preprocessor_error(PreprocessorError {
@@ -373,7 +392,8 @@ impl<'x> Expander<'_, '_, 'x> {
             .first()
             .cloned()
             .unwrap_or_default();
-        let mut arguments = HashMap::default();
+        let parameters = names.len() + usize::from(variadic);
+        let mut arguments = ArenaVec::with_capacity_in(parameters, self.scratch);
         for (i, name) in names
             .iter()
             .copied()
@@ -382,19 +402,24 @@ impl<'x> Expander<'_, '_, 'x> {
         {
             // A normal argument cursor is terminated by a closing parenthesis.
             // Keep that sentinel so all existing raw #/## readers share bounds.
-            let mut tokens = groups.get_mut(i).map(take).unwrap_or_default();
-            tokens.push(closing);
-            let tokenizer = TokenSource::replay(context, &tokens, location.clone());
-            drop(arguments.insert(
+            let group = match i {
+                | _ if i >= group_ends.len() => &[][..],
+                | 0 => &grouped[..group_ends[0]],
+                | _ => &grouped[group_ends[i - 1]..group_ends[i]],
+            };
+            let tokenizer = TokenSource::replay(
+                context,
+                self.scratch,
+                &[group, std::slice::from_ref(&closing)],
+                location.clone(),
+            );
+            arguments.push(FunctionLikeMacroArgument {
+                expanded: self.scratch.alloc(OnceCell::new()),
                 name,
-                FunctionLikeMacroArgument {
-                    expanded: Rc::default(),
-                    name,
-                    tokenizer,
-                    enclosing_arguments: None,
-                    disabled_macros: disabled_macros.clone(),
-                },
-            ));
+                tokenizer,
+                enclosing_arguments: None,
+                disabled_macros,
+            });
         }
         let invocation_end = match cursor.index.map(|index| &cursor.frames[index].frame_type) {
             | Some(
@@ -404,20 +429,17 @@ impl<'x> Expander<'_, '_, 'x> {
             | _ => location.clone(),
         };
         cursor.commit(self, context, location);
-        Some((arguments, invocation_end))
+        Some((arguments.leak(), invocation_end))
     }
 
-    pub(super) fn get_arguments(
-        &self,
-        _context: &Context<'_>,
-    ) -> Option<Rc<HashMap<StringCacheId, FunctionLikeMacroArgument<'x>>>> {
+    pub(super) fn get_arguments(&self, _context: &Context<'_>) -> Option<MacroArguments<'x>> {
         match self.tokenizer_stack.last().map(|frame| &frame.frame_type) {
             // Argument tokens belong to the invocation's caller. Looking them
             // up in the callee's map can make a same-named parameter expand itself.
             | Some(TokenizerFrameType::FunctionLikeMacroArgument { argument, .. }) =>
-                argument.enclosing_arguments.clone(),
+                argument.enclosing_arguments,
             | Some(TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. }) =>
-                Some(arguments.clone()),
+                Some(*arguments),
             | _ => None,
         }
     }
@@ -474,21 +496,20 @@ impl<'x> Expander<'_, '_, 'x> {
         false
     }
 
-    pub(super) fn disabled_macros(&self) -> Rc<[StringCacheId]> {
+    pub(super) fn disabled_macros(&self) -> &'x [StringCacheId] {
         if let Some(frame) = self.tokenizer_stack.last() {
             match &frame.frame_type {
-                | TokenizerFrameType::SourceFile { .. } =>
-                    return self.empty_disabled_macros.clone(),
+                | TokenizerFrameType::SourceFile { .. } => return &[],
                 | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } =>
-                    return argument.disabled_macros.clone(),
+                    return argument.disabled_macros,
                 | _ => (),
             }
         }
-        let mut names = Vec::new();
+        let mut names = ArenaVec::new_in(self.scratch);
         for frame in self.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } => {
-                    names.extend_from_slice(&argument.disabled_macros);
+                    names.extend_from_slice(argument.disabled_macros);
                     break;
                 },
                 | TokenizerFrameType::ObjectLikeMacroInvocation { name, .. }
@@ -496,7 +517,7 @@ impl<'x> Expander<'_, '_, 'x> {
                 | _ => (),
             }
         }
-        Rc::from(names)
+        names.leak()
     }
 
     pub(super) fn handle_macro_argument(
@@ -505,12 +526,12 @@ impl<'x> Expander<'_, '_, 'x> {
         token: PreprocessorToken,
     ) -> Option<TokenizerFrame<'x>> {
         let arguments = self.get_arguments(context)?;
-        let argument = arguments.get(&token.identifier_id(context))?.clone();
+        let argument = find_argument(arguments, token.identifier_id(context))?;
         // Prescan is isolated from the replacement list. Rescanning the result
         // then uses the callee's disabled-name set, not the caller's.
         Some(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan,
-            tokenizer:  self.expanded_argument(context, token, &argument),
+            tokenizer:  self.expanded_argument(context, token, argument),
         })
     }
 
@@ -521,7 +542,7 @@ impl<'x> Expander<'_, '_, 'x> {
         &mut self,
         context: &mut Context<'_>,
         token: PreprocessorToken,
-        argument: &FunctionLikeMacroArgument<'x>,
+        argument: &'x FunctionLikeMacroArgument<'x>,
     ) -> TokenSource<'x> {
         if let Some(tokenizer) = argument.expanded.get() {
             return tokenizer.clone();
@@ -532,7 +553,7 @@ impl<'x> Expander<'_, '_, 'x> {
             .first()
             .cloned()
             .unwrap_or_default();
-        let tokenizer = TokenSource::replay(context, &tokens, location);
+        let tokenizer = TokenSource::replay(context, self.scratch, &[&tokens], location);
         drop(argument.expanded.set(tokenizer.clone()));
         tokenizer
     }
@@ -543,11 +564,11 @@ impl<'x> Expander<'_, '_, 'x> {
         token: PreprocessorToken,
     ) -> Option<TokenizerFrame<'x>> {
         if let Some(arguments) = self.get_arguments(context)
-            && let Some(arg) = arguments.get(&token.identifier_id(context))
+            && let Some(arg) = find_argument(arguments, token.identifier_id(context))
         {
             let frame = TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
-                    argument:            Box::new(arg.clone()),
+                    argument:            arg,
                     paren_depth:         Some(1),
                     has_generated_token: false,
                 },
@@ -591,9 +612,14 @@ impl<'x> Expander<'_, '_, 'x> {
                 .first()
                 .cloned()
                 .unwrap_or_default();
-            let tokenizer = TokenSource::replay(context, &tokens, empty_location);
-            argument.tokenizer = tokenizer.clone();
-            argument.enclosing_arguments = None;
+            let tokenizer = TokenSource::replay(context, self.scratch, &[&tokens], empty_location);
+            // This frame reads its own replaced copy; the invocation keeps
+            // the original argument.
+            *argument = self.scratch.alloc(FunctionLikeMacroArgument {
+                tokenizer: tokenizer.clone(),
+                enclosing_arguments: None,
+                ..argument.clone()
+            });
             *paren_depth = None;
             frame.tokenizer = tokenizer;
         }
@@ -612,17 +638,17 @@ impl<'x> Expander<'_, '_, 'x> {
     fn replace_operand_argument(
         &mut self,
         context: &mut Context<'_>,
-        argument: &FunctionLikeMacroArgument<'x>,
-    ) -> Vec<PreprocessorToken> {
+        argument: &'x FunctionLikeMacroArgument<'x>,
+    ) -> ArenaVec<'x, PreprocessorToken> {
         self.read_argument(context, argument, false)
     }
 
     fn read_argument(
         &mut self,
         context: &mut Context<'_>,
-        argument: &FunctionLikeMacroArgument<'x>,
+        argument: &'x FunctionLikeMacroArgument<'x>,
         expand: bool,
-    ) -> Vec<PreprocessorToken> {
+    ) -> ArenaVec<'x, PreprocessorToken> {
         let hash_hash_stack = replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
         let generate_placeholders = self.generate_placeholders;
         let newlines = (self.last_was_newline, self.current_is_newline);
@@ -630,8 +656,8 @@ impl<'x> Expander<'_, '_, 'x> {
             context,
             TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
-                    argument:            Box::new(argument.clone()),
-                    paren_depth:         Some(1),
+                    argument,
+                    paren_depth: Some(1),
                     has_generated_token: false,
                 },
                 tokenizer:  argument.tokenizer.clone(),
@@ -640,7 +666,7 @@ impl<'x> Expander<'_, '_, 'x> {
         let depth = self.tokenizer_stack.len();
         let fence = replace(&mut self.operand_fence, if expand { 0 } else { depth });
         let expansion_fence = replace(&mut self.expansion_fence, depth);
-        let mut tokens = Vec::new();
+        let mut tokens = ArenaVec::new_in(self.scratch);
         while let Some(token) = self.next_preprocessor_token::<false>(context) {
             tokens.push(token);
         }
@@ -793,7 +819,7 @@ impl<'x> Expander<'_, '_, 'x> {
             | TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. },
                 ..
-            } => match arguments.get(&argument_name.identifier_id(context)) {
+            } => match find_argument(arguments, argument_name.identifier_id(context)) {
                 | None => {
                     self.set_position(context, position);
                     context.preprocessor_error(PreprocessorError {
@@ -811,12 +837,12 @@ impl<'x> Expander<'_, '_, 'x> {
                         source_vectors: token.source_vectors,
                     };
                 },
-                | Some(v) => v.clone(),
+                | Some(v) => v,
             },
             | _ => unreachable!(),
         };
         if argument.enclosing_arguments.is_some() {
-            let tokens = self.replace_operand_argument(context, &argument);
+            let tokens = self.replace_operand_argument(context, argument);
             return PreprocessorToken {
                 kind:           PreprocessorTokenType::String,
                 contents:       Self::stringify(context, &tokens),
@@ -824,7 +850,7 @@ impl<'x> Expander<'_, '_, 'x> {
             };
         }
         let argument_id = argument.name;
-        let mut token_tokenizer = argument.tokenizer;
+        let mut token_tokenizer = argument.tokenizer.clone();
         let mut last_was_whitespace = true;
         let mut synthetic_contents = String::from("\"");
         let mut pending_space = false;

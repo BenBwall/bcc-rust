@@ -1,6 +1,7 @@
 //! Tokenizer frame stack and the main preprocessing-token loop.
 
 use std::{
+    cell::OnceCell,
     fmt::{
         Debug,
         Write,
@@ -8,7 +9,6 @@ use std::{
     mem::take,
     ops::ControlFlow,
     path::Path,
-    rc::Rc,
 };
 
 use chrono::Local;
@@ -22,6 +22,7 @@ use super::{
     macro_expansion::{
         FunctionLikeMacroArgument,
         HashHash,
+        MacroArguments,
         MacroDefinition,
     },
 };
@@ -46,9 +47,9 @@ use crate::{
         },
     },
     util::{
-        HashMap,
         bump::{
             ArenaString,
+            ArenaVec,
             Bump,
         },
         string_cache::StringCacheId,
@@ -74,11 +75,11 @@ pub(crate) enum TokenizerFrameType<'a> {
         invocation:     SourceVector,
         invocation_end: SourceVector,
         name:           StringCacheId,
-        arguments:      Rc<HashMap<StringCacheId, FunctionLikeMacroArgument<'a>>>,
+        arguments:      MacroArguments<'a>,
         is_variadic:    bool,
     },
     FunctionLikeMacroArgument {
-        argument:            Box<FunctionLikeMacroArgument<'a>>,
+        argument:            &'a FunctionLikeMacroArgument<'a>,
         /// The parenthesis depth within an argument read from its invocation,
         /// or `None` for a replayed operand, which ends with its tokens.
         paren_depth:         Option<usize>,
@@ -91,6 +92,19 @@ pub(crate) struct TokenizerFrame<'a> {
     pub(super) frame_type: TokenizerFrameType<'a>,
     pub(super) tokenizer:  TokenSource<'a>,
 }
+
+// Frames, the arguments they share, and macro definitions live in arenas,
+// which run no destructors, so none of them may own other memory.
+const _: () = {
+    assert!(
+        !std::mem::needs_drop::<TokenizerFrame<'static>>(),
+        "tokenizer frames must not own memory outside their arena"
+    );
+    assert!(
+        !std::mem::needs_drop::<MacroDefinition<'static>>(),
+        "macro definitions must not own memory outside their arena"
+    );
+};
 
 /// The date and time of translation, spelled as C99 §6.10.8p1 requires.
 #[derive(Debug)]
@@ -551,11 +565,7 @@ impl<'x> Expander<'_, '_, 'x> {
                                         invocation_end,
                                         invocation: self.invocation_location(context, token),
                                         name: token.identifier_id(context),
-                                        arguments: if arguments.is_empty() {
-                                            self.empty_arguments.clone()
-                                        } else {
-                                            Rc::new(arguments)
-                                        },
+                                        arguments,
                                         is_variadic,
                                     },
                                     tokenizer,
@@ -593,7 +603,10 @@ impl<'x> Expander<'_, '_, 'x> {
                         let mut i = 0;
                         let enclosing_arguments = self.get_arguments(context);
                         let disabled_macros = self.disabled_macros();
-                        let mut arguments = HashMap::default();
+                        let mut arguments = ArenaVec::with_capacity_in(
+                            argument_names.len() + usize::from(is_variadic),
+                            self.scratch,
+                        );
                         // Excess arguments share a recovery map key, so map
                         // length cannot give the invocation's argument count.
                         let mut argument_count = 0;
@@ -636,17 +649,13 @@ impl<'x> Expander<'_, '_, 'x> {
                                                 i + 1
                                             };
                                             if argument_count != 0 {
-                                                drop(arguments.insert(
-                                                    at!(),
-                                                    FunctionLikeMacroArgument {
-                                                        expanded: Rc::default(),
-                                                        name: at!(),
-                                                        tokenizer,
-                                                        enclosing_arguments:
-                                                            enclosing_arguments.clone(),
-                                                        disabled_macros: disabled_macros.clone(),
-                                                    },
-                                                ));
+                                                arguments.push(FunctionLikeMacroArgument {
+                                                    expanded: self.scratch.alloc(OnceCell::new()),
+                                                    name: at!(),
+                                                    tokenizer,
+                                                    enclosing_arguments,
+                                                    disabled_macros,
+                                                });
                                             }
                                             break 'outer;
                                         }
@@ -658,16 +667,13 @@ impl<'x> Expander<'_, '_, 'x> {
                                         if token.kind == PreprocessorTokenType::Comma
                                             && paren_depth == 1 =>
                                     {
-                                        drop(arguments.insert(
-                                            at!(),
-                                            FunctionLikeMacroArgument {
-                                                expanded: Rc::default(),
-                                                name: at!(),
-                                                tokenizer,
-                                                enclosing_arguments: enclosing_arguments.clone(),
-                                                disabled_macros: disabled_macros.clone(),
-                                            },
-                                        ));
+                                        arguments.push(FunctionLikeMacroArgument {
+                                            expanded: self.scratch.alloc(OnceCell::new()),
+                                            name: at!(),
+                                            tokenizer,
+                                            enclosing_arguments,
+                                            disabled_macros,
+                                        });
                                         i += 1;
                                         continue 'outer;
                                     },
@@ -742,16 +748,13 @@ impl<'x> Expander<'_, '_, 'x> {
                                 },
                                 | None => self.tokenizer.clone(),
                             };
-                            drop(arguments.insert(
-                                context.string_cache.intern("__VA_ARGS__"),
-                                FunctionLikeMacroArgument {
-                                    expanded:            Rc::default(),
-                                    name:                context.string_cache.intern("__VA_ARGS__"),
-                                    tokenizer:           va_args_tokenizer,
-                                    enclosing_arguments: enclosing_arguments.clone(),
-                                    disabled_macros:     disabled_macros.clone(),
-                                },
-                            ));
+                            arguments.push(FunctionLikeMacroArgument {
+                                expanded: self.scratch.alloc(OnceCell::new()),
+                                name: context.string_cache.intern("__VA_ARGS__"),
+                                tokenizer: va_args_tokenizer,
+                                enclosing_arguments,
+                                disabled_macros,
+                            });
                             let mut paren_depth = 1isize;
 
                             if closed_at.is_none() {
@@ -800,11 +803,7 @@ impl<'x> Expander<'_, '_, 'x> {
                                 ),
                                 invocation: self.invocation_location(context, token),
                                 name: token.identifier_id(context),
-                                arguments: if arguments.is_empty() {
-                                    self.empty_arguments.clone()
-                                } else {
-                                    Rc::new(arguments)
-                                },
+                                arguments: arguments.leak(),
                                 is_variadic,
                             },
                             tokenizer,

@@ -38,7 +38,7 @@ pub(crate) enum TokenSource<'a> {
     /// A source buffer, lexed completely when it was opened.
     File(LexedCursor<'a>),
     /// Tokens phase 4 already produced.
-    Replay(ReplayCursor),
+    Replay(ReplayCursor<'a>),
 }
 
 impl Default for TokenSource<'_> {
@@ -64,13 +64,15 @@ impl<'a> TokenSource<'a> {
         ))))
     }
 
-    /// Replays `tokens`; `empty_location` locates an empty replay.
+    /// Replays the tokens of `parts` in order, keeping them in `arena`;
+    /// `empty_location` locates an empty replay.
     pub(crate) fn replay(
         context: &Context<'_>,
-        tokens: &[PreprocessorToken],
+        arena: &'a Bump,
+        parts: &[&[PreprocessorToken]],
         empty_location: SourceVector,
     ) -> Self {
-        Self::Replay(ReplayCursor::new(context, tokens, empty_location))
+        Self::Replay(ReplayCursor::new(context, arena, parts, empty_location))
     }
 
     /// A zero-length diagnostic location at `position`, which this source
@@ -395,7 +397,8 @@ impl<'pp> LexedFiles<'pp> {
     }
 
     /// `source` in the run's lifetime. A cursor over a file opened here is
-    /// re-pointed at that file; any other file is copied into the arena.
+    /// re-pointed at that file; any other file, and any replay, is copied
+    /// into the arena.
     pub(crate) fn persist(&mut self, source: &TokenSource<'_>) -> TokenSource<'pp> {
         match source {
             | TokenSource::File(cursor) => {
@@ -413,7 +416,7 @@ impl<'pp> LexedFiles<'pp> {
                 };
                 TokenSource::File(cursor.with_file(file))
             },
-            | TokenSource::Replay(cursor) => TokenSource::Replay(cursor.clone()),
+            | TokenSource::Replay(cursor) => TokenSource::Replay(cursor.copy_into(self.arena)),
         }
     }
 }
