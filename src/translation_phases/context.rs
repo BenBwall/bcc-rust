@@ -64,6 +64,8 @@ struct SegmentedVec<'a, T> {
     start:    usize,
     /// The position after the last element.
     end:      usize,
+    /// The segment that holds the last element, or 0 when empty.
+    tail:     usize,
 }
 
 impl<'a, T: Clone> SegmentedVec<'a, T> {
@@ -76,6 +78,7 @@ impl<'a, T: Clone> SegmentedVec<'a, T> {
             segments: ArenaVec::new_in(arena),
             start: 0,
             end: 0,
+            tail: 0,
         }
     }
 
@@ -112,26 +115,42 @@ impl<'a, T: Clone> SegmentedVec<'a, T> {
     }
 
     fn last(&self) -> Option<&T> {
-        self.len().checked_sub(1).and_then(|index| self.get(index))
+        if self.is_empty() {
+            None
+        } else {
+            self.segments[self.tail].last()
+        }
     }
 
     fn last_mut(&mut self) -> Option<&mut T> {
-        self.len()
-            .checked_sub(1)
-            .and_then(|index| self.get_mut(index))
+        if self.is_empty() {
+            None
+        } else {
+            self.segments[self.tail].last_mut()
+        }
     }
 
     fn push(&mut self, value: T) {
-        let (segment, offset) = Self::locate(self.end);
+        // The tail segment takes the element unless it is full.
+        let segment = match self.segments.get(self.tail) {
+            | Some(tail) if self.end == 0 || tail.len() < Self::FIRST_SEGMENT << self.tail =>
+                self.tail,
+            | Some(_) => self.tail + 1,
+            | None => 0,
+        };
         if segment == self.segments.len() {
             self.segments.push(ArenaVec::with_capacity_in(
                 Self::FIRST_SEGMENT << segment,
                 self.arena,
             ));
         }
-        let segment = &mut self.segments[segment];
-        debug_assert_eq!(segment.len(), offset, "segments fill in order");
-        segment.push(value);
+        debug_assert_eq!(
+            Self::locate(self.end),
+            (segment, self.segments[segment].len()),
+            "segments fill in order"
+        );
+        self.segments[segment].push(value);
+        self.tail = segment;
         self.end += 1;
     }
 
@@ -149,19 +168,34 @@ impl<'a, T: Clone> SegmentedVec<'a, T> {
         self[index] = value;
     }
 
+    /// The elements in order, one slice per segment.
+    fn slices(&self) -> impl Iterator<Item = &[T]> {
+        let (first, offset) = Self::locate(self.start);
+        let segments = if self.is_empty() {
+            &[][..]
+        } else {
+            &self.segments[first..=self.tail]
+        };
+        segments.iter().enumerate().map(move |(index, segment)| {
+            if index == 0 {
+                &segment[offset..]
+            } else {
+                &segment[..]
+            }
+        })
+    }
+
     /// The number of leading elements for which `predicate` holds, which must
     /// hold for a prefix.
     fn partition_point(&self, mut predicate: impl FnMut(&T) -> bool) -> usize {
-        let (mut low, mut high) = (0, self.len());
-        while low < high {
-            let middle = low + (high - low) / 2;
-            if predicate(&self[middle]) {
-                low = middle + 1;
-            } else {
-                high = middle;
+        let mut count = 0;
+        for slice in self.slices() {
+            match slice.last() {
+                | Some(last) if predicate(last) => count += slice.len(),
+                | _ => return count + slice.partition_point(&mut predicate),
             }
         }
-        low
+        count
     }
 
     /// Removes the first `count` elements.
@@ -173,20 +207,29 @@ impl<'a, T: Clone> SegmentedVec<'a, T> {
     }
 
     fn clear(&mut self) {
-        for segment in &mut self.segments {
+        if self.end == 0 {
+            return;
+        }
+        for segment in &mut self.segments[..=self.tail] {
             segment.clear();
         }
         self.start = 0;
         self.end = 0;
+        self.tail = 0;
     }
 
     fn iter(&self) -> impl Iterator<Item = &T> {
-        (0..self.len()).map(|index| &self[index])
+        self.slices().flatten()
     }
 
     fn for_each_mut(&mut self, mut visit: impl FnMut(&mut T)) {
-        for index in 0..self.len() {
-            visit(&mut self[index]);
+        if self.is_empty() {
+            return;
+        }
+        let (first, offset) = Self::locate(self.start);
+        for (index, segment) in self.segments[first..=self.tail].iter_mut().enumerate() {
+            let skip = if index == 0 { offset } else { 0 };
+            segment[skip..].iter_mut().for_each(&mut visit);
         }
     }
 }
@@ -1137,6 +1180,8 @@ mod tests {
 
         values.discard_front(10);
         assert_eq!((values.len(), values[0]), (91, 20));
+        assert_eq!(values.partition_point(|&value| value < 100), 41);
+        assert_eq!(values.iter().count(), 91);
         values.for_each_mut(|value| *value += 1);
         assert_eq!(values[0], 21);
 
