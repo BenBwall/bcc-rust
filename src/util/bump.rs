@@ -246,6 +246,7 @@ impl Bump {
         // The region may not exist yet. Align against its actual base during
         // the first fallible commit, after reservation succeeds.
         let start = inner.used;
+        let restore_last = inner.last;
         inner.tail = Some(start);
         inner.last = None;
         TailVec {
@@ -255,6 +256,7 @@ impl Bump {
             len: 0,
             committed: 0,
             restore: inner.used,
+            restore_last,
             elements: PhantomData,
         }
     }
@@ -453,19 +455,21 @@ unsafe impl Allocator for Bump {
 /// A vector at the end of an arena that commits as it is written; see
 /// [`Bump::tail_vec`].
 pub(crate) struct TailVec<'a, T: Copy> {
-    arena:     &'a Bump,
+    arena:        &'a Bump,
     /// The first element's offset in the arena's region.
-    start:     usize,
+    start:        usize,
     /// The first element, derived after the latest commit so it reaches
     /// every committed element. Dangling until the first commit.
-    ptr:       NonNull<T>,
-    len:       usize,
+    ptr:          NonNull<T>,
+    len:          usize,
     /// How many elements fit in committed memory.
-    committed: usize,
+    committed:    usize,
     /// The arena's `used` before the vector opened, restored if it is
     /// dropped unfinished.
-    restore:   usize,
-    elements:  PhantomData<&'a mut [T]>,
+    restore:      usize,
+    /// The latest block before the tail opened, restored with `used`.
+    restore_last: Option<Last>,
+    elements:     PhantomData<&'a mut [T]>,
 }
 
 impl<'a, T: Copy> TailVec<'a, T> {
@@ -546,6 +550,7 @@ impl<'a, T: Copy> TailVec<'a, T> {
         inner.tail = None;
         if this.len == 0 {
             inner.used = this.restore;
+            inner.last = this.restore_last;
             return &mut [];
         }
         inner.set_used(this.start + this.len * size_of::<T>());
@@ -564,6 +569,7 @@ impl<T: Copy> Drop for TailVec<'_, T> {
         let mut inner = self.arena.inner.borrow_mut();
         inner.tail = None;
         inner.used = self.restore;
+        inner.last = self.restore_last;
     }
 }
 
@@ -1165,6 +1171,31 @@ mod tests {
         let mut values = empty.tail_vec::<u8>();
         values.push(4);
         assert_eq!(values.into_slice(), [4]);
+    }
+
+    #[test]
+    fn abandoned_tail_preserves_latest_block_for_growth_and_deallocation() {
+        let old = Layout::from_size_align(16, 8).unwrap();
+        let new = Layout::from_size_align(24, 8).unwrap();
+        for close_as_empty_slice in [false, true] {
+            let arena = Bump::new();
+            let first = arena.allocate(old).unwrap().cast::<u8>();
+            if close_as_empty_slice {
+                assert_eq!(arena.tail_vec::<u8>().into_slice(), [0_u8; 0]);
+            } else {
+                let mut tail = arena.tail_vec::<u8>();
+                tail.push(7);
+                drop(tail);
+            }
+            // SAFETY: `first` is live and `new` is larger than `old`.
+            let grown = unsafe { arena.grow(first, old, new) }.unwrap().cast::<u8>();
+            assert_eq!(grown, first);
+            // SAFETY: `grown` is the latest live block with layout `new`.
+            unsafe {
+                arena.deallocate(grown, new);
+            }
+            assert_eq!(arena.used(), 0);
+        }
     }
 
     #[test]
