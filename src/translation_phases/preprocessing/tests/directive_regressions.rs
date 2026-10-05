@@ -175,6 +175,117 @@ fn enormous_line_number_diagnoses_without_panicking_and_retains_its_digits() {
 }
 
 #[test]
+fn missing_line_number_preserves_the_following_line() {
+    for (source, directive_line) in [
+        ("#line\nint kept;\n", 1),
+        ("#define EMPTY\n#line EMPTY\nint kept;\n", 2),
+        ("#line wrong discarded\nint kept;\n", 1),
+    ] {
+        with_directive_tokens_at_path(source, Path::new("main.c"), |tokens, context| {
+            assert_eq!(
+                tokens
+                    .iter()
+                    .map(|token| context.string_cache.at(token.contents))
+                    .collect::<Vec<_>>(),
+                ["int", "kept", ";"],
+                "{source:?}"
+            );
+            let kept = context.first_source_vector(tokens[0].source_vectors);
+            assert_eq!(kept.line, directive_line + 1, "{source:?}");
+            let errors = context.take_pending_errors();
+            let [TranslationError::Preprocessing(error)] = errors.as_slice() else {
+                panic!("{source:?}: {errors:#?}");
+            };
+            assert!(matches!(
+                error.error_type,
+                PreprocessorErrorType::MissingNumberInLineDirective(_)
+            ));
+            let location = context.first_source_vector(error.source_vectors);
+            assert_eq!(location.line, directive_line, "{source:?}");
+        });
+    }
+}
+
+#[test]
+fn pragma_expectations_preserve_tokens_across_source_boundaries() {
+    let headers = TemporaryHeaders::new();
+    headers.write(
+        "macros.h",
+        "#define BAD 123\n#define TEXT \"STDC FP_CONTRACT ON\"\n#define OPEN (\n\
+         #define CLOSE )\n#define P _Pragma\n#define EMPTY\n",
+    );
+    for (operand, recovered, expected_errors, error_in_header) in [
+        ("_Pragma(BAD)\n", vec!["123", ")"], 1, true),
+        ("_Pragma BAD\n", vec!["123"], 2, true),
+        ("_Pragma(TEXT BAD\n", vec!["123"], 1, true),
+        ("_Pragma(EMPTY)\n", vec![")"], 1, false),
+        ("_Pragma(\n", vec![], 1, false),
+        ("_Pragma(TEXT\n", vec![], 1, false),
+        ("_Pragma(TEXT ", vec![], 1, false),
+        ("_Pragma ", vec![], 2, false),
+        ("_Pragma(\"STDC FP_CONTRACT ON\")\n", vec![], 0, false),
+        ("P OPEN TEXT CLOSE\n", vec![], 0, false),
+    ] {
+        let source = format!("#include \"macros.h\"\n{operand}int after;\n");
+        with_directive_tokens_at_path(&source, &headers.0.join("main.c"), |tokens, context| {
+            let mut expected = recovered;
+            expected.extend(["int", "after", ";"]);
+            assert_eq!(
+                tokens
+                    .iter()
+                    .map(|token| {
+                        context.string_cache.at(token.contents).trim_end_matches('\0')
+                    })
+                    .collect::<Vec<_>>(),
+                expected,
+                "{source:?}"
+            );
+            let after = context.first_source_vector(tokens[tokens.len() - 2].source_vectors);
+            assert_eq!(
+                context.get_source_file(after.source_file_index),
+                headers.0.join("main.c").as_path(),
+                "{source:?}"
+            );
+            assert_eq!(after.line, if operand.ends_with('\n') { 3 } else { 2 });
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), expected_errors, "{source:?}: {errors:#?}");
+            for error in errors {
+                let TranslationError::Preprocessing(error) = error else {
+                    panic!("{source:?}: {error:#?}");
+                };
+                assert!(matches!(
+                    error.error_type,
+                    PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(_)
+                        | PreprocessorErrorType::MissingStringLiteralInPragmaOperator(_)
+                        | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(_)
+                ));
+                let location = context.first_source_vector(error.source_vectors);
+                let expected_file = headers.0.join(if error_in_header {
+                    "macros.h"
+                } else {
+                    "main.c"
+                });
+                assert_eq!(
+                    context.get_source_file(location.source_file_index),
+                    expected_file.as_path()
+                );
+                assert_eq!(location.line, if error_in_header { 1 } else { 2 });
+            }
+        });
+    }
+}
+
+#[test]
+fn unfinished_pragma_expectations_terminate_at_end_of_input() {
+    for source in ["_Pragma", "_Pragma(", "_Pragma(\"STDC FP_CONTRACT ON\""] {
+        with_directive_tokens(source, |tokens, context| {
+            assert!(tokens.is_empty(), "{source:?}: {tokens:#?}");
+            assert!(!context.take_pending_errors().is_empty(), "{source:?}");
+        });
+    }
+}
+
+#[test]
 fn line_directive_applies_to_the_following_line_and_strips_file_delimiters() {
     for source in [
         "#line 10 \"logical.c\"\n__FILE__; __LINE__\n",
@@ -516,6 +627,58 @@ fn stringified_include_operands_resolve_headers_and_consume_their_tail() {
             ["inside", "after"]
         );
     });
+}
+
+#[test]
+fn macro_include_tails_are_checked_in_the_callers_source_file() {
+    let headers = TemporaryHeaders::new();
+    headers.write("a.h", "int inside;\n");
+    for (definitions, operand) in [
+        ("#define H \"a.h\"\n", "H"),
+        ("#define H <a.h>\n", "H"),
+        ("#define H \"a.h\"\n#define ALIAS H\n", "ALIAS"),
+        ("#define S(x) #x\n", "S(a.h)"),
+    ] {
+        for tail in [" int injected;", " EMPTY", ""] {
+            let source = format!(
+                "#define EMPTY\n{definitions}#include {operand}{tail}\nint after;\n"
+            );
+            with_directive_tokens_with_system_directory(
+                &source,
+                &headers.0.join("main.c"),
+                &headers.0,
+                |tokens, context| {
+                    assert_eq!(
+                        tokens
+                            .iter()
+                            .map(|token| context.string_cache.at(token.contents))
+                            .collect::<Vec<_>>(),
+                        ["int", "inside", ";", "int", "after", ";"],
+                        "{source:?}"
+                    );
+                    let errors = context.take_pending_errors();
+                    if tail != " int injected;" {
+                        assert!(errors.is_empty(), "{source:?}: {errors:#?}");
+                        return;
+                    }
+                    let [TranslationError::Preprocessing(error)] = errors.as_slice() else {
+                        panic!("{source:?}: {errors:#?}");
+                    };
+                    assert!(matches!(
+                        error.error_type,
+                        PreprocessorErrorType::ExtraTokensAfterIncludeDirective
+                    ));
+                    let location = context.first_source_vector(error.source_vectors);
+                    assert_eq!(location.line as usize, definitions.lines().count() + 2);
+                    assert_eq!(location.column as usize, operand.len() + 11);
+                    assert_eq!(
+                        context.get_source_file(location.source_file_index),
+                        headers.0.join("main.c").as_path()
+                    );
+                },
+            );
+        }
+    }
 }
 #[test]
 fn unfinished_include_does_not_consume_the_following_line() {

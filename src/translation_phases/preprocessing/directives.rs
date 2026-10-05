@@ -861,7 +861,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 match tokenizer.next_item(self.context) {
                     | Some(token) if token.kind == PreprocessorTokenType::Whitespace => (),
                     | Some(token) if token.kind == PreprocessorTokenType::Newline => {
-                        empty = true;
+                        // A replacement-list newline ends that expansion,
+                        // not the directive in its caller's source file.
+                        empty = matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. });
                         break;
                     },
                     | Some(_) => break 'frames,
@@ -1336,7 +1338,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             },
             "parsing line directive",
         ) else {
-            self.skip_and_expand_until_newline();
+            if !self.current_is_newline {
+                self.skip_and_expand_until_newline();
+            }
             return;
         };
         let digits = self

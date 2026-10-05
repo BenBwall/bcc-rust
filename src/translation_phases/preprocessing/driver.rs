@@ -294,7 +294,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         }
     }
 
-    pub(super) fn expect_token<const SHOULD_IGNORE_WHITESPACE: bool>(
+    fn expect_token_preserving_rejected<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
         on_wrong_token_type: impl FnMut(
@@ -303,7 +303,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         ) -> ControlFlow<PreprocessorError<'tu>>,
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
-        self.expect_token_with_rewind::<SHOULD_IGNORE_WHITESPACE>(
+        self.expect_expanded_token::<SHOULD_IGNORE_WHITESPACE>(
             is_correct_token,
             on_wrong_token_type,
             eof_message,
@@ -320,7 +320,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         ) -> ControlFlow<PreprocessorError<'tu>>,
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
-        self.expect_token_with_rewind::<SHOULD_IGNORE_WHITESPACE>(
+        self.expect_expanded_token::<SHOULD_IGNORE_WHITESPACE>(
             is_correct_token,
             on_wrong_token_type,
             eof_message,
@@ -328,7 +328,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         )
     }
 
-    fn expect_token_with_rewind<const SHOULD_IGNORE_WHITESPACE: bool>(
+    fn expect_expanded_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         mut is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
         mut on_wrong_token_type: impl FnMut(
@@ -336,10 +336,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             PreprocessorToken,
         ) -> ControlFlow<PreprocessorError<'tu>>,
         eof_message: &'static str,
-        rewind_on_error: bool,
+        preserve_rejected: bool,
     ) -> Option<PreprocessorToken> {
         loop {
-            let start = self.position();
             match self.next_preprocessor_token::<SHOULD_IGNORE_WHITESPACE>() {
                 | Some(token) => {
                     if SHOULD_IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
@@ -351,8 +350,24 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     match on_wrong_token_type(self, token) {
                         | ControlFlow::Continue(()) => continue,
                         | ControlFlow::Break(e) => {
-                            if rewind_on_error {
-                                self.set_position(start);
+                            if preserve_rejected {
+                                // Expansion may have changed the active source.
+                                // Replay the token with its own provenance rather
+                                // than rewinding a position from another cursor.
+                                let location = self
+                                    .context
+                                    .first_source_vector(token.source_vectors)
+                                    .clone();
+                                let tokenizer = TokenSource::replay(
+                                    self.context,
+                                    self.scratch,
+                                    &[std::slice::from_ref(&token)],
+                                    location,
+                                );
+                                self.push_tokenizer_frame(TokenizerFrame {
+                                    frame_type: TokenizerFrameType::Rescan,
+                                    tokenizer,
+                                });
                             }
                             self.context.preprocessor_error(e);
                             return None;
@@ -360,10 +375,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     }
                 },
                 | None => {
-                    if rewind_on_error {
-                        self.set_position(start);
-                    }
-                    let source_vectors = self.location_at(start);
+                    let source_vectors = self.current_location();
                     self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(eof_message),
                         source_vectors,
@@ -881,7 +893,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 });
                             },
                             | "_Pragma" => {
-                                _ = self.expect_token::<true>(
+                                _ = self.expect_token_preserving_rejected::<true>(
                                 |_, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
                                 |_, token|
                                     ControlFlow::Break(PreprocessorError {
@@ -892,7 +904,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 "parsing pragma operator",
                             );
 
-                                let Some(string_token) = self.expect_token::<true>(
+                                let Some(string_token) = self.expect_token_preserving_rejected::<true>(
                                 |_, t| t.kind == PreprocessorTokenType::String,
                                 |_, token|
                                     ControlFlow::Break(PreprocessorError {
@@ -937,7 +949,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 }
                                 self.tokenizer = tokenizer;
 
-                                _ = self.expect_token::<true>(
+                                _ = self.expect_token_preserving_rejected::<true>(
                                 |_, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
                                 |_, token|
                                     ControlFlow::Break(PreprocessorError {
