@@ -51,25 +51,192 @@ use crate::{
     },
 };
 
+/// A vector in an arena that grows by adding segments, each twice as long as
+/// the one before, so it never moves or copies its elements and leaves no
+/// outgrown buffers in the arena. Removing from the front only advances its
+/// start, and clearing keeps the segments for reuse, as a `Vec` keeps its
+/// capacity.
+struct SegmentedVec<'a, T> {
+    arena:    &'a Bump,
+    segments: ArenaVec<'a, ArenaVec<'a, T>>,
+    /// The position of the first element.
+    start:    usize,
+    /// The position after the last element.
+    end:      usize,
+}
+
+impl<'a, T: Clone> SegmentedVec<'a, T> {
+    /// The length of the first segment.
+    const FIRST_SEGMENT: usize = 16;
+
+    fn new_in(arena: &'a Bump) -> Self {
+        Self {
+            arena,
+            segments: ArenaVec::new_in(arena),
+            start: 0,
+            end: 0,
+        }
+    }
+
+    /// The segment holding `position`, and the offset there.
+    fn locate(position: usize) -> (usize, usize) {
+        let blocks = position / Self::FIRST_SEGMENT + 1;
+        let segment = blocks.ilog2() as usize;
+        (
+            segment,
+            position - Self::FIRST_SEGMENT * ((1 << segment) - 1),
+        )
+    }
+
+    fn len(&self) -> usize {
+        self.end - self.start
+    }
+
+    fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    fn get(&self, index: usize) -> Option<&T> {
+        (index < self.len()).then(|| {
+            let (segment, offset) = Self::locate(self.start + index);
+            &self.segments[segment][offset]
+        })
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        (index < self.len()).then(|| {
+            let (segment, offset) = Self::locate(self.start + index);
+            &mut self.segments[segment][offset]
+        })
+    }
+
+    fn last(&self) -> Option<&T> {
+        self.len().checked_sub(1).and_then(|index| self.get(index))
+    }
+
+    fn last_mut(&mut self) -> Option<&mut T> {
+        self.len()
+            .checked_sub(1)
+            .and_then(|index| self.get_mut(index))
+    }
+
+    fn push(&mut self, value: T) {
+        let (segment, offset) = Self::locate(self.end);
+        if segment == self.segments.len() {
+            self.segments.push(ArenaVec::with_capacity_in(
+                Self::FIRST_SEGMENT << segment,
+                self.arena,
+            ));
+        }
+        let segment = &mut self.segments[segment];
+        debug_assert_eq!(segment.len(), offset, "segments fill in order");
+        segment.push(value);
+        self.end += 1;
+    }
+
+    /// Inserts `value` at `index`, shifting the elements after it.
+    fn insert(&mut self, index: usize, value: T) {
+        let Some(last) = self.last().cloned() else {
+            self.push(value);
+            return;
+        };
+        self.push(last);
+        for position in (index + 1..self.len() - 1).rev() {
+            let previous = self[position - 1].clone();
+            self[position] = previous;
+        }
+        self[index] = value;
+    }
+
+    /// The number of leading elements for which `predicate` holds, which must
+    /// hold for a prefix.
+    fn partition_point(&self, mut predicate: impl FnMut(&T) -> bool) -> usize {
+        let (mut low, mut high) = (0, self.len());
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if predicate(&self[middle]) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        low
+    }
+
+    /// Removes the first `count` elements.
+    fn discard_front(&mut self, count: usize) {
+        self.start += count.min(self.len());
+        if self.is_empty() {
+            self.clear();
+        }
+    }
+
+    fn clear(&mut self) {
+        for segment in &mut self.segments {
+            segment.clear();
+        }
+        self.start = 0;
+        self.end = 0;
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        (0..self.len()).map(|index| &self[index])
+    }
+
+    fn for_each_mut(&mut self, mut visit: impl FnMut(&mut T)) {
+        for index in 0..self.len() {
+            visit(&mut self[index]);
+        }
+    }
+}
+
+impl<T: Clone> std::ops::Index<usize> for SegmentedVec<'_, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &T {
+        self.get(index)
+            .expect("segmented vector index out of bounds")
+    }
+}
+
+impl<T: Clone> std::ops::IndexMut<usize> for SegmentedVec<'_, T> {
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        self.get_mut(index)
+            .expect("segmented vector index out of bounds")
+    }
+}
+
 /// Endpoints are normally appended in source-arena order. Keep sparse keys
 /// packed, and reuse end locations within each invocation. Unlike a global
 /// interner, the transient pool is cleared during preprocessing compaction.
-#[derive(Default)]
-struct ExpansionSites {
-    entries: Vec<(u32, u32)>,
-    ends:    Vec<SourceVector>,
+///
+/// Both tables live in the translation-unit arena. They grow by segments, so
+/// the parser-token table, which holds an entry for every macro-expanded
+/// token until parsing reads past it, never copies itself into a larger
+/// buffer and leaves the old one behind.
+struct ExpansionSites<'tu> {
+    entries: SegmentedVec<'tu, (u32, u32)>,
+    ends:    SegmentedVec<'tu, SourceVector>,
 }
 
-impl ExpansionSites {
+impl<'tu> ExpansionSites<'tu> {
+    fn new_in(tu: &'tu Bump) -> Self {
+        Self {
+            entries: SegmentedVec::new_in(tu),
+            ends:    SegmentedVec::new_in(tu),
+        }
+    }
+
     fn get(&self, end: u32) -> Option<u32> {
         let &(last, id) = self.entries.last()?;
         if end >= last {
             return (end == last).then_some(id);
         }
+        let index = self.entries.partition_point(|&(key, _)| key < end);
         self.entries
-            .binary_search_by_key(&end, |&(key, _)| key)
-            .ok()
-            .map(|index| self.entries[index].1)
+            .get(index)
+            .filter(|&&(key, _)| key == end)
+            .map(|&(_, id)| id)
     }
 
     fn insert(&mut self, end: u32, id: u32) {
@@ -79,9 +246,11 @@ impl ExpansionSites {
                 return;
             }
             if last.0 > end {
-                match self.entries.binary_search_by_key(&end, |&(key, _)| key) {
-                    | Ok(index) => self.entries[index].1 = id,
-                    | Err(index) => self.entries.insert(index, (end, id)),
+                let index = self.entries.partition_point(|&(key, _)| key < end);
+                if self.entries[index].0 == end {
+                    self.entries[index].1 = id;
+                } else {
+                    self.entries.insert(index, (end, id));
                 }
                 return;
             }
@@ -100,20 +269,18 @@ impl ExpansionSites {
 
     fn discard_before(&mut self, end: u32) {
         let count = self.entries.partition_point(|&(key, _)| key < end);
-        // Compact geometrically for full-batch input; shifting the whole tail
-        // after every declaration would make parsing quadratic.
+        // Compact geometrically for full-batch input; renumbering the whole
+        // tail after every declaration would make parsing quadratic.
         if count == 0 || count < self.entries.len() / 2 {
             return;
         }
-        drop(self.entries.drain(..count));
+        self.entries.discard_front(count);
         let Some(first_id) = self.entries.iter().map(|&(_, id)| id).min() else {
             self.ends.clear();
             return;
         };
-        drop(self.ends.drain(..first_id as usize));
-        for (_, id) in &mut self.entries {
-            *id -= first_id;
-        }
+        self.ends.discard_front(first_id as usize);
+        self.entries.for_each_mut(|(_, id)| *id -= first_id);
     }
 
     fn clear(&mut self) {
@@ -121,7 +288,6 @@ impl ExpansionSites {
         self.ends.clear();
     }
 }
-
 pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
@@ -132,7 +298,7 @@ pub(crate) struct Context<'tu> {
     pub(crate) canonical_identifiers: ArenaMap<'tu, StringCacheId, StringCacheId>,
     literal_values: DedupArena<'tu, &'tu [LiteralUnit], FxBuildHasher>,
     /// Sparse endpoints follow their source arena's lifetime.
-    expansion_sites: [ExpansionSites; 3],
+    expansion_sites: [ExpansionSites<'tu>; 3],
     ignore_tokenizer_errors: bool,
     pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
     /// How many leading pending errors no longer refer to the preprocessor
@@ -189,7 +355,7 @@ impl<'tu> Context<'tu> {
             string_cache,
             canonical_identifiers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             literal_values: DedupArena::new(tu),
-            expansion_sites: Default::default(),
+            expansion_sites: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
             ignore_tokenizer_errors: false,
             pending_errors: ArenaQueue::new_in(tu),
             relocated_errors: 0,
@@ -421,37 +587,17 @@ impl<'tu> Context<'tu> {
     /// Parser anchors are dropped as in [`Self::merge_vectors`]: after the
     /// first nonempty range, or before the range they point at.
     pub(crate) fn merge_vector_list(&mut self, sources: &[SourceVectors]) -> SourceVectors {
-        let mut kept = Vec::new();
-        let sources = if sources.iter().any(|source| self.is_parser_anchor(*source)) {
-            // Before the first real range, an anchor is dropped only if it
-            // points at the start of the next real range.
-            let first_real = sources
-                .iter()
-                .find(|source| source.length != 0 && !self.is_parser_anchor(**source))
-                .copied();
-            let mut real_seen = false;
-            for source in sources.iter().filter(|source| source.length != 0) {
-                if self.is_parser_anchor(*source) {
-                    if real_seen
-                        || first_real.is_some_and(|first| self.anchors_start_of(*source, first))
-                    {
-                        continue;
-                    }
-                } else {
-                    real_seen = true;
-                }
-                kept.push(*source);
-            }
-            &kept[..]
-        } else {
-            sources
-        };
+        let anchors = MergeAnchors::new(self, sources);
+        let mut kept = anchors;
         let mut first = None;
         let mut end = 0;
         let mut contiguous = true;
         let mut all_preprocessor = true;
-        for source in sources.iter().filter(|source| source.length != 0) {
-            let (arena, start) = SourceArena::decode(*source);
+        for &source in sources {
+            if !kept.keeps(self, source) {
+                continue;
+            }
+            let (arena, start) = SourceArena::decode(source);
             all_preprocessor &= arena == SourceArena::Preprocessor;
             match first {
                 | None => first = Some((arena, start)),
@@ -470,8 +616,11 @@ impl<'tu> Context<'tu> {
         }
         let target = Self::merge_target(all_preprocessor);
         let start = self.arena(target).len().to_u32();
-        for source in sources.iter().filter(|source| source.length != 0) {
-            self.copy_into(target, *source);
+        let mut kept = anchors;
+        for &source in sources {
+            if kept.keeps(self, source) {
+                self.copy_into(target, source);
+            }
         }
         target.encode(start, self.arena(target).len().to_u32())
     }
@@ -809,13 +958,100 @@ impl<'tu> Context<'tu> {
     }
 }
 
+/// Which ranges [`Context::merge_vector_list`] keeps, decided in order
+/// without collecting them: empty ranges are dropped, and parser anchors are
+/// dropped after the first real range, or before it when they point at its
+/// start.
+#[derive(Clone, Copy)]
+struct MergeAnchors {
+    /// Whether any range is an anchor; otherwise every nonempty range stays.
+    any:        bool,
+    first_real: Option<SourceVectors>,
+    real_seen:  bool,
+}
+
+impl MergeAnchors {
+    fn new(context: &Context<'_>, sources: &[SourceVectors]) -> Self {
+        let any = sources
+            .iter()
+            .any(|source| context.is_parser_anchor(*source));
+        Self {
+            any,
+            first_real: any
+                .then(|| {
+                    sources
+                        .iter()
+                        .find(|source| source.length != 0 && !context.is_parser_anchor(**source))
+                        .copied()
+                })
+                .flatten(),
+            real_seen: false,
+        }
+    }
+
+    /// Whether the next range in order, `source`, is kept.
+    fn keeps(&mut self, context: &Context<'_>, source: SourceVectors) -> bool {
+        if source.length == 0 {
+            return false;
+        }
+        if !self.any {
+            return true;
+        }
+        if context.is_parser_anchor(source) {
+            !(self.real_seen
+                || self
+                    .first_real
+                    .is_some_and(|first| context.anchors_start_of(source, first)))
+        } else {
+            self.real_seen = true;
+            true
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         Context,
+        SegmentedVec,
         SourceArena,
         SourceVector,
     };
+
+    #[test]
+    fn segmented_vectors_keep_order_across_segments_and_reuse_them() {
+        let arena = crate::util::bump::Bump::new();
+        let mut values = SegmentedVec::new_in(&arena);
+        // 100 values span the first three segments (16, 32, and 64).
+        for value in (0..200).step_by(2) {
+            values.push(value);
+        }
+        values.insert(50, 99);
+        let mut expected: Vec<i32> = (0..100).step_by(2).collect();
+        expected.push(99);
+        expected.extend((100..200).step_by(2));
+        assert_eq!(values.iter().copied().collect::<Vec<_>>(), expected);
+        assert_eq!(values.partition_point(|&value| value < 100), 51);
+        assert_eq!(values.last(), Some(&198));
+
+        values.discard_front(10);
+        assert_eq!((values.len(), values[0]), (91, 20));
+        values.for_each_mut(|value| *value += 1);
+        assert_eq!(values[0], 21);
+
+        // Clearing keeps the segments, so refilling takes no arena memory.
+        let used = arena.used();
+        values.clear();
+        assert!(values.is_empty());
+        for value in 0..100 {
+            values.push(value);
+        }
+        assert_eq!(arena.used(), used);
+        assert_eq!(
+            values.iter().copied().collect::<Vec<_>>(),
+            (0..100).collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn repeated_literal_values_keep_one_identity_after_arena_growth() {
@@ -889,8 +1125,8 @@ mod tests {
             saved.push((token, retained, site));
             context.compact_preprocessor_vectors();
             let temporary = &context.expansion_sites[SourceArena::Preprocessor as usize];
-            assert_eq!(temporary.entries, []);
-            assert_eq!(temporary.ends, []);
+            assert!(temporary.entries.is_empty());
+            assert!(temporary.ends.is_empty());
         }
         for (token, retained, site) in saved {
             assert_eq!(context.user_source_end(token), Some(site.clone()));
