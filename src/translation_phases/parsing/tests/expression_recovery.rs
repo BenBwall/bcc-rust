@@ -172,7 +172,7 @@ fn sizeof_owns_the_complete_compound_literal_postfix_operand() {
                 .parser
                 .syntax
                 .iter::<Expression<'_>>()
-                .filter(|expression| matches!(expression.kind, ExpressionType::Call(_)))
+                .filter(|expression| matches!(expression.kind, ExpressionType::Call { .. }))
                 .all(|expression| expression.recovered)
         );
     });
@@ -669,7 +669,7 @@ fn recovered_expression_children_mark_every_composite_parent() {
             .parser
             .syntax
             .iter::<Expression<'_>>()
-            .find(|expression| matches!(expression.kind, ExpressionType::Call(_)))
+            .find(|expression| matches!(expression.kind, ExpressionType::Call { .. }))
             .expect("expected the recovered call expression");
         assert!(call.recovered);
         assert!(

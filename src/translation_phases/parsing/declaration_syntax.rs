@@ -27,6 +27,7 @@ use crate::{
         preprocessing::Token,
     },
     util::{
+        arena_list::ArenaList,
         bump::ArenaVec,
         string_cache::StringCacheId,
         vector_slice::VectorSlice,
@@ -45,7 +46,7 @@ use crate::{
 pub(crate) struct Declaration<'tu> {
     pub(crate) declaration_specifiers:      DeclarationSpecifiers<'tu>,
     /// init-declarator-list
-    pub(crate) init_declarators:            &'tu [InitDeclarator<'tu>],
+    pub(crate) init_declarators:            ArenaList<'tu, InitDeclarator<'tu>>,
     pub(crate) source_vectors:              SourceVectors,
     /// Whether local syntax recovery repaired this declaration.
     pub(crate) recovered:                   bool,
@@ -90,7 +91,7 @@ pub(crate) enum InitializerType<'tu> {
 /// live here rather than in every [`Initializer`].
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct BracedInitializerList<'tu> {
-    pub(crate) elements:                     &'tu [InitializerElement<'tu>],
+    pub(crate) elements:                     ArenaList<'tu, InitializerElement<'tu>>,
     pub(crate) opening_brace_source_vectors: Option<SourceVectors>,
     /// `None` when recovery found the closing brace missing.
     pub(crate) closing_brace_source_vectors: Option<SourceVectors>,
@@ -106,7 +107,7 @@ pub(crate) struct InitializerElement<'tu> {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Designation<'tu> {
-    pub(crate) designators:           &'tu [Designator<'tu>],
+    pub(crate) designators:           ArenaList<'tu, Designator<'tu>>,
     pub(crate) equals_source_vectors: Option<SourceVectors>,
     pub(crate) source_vectors:        SourceVectors,
     pub(crate) recovered:             bool,
@@ -617,7 +618,7 @@ pub(crate) struct StructOrUnionSpecifier<'tu> {
     /// None indicates that the body is missing. An empty vector indicates an
     /// empty body. `struct Foo;` has no body. `struct Foo {};` has an empty
     /// body.
-    pub(crate) struct_declaration_list: Option<&'tu [StructDeclaration<'tu>]>,
+    pub(crate) struct_declaration_list: Option<ArenaList<'tu, StructDeclaration<'tu>>>,
     pub(crate) source_vectors:          SourceVectors,
 }
 
@@ -642,7 +643,7 @@ pub(crate) enum StructOrUnion {
 pub(crate) struct StructDeclaration<'tu> {
     pub(crate) type_qualifiers:        TypeQualifiers,
     pub(crate) type_specifiers:        TypeSpecifiers<'tu>,
-    pub(crate) struct_declarator_list: &'tu [StructDeclarator<'tu>],
+    pub(crate) struct_declarator_list: ArenaList<'tu, StructDeclarator<'tu>>,
     pub(crate) source_vectors:         SourceVectors,
 }
 
@@ -667,7 +668,7 @@ pub(crate) struct StructDeclarator<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct EnumSpecifier<'tu> {
     pub(crate) name:             Option<Identifier>,
-    pub(crate) enumeration_list: Option<&'tu [Enumerator<'tu>]>,
+    pub(crate) enumeration_list: Option<ArenaList<'tu, Enumerator<'tu>>>,
     pub(crate) source_vectors:   SourceVectors,
 }
 
@@ -748,7 +749,7 @@ impl DeclarationSpecifiers<'_> {
 pub(crate) struct PointerDeclarator<'tu> {
     /// Each element represents the type qualifiers for one level of
     /// indirection.
-    pub(crate) type_qualifiers_list: &'tu [TypeQualifiers],
+    pub(crate) type_qualifiers_list: ArenaList<'tu, TypeQualifiers>,
 }
 
 /// declarator:
@@ -765,7 +766,7 @@ pub(crate) struct PointerDeclarator<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Declarator<'tu> {
     pub(crate) pointer:        PointerDeclarator<'tu>,
-    pub(crate) kind:           &'tu [DirectDeclarator<'tu>],
+    pub(crate) kind:           ArenaList<'tu, DirectDeclarator<'tu>>,
     pub(crate) source_vectors: SourceVectors,
 }
 
@@ -800,7 +801,7 @@ pub(crate) enum DirectDeclarator<'tu> {
     Identifier(Identifier),
     Parenthesized(&'tu ParenthesizedDeclarator<'tu>),
     KAndRStyleFunction {
-        parameters: &'tu [Identifier],
+        parameters: ArenaList<'tu, Identifier>,
     },
     Array {
         type_qualifiers:       TypeQualifiers,
@@ -809,7 +810,7 @@ pub(crate) enum DirectDeclarator<'tu> {
         assignment_expression: Option<&'tu Expression<'tu>>,
     },
     Function {
-        parameter_list: &'tu [ParameterDeclaration<'tu>],
+        parameter_list: ArenaList<'tu, ParameterDeclaration<'tu>>,
         is_variadic:    bool,
     },
 }
@@ -856,7 +857,7 @@ impl<'tu> Declaration<'tu> {
     /// The declarator of a declaration that could head a function
     /// definition: its only init-declarator, without an initializer.
     pub(super) fn head_declarator(&self) -> Option<Declarator<'tu>> {
-        let [init] = self.init_declarators else {
+        let [init] = self.init_declarators.as_slice() else {
             return None;
         };
         init.initializer.is_none().then_some(init.declarator)

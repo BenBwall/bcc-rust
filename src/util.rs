@@ -6,6 +6,7 @@
 /// let arena = bump::Bump::new();
 /// arena.alloc(String::from("owned"));
 /// ```
+pub(crate) mod arena_list;
 pub(crate) mod bump;
 pub(crate) mod byte_scan;
 pub(crate) mod dedup_arena;

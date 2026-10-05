@@ -36,7 +36,6 @@ use super::{
     syntax::{
         BinaryOperator,
         BlockItem,
-        CallExpression,
         ConditionalExpression,
         Constant,
         ConstantExpressionSlot,
@@ -986,7 +985,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     };
                 },
                 | ExpressionType::Parenthesized { .. } => "parenthesized",
-                | ExpressionType::Conditional { .. } => "conditional ?:",
+                | ExpressionType::Conditional(_) => "conditional ?:",
                 | ExpressionType::Call { .. } => "call",
                 | ExpressionType::CompoundLiteral { .. } => "compound-literal",
                 | ExpressionType::SizeofType(..) => "sizeof type",
@@ -1040,10 +1039,10 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 work.push(Work::Expression(right_expression, indent, "rhs"));
                 work.push(Work::Expression(left_expression, indent, "lhs"));
             },
-            | ExpressionType::Call(CallExpression {
+            | ExpressionType::Call {
                 function_expression,
                 arguments,
-            }) => {
+            } => {
                 for argument in arguments.iter().rev() {
                     work.push(Work::Expression(argument, indent, "argument"));
                 }

@@ -33,7 +33,6 @@ use super::{
     statement::is_statement_keyword,
     syntax::{
         BinaryOperator,
-        CallExpression,
         ConditionalExpression,
         Constant,
         ConstantExpression,
@@ -1591,12 +1590,11 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     ) {
         let call = self.call.as_mut().expect("a call is being finished");
         let arguments = parser.alloc_syntax_list(&mut call.arguments);
-        let call_expression = parser.alloc_syntax_part(CallExpression {
-            function_expression: base,
-            arguments,
-        });
         let index = parser.store_expression(
-            ExpressionType::Call(call_expression),
+            ExpressionType::Call {
+                function_expression: base,
+                arguments,
+            },
             context.merge_vector_list(&call.source_vectors),
             Some(context.merge_vector_list(&call.operator_sources)),
             parser.hard_error_count > self.starting_error_count,

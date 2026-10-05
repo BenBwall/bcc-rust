@@ -26,7 +26,6 @@ use crate::translation_phases::{
         syntax::{
             BinaryOperator,
             BlockItem,
-            CallExpression,
             ConditionalExpression,
             Constant,
             Expression,
@@ -116,12 +115,12 @@ fn function_arguments_keep_postfix_calls_and_increments() {
                 panic!("expected one return statement")
             };
             let root = return_expression(statement);
-            let ExpressionType::Call(&CallExpression { arguments, .. }) = root.kind else {
+            let ExpressionType::Call { arguments, .. } = root.kind else {
                 panic!("expected an outer call")
             };
 
             assert_eq!(arguments.len(), 2);
-            assert!(matches!(arguments[0].kind, ExpressionType::Call(_)));
+            assert!(matches!(arguments[0].kind, ExpressionType::Call { .. }));
             assert!(matches!(
                 arguments[1].kind,
                 ExpressionType::Unary {
@@ -149,7 +148,7 @@ fn function_arguments_keep_binary_operators_inside_each_argument() {
                 panic!("expected one return statement")
             };
             let root = return_expression(statement);
-            let ExpressionType::Call(&CallExpression { arguments, .. }) = root.kind else {
+            let ExpressionType::Call { arguments, .. } = root.kind else {
                 panic!("expected a function call")
             };
 
@@ -182,7 +181,7 @@ fn return_expression_keeps_a_typedef_spelled_call() {
             };
             let root = return_expression(statement);
 
-            assert!(matches!(root.kind, ExpressionType::Call(_)));
+            assert!(matches!(root.kind, ExpressionType::Call { .. }));
             assert_eq!(expression_text(parsed, root), "T(*p)");
             assert!(
                 parser_errors(parsed).next().is_none(),
@@ -270,7 +269,7 @@ fn conditional_middle_recovery_honors_enclosing_boundaries() {
     );
     with_parse("int values[] = { 1 ? , 2 };\n", |initializer| {
         let declaration = declaration(initializer, 0);
-        let [init_declarator] = declaration.init_declarators else {
+        let [init_declarator] = declaration.init_declarators.as_slice() else {
             panic!("expected one initialized declarator")
         };
         let outer = init_declarator
@@ -429,7 +428,7 @@ fn declarator_binding_shadows_a_typedef_inside_its_own_initializer() {
             let BlockItem::Declaration(declaration) = items[0] else {
                 panic!("expected a block declaration")
             };
-            let [init_declarator] = declaration.init_declarators else {
+            let [init_declarator] = declaration.init_declarators.as_slice() else {
                 panic!("expected one initialized declarator")
             };
             let initializer = init_declarator.initializer.expect("parsed initializer");
@@ -493,7 +492,7 @@ fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
             let argument_lengths = roots[2..]
                 .iter()
                 .map(|root| match root.kind {
-                    | ExpressionType::Call(&CallExpression { arguments, .. }) => arguments.len(),
+                    | ExpressionType::Call { arguments, .. } => arguments.len(),
                     | _ => panic!("expected call expression"),
                 })
                 .collect::<Vec<_>>();
@@ -549,7 +548,7 @@ fn missing_call_argument_comma_preserves_later_arguments() {
         let StatementType::Expression(ExpressionSlot::Parsed(root)) = statement.kind else {
             panic!("expected parsed expression")
         };
-        let ExpressionType::Call(&CallExpression { arguments, .. }) = root.kind else {
+        let ExpressionType::Call { arguments, .. } = root.kind else {
             panic!("expected call expression")
         };
         assert_eq!(
@@ -762,7 +761,7 @@ fn typedef_spelled_expressions_remain_inside_braced_initializers() {
                         ExternalDeclaration::Declaration(_)
                     ]
                 ));
-                let [init_declarator] = declaration(parsed, 1).init_declarators else {
+                let [init_declarator] = declaration(parsed, 1).init_declarators.as_slice() else {
                     panic!("expected one initialized declarator")
                 };
                 let initializer = init_declarator.initializer.expect("braced initializer");
@@ -771,7 +770,7 @@ fn typedef_spelled_expressions_remain_inside_braced_initializers() {
                 else {
                     panic!("expected an initializer list")
                 };
-                let [element] = elements else {
+                let [element] = elements.as_slice() else {
                     panic!("expected one initializer element")
                 };
                 let InitializerType::AssignmentExpression(expression_index) =
@@ -801,7 +800,7 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
          5 };\n",
         |parsed| {
             let declaration = declaration(parsed, 1);
-            let [init_declarator] = declaration.init_declarators else {
+            let [init_declarator] = declaration.init_declarators.as_slice() else {
                 panic!("expected one initialized declarator");
             };
             let initializer = init_declarator
@@ -835,7 +834,7 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
             assert!(outer.iter().all(|element| element.designation.is_some()));
 
             let field_designation = outer[0].designation.expect("field designation");
-            let field_designators = field_designation.designators;
+            let field_designators = field_designation.designators.as_slice();
             assert!(matches!(
                 field_designators,
                 [Designator {
@@ -925,7 +924,7 @@ fn chained_designators_retain_their_order_and_initializer() {
         "struct S { int member[2][2]; }; struct S value = { .member[0][1] = 3 };\n",
         |parsed| {
             let declaration = declaration(parsed, 1);
-            let [init_declarator] = declaration.init_declarators else {
+            let [init_declarator] = declaration.init_declarators.as_slice() else {
                 panic!("expected one initialized declarator")
             };
             let initializer = init_declarator
@@ -936,11 +935,11 @@ fn chained_designators_retain_their_order_and_initializer() {
             else {
                 panic!("expected an initializer list")
             };
-            let [element] = elements else {
+            let [element] = elements.as_slice() else {
                 panic!("expected one designated element")
             };
             let designation = element.designation.expect("expected a designation");
-            let designators = designation.designators;
+            let designators = designation.designators.as_slice();
 
             assert!(matches!(
                 designators,
@@ -984,7 +983,7 @@ fn array_designators_accept_conditional_and_parenthesized_comma_expressions() {
         "int values[] = { [x ? y : z] = 1, [(x, y)] = 2 };\n",
         |parsed| {
             let declaration = declaration(parsed, 0);
-            let [init_declarator] = declaration.init_declarators else {
+            let [init_declarator] = declaration.init_declarators.as_slice() else {
                 panic!("expected one initialized declarator")
             };
             let initializer = init_declarator.initializer.expect("parsed initializer");
@@ -1259,7 +1258,7 @@ fn call_argument_and_initializer_nesting_translation_floors_are_heap_backed() {
                 .iter::<Expression<'_>>()
                 .any(|expression| matches!(
                     expression.kind,
-                    ExpressionType::Call(&CallExpression { arguments, .. }) if arguments.len() == 127
+                    ExpressionType::Call { arguments, .. } if arguments.len() == 127
                 ))
         );
         assert!(

@@ -42,9 +42,12 @@ use crate::{
             Token,
         },
     },
-    util::bump::{
-        ArenaVec,
-        Bump,
+    util::{
+        arena_list::ArenaList,
+        bump::{
+            ArenaVec,
+            Bump,
+        },
     },
 };
 
@@ -132,7 +135,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                             // cannot rebuild.
                             if parser
                                 .scopes
-                                .publish_retained_bindings(list_key(parameter_list))
+                                .publish_retained_bindings(list_key(&parameter_list))
                             {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                                 return ParseAction::Reprocess;
@@ -231,7 +234,9 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     if token.is_none() || head_is_doubtful {
                         let body_source = parser.missing_syntax_source(context);
                         let body = parser.alloc_syntax(Statement {
-                            kind:           StatementType::Compound { items: &[] },
+                            kind:           StatementType::Compound {
+                                items: ArenaList::empty(),
+                            },
                             source_vectors: body_source,
                             recovered:      true,
                         });

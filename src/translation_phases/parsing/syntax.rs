@@ -18,7 +18,10 @@ use crate::{
             Token,
         },
     },
-    util::string_cache::StringCacheId,
+    util::{
+        arena_list::ArenaList,
+        string_cache::StringCacheId,
+    },
 };
 
 /// One top-level parser result.
@@ -69,7 +72,7 @@ impl<'tu> From<ConstantExpression<'tu>> for &'tu Expression<'tu> {
 pub(crate) struct FunctionDefinition<'tu> {
     pub(crate) declaration_specifiers: DeclarationSpecifiers<'tu>,
     pub(crate) declarator:             Declarator<'tu>,
-    pub(crate) declaration_list:       &'tu [&'tu Declaration<'tu>],
+    pub(crate) declaration_list:       ArenaList<'tu, &'tu Declaration<'tu>>,
     pub(crate) body:                   &'tu Statement<'tu>,
     pub(crate) source_vectors:         SourceVectors,
     pub(crate) recovered:              bool,
@@ -116,7 +119,7 @@ pub(crate) struct Statement<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum StatementType<'tu> {
     Compound {
-        items: &'tu [BlockItem<'tu>],
+        items: ArenaList<'tu, BlockItem<'tu>>,
     },
     Expression(ExpressionSlot<'tu>),
     If {
@@ -187,9 +190,9 @@ pub(crate) struct Expression<'tu> {
 
 /// C expression grammar forms represented through child references.
 ///
-/// Forms whose children would not fit beside the operator in 24 bytes keep
-/// them in a separate arena record, so the common binary, unary, and leaf
-/// forms do not pay for the rare wide ones.
+/// A conditional's three operands would not fit beside the operator in 24
+/// bytes, so they live in a separate arena record and the common binary,
+/// unary, and leaf forms do not pay for the rare conditional.
 ///
 /// C99: primary through comma expressions are §6.5.1-§6.5.17,
 /// pp. 69-94; PDF pp. 81-106.
@@ -208,7 +211,10 @@ pub(crate) enum ExpressionType<'tu> {
         operator:           UnaryOperator,
         operand_expression: &'tu Expression<'tu>,
     },
-    Call(&'tu CallExpression<'tu>),
+    Call {
+        function_expression: &'tu Expression<'tu>,
+        arguments:           ArenaList<'tu, &'tu Expression<'tu>>,
+    },
     DirectMember {
         base_expression: &'tu Expression<'tu>,
         member:          Identifier,
@@ -245,15 +251,6 @@ pub(crate) struct ConditionalExpression<'tu> {
     pub(crate) condition_expression: &'tu Expression<'tu>,
     pub(crate) then_expression:      &'tu Expression<'tu>,
     pub(crate) else_expression:      &'tu Expression<'tu>,
-}
-
-/// The callee and arguments of a function call.
-///
-/// C99: function calls are §6.5.2.2.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct CallExpression<'tu> {
-    pub(crate) function_expression: &'tu Expression<'tu>,
-    pub(crate) arguments:           &'tu [&'tu Expression<'tu>],
 }
 
 /// Typed literal value accepted by a primary expression.

@@ -703,7 +703,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 if entry_scope_depth == 0
                     && parser.scopes.innermost_binding_count() > self.parameter_name_bindings
                 {
-                    parser.scopes.retain_innermost_bindings(list_key(start));
+                    parser.scopes.retain_innermost_bindings(list_key(&start));
                 }
                 parser.scopes.restore_depth(entry_scope_depth);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {

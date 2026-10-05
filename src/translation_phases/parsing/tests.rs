@@ -181,7 +181,7 @@ fn block_items<'tu>(statement: &Statement<'tu>) -> &'tu [BlockItem<'tu>] {
     let StatementType::Compound { items } = statement.kind else {
         panic!("expected a compound statement")
     };
-    items
+    items.as_slice()
 }
 
 fn identifier_name(parsed: &Parsed<'_, '_>, declarator: Declarator<'_>) -> Option<String> {

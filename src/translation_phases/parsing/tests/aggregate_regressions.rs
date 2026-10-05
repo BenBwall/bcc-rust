@@ -35,7 +35,7 @@ fn errors<'tu>(parsed: &Parsed<'_, 'tu>) -> Vec<ParserErrorType<'tu>> {
 /// external declaration `item`.
 fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let declaration = declaration(parsed, item);
-    let [init_declarator, ..] = declaration.init_declarators else {
+    let [init_declarator, ..] = declaration.init_declarators.as_slice() else {
         panic!("expected an initialized declarator")
     };
     let initializer = init_declarator
@@ -51,7 +51,7 @@ fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
 
 fn designated_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let declaration = declaration(parsed, item);
-    let [init_declarator, ..] = declaration.init_declarators else {
+    let [init_declarator, ..] = declaration.init_declarators.as_slice() else {
         panic!("expected an initialized declarator")
     };
     let initializer = init_declarator
@@ -324,7 +324,7 @@ fn deeply_nested_function_declarators_track_whether_they_are_named() {
     with_parse(&source, |parsed| {
         assert_eq!(errors(parsed), []);
         let declaration = declaration(parsed, 0);
-        let [init_declarator] = declaration.init_declarators else {
+        let [init_declarator] = declaration.init_declarators.as_slice() else {
             panic!("expected one declarator")
         };
         let directs = init_declarator.declarator.kind;
@@ -356,7 +356,7 @@ fn enumerator_counts(parsed: &Parsed<'_, '_>) -> Vec<usize> {
         .syntax
         .iter::<EnumSpecifier<'_>>()
         .filter_map(|specifier| specifier.enumeration_list)
-        .map(<[_]>::len)
+        .map(|list| list.len())
         .collect()
 }
 
@@ -366,7 +366,7 @@ fn member_counts(parsed: &Parsed<'_, '_>) -> Vec<usize> {
         .syntax
         .iter::<StructOrUnionSpecifier<'_>>()
         .filter_map(|specifier| specifier.struct_declaration_list)
-        .map(<[_]>::len)
+        .map(|list| list.len())
         .collect()
 }
 

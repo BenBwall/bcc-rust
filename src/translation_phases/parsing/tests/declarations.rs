@@ -125,7 +125,7 @@ fn ordinary_pointer_and_typedef_declarations_are_reachable() {
                 .declarator
                 .pointer
                 .type_qualifiers_list;
-            assert_eq!(pointer, &[TypeQualifiers::CONST, TypeQualifiers::VOLATILE]);
+            assert_eq!(*pointer, [TypeQualifiers::CONST, TypeQualifiers::VOLATILE]);
         },
     );
 }

@@ -40,7 +40,6 @@ use super::{
     },
     statement::is_statement_keyword,
     syntax::{
-        CallExpression,
         ConditionalExpression,
         Expression,
         ExpressionType,
@@ -73,6 +72,7 @@ use crate::{
         },
     },
     util::{
+        arena_list::ArenaList,
         bump::{
             ArenaVec,
             Bump,
@@ -428,17 +428,14 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         self.tree.alloc(part)
     }
 
-    /// Copies frame-retained nodes into one list in the translation-unit
-    /// arena, counts them, and empties `nodes` for reuse.
+    /// Copies frame-retained nodes into one length-prefixed list in the
+    /// translation-unit arena, counts them, and empties `nodes` for reuse.
+    /// An empty list allocates nothing.
     pub(super) fn alloc_syntax_list<T: TreeNode<'tu> + Copy>(
         &mut self,
         nodes: &mut ArenaVec<'_, T>,
-    ) -> &'tu [T] {
-        let list: &'tu [T] = if nodes.is_empty() {
-            &[]
-        } else {
-            self.tree.alloc_slice_copy(nodes)
-        };
+    ) -> ArenaList<'tu, T> {
+        let list = ArenaList::copy_from_slice(self.tree, nodes);
         nodes.clear();
         self.syntax_nodes += list.len();
         #[cfg(test)]
@@ -1068,10 +1065,10 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                 right_expression,
                 ..
             } => expression_recovered(left_expression) || expression_recovered(right_expression),
-            | ExpressionType::Call(CallExpression {
+            | ExpressionType::Call {
                 function_expression,
                 arguments,
-            }) =>
+            } =>
                 expression_recovered(function_expression)
                     || arguments
                         .iter()

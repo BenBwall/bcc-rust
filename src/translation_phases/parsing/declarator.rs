@@ -58,9 +58,12 @@ use crate::{
             TokenType,
         },
     },
-    util::bump::{
-        ArenaVec,
-        Bump,
+    util::{
+        arena_list::ArenaList,
+        bump::{
+            ArenaVec,
+            Bump,
+        },
     },
 };
 
@@ -326,7 +329,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let token = token.expect("closing-parenthesis token exists");
                     self.direct_declarators
-                        .push(DirectDeclarator::KAndRStyleFunction { parameters: &[] });
+                        .push(DirectDeclarator::KAndRStyleFunction {
+                            parameters: ArenaList::empty(),
+                        });
                     self.has_direct_declarator = true;
                     parser.merge_source(context, &mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
@@ -641,10 +646,12 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 let allow_k_and_r = self.named;
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let direct = if allow_k_and_r {
-                        DirectDeclarator::KAndRStyleFunction { parameters: &[] }
+                        DirectDeclarator::KAndRStyleFunction {
+                            parameters: ArenaList::empty(),
+                        }
                     } else {
                         DirectDeclarator::Function {
-                            parameter_list: &[],
+                            parameter_list: ArenaList::empty(),
                             is_variadic:    false,
                         }
                     };
