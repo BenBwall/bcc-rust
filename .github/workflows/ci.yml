@@ -17,6 +17,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  agentbus:
+    name: Agentbus
+    runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: ""
+      CARGO_ENCODED_RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - run: python -m unittest discover -s scripts/agentbus/tests -p 'test_*.py'
+      - run: cargo test --manifest-path scripts/agentbus/Cargo.toml
+
+  format:
+    name: Formatting
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --profile minimal --component rustfmt
+      - run: cargo +nightly fmt --check
+
   llvm:
     name: Pinned LLVM toolchain
     runs-on: ubuntu-24.04
@@ -88,6 +109,7 @@ jobs:
         with:
           llvm-key: ${{ needs.llvm.outputs.key }}
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features benchmarking-internals -- -D warnings
 
   test:
     name: Tests
@@ -99,6 +121,7 @@ jobs:
         with:
           llvm-key: ${{ needs.llvm.outputs.key }}
       - run: cargo test --all-targets --no-fail-fast
+      - run: cargo test --features benchmarking-internals --test allocation_count
 
   bench:
     name: Benchmarks
