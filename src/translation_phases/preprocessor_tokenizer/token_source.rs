@@ -49,18 +49,16 @@ impl Default for TokenSource<'_> {
 
 impl<'a> TokenSource<'a> {
     /// Lexes all of `source` (translation phases 1 through 3) into `arena`
-    /// and opens it. Lexing's temporary storage comes from `scratch`.
+    /// and opens it.
     pub(crate) fn new(
         context: &mut Context<'_>,
         arena: &'a Bump,
-        scratch: &mut Bump,
         source_file_index: u32,
         source: &str,
     ) -> Self {
         Self::File(LexedCursor::new(arena.alloc(LexedFile::lex(
             context,
             arena,
-            scratch,
             source_file_index,
             source,
         ))))
@@ -359,12 +357,8 @@ impl<'a> LexedCursor<'a> {
 /// source to the run's lifetime, so a macro definition or a resting include
 /// frame can keep reading it.
 pub(crate) struct LexedFiles<'pp> {
-    arena:   &'pp Bump,
-    files:   ArenaVec<'pp, &'pp LexedFile<'pp>>,
-    /// Lexing's temporary storage, reset for each file lexed: spliced text,
-    /// and side tables until they are copied beside the file's entries.
-    /// Its region is reserved only when a file needs one of them.
-    scratch: Bump,
+    arena: &'pp Bump,
+    files: ArenaVec<'pp, &'pp LexedFile<'pp>>,
 }
 
 impl Debug for LexedFiles<'_> {
@@ -380,7 +374,6 @@ impl<'pp> LexedFiles<'pp> {
         Self {
             arena,
             files: ArenaVec::new_in(arena),
-            scratch: Bump::new(),
         }
     }
 
@@ -392,19 +385,8 @@ impl<'pp> LexedFiles<'pp> {
         source_file_index: u32,
         source: &str,
     ) -> TokenSource<'pp> {
-        let file = LexedFile::lex(
-            context,
-            self.arena,
-            &mut self.scratch,
-            source_file_index,
-            source,
-        );
+        let file = LexedFile::lex(context, self.arena, source_file_index, source);
         TokenSource::File(LexedCursor::new(self.register(file)))
-    }
-
-    /// Lexing's temporary storage, for a file lexed outside the registry.
-    pub(crate) fn scratch(&mut self) -> &mut Bump {
-        &mut self.scratch
     }
 
     fn register(&mut self, mut file: LexedFile<'pp>) -> &'pp LexedFile<'pp> {

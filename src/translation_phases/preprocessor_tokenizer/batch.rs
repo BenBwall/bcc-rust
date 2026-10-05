@@ -493,20 +493,24 @@ impl<'arena> LexingFile<'arena, '_> {
 
 impl<'a> LexedFile<'a> {
     /// Runs translation phases 1 through 3 over all of `source`, keeping the
-    /// result in `arena`. Lexing's temporary storage comes from `scratch`,
-    /// which is reset first, so the largest file lexed bounds it.
+    /// result in `arena`.
+    ///
+    /// Lexing's temporary storage (text that phases 1 and 2 change, side
+    /// tables until they are copied beside the entries, and canonical UCN
+    /// spellings) comes from an arena of its own. It reserves a region only
+    /// when the file needs one of them, and releases it when the file is
+    /// lexed, so a large file's spliced copy does not stay committed for the
+    /// rest of preprocessing.
     pub(super) fn lex(
         context: &mut Context<'_>,
         arena: &'a Bump,
-        scratch: &mut Bump,
         source_file_index: u32,
         source: &str,
     ) -> Self {
-        scratch.reset();
-        let scratch = &*scratch;
-        let (text, remaps) = splice(source, scratch);
+        let scratch = Bump::new();
+        let (text, remaps) = splice(source, &scratch);
         let terminal_splice = terminal_splice_length(source);
-        let file = Lexer::new(context, arena, scratch, text, remaps, source.is_empty())
+        let file = Lexer::new(context, arena, &scratch, text, remaps, source.is_empty())
             .with_terminal_splice(terminal_splice.is_some())
             .run();
         let escaped_final_newline = terminal_splice.map(|length| {

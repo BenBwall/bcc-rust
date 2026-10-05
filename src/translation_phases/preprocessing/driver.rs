@@ -937,13 +937,8 @@ impl<'x> Expander<'_, '_, 'x> {
                             // most recent one.
                             let pragma_string = context
                                 .add_synthetic_source_file(Path::new("<pragma string>"), input);
-                            self.tokenizer = TokenSource::new(
-                                context,
-                                self.scratch,
-                                self.state.lexed_files.scratch(),
-                                pragma_string,
-                                input,
-                            );
+                            self.tokenizer =
+                                TokenSource::new(context, self.scratch, pragma_string, input);
                             self.pushed_frames += 1;
                             _ = self.parse_pragma_directive(context, string_token);
                             if self.tokenizer.next_item(context).is_some() {
