@@ -22,8 +22,9 @@
 //! rarer paths of every phase, and a main file with headers read from disk.
 //! Every input must produce no diagnostics; reporting them is covered by
 //! `reporting_golden_diagnostics_makes_no_global_allocations` above. Not
-//! covered: `__DATE__` and `__TIME__` (which read the environment and the
-//! clock), include directories from the command line, and the CLI's
+//! covered: `__DATE__` and `__TIME__` (which the benchmark API pins to the
+//! Unix epoch, and which otherwise read the clock), include directories and
+//! `SOURCE_DATE_EPOCH` from the command line or environment, and the CLI's
 //! argument parsing. One exception is allowed, only for files read from
 //! disk: the standard library's `File::open` and `Path::is_file` convert
 //! each path to the operating system's encoding in a buffer of their own,

@@ -7,6 +7,7 @@ use std::{
 };
 
 use crate::{
+    configuration::CompilerConfiguration,
     pipeline::{
         parse_with_arena,
         with_preprocessor,
@@ -22,6 +23,16 @@ use crate::{
     },
     util::bump::Bump,
 };
+
+/// A translation context whose `__DATE__` and `__TIME__` spell the Unix
+/// epoch, so a benchmark never reads the clock and its result does not
+/// depend on when it runs.
+fn benchmark_context(tu: &Bump) -> Context<'_> {
+    Context::with_configuration(
+        tu,
+        CompilerConfiguration::default().with_source_date_epoch(Some(0)),
+    )
+}
 
 #[doc(hidden)]
 #[must_use]
@@ -209,7 +220,7 @@ fn declaration_heavy_source(count: usize) -> String {
 #[must_use]
 pub fn lex(input: BenchmarkInput) -> usize {
     let tu = Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = benchmark_context(&tu);
     let file = context.intern_source_file(Path::new("<input>"));
     let pp = Bump::new();
     let mut tokens = TokenSource::new(&mut context, &pp, file, input.source());
@@ -230,7 +241,7 @@ pub fn lex(input: BenchmarkInput) -> usize {
 #[must_use]
 pub fn preprocess(input: BenchmarkInput) -> usize {
     let tu = Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = benchmark_context(&tu);
     with_preprocessor(
         &mut context,
         Path::new("<input>"),
@@ -277,7 +288,7 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
     use crate::util::vm::accounting;
     let (preprocessor_high_water, expansion_high_water) = {
         let tu = Bump::new();
-        let mut context = Context::new(&tu);
+        let mut context = benchmark_context(&tu);
         with_preprocessor(
             &mut context,
             Path::new("<input>"),
@@ -300,7 +311,7 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
     accounting::reset_peak();
     let tu_high_water = {
         let tu = Bump::new();
-        let mut context = Context::new(&tu);
+        let mut context = benchmark_context(&tu);
         let unit = crate::pipeline::parse_translation_unit(
             &mut context,
             Path::new("<input>"),
@@ -365,7 +376,7 @@ pub fn parse_file(path: &Path) -> std::io::Result<ParseBenchmarkSummary> {
 }
 
 fn summarize_parse<'tu>(tu: &'tu Bump, path: &Path, source: &'tu str) -> ParseBenchmarkSummary {
-    let mut context = Context::new(tu);
+    let mut context = benchmark_context(tu);
     let unit = crate::pipeline::parse_translation_unit(&mut context, path, source, &[], &[]);
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
@@ -396,7 +407,7 @@ pub fn with_prepared_parse<R>(
     inspect: impl FnOnce(PreparedParse<'_, '_, '_>) -> R,
 ) -> R {
     let tu = Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = benchmark_context(&tu);
     let preprocessed = prepare_parse_in_context(&mut context, input);
     let parse = Bump::new();
     inspect(PreparedParse {
