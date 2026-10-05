@@ -351,9 +351,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         | ControlFlow::Continue(()) => continue,
                         | ControlFlow::Break(e) => {
                             if preserve_rejected {
-                                // Expansion may have changed the active source.
-                                // Replay the token with its own provenance rather
-                                // than rewinding a position from another cursor.
+                                // Expansion can change the active source.
+                                // Replay the token and its provenance.
+                                // A saved position may belong elsewhere.
                                 let location = self
                                     .context
                                     .first_source_vector(token.source_vectors)

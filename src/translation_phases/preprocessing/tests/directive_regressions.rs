@@ -211,8 +211,8 @@ fn pragma_expectations_preserve_tokens_across_source_boundaries() {
     let headers = TemporaryHeaders::new();
     headers.write(
         "macros.h",
-        "#define BAD 123\n#define TEXT \"STDC FP_CONTRACT ON\"\n#define OPEN (\n\
-         #define CLOSE )\n#define P _Pragma\n#define EMPTY\n",
+        "#define BAD 123\n#define TEXT \"STDC FP_CONTRACT ON\"\n#define OPEN (\n#define CLOSE \
+         )\n#define P _Pragma\n#define EMPTY\n",
     );
     for (operand, recovered, expected_errors, error_in_header) in [
         ("_Pragma(BAD)\n", vec!["123", ")"], 1, true),
@@ -234,7 +234,10 @@ fn pragma_expectations_preserve_tokens_across_source_boundaries() {
                 tokens
                     .iter()
                     .map(|token| {
-                        context.string_cache.at(token.contents).trim_end_matches('\0')
+                        context
+                            .string_cache
+                            .at(token.contents)
+                            .trim_end_matches('\0')
                     })
                     .collect::<Vec<_>>(),
                 expected,
@@ -640,9 +643,8 @@ fn macro_include_tails_are_checked_in_the_callers_source_file() {
         ("#define S(x) #x\n", "S(a.h)"),
     ] {
         for tail in [" int injected;", " EMPTY", ""] {
-            let source = format!(
-                "#define EMPTY\n{definitions}#include {operand}{tail}\nint after;\n"
-            );
+            let source =
+                format!("#define EMPTY\n{definitions}#include {operand}{tail}\nint after;\n");
             with_directive_tokens_with_system_directory(
                 &source,
                 &headers.0.join("main.c"),

@@ -1088,8 +1088,7 @@ impl<'tu> Context<'tu> {
                         .iter()
                         .enumerate()
                         .filter(|&(index, &byte)| {
-                            byte == b'\n'
-                                || (byte == b'\r' && bytes.get(index + 1) != Some(&b'\n'))
+                            byte == b'\n' || (byte == b'\r' && bytes.get(index + 1) != Some(&b'\n'))
                         })
                         .map(|(index, _)| index + 1),
                 ),
