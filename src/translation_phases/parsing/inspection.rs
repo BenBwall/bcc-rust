@@ -664,8 +664,8 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         | InitializerType::AssignmentExpression(expression) => work.push(
                             Work::Expression(expression, indent + 1, "assignment-expression"),
                         ),
-                        | InitializerType::InitializerList(elements) => {
-                            for element in elements.iter().rev() {
+                        | InitializerType::InitializerList(list) => {
+                            for element in list.elements.iter().rev() {
                                 work.push(Work::InitializerElement(*element, indent + 1));
                             }
                         },

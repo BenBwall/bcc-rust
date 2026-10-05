@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use super::{
     Parser,
     declaration_syntax::{
+        BracedInitializerList,
         Designation,
         Designator,
         DesignatorType,
@@ -606,8 +607,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     let index = parser.alloc_syntax(Initializer {
                         kind: InitializerType::AssignmentExpression(expression),
                         source_vectors,
-                        opening_brace_source_vectors: None,
-                        closing_brace_source_vectors: None,
                         recovered: true,
                     });
                     self.push_element(context, index);
@@ -689,11 +688,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             },
             | InitializerPhase::FinishList => {
                 debug_assert!(returned.is_none());
-                let elements = parser.alloc_syntax_list(&mut self.elements);
+                let list = self.store_braced_list(parser);
                 let source_vectors = context.merge_vector_list(&self.source_vectors);
                 let index = self.store_initializer(
                     parser,
-                    InitializerType::InitializerList(elements),
+                    InitializerType::InitializerList(list),
                     source_vectors,
                 );
                 ParseAction::Reduce(ParseValue::Initializer(InitializerResult {
@@ -1011,6 +1010,20 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         false
     }
 
+    /// Stores the finished list's elements and braces, emptying the element
+    /// vector for reuse.
+    fn store_braced_list(
+        &mut self,
+        parser: &mut Parser<'tu, 'p>,
+    ) -> &'tu BracedInitializerList<'tu> {
+        let elements = parser.alloc_syntax_list(&mut self.elements);
+        parser.alloc_syntax_part(BracedInitializerList {
+            elements,
+            opening_brace_source_vectors: self.opening_brace_source_vectors,
+            closing_brace_source_vectors: self.closing_brace_source_vectors,
+        })
+    }
+
     fn store_initializer(
         &self,
         parser: &mut Parser<'tu, 'p>,
@@ -1020,8 +1033,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         parser.alloc_syntax(Initializer {
             kind,
             source_vectors,
-            opening_brace_source_vectors: self.opening_brace_source_vectors,
-            closing_brace_source_vectors: self.closing_brace_source_vectors,
             recovered: parser.hard_error_count > self.starting_error_count,
         })
     }

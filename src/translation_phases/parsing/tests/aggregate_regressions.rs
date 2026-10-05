@@ -10,6 +10,7 @@ use super::{
 use crate::translation_phases::{
     parsing::{
         declaration_syntax::{
+            BracedInitializerList,
             DirectDeclarator,
             EnumSpecifier,
             InitializerType,
@@ -40,7 +41,9 @@ fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let initializer = init_declarator
         .initializer
         .expect("expected an initializer");
-    let InitializerType::InitializerList(elements) = initializer.kind else {
+    let InitializerType::InitializerList(&BracedInitializerList { elements, .. }) =
+        initializer.kind
+    else {
         panic!("expected an initializer list")
     };
     elements.len()
@@ -54,7 +57,9 @@ fn designated_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let initializer = init_declarator
         .initializer
         .expect("expected an initializer");
-    let InitializerType::InitializerList(elements) = initializer.kind else {
+    let InitializerType::InitializerList(&BracedInitializerList { elements, .. }) =
+        initializer.kind
+    else {
         panic!("expected an initializer list")
     };
     elements

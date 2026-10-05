@@ -55,7 +55,7 @@ fn syntax_nodes_keep_their_sizes() {
         FunctionDefinition<'_> => 112,
         Declaration<'_> => 64,
         InitDeclarator<'_> => 56,
-        Initializer<'_> => 48,
+        Initializer<'_> => 32,
         InitializerElement<'_> => 32,
         Designation<'_> => 40,
         Designator<'_> => 48,

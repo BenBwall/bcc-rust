@@ -14,6 +14,7 @@ use super::{
 use crate::translation_phases::{
     parsing::{
         declaration_syntax::{
+            BracedInitializerList,
             Designator,
             DesignatorType,
             Initializer,
@@ -275,7 +276,8 @@ fn conditional_middle_recovery_honors_enclosing_boundaries() {
         let outer = init_declarator
             .initializer
             .expect("expected an initializer list");
-        let InitializerType::InitializerList(elements) = outer.kind else {
+        let InitializerType::InitializerList(&BracedInitializerList { elements, .. }) = outer.kind
+        else {
             panic!("expected an initializer list")
         };
         assert_eq!(elements.len(), 2);
@@ -764,7 +766,9 @@ fn typedef_spelled_expressions_remain_inside_braced_initializers() {
                     panic!("expected one initialized declarator")
                 };
                 let initializer = init_declarator.initializer.expect("braced initializer");
-                let InitializerType::InitializerList(elements) = initializer.kind else {
+                let InitializerType::InitializerList(&BracedInitializerList { elements, .. }) =
+                    initializer.kind
+                else {
                     panic!("expected an initializer list")
                 };
                 let [element] = elements else {
@@ -804,13 +808,14 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
                 .initializer
                 .expect("initializer must be attached to its declarator");
             let outer_initializer = initializer;
-            let InitializerType::InitializerList(elements) = outer_initializer.kind else {
+            let InitializerType::InitializerList(outer_list) = outer_initializer.kind else {
                 panic!("expected outer initializer list");
             };
+            let elements = outer_list.elements;
             assert_eq!(
                 sourced_text(
                     parsed,
-                    outer_initializer
+                    outer_list
                         .opening_brace_source_vectors
                         .expect("opening initializer brace"),
                 ),
@@ -819,7 +824,7 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
             assert_eq!(
                 sourced_text(
                     parsed,
-                    outer_initializer
+                    outer_list
                         .closing_brace_source_vectors
                         .expect("closing initializer brace"),
                 ),
@@ -853,7 +858,11 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
             );
 
             let nested_initializer = outer[0].initializer;
-            let InitializerType::InitializerList(nested_elements) = nested_initializer.kind else {
+            let InitializerType::InitializerList(&BracedInitializerList {
+                elements: nested_elements,
+                ..
+            }) = nested_initializer.kind
+            else {
                 panic!("expected nested initializer list");
             };
             assert_eq!(nested_elements.len(), 2);
@@ -922,7 +931,9 @@ fn chained_designators_retain_their_order_and_initializer() {
             let initializer = init_declarator
                 .initializer
                 .expect("initializer must be attached to its declarator");
-            let InitializerType::InitializerList(elements) = initializer.kind else {
+            let InitializerType::InitializerList(&BracedInitializerList { elements, .. }) =
+                initializer.kind
+            else {
                 panic!("expected an initializer list")
             };
             let [element] = elements else {
@@ -977,7 +988,9 @@ fn array_designators_accept_conditional_and_parenthesized_comma_expressions() {
                 panic!("expected one initialized declarator")
             };
             let initializer = init_declarator.initializer.expect("parsed initializer");
-            let InitializerType::InitializerList(elements) = initializer.kind else {
+            let InitializerType::InitializerList(&BracedInitializerList { elements, .. }) =
+                initializer.kind
+            else {
                 panic!("expected an initializer list")
             };
             let expressions = elements

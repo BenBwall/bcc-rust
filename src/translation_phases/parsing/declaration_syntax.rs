@@ -74,17 +74,26 @@ pub(crate) struct InitDeclarator<'tu> {
 /// C99: §6.7.8, p. 125; PDF p. 137.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Initializer<'tu> {
-    pub(crate) kind: InitializerType<'tu>,
+    pub(crate) kind:           InitializerType<'tu>,
     pub(crate) source_vectors: SourceVectors,
-    pub(crate) opening_brace_source_vectors: Option<SourceVectors>,
-    pub(crate) closing_brace_source_vectors: Option<SourceVectors>,
-    pub(crate) recovered: bool,
+    pub(crate) recovered:      bool,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum InitializerType<'tu> {
     AssignmentExpression(&'tu Expression<'tu>),
-    InitializerList(&'tu [InitializerElement<'tu>]),
+    InitializerList(&'tu BracedInitializerList<'tu>),
+}
+
+/// `{ initializer-list }` or `{ initializer-list , }`: the elements and the
+/// braces around them. Only a braced list has braces, so their locations
+/// live here rather than in every [`Initializer`].
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct BracedInitializerList<'tu> {
+    pub(crate) elements:                     &'tu [InitializerElement<'tu>],
+    pub(crate) opening_brace_source_vectors: Option<SourceVectors>,
+    /// `None` when recovery found the closing brace missing.
+    pub(crate) closing_brace_source_vectors: Option<SourceVectors>,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
