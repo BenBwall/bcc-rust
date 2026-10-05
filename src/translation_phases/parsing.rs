@@ -54,10 +54,8 @@ mod type_name;
 use std::fmt::Debug;
 
 #[cfg(test)]
-pub(crate) use declaration_syntax::{
-    DirectDeclarator,
-    TypeSpecifiers,
-};
+pub(crate) use declaration_syntax::DirectDeclarator;
+pub(crate) use declaration_syntax::TypeSpecifiers;
 pub(crate) use errors::ParserError;
 pub(crate) use inspection::InspectionOptions;
 #[cfg(test)]
@@ -144,6 +142,9 @@ pub(crate) struct Parser<'tu, 'p> {
     func_name: Option<StringCacheId>,
     /// Active switch contexts used to associate `case` and `default` labels.
     switch_scopes: ArenaVec<'p, SwitchScope>,
+    /// Scan storage for the nested specifiers whose enumeration constants a
+    /// function definition's parameters declare, reused by every definition.
+    binding_scan: ArenaVec<'p, TypeSpecifiers<'tu>>,
     /// Delimiter depth and ownership while a synchronization scan is active.
     recovery: RecoveryState<'p>,
     /// Number of hard parser diagnostics emitted so far.

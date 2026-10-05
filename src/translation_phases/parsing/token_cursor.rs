@@ -1,6 +1,4 @@
-//! Buffered parser-facing view of the preprocessed token stream.
-
-use std::collections::VecDeque;
+//! The parser's view of the preprocessed token array.
 
 use crate::{
     translation_phases::{
@@ -22,7 +20,6 @@ use crate::{
 pub(super) struct Upstream {
     /// Phase-6 output remains available until parsing ends.
     tokens: RegionVec<Token>,
-    next_token: usize,
     /// Where the preprocessor stopped, used to locate end-of-input
     /// diagnostics.
     end: SourcePosition,
@@ -44,7 +41,6 @@ impl Upstream {
             preprocessor.preprocess_into_arena(context, source_segment_limit, &mut tokens);
         Self {
             tokens,
-            next_token: 0,
             end: preprocessor.end_position(),
             source_file_index: preprocessor.end_source_file_index(),
             preprocessing_limit_token,
@@ -76,61 +72,54 @@ impl SetSourceFileIndex for Upstream {
     }
 }
 
-/// Buffered adapter from the preprocessor's iterator interface to parser
-/// current-token and arbitrary-lookahead operations.
+/// The parser's current-token and arbitrary-lookahead view of the
+/// preprocessed token array.
 ///
-/// `consume` advances exactly one token. Lookahead never changes `current`, and
-/// EOF is memoized so the preprocessor is not polled after completion.
+/// The whole translation unit is preprocessed before parsing starts, so the
+/// cursor is an index into that array: lookahead reads ahead of it and
+/// buffers nothing. `consume` advances exactly one token, and lookahead never
+/// changes `current`.
 ///
 /// C99: this cursor consumes the phase-7 token stream described by §5.1.1.2,
 /// phases 6-7, pp. 9-10; PDF pp. 21-22. Token categories are specified by
 /// §6.4, pp. 49-50; PDF pp. 61-62.
 pub(super) struct TokenCursor {
-    /// Upstream producer of parser-facing tokens.
+    /// The preprocessed token array.
     pub(super) upstream: Upstream,
-    /// Token currently owned by the active parser frame.
-    current:             Option<Token>,
-    /// Tokens fetched beyond `current`, ordered nearest first.
-    lookahead:           VecDeque<Token>,
+    /// The index of the current token in the array.
+    position:            usize,
+    /// Tokens at or past this index read as the end of input: the array's
+    /// length, or the current position once input is abandoned.
+    end:                 usize,
     /// The most recently consumed token, used to suggest insertions after it.
     pub(super) previous: Option<Token>,
-    /// Whether the upstream preprocessor has returned EOF.
-    reached_eof:         bool,
     /// Number of tokens consumed so far.
     pub(super) consumed: usize,
 }
 
 impl TokenCursor {
-    /// Creates an empty cursor over `upstream`; no token is fetched eagerly.
+    /// Creates a cursor at the first token of `upstream`.
     pub(super) fn new(upstream: Upstream) -> Self {
+        let end = upstream.tokens.len();
         Self {
             upstream,
-            current: None,
-            lookahead: VecDeque::new(),
+            position: 0,
+            end,
             previous: None,
-            reached_eof: false,
             consumed: 0,
         }
     }
 
-    /// Fetches the next upstream token. Its provenance was copied to the
-    /// parser-token provenance when it was preprocessed, so consecutive
-    /// tokens have adjacent provenance.
-    fn fetch(&mut self, _context: &mut Context<'_>) -> Option<Token> {
-        let token = self.upstream.tokens.get(self.upstream.next_token).copied();
-        if token.is_some() {
-            self.upstream.next_token += 1;
-        }
-        token
+    /// The token `offset` places past the current one, or `None` at the end
+    /// of input.
+    fn at(&self, offset: usize) -> Option<Token> {
+        let index = self.position.checked_add(offset)?;
+        (index < self.end).then(|| self.upstream.tokens[index])
     }
 
-    /// Returns the current token, fetching it once if necessary.
-    pub(super) fn current(&mut self, context: &mut Context<'_>) -> Option<Token> {
-        if self.current.is_none() && !self.reached_eof {
-            self.current = self.fetch(context);
-            self.reached_eof = self.current.is_none();
-        }
-        self.current
+    /// Returns the current token.
+    pub(super) fn current(&mut self, _context: &mut Context<'_>) -> Option<Token> {
+        self.at(0)
     }
 
     /// Returns the token immediately following `current` without consuming.
@@ -139,31 +128,20 @@ impl TokenCursor {
     }
 
     /// Returns zero-based lookahead beyond `current` without consuming.
-    pub(super) fn lookahead(&mut self, context: &mut Context<'_>, index: usize) -> Option<Token> {
-        let _ = self.current(context)?;
-        while self.lookahead.len() <= index && !self.reached_eof {
-            let next = self.fetch(context);
-            self.reached_eof = next.is_none();
-            if let Some(next) = next {
-                self.lookahead.push_back(next);
-            }
-        }
-        self.lookahead.get(index).copied()
+    pub(super) fn lookahead(&mut self, _context: &mut Context<'_>, index: usize) -> Option<Token> {
+        self.at(0).and_then(|_| self.at(index.checked_add(1)?))
     }
 
-    /// Drops buffered tokens and reports EOF without fetching the rest of
-    /// the input.
+    /// Reports EOF from now on without reading the rest of the input.
     pub(super) fn abandon(&mut self) {
-        self.current = None;
-        self.lookahead.clear();
-        self.reached_eof = true;
+        self.end = self.position.min(self.end);
     }
 
-    /// Advances by one token while preserving any buffered lookahead.
+    /// Advances by one token.
     pub(super) fn consume(&mut self) {
-        debug_assert!(self.current.is_some(), "cannot consume parser EOF");
-        self.previous = self.current;
-        self.current = self.lookahead.pop_front();
+        debug_assert!(self.at(0).is_some(), "cannot consume parser EOF");
+        self.previous = self.at(0);
+        self.position += 1;
         self.consumed += 1;
     }
 }

@@ -137,22 +137,21 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                                 return ParseAction::Reprocess;
                             }
-                            let mut names = Vec::new();
                             for parameter in parameter_list {
+                                let scopes = &mut parser.scopes;
                                 parameter
                                     .declaration_specifiers
                                     .type_specifiers
-                                    .collect_bindings(&mut names);
+                                    .collect_bindings(&mut parser.binding_scan, |name| {
+                                        scopes.publish(name, NameClass::Ordinary);
+                                    });
                                 if let Some(name) = parameter
                                     .declarator
                                     .and_then(Declarator::identifier)
                                     .map(|identifier| identifier.name)
                                 {
-                                    names.push(name);
+                                    parser.scopes.publish(name, NameClass::Ordinary);
                                 }
-                            }
-                            for name in names {
-                                parser.scopes.publish(name, NameClass::Ordinary);
                             }
                         },
                         | DirectDeclarator::KAndRStyleFunction { parameters } => {
@@ -160,12 +159,8 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                                 return ParseAction::Reprocess;
                             }
-                            let names = parameters
-                                .iter()
-                                .map(|identifier| identifier.name)
-                                .collect::<Vec<_>>();
-                            for name in names {
-                                parser.scopes.publish(name, NameClass::Ordinary);
+                            for identifier in parameters {
+                                parser.scopes.publish(identifier.name, NameClass::Ordinary);
                             }
                         },
                         | _ => unreachable!("function suffix helper returns only function forms"),

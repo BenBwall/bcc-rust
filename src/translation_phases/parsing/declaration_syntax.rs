@@ -27,6 +27,7 @@ use crate::{
         preprocessing::Token,
     },
     util::{
+        bump::ArenaVec,
         string_cache::StringCacheId,
         vector_slice::VectorSlice,
     },
@@ -914,19 +915,23 @@ impl<'tu> Declarator<'tu> {
 }
 
 impl TypeSpecifiers<'_> {
-    /// Adds the ordinary identifiers these specifiers declare, the
-    /// enumeration constants of nested enum bodies, to `names`.
-    pub(super) fn collect_bindings(self, names: &mut Vec<StringCacheId>) {
-        let mut pending = vec![self];
+    /// Passes `bind` the ordinary identifiers these specifiers declare, the
+    /// enumeration constants of nested enum bodies. `pending` is empty scan
+    /// storage, reused across calls and left empty.
+    pub(super) fn collect_bindings(
+        self,
+        pending: &mut ArenaVec<'_, Self>,
+        mut bind: impl FnMut(StringCacheId),
+    ) {
+        debug_assert!(pending.is_empty(), "binding scan storage starts empty");
+        pending.push(self);
         while let Some(type_specifiers) = pending.pop() {
             match type_specifiers {
                 | TypeSpecifiers::Enum(specifier) => {
                     if let Some(enumeration_list) = specifier.enumeration_list {
-                        names.extend(
-                            enumeration_list
-                                .iter()
-                                .map(|enumerator| enumerator.name.name),
-                        );
+                        for enumerator in enumeration_list {
+                            bind(enumerator.name.name);
+                        }
                     }
                 },
                 | TypeSpecifiers::StructOrUnion(specifier) => {

@@ -40,6 +40,7 @@ use super::{
         Expression,
         ExpressionType,
         ExternalDeclaration,
+        Identifier,
     },
     syntax_log::TreeNode,
     token_cursor::{
@@ -72,7 +73,6 @@ use crate::{
             Bump,
         },
         region_vec::RegionVec,
-        string_cache::StringCacheId,
     },
 };
 
@@ -155,6 +155,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
             label_scopes: LabelScopes::new_in(arena),
             func_name: None,
             switch_scopes: ArenaVec::new_in(arena),
+            binding_scan: ArenaVec::new_in(arena),
             recovery: RecoveryState::new_in(arena),
             hard_error_count: 0,
             active_frame: ParseFrameKind::ExternalDeclaration,
@@ -917,7 +918,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
     /// declarator ambiguity is constrained by §6.7.5.3 paragraph 11,
     /// p. 119; PDF p. 131.
     /// Returns whether the declaration starting at the current token
-    /// declares one of `names`, judged from its first identifiers that are
+    /// declares one of `parameters`, judged from its first identifiers that are
     /// neither typedef names nor tags. Recovery uses this to tell an
     /// old-style parameter declaration from an unrelated declaration that
     /// follows a head missing its `;`. When the scan runs out of lookahead it
@@ -925,7 +926,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
     pub(super) fn next_declaration_declares_one_of(
         &mut self,
         context: &mut Context<'_>,
-        names: &[StringCacheId],
+        parameters: &[Identifier],
     ) -> bool {
         const LOOKAHEAD: usize = 32;
         let mut after_tag_keyword = false;
@@ -946,7 +947,9 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                 | TokenType::Identifier => {
                     let tag = std::mem::take(&mut after_tag_keyword);
                     if depth == 0 && !tag && !self.scopes.is_typedef(token.contents) {
-                        return names.contains(&token.contents);
+                        return parameters
+                            .iter()
+                            .any(|parameter| parameter.name == token.contents);
                     }
                 },
                 | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {

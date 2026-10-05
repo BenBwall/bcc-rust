@@ -205,7 +205,10 @@ pub(super) fn closer_follows_stray_run(
     closer: fn(TokenType) -> bool,
     stop_at_declarations: bool,
 ) -> Option<usize> {
-    let mut open = Vec::new();
+    // Each token opens at most one delimiter, so the run's open delimiters
+    // fit in a fixed stack.
+    let mut open = [OperatorTokenType::OpeningParenthesis; STRAY_RUN_LOOKAHEAD];
+    let mut depth = 0;
     let mut previous = None;
     for index in 0..STRAY_RUN_LOOKAHEAD {
         let token = if index == 0 {
@@ -213,14 +216,14 @@ pub(super) fn closer_follows_stray_run(
         } else {
             parser.cursor.lookahead(context, index - 1)?
         };
-        if open.is_empty() && closer(token.kind) {
+        if depth == 0 && closer(token.kind) {
             return (index > 0).then_some(index);
         }
         if token.kind == TokenType::Operator(OperatorTokenType::Semicolon)
             || is_statement_keyword(token.kind)
             || stop_at_declarations
                 && (token.kind == TokenType::Operator(OperatorTokenType::QuestionMark)
-                    || open.is_empty() && parser.declaration_starter(token))
+                    || depth == 0 && parser.declaration_starter(token))
         {
             return None;
         }
@@ -233,10 +236,13 @@ pub(super) fn closer_follows_stray_run(
                 return None;
             },
             | TokenType::Operator(
-                OperatorTokenType::OpeningParenthesis
+                opening @ (OperatorTokenType::OpeningParenthesis
                 | OperatorTokenType::OpeningSquareBracket
-                | OperatorTokenType::OpeningCurlyBrace,
-            ) => open.push(token.kind),
+                | OperatorTokenType::OpeningCurlyBrace),
+            ) => {
+                open[depth] = opening;
+                depth += 1;
+            },
             | TokenType::Operator(
                 closing @ (OperatorTokenType::ClosingParenthesis
                 | OperatorTokenType::ClosingSquareBracket
@@ -249,9 +255,10 @@ pub(super) fn closer_follows_stray_run(
                         OperatorTokenType::OpeningSquareBracket,
                     | _ => OperatorTokenType::OpeningCurlyBrace,
                 };
-                if open.pop() != Some(TokenType::Operator(opening)) {
+                if depth == 0 || open[depth - 1] != opening {
                     return None;
                 }
+                depth -= 1;
             },
             | _ => {},
         }
@@ -1879,23 +1886,22 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         context: &mut Context<'_>,
         anchor: Option<Token>,
     ) {
-        let anchor_vectors = anchor.map(|token| {
-            context
-                .get_source_vectors(token.source_vectors)
-                .iter()
-                .map(|source| (source.position(context), source.source_file_index))
-                .collect::<Vec<_>>()
-        });
-        let source_vectors = match anchor_vectors.filter(|vectors| !vectors.is_empty()) {
-            | Some(vectors) => vectors.into_iter().fold(
-                SourceVectors::default(),
-                |combined, (position, source_file_index)| {
+        let source_vectors = match anchor {
+            | Some(token) if token.source_vectors.length != 0 => {
+                let mut combined = SourceVectors::default();
+                for index in 0..token.source_vectors.length as usize {
+                    // Creating an anchor appends to the retained provenance,
+                    // so the token's vectors are read again each time.
+                    let source = &context.get_source_vectors(token.source_vectors)[index];
+                    let (position, source_file_index) =
+                        (source.position(context), source.source_file_index);
                     let anchor =
                         context.create_retained_source_vectors(position, source_file_index, 0);
-                    context.merge_vectors(combined, anchor)
-                },
-            ),
-            | None => parser.missing_syntax_source(context),
+                    combined = context.merge_vectors(combined, anchor);
+                }
+                combined
+            },
+            | _ => parser.missing_syntax_source(context),
         };
         self.push_error_with_source(parser, source_vectors, None);
     }

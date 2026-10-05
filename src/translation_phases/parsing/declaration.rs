@@ -319,12 +319,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                         .first()
                         .and_then(|init| init.declarator.function_suffix())
                         .and_then(|suffix| match suffix {
-                            | DirectDeclarator::KAndRStyleFunction { parameters } => Some(
-                                parameters
-                                    .iter()
-                                    .map(|parameter| parameter.name)
-                                    .collect::<Vec<_>>(),
-                            ),
+                            | DirectDeclarator::KAndRStyleFunction { parameters } =>
+                                Some(parameters),
                             | _ => None,
                         })
                 } else {
@@ -338,7 +334,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     != self.starting_error_count
                     && token.is_some_and(|token| parser.declaration_starter(token))
                     && old_style_parameters.is_some_and(|parameters| {
-                        parser.next_declaration_declares_one_of(context, &parameters)
+                        parser.next_declaration_declares_one_of(context, parameters)
                     });
                 let starts_function_definition = self.context == DeclarationContext::External
                     && has_sole_uninitialized_declarator
