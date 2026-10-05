@@ -12,7 +12,10 @@
 //!
 //! Tests can make reservations and commits fail ([`faults`]). Under Miri,
 //! the OS is modelled by one allocation whose uncommitted bytes are
-//! unreachable through the pointers a [`GrowingRegion`] hands out.
+//! unreachable through the pointers a [`GrowingRegion`] hands out. Its bytes
+//! start uninitialized rather than zeroed, so Miri also reports any read of
+//! memory nothing has written: arena memory is reused after a reset, and its
+//! users must not count on fresh pages reading as zero.
 
 use std::{
     io,
@@ -540,7 +543,9 @@ fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid mock region layout"))?;
     // SAFETY: layout is nonzero and valid. The whole mock reservation is one
     // allocation; GrowingRegion hands out only views of its committed prefix.
-    NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
+    // It is left uninitialized, unlike an OS page, so that a read of bytes
+    // never written is reported.
+    NonNull::new(unsafe { std::alloc::alloc(layout) })
         .ok_or_else(|| io::Error::new(io::ErrorKind::OutOfMemory, "mock region allocation"))
 }
 

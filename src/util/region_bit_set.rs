@@ -40,9 +40,9 @@ impl RegionBitSet {
     pub(crate) fn insert(&mut self, index: usize) {
         let (word, bit) = Self::position(index);
         if word >= self.words.len() {
-            // The new pages are zeroed by the OS, but the vector only hands
-            // out elements it has written, so the new words are written as
-            // zeros: one store per 64 members, done once per word.
+            // The vector only hands out elements it has written, and its
+            // memory need not be fresh from the OS, so the new words are
+            // written as zeros: one store per 64 members, done once per word.
             self.words
                 .extend(std::iter::repeat_n(0, word + 1 - self.words.len()));
         }
