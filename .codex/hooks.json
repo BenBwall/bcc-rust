@@ -4,28 +4,28 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$(git rev-parse --show-toplevel)/tools/agentbus/agentbus.py\" hook --agent codex", "timeout": 10, "additionalContextLimit": 8000 }
+          { "type": "command", "command": "$env:RUSTFLAGS = ' '; cargo run --quiet --manifest-path \"$(git rev-parse --show-toplevel)/scripts/agentbus/Cargo.toml\" -- hook --agent codex", "timeout": 60, "additionalContextLimit": 8000 }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$(git rev-parse --show-toplevel)/tools/agentbus/agentbus.py\" hook --agent codex", "timeout": 10, "additionalContextLimit": 8000 }
+          { "type": "command", "command": "$env:RUSTFLAGS = ' '; cargo run --quiet --manifest-path \"$(git rev-parse --show-toplevel)/scripts/agentbus/Cargo.toml\" -- hook --agent codex", "timeout": 60, "additionalContextLimit": 8000 }
         ]
       }
     ],
     "PostToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$(git rev-parse --show-toplevel)/tools/agentbus/agentbus.py\" hook --agent codex", "timeout": 10, "additionalContextLimit": 8000 }
+          { "type": "command", "command": "$env:RUSTFLAGS = ' '; cargo run --quiet --manifest-path \"$(git rev-parse --show-toplevel)/scripts/agentbus/Cargo.toml\" -- hook --agent codex", "timeout": 60, "additionalContextLimit": 8000 }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$(git rev-parse --show-toplevel)/tools/agentbus/agentbus.py\" hook --agent codex", "timeout": 3600 }
+          { "type": "command", "command": "$env:RUSTFLAGS = ' '; cargo run --quiet --manifest-path \"$(git rev-parse --show-toplevel)/scripts/agentbus/Cargo.toml\" -- hook --agent codex", "timeout": 3600 }
         ]
       }
     ]

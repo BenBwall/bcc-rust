@@ -10,28 +10,28 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/tools/agentbus/agentbus.py\" hook --agent claude", "timeout": 10 }
+          { "type": "command", "command": "RUSTFLAGS='' cargo run --quiet --manifest-path \"$CLAUDE_PROJECT_DIR/scripts/agentbus/Cargo.toml\" -- hook --agent claude", "timeout": 60 }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/tools/agentbus/agentbus.py\" hook --agent claude", "timeout": 10 }
+          { "type": "command", "command": "RUSTFLAGS='' cargo run --quiet --manifest-path \"$CLAUDE_PROJECT_DIR/scripts/agentbus/Cargo.toml\" -- hook --agent claude", "timeout": 60 }
         ]
       }
     ],
     "PostToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/tools/agentbus/agentbus.py\" hook --agent claude", "timeout": 10 }
+          { "type": "command", "command": "RUSTFLAGS='' cargo run --quiet --manifest-path \"$CLAUDE_PROJECT_DIR/scripts/agentbus/Cargo.toml\" -- hook --agent claude", "timeout": 60 }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/tools/agentbus/agentbus.py\" hook --agent claude", "timeout": 3600 }
+          { "type": "command", "command": "RUSTFLAGS='' cargo run --quiet --manifest-path \"$CLAUDE_PROJECT_DIR/scripts/agentbus/Cargo.toml\" -- hook --agent claude", "timeout": 3600 }
         ]
       }
     ]

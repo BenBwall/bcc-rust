@@ -1,4 +1,5 @@
 /target
+/scripts/agentbus/target/
 *.log
 *.txt
 **/.DS_Store
