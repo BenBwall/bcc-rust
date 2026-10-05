@@ -5,8 +5,12 @@ repository coordinate. A Rust crate in [`scripts/agentbus`](./), using SeaORM
 with SQLite, serves three roles:
 
 Commands below use PowerShell. On POSIX, replace `./scripts/agentbus/run.ps1`
-with `sh scripts/agentbus/run.sh`. The launchers clear the compiler project's
-linker flags while building this independent crate.
+with `sh scripts/agentbus/run.sh`. Both delegate to the shared Python launcher
+(`python scripts/agentbus/run.py`), using the Python prerequisite already
+needed for the compiler build. It clears `RUSTFLAGS` and
+`CARGO_ENCODED_RUSTFLAGS` for Cargo while preserving the caller's other
+environment variables, working directory, and standard streams. This keeps
+the compiler project's linker flags out of this independent crate.
 
 | Role | Command | Wired up by |
 | --- | --- | --- |
@@ -135,8 +139,10 @@ these files: `.claude/settings.json` enables the `agentbus` server from
 
 **Codex** loads `.codex/` only for trusted projects. Each hook also needs
 one-time approval: run `/hooks` in Codex and trust the four agentbus hooks, then
-restart. Codex runs hooks through PowerShell on Windows; the hook commands work
-in both PowerShell and POSIX shells.
+restart. The MCP and hook commands use Python to find the checkout from the
+session's working directory, including nested directories and linked
+worktrees, then run that checkout's shared launcher. Their command syntax
+works in both PowerShell and POSIX shells.
 
 Agents' identities are fixed by config (`claude`, `codex`). Two sessions of the
 same agent share one inbox, and whichever hook fires first delivers a message. For
@@ -162,5 +168,14 @@ marks messages delivered, which suppresses that agent's next hook delivery.
 
 ```sh
 $env:RUSTFLAGS = ' '
+$env:CARGO_ENCODED_RUSTFLAGS = ''
 cargo test --manifest-path scripts/agentbus/Cargo.toml
+```
+
+The launcher tests require Python 3.11 or newer and Git. They check argument
+forwarding, checkout discovery, and environment isolation without building
+Rust, enabling hooks, or accessing the bus:
+
+```sh
+python -m unittest discover -s scripts/agentbus/tests -p 'test_*.py'
 ```

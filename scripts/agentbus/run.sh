@@ -1,3 +1,3 @@
 #!/bin/sh
 set -eu
-RUSTFLAGS='' cargo run --quiet --manifest-path "$(dirname "$0")/Cargo.toml" -- "$@"
+exec python "$(dirname "$0")/run.py" "$@"

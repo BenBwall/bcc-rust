@@ -1,3 +1,2 @@
-$env:RUSTFLAGS = ' '
-cargo run --quiet --manifest-path (Join-Path $PSScriptRoot 'Cargo.toml') -- @args
+python (Join-Path $PSScriptRoot 'run.py') @args
 exit $LASTEXITCODE
