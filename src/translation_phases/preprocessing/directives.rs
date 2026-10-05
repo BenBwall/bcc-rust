@@ -32,8 +32,6 @@ use crate::{
     },
     translation_phases::{
         Context,
-        SetPosition,
-        SetSourceFileIndex,
         SourcePosition,
         SourceVectors,
         StrExt,

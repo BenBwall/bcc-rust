@@ -1,6 +1,6 @@
 //! Shared translation-phase concepts: diagnostics plumbing, provenance,
-//! the translation [`Context`], and the [`TranslationPhase`] interface
-//! implemented by each phase module.
+//! the translation [`Context`], and the [`TranslationPhase`] interface of
+//! the preprocessing-token sources.
 
 mod context;
 pub(crate) mod initial_processing;
@@ -232,6 +232,13 @@ pub(crate) trait SetPosition: GetPosition {
             },
         );
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Position setters are retained for translation-phase implementations."
+        )
+    )]
     #[inline(always)]
     fn set_line(&mut self, context: &mut Context<'_>, line: u32) {
         self.set_position(

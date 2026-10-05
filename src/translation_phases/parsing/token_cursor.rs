@@ -5,8 +5,6 @@ use crate::{
         Context,
         GetPosition,
         GetSourceFileIndex,
-        SetPosition,
-        SetSourceFileIndex,
         SourcePosition,
         preprocessing::{
             Preprocessor,
@@ -54,21 +52,9 @@ impl GetPosition for Upstream {
     }
 }
 
-impl SetPosition for Upstream {
-    fn set_position(&mut self, _context: &mut Context<'_>, position: SourcePosition) {
-        self.end = position;
-    }
-}
-
 impl GetSourceFileIndex for Upstream {
     fn source_file_index(&self) -> u32 {
         self.source_file_index
-    }
-}
-
-impl SetSourceFileIndex for Upstream {
-    fn set_source_file_index(&mut self, _context: &mut Context<'_>, source_file_index: u32) {
-        self.source_file_index = source_file_index;
     }
 }
 

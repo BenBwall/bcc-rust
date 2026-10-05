@@ -19,7 +19,6 @@ use crate::{
         Context,
         GetSourceVectors,
         TranslationError,
-        TranslationPhase,
         parsing::{
             ExternalDeclaration,
             Parser as LanguageParser,

@@ -12,7 +12,6 @@ use super::{
 use crate::{
     translation_phases::{
         TranslationError,
-        TranslationPhase,
         parsing::{
             declaration_syntax::{
                 DirectDeclarator,

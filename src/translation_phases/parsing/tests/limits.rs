@@ -18,7 +18,6 @@ use crate::{
     translation_phases::{
         Context,
         TranslationError,
-        TranslationPhase,
         parsing::{
             Parser,
             ParserLimits,

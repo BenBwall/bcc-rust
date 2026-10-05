@@ -26,7 +26,6 @@ use crate::{
     translation_phases::{
         Context,
         GetPosition,
-        SetPosition,
         SourceVectors,
         preprocessor_tokenizer::{
             PreprocessorToken,

@@ -71,7 +71,6 @@ use crate::{
         SetSourceFileIndex,
         SourcePosition,
         TranslationError,
-        TranslationPhase,
         preprocessor_tokenizer::{
             LexedFiles,
             TokenSource,
@@ -234,10 +233,24 @@ impl GetPosition for Expander<'_, '_, '_> {
     }
 }
 
-impl SetPosition for Expander<'_, '_, '_> {
+impl Expander<'_, '_, '_> {
+    /// Moves the current token source to `position`.
     #[inline(always)]
     fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
         self.tokenizer.set_position(context, position);
+    }
+
+    /// Moves the current token source to `line`, keeping its index and
+    /// column.
+    fn set_line(&mut self, context: &mut Context<'_>, line: u32) {
+        let position = self.position(context);
+        self.set_position(context, SourcePosition { line, ..position });
+    }
+
+    /// Attributes the current token source to another source file.
+    fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
+        self.tokenizer
+            .set_source_file_index(context, source_file_index);
     }
 }
 
@@ -245,13 +258,6 @@ impl GetSourceFileIndex for Expander<'_, '_, '_> {
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         self.tokenizer.source_file_index()
-    }
-}
-
-impl SetSourceFileIndex for Expander<'_, '_, '_> {
-    fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
-        self.tokenizer
-            .set_source_file_index(context, source_file_index);
     }
 }
 
@@ -675,10 +681,10 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
     }
 }
 
-impl<'tu> TranslationPhase<'tu> for Expander<'tu, '_, '_> {
-    type Item = Token;
-
-    fn next_item(&mut self, context: &mut Context<'tu>) -> Option<Self::Item> {
+impl<'tu> Expander<'tu, '_, '_> {
+    /// Returns the next phase-6 token, with adjacent string literals
+    /// concatenated.
+    pub(crate) fn next_item(&mut self, context: &mut Context<'tu>) -> Option<Token> {
         let token = self.next_parser_token(context)?;
         Some(self.concatenate_adjacent_strings(context, token))
     }

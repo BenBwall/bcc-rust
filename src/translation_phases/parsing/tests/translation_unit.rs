@@ -16,7 +16,6 @@ use crate::{
         GetSourceVectors,
         SourceVector,
         TranslationError,
-        TranslationPhase,
         parsing::{
             Parser,
             declaration_syntax::DirectDeclarator,

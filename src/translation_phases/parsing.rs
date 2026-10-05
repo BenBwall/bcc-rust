@@ -88,10 +88,7 @@ use crate::{
         Context,
         GetPosition,
         GetSourceFileIndex,
-        SetPosition,
-        SetSourceFileIndex,
         SourcePosition,
-        TranslationPhase,
     },
     util::{
         bump::{
@@ -114,7 +111,7 @@ type FrameTrace = Vec<FrameTraceEvent>;
 /// Owns parser input, control frames, the syntax node count, scopes, and
 /// diagnostics.
 ///
-/// Calling [`TranslationPhase::next_item`] drives the machine until one
+/// Calling [`Parser::next_item`] drives the machine until one
 /// external declaration reduces or the preprocessed token stream ends.
 ///
 /// C99: translation units and external declarations are specified by §6.9,
@@ -280,30 +277,26 @@ impl GetPosition for Parser<'_, '_> {
     }
 }
 
-impl SetPosition for Parser<'_, '_> {
-    fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
-        self.cursor.upstream.set_position(context, position);
-    }
-}
-
 impl GetSourceFileIndex for Parser<'_, '_> {
     fn source_file_index(&self) -> u32 {
         self.cursor.upstream.source_file_index()
     }
 }
 
-impl SetSourceFileIndex for Parser<'_, '_> {
-    fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
-        self.cursor
-            .upstream
-            .set_source_file_index(context, source_file_index);
-    }
-}
-
-impl<'tu> TranslationPhase<'_> for Parser<'tu, '_> {
-    type Item = ExternalDeclaration<'tu>;
-
-    fn next_item(&mut self, context: &mut Context<'_>) -> Option<Self::Item> {
+impl<'tu> Parser<'tu, '_> {
+    /// Streaming adapter: drives the machine until one external declaration
+    /// reduces, and returns it.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Tests stream roots; the pipeline parses whole translation units."
+        )
+    )]
+    pub(crate) fn next_item(
+        &mut self,
+        context: &mut Context<'_>,
+    ) -> Option<ExternalDeclaration<'tu>> {
         let root = self.drive(context)?;
         self.emitted_roots.push(root);
         Some(root)

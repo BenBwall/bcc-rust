@@ -44,7 +44,6 @@ use crate::{
         Context,
         SourceVectors,
         TranslationError,
-        TranslationPhase,
         preprocessing::Preprocessor,
     },
     util::shared::SharedVec,

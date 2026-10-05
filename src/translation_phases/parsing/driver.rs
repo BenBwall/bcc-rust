@@ -195,11 +195,9 @@ impl<'tu, 'p> Parser<'tu, 'p> {
     /// Parses the complete phase-7 input into one source-ordered translation
     /// unit whose roots and syntax live in the translation-unit arena.
     ///
-    /// Roots already observed through
-    /// [`TranslationPhase::next_item`](crate::translation_phases::TranslationPhase::next_item)
-    /// remain part of the aggregate result so mixing the streaming adapter
-    /// with the owning seam cannot silently produce a suffix-only
-    /// translation unit.
+    /// Roots already observed through [`Self::next_item`] remain part of the
+    /// aggregate result so mixing the streaming adapter with the owning seam
+    /// cannot silently produce a suffix-only translation unit.
     pub(crate) fn parse_translation_unit(
         mut self,
         context: &mut Context<'_>,
