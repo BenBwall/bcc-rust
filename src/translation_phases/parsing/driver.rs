@@ -114,9 +114,9 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         source_segment_limit: usize,
     ) -> PreprocessedTranslationUnit {
         preprocessor.prepare_for_parsing();
-        PreprocessedTranslationUnit {
-            upstream: Upstream::preprocess_all(preprocessor, context, source_segment_limit),
-        }
+        let upstream = Upstream::preprocess_all(preprocessor, context, source_segment_limit);
+        context.release_preprocessor_vectors();
+        PreprocessedTranslationUnit { upstream }
     }
 
     /// Creates an idle parser over `preprocessed` whose working memory comes

@@ -767,6 +767,16 @@ impl<'tu> Context<'tu> {
         self.expansion_sites[SourceArena::Preprocessor as usize].clear();
     }
 
+    /// Discards the preprocessor provenance arena once preprocessing has
+    /// ended and releases its region, which would otherwise stay reserved,
+    /// empty, through parsing. Parsed tokens and parser locations use the
+    /// other two arenas; a later preprocessor-arena range would reserve a new
+    /// region.
+    pub(crate) fn release_preprocessor_vectors(&mut self) {
+        self.compact_preprocessor_vectors();
+        self.source_vectors.0 = RegionVec::new();
+    }
+
     /// Copies a preprocessor-arena range into the retained arena; other
     /// ranges are returned unchanged.
     fn retain_preprocessor_range(&mut self, source_vectors: SourceVectors) -> SourceVectors {

@@ -462,8 +462,9 @@ const RECURSIVE_MAIN: &str = "#include \"loop.h\"\nint caller_after;\n";
 /// Regions one compilation may hold at once: the translation-unit,
 /// preprocessor, and expansion arenas, the string cache's two buffers, three
 /// provenance stores, the parser's token stream, and the renderer's scratch.
-/// The parse arena and the file-scope typedef set are reserved only after the
-/// preprocessor's arenas are released. Lexed files and include depth add none.
+/// The parse arena, the file-scope typedef set, and the parsed roots are
+/// reserved only after the preprocessor's arenas and its provenance store are
+/// released. Lexed files and include depth add none.
 const MAX_REGIONS_PER_COMPILATION: usize = 10;
 
 fn assert_within_budget(usage: crate::util::vm::accounting::Usage, what: &str) {
@@ -492,6 +493,18 @@ fn small_compilations_hold_few_regions_and_commit_little() {
         let usage = compilation_peak(source, Path::new("<input>"));
         assert_within_budget(usage, source);
     }
+}
+
+/// Parsing reserves its arena, the file-scope typedef set, and the roots, but
+/// releases the preprocessor's provenance store first, which nothing reads
+/// once phase 6 has ended. Holding it would make this compilation's peak 9.
+#[test]
+fn parsing_does_not_keep_the_preprocessor_provenance_region() {
+    let usage = compilation_peak(
+        "typedef int t;\nt main(void) { t x = 0; return x; }\n",
+        Path::new("<input>"),
+    );
+    assert!(usage.regions <= 8, "{usage:?}");
 }
 
 #[test]
