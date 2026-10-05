@@ -263,15 +263,16 @@ fn header_name_from_source<'a>(
     clippy::while_let_loop,
     reason = "The macro-parameter loop has multiple semantic exit conditions."
 )]
-impl<'x> Expander<'_, '_, 'x> {
-    pub(super) fn parse_directive(&mut self, context: &mut Context<'_>, token: PreprocessorToken) {
+impl<'x> Expander<'_, '_, '_, 'x> {
+    pub(super) fn parse_directive(&mut self, token: PreprocessorToken) {
         if !self.last_was_newline {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
                 source_vectors: token.source_vectors,
             });
         }
-        let Some(directive) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
+        let Some(directive) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+        else {
             return;
         };
         match directive.kind {
@@ -287,39 +288,39 @@ impl<'x> Expander<'_, '_, 'x> {
             | PreprocessorTokenType::Identifier
             | PreprocessorTokenType::UniversalIdentifier => (),
             | _ => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::HashMustBeFollowedByIdentifier,
                     source_vectors: directive.source_vectors,
                 });
-                self.skip_until_newline(context);
+                self.skip_until_newline();
                 return;
             },
         }
-        match context.string_cache.at(directive.contents) {
-            | "if" => self.parse_if_directive(context, directive),
-            | "ifdef" => self.parse_ifdef_directive(context, directive),
-            | "ifndef" => self.parse_ifndef_directive(context, directive),
-            | "elif" => self.parse_elif_directive(context, directive),
-            | "else" => self.parse_else_directive(context, directive),
-            | "endif" => self.parse_endif_directive(context, directive),
-            | "include" => self.parse_include_directive(context, directive),
-            | "define" => self.parse_define_directive(context, directive),
-            | "undef" => self.parse_undef_directive(context, directive),
-            | "line" => self.parse_line_directive(context, directive),
-            | "error" => self.parse_error_directive(context, directive),
+        match self.context.string_cache.at(directive.contents) {
+            | "if" => self.parse_if_directive(directive),
+            | "ifdef" => self.parse_ifdef_directive(directive),
+            | "ifndef" => self.parse_ifndef_directive(directive),
+            | "elif" => self.parse_elif_directive(directive),
+            | "else" => self.parse_else_directive(directive),
+            | "endif" => self.parse_endif_directive(directive),
+            | "include" => self.parse_include_directive(directive),
+            | "define" => self.parse_define_directive(directive),
+            | "undef" => self.parse_undef_directive(directive),
+            | "line" => self.parse_line_directive(directive),
+            | "error" => self.parse_error_directive(directive),
             | "pragma" => {
-                if !self.parse_pragma_directive(context, directive) {
-                    self.skip_until_newline(context);
+                if !self.parse_pragma_directive(directive) {
+                    self.skip_until_newline();
                 }
                 self.last_was_newline = true;
                 self.current_is_newline = true;
             },
             | _ => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnknownDirective,
                     source_vectors: directive.source_vectors,
                 });
-                self.skip_until_newline(context);
+                self.skip_until_newline();
             },
         }
     }
@@ -401,18 +402,20 @@ impl<'x> Expander<'_, '_, 'x> {
     /// a macro-expanded operand can switch to its definition's tokenizer.
     fn find_header_from_path(
         &mut self,
-        context: &mut Context<'_>,
         including_file: u32,
         operand: SourceVectors,
         path: &Path,
         is_system_header: bool,
     ) -> Option<u32> {
         let source_file_index = if path.is_absolute() {
-            path.is_file().then(|| context.intern_source_file(path))
+            path.is_file()
+                .then(|| self.context.intern_source_file(path))
         } else {
             // The including file's directory and the quote directories come
             // first for `"…"` names.
-            let directories = context.include_search_directories(including_file, is_system_header);
+            let directories = self
+                .context
+                .include_search_directories(including_file, is_system_header);
             let mut found = None;
             for directory in directories.clone() {
                 // Each candidate is spelled in the expansion arena and taken
@@ -420,15 +423,15 @@ impl<'x> Expander<'_, '_, 'x> {
                 let mut buffer = ArenaVec::new_in(self.scratch);
                 let candidate = join_path(&mut buffer, directory, path);
                 if candidate.is_file() {
-                    found = Some(context.intern_source_file(candidate));
+                    found = Some(self.context.intern_source_file(candidate));
                     break;
                 }
             }
             if found.is_none() {
-                let searched = context.tu_arena().alloc_slice_fill_iter(directories);
-                context.preprocessor_error(PreprocessorError {
+                let searched = self.context.tu_arena().alloc_slice_fill_iter(directories);
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::HeaderNotFound {
-                        name: context.diagnostic_text(&path.to_string_lossy()),
+                        name: self.context.diagnostic_text(&path.to_string_lossy()),
                         is_system_header,
                         searched,
                     },
@@ -439,9 +442,9 @@ impl<'x> Expander<'_, '_, 'x> {
             found
         };
         let Some(source_file_index) = source_file_index else {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderNotFound {
-                    name: context.diagnostic_text(&path.to_string_lossy()),
+                    name: self.context.diagnostic_text(&path.to_string_lossy()),
                     is_system_header,
                     searched: &[],
                 },
@@ -458,7 +461,7 @@ impl<'x> Expander<'_, '_, 'x> {
 
     /// Judges an `#include` operand by its first token as written, without
     /// consuming it or reporting what reading it reports.
-    fn peek_include_operand(&mut self, context: &mut Context<'_>) -> IncludeOperand {
+    fn peek_include_operand(&mut self) -> IncludeOperand {
         // Only a source file's own text can be read between the delimiters.
         if !matches!(
             self.tokenizer_stack.last().map(|frame| &frame.frame_type),
@@ -467,15 +470,15 @@ impl<'x> Expander<'_, '_, 'x> {
             return IncludeOperand::Other;
         }
         let saved = self.tokenizer.clone();
-        let ignored = context.ignore_tokenizer_errors();
-        context.set_ignore_tokenizer_errors(true);
-        let first = Self::next_ignore_whitespace(&mut self.tokenizer, context);
-        context.set_ignore_tokenizer_errors(ignored);
+        let ignored = self.context.ignore_tokenizer_errors();
+        self.context.set_ignore_tokenizer_errors(true);
+        let first = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+        self.context.set_ignore_tokenizer_errors(ignored);
         self.tokenizer = saved;
         let Some(first) = first else {
             return IncludeOperand::Other;
         };
-        let spelling = context.string_cache.at(first.contents);
+        let spelling = self.context.string_cache.at(first.contents);
         if first.kind == PreprocessorTokenType::String && spelling.starts_with('"') {
             IncludeOperand::Quoted
         } else if spelling.starts_with('<') {
@@ -488,14 +491,13 @@ impl<'x> Expander<'_, '_, 'x> {
     /// Reads a `<…>` operand as written: tokens through the first one that
     /// contains `>`. The name is the source text between the delimiters, so
     /// it keeps the whitespace that the tokens between them do not spell.
-    fn read_written_angle_header(
-        &mut self,
-        context: &mut Context<'_>,
-        directive: PreprocessorToken,
-    ) -> HeaderName<'x> {
-        let open = Self::next_ignore_whitespace(&mut self.tokenizer, context)
+    fn read_written_angle_header(&mut self, directive: PreprocessorToken) -> HeaderName<'x> {
+        let open = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             .expect("the operand was peeked");
-        let open_vector = context.first_source_vector(open.source_vectors).clone();
+        let open_vector = self
+            .context
+            .first_source_vector(open.source_vectors)
+            .clone();
         let file = open_vector.source_file_index;
         // `#line` may rename the file; its text is the physical file's.
         let physical = self.physical_source_file_index();
@@ -504,8 +506,8 @@ impl<'x> Expander<'_, '_, 'x> {
         let mut closing = None;
         let mut extra_after_closing = None;
         loop {
-            let Some(token) = self.tokenizer.next_item(context) else {
-                context.preprocessor_error(PreprocessorError {
+            let Some(token) = self.tokenizer.next_item(self.context) else {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing include directive",
                     ),
@@ -518,9 +520,13 @@ impl<'x> Expander<'_, '_, 'x> {
                 self.current_is_newline = true;
                 break;
             }
-            let vector = context.first_source_vector(token.source_vectors).clone();
-            if context.string_cache.at(token.contents).contains('>') {
-                let source = context
+            let vector = self
+                .context
+                .first_source_vector(token.source_vectors)
+                .clone();
+            if self.context.string_cache.at(token.contents).contains('>') {
+                let source = self
+                    .context
                     .source_text(physical)
                     .expect("source files record their text");
                 let characters = logical_characters(self.scratch, source, vector.range());
@@ -545,7 +551,8 @@ impl<'x> Expander<'_, '_, 'x> {
             column: open_vector.column,
         };
         let (name, invalid, unclosed_at, extra_after_closing) = {
-            let source = context
+            let source = self
+                .context
                 .source_text(physical)
                 .expect("source files record their text");
             let open_index = logical_characters(self.scratch, source, open_vector.range())
@@ -572,7 +579,7 @@ impl<'x> Expander<'_, '_, 'x> {
         // newline while looking for `>=` or `>>`. Do not ask phase 4 for
         // another token: that would pop this file and read its parent.
         if closing.is_some_and(|index| {
-            context
+            self.context
                 .source_text(physical)
                 .is_some_and(|source| index + 1 == source.len())
         }) {
@@ -581,24 +588,31 @@ impl<'x> Expander<'_, '_, 'x> {
         HeaderName {
             name,
             is_system_header: true,
-            source_vectors: context.create_source_vectors(anchor, file, length),
+            source_vectors: self.context.create_source_vectors(anchor, file, length),
             missing_delimiter: unclosed_at
-                .map(|position| ('>', context.create_source_vectors(position, file, 0))),
+                .map(|position| ('>', self.context.create_source_vectors(position, file, 0))),
             invalid: invalid.map(|(sequence, start, length)| {
-                (sequence, context.create_source_vectors(start, file, length))
+                (
+                    sequence,
+                    self.context.create_source_vectors(start, file, length),
+                )
             }),
             backslash: None,
-            extra_tokens: extra_after_closing
-                .map(|(position, length)| context.create_source_vectors(position, file, length)),
+            extra_tokens: extra_after_closing.map(|(position, length)| {
+                self.context.create_source_vectors(position, file, length)
+            }),
         }
     }
 
     /// Reads a `"…"` operand as written: one string literal, whose source
     /// text between its quotes is the name.
-    fn read_written_quoted_header(&mut self, context: &mut Context<'_>) -> HeaderName<'x> {
-        let token = Self::next_ignore_whitespace(&mut self.tokenizer, context)
+    fn read_written_quoted_header(&mut self) -> HeaderName<'x> {
+        let token = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             .expect("the operand was peeked");
-        let vector = context.first_source_vector(token.source_vectors).clone();
+        let vector = self
+            .context
+            .first_source_vector(token.source_vectors)
+            .clone();
         let file = vector.source_file_index;
         // `#line` may rename the file; its text is the physical file's.
         let physical = self.physical_source_file_index();
@@ -607,9 +621,11 @@ impl<'x> Expander<'_, '_, 'x> {
             line:   vector.line,
             column: vector.column,
         };
-        let allow_backslash = context.configuration.extension_policy() != ExtensionPolicy::Deny;
+        let allow_backslash =
+            self.context.configuration.extension_policy() != ExtensionPolicy::Deny;
         let (written, unclosed_at, escaped_closing_quote, trailing) = {
-            let source = context
+            let source = self
+                .context
                 .source_text(physical)
                 .expect("source files record their text");
             let characters = logical_characters(self.scratch, source, vector.range());
@@ -668,17 +684,18 @@ impl<'x> Expander<'_, '_, 'x> {
             (written, unclosed_at, escaped_closing_quote, trailing)
         };
         if escaped_closing_quote {
-            context.withdraw_quoted_header_lexer_error(&vector);
+            self.context.withdraw_quoted_header_lexer_error(&vector);
         }
         let source_vectors = match trailing {
-            | Some((length, _)) => context.create_source_vectors(anchor, file, length),
+            | Some((length, _)) => self.context.create_source_vectors(anchor, file, length),
             | None => token.source_vectors,
         };
         let extra_tokens = trailing
             .and_then(|(_, extra)| extra)
-            .map(|(position, length)| context.create_source_vectors(position, file, length));
+            .map(|(position, length)| self.context.create_source_vectors(position, file, length));
         if unclosed_at.is_some()
-            && context
+            && self
+                .context
                 .source_text(physical)
                 .is_some_and(|source| vector.end() == source.len())
         {
@@ -689,33 +706,31 @@ impl<'x> Expander<'_, '_, 'x> {
             is_system_header: false,
             source_vectors,
             missing_delimiter: unclosed_at
-                .map(|position| ('"', context.create_source_vectors(position, file, 0))),
+                .map(|position| ('"', self.context.create_source_vectors(position, file, 0))),
             invalid: written.invalid.map(|(sequence, start, length)| {
-                (sequence, context.create_source_vectors(start, file, length))
+                (
+                    sequence,
+                    self.context.create_source_vectors(start, file, length),
+                )
             }),
             backslash: written
                 .backslash
-                .map(|(start, length)| context.create_source_vectors(start, file, length)),
+                .map(|(start, length)| self.context.create_source_vectors(start, file, length)),
             extra_tokens,
         }
     }
 
     /// Reads an operand not written as a header name: macros that expand to
     /// one (C99 §6.10.2p4), whose tokens are combined by their spellings.
-    fn read_expanded_header(
-        &mut self,
-        context: &mut Context<'_>,
-        directive: PreprocessorToken,
-    ) -> Option<HeaderName<'x>> {
+    fn read_expanded_header(&mut self, directive: PreprocessorToken) -> Option<HeaderName<'x>> {
         let include_string =
             self.expect_token_without_rewind::<true>(
-                context,
-                |_, context, token| {
-                    let spelling = context.string_cache.at(token.contents);
+                |preprocessor, token| {
+                    let spelling = preprocessor.context.string_cache.at(token.contents);
                     (token.kind == PreprocessorTokenType::String && spelling.starts_with('"'))
                         || spelling.starts_with('<')
                 },
-                |_, _, token| {
+                |_, token| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(
@@ -727,7 +742,7 @@ impl<'x> Expander<'_, '_, 'x> {
                 "parsing include directive",
             )?;
         if include_string.kind == PreprocessorTokenType::String {
-            let spelling = context.string_cache.at(include_string.contents);
+            let spelling = self.context.string_cache.at(include_string.contents);
             let name = spelling.strip_prefix('"').unwrap_or(spelling);
             let name = &*self
                 .scratch
@@ -736,7 +751,7 @@ impl<'x> Expander<'_, '_, 'x> {
                 (
                     sequence,
                     expanded_header_sequence_source(
-                        context,
+                        self.context,
                         include_string.source_vectors,
                         offset + 1,
                         sequence,
@@ -755,25 +770,25 @@ impl<'x> Expander<'_, '_, 'x> {
             });
         }
         let mut contents = ArenaString::new_in(self.scratch);
-        contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
+        contents.push_str(&self.context.string_cache.at(include_string.contents)[1..]);
         // Each name byte belongs to a token; keep that token's provenance so
         // an invalid sequence does not share the whole operand's location.
         let mut token_spans = ArenaVec::new_in(self.scratch);
         token_spans.push((0..contents.len(), include_string.source_vectors, 1));
         let start_index = Context::duplicate_source_vectors(
-            &mut context.source_vectors.0,
+            &mut self.context.source_vectors.0,
             include_string.source_vectors,
         );
         let mut closed = false;
         loop {
-            match self.next_preprocessor_token::<false>(context) {
+            match self.next_preprocessor_token::<false>() {
                 | Some(token) => {
                     if token.kind == PreprocessorTokenType::Newline {
                         break;
                     }
-                    let token_contents = context.string_cache.at(token.contents);
+                    let token_contents = self.context.string_cache.at(token.contents);
                     _ = Context::duplicate_source_vectors(
-                        &mut context.source_vectors.0,
+                        &mut self.context.source_vectors.0,
                         token.source_vectors,
                     );
                     if let Some(idx) = token_contents.find('>') {
@@ -784,11 +799,11 @@ impl<'x> Expander<'_, '_, 'x> {
                         break;
                     }
                     let start = contents.len();
-                    contents.push_str(context.string_cache.at(token.contents));
+                    contents.push_str(self.context.string_cache.at(token.contents));
                     token_spans.push((start..contents.len(), token.source_vectors, 0));
                 },
                 | None => {
-                    context.preprocessor_error(PreprocessorError {
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                             "parsing include directive",
                         ),
@@ -798,7 +813,8 @@ impl<'x> Expander<'_, '_, 'x> {
                 },
             }
         }
-        let source_vectors = SourceVectors::new(start_index, context.source_vectors.0.len() as u32);
+        let source_vectors =
+            SourceVectors::new(start_index, self.context.source_vectors.0.len() as u32);
         let name = contents.into_str();
         let invalid = invalid_header_sequence(name, true).map(|(offset, sequence)| {
             let (range, token_source, token_offset) = token_spans
@@ -808,7 +824,7 @@ impl<'x> Expander<'_, '_, 'x> {
             (
                 sequence,
                 expanded_header_sequence_source(
-                    context,
+                    self.context,
                     *token_source,
                     offset - range.start + token_offset,
                     sequence,
@@ -830,9 +846,9 @@ impl<'x> Expander<'_, '_, 'x> {
     /// Inspect the active expansion frames and the including file without
     /// advancing them; reading through the file's end here could enter its
     /// parent's next line before the include frame is pushed.
-    fn include_tail_is_empty(&self, context: &mut Context<'_>) -> bool {
-        let ignored = context.ignore_tokenizer_errors();
-        context.set_ignore_tokenizer_errors(true);
+    fn include_tail_is_empty(&mut self) -> bool {
+        let ignored = self.context.ignore_tokenizer_errors();
+        self.context.set_ignore_tokenizer_errors(true);
         let mut empty = false;
         'frames: for index in (0..self.tokenizer_stack.len()).rev() {
             let frame = &self.tokenizer_stack[index];
@@ -842,7 +858,7 @@ impl<'x> Expander<'_, '_, 'x> {
                 frame.tokenizer.clone()
             };
             loop {
-                match tokenizer.next_item(context) {
+                match tokenizer.next_item(self.context) {
                     | Some(token) if token.kind == PreprocessorTokenType::Whitespace => (),
                     | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                         empty = true;
@@ -860,48 +876,48 @@ impl<'x> Expander<'_, '_, 'x> {
                 break;
             }
         }
-        context.set_ignore_tokenizer_errors(ignored);
+        self.context.set_ignore_tokenizer_errors(ignored);
         empty
     }
 
-    fn parse_include_directive(&mut self, context: &mut Context<'_>, directive: PreprocessorToken) {
+    fn parse_include_directive(&mut self, directive: PreprocessorToken) {
         let including_file = self.physical_source_file_index();
-        let header = match self.peek_include_operand(context) {
-            | IncludeOperand::Angle => Some(self.read_written_angle_header(context, directive)),
-            | IncludeOperand::Quoted => Some(self.read_written_quoted_header(context)),
-            | IncludeOperand::Other => self.read_expanded_header(context, directive),
+        let header = match self.peek_include_operand() {
+            | IncludeOperand::Angle => Some(self.read_written_angle_header(directive)),
+            | IncludeOperand::Quoted => Some(self.read_written_quoted_header()),
+            | IncludeOperand::Other => self.read_expanded_header(directive),
         };
         let Some(header) = header else {
             if !self.current_is_newline {
-                self.skip_and_expand_until_newline(context);
+                self.skip_and_expand_until_newline();
             }
             return;
         };
         if header.missing_delimiter.is_none()
             && !self.current_is_newline
-            && self.include_tail_is_empty(context)
+            && self.include_tail_is_empty()
         {
             self.current_is_newline = true;
         }
         if let Some((delimiter, source_vectors)) = header.missing_delimiter {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type: PreprocessorErrorType::UnterminatedHeaderName(delimiter),
                 source_vectors,
             });
         }
         if let Some((sequence, source_vectors)) = header.invalid {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type: PreprocessorErrorType::InvalidCharacterInHeaderName(sequence),
                 source_vectors,
             });
         }
         let mut look_up = true;
         if let Some(source_vectors) = header.backslash {
-            let policy = match context.configuration.standard() {
-                | CStandard::C99 => context.configuration.extension_policy(),
+            let policy = match self.context.configuration.standard() {
+                | CStandard::C99 => self.context.configuration.extension_policy(),
             };
             if policy != ExtensionPolicy::Allow {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(policy),
                     source_vectors,
                 });
@@ -910,7 +926,6 @@ impl<'x> Expander<'_, '_, 'x> {
         }
         let header_source_index = if look_up {
             self.find_header_from_path(
-                context,
                 including_file,
                 header.source_vectors,
                 Path::new(header.name),
@@ -920,21 +935,20 @@ impl<'x> Expander<'_, '_, 'x> {
             None
         };
         if let Some(source_vectors) = header.extra_tokens {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type: PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
                 source_vectors,
             });
             if !self.current_is_newline {
-                self.skip_and_expand_until_newline(context);
+                self.skip_and_expand_until_newline();
             }
         } else if !self.current_is_newline
             && self
                 // An extra token is discarded with the directive tail. Rewinding
                 // after an expansion frame ends can target a different source.
                 .expect_token_without_rewind::<true>(
-                    context,
-                    |_, _, token| token.kind == PreprocessorTokenType::Newline,
-                    |_, _, token| {
+                    |_, token| token.kind == PreprocessorTokenType::Newline,
+                    |_, token| {
                         ControlFlow::Break(PreprocessorError {
                             error_type:     PreprocessorErrorType::ExtraTokensAfterIncludeDirective,
                             source_vectors: token.source_vectors,
@@ -944,7 +958,7 @@ impl<'x> Expander<'_, '_, 'x> {
                 )
                 .is_none()
         {
-            self.skip_and_expand_until_newline(context);
+            self.skip_and_expand_until_newline();
         }
         let Some(header_source_index) = header_source_index else {
             return;
@@ -957,7 +971,7 @@ impl<'x> Expander<'_, '_, 'x> {
             .filter(|frame| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))
             .count();
         if source_depth > MAX_INCLUDE_NESTING {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::IncludeNestingLimitExceeded(
                     MAX_INCLUDE_NESTING,
                 ),
@@ -965,20 +979,24 @@ impl<'x> Expander<'_, '_, 'x> {
             });
             return;
         }
-        let Ok(header_string) = context.read_source_file(header_source_index).map_err(|e| {
-            context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::HeaderFileInaccessible(
-                    context.diagnostic_format(format_args!("{e}")),
-                ),
-                source_vectors: directive.source_vectors,
-            });
-        }) else {
+        let Ok(header_string) = self
+            .context
+            .read_source_file(header_source_index)
+            .map_err(|e| {
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::HeaderFileInaccessible(
+                        self.context.diagnostic_format(format_args!("{e}")),
+                    ),
+                    source_vectors: directive.source_vectors,
+                });
+            })
+        else {
             return;
         };
-        let tokenizer = self
-            .state
-            .lexed_files
-            .open(context, header_source_index, header_string);
+        let tokenizer =
+            self.state
+                .lexed_files
+                .open(self.context, header_source_index, header_string);
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::SourceFile {
                 conditional_base:           self.state.open_conditionals.len(),
@@ -990,11 +1008,10 @@ impl<'x> Expander<'_, '_, 'x> {
         self.current_is_newline = true;
     }
 
-    fn parse_define_directive(&mut self, context: &mut Context<'_>, _directive: PreprocessorToken) {
+    fn parse_define_directive(&mut self, _directive: PreprocessorToken) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
-            context,
-            |_, _, t| t.kind.is_identifier(),
-            |_, _, token| {
+            |_, t| t.kind.is_identifier(),
+            |_, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedIdentifierInDefineDirective(
                         token.kind,
@@ -1004,13 +1021,13 @@ impl<'x> Expander<'_, '_, 'x> {
             },
             "parsing define directive",
         ) else {
-            self.skip_until_newline(context);
+            self.skip_until_newline();
             return;
         };
         let old_definition = self
             .state
             .macro_definitions
-            .get(&name.identifier_id(context))
+            .get(&name.identifier_id(self.context))
             .cloned();
         let tokenizer = self.tokenizer.clone();
         let old_tokenizer = match old_definition {
@@ -1021,13 +1038,14 @@ impl<'x> Expander<'_, '_, 'x> {
                 | MacroDefinition::BuiltIn => {
                     // C99 §6.10.8p4: predefined macro names cannot be
                     // redefined, so the built-in definition stays in effect.
-                    context.preprocessor_error(PreprocessorError {
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::RedefinitionOfBuiltInMacro(
-                            context.diagnostic_text(context.string_cache.at(name.contents)),
+                            self.context
+                                .diagnostic_text(self.context.string_cache.at(name.contents)),
                         ),
                         source_vectors: name.source_vectors,
                     });
-                    self.skip_until_newline(context);
+                    self.skip_until_newline();
                     return;
                 },
             },
@@ -1036,7 +1054,7 @@ impl<'x> Expander<'_, '_, 'x> {
         // The probe may consume the directive's newline when the replacement
         // list is empty; remember that so the next line is not skipped too.
         let mut line_ended = false;
-        let opening_paren = match self.tokenizer.next_item(context) {
+        let opening_paren = match self.tokenizer.next_item(self.context) {
             | Some(
                 token @ PreprocessorToken {
                     kind: PreprocessorTokenType::OpeningParenthesis,
@@ -1049,7 +1067,7 @@ impl<'x> Expander<'_, '_, 'x> {
             },
             | None => {
                 line_ended = true;
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing macro definition",
                     ),
@@ -1066,10 +1084,11 @@ impl<'x> Expander<'_, '_, 'x> {
                     unreachable!("The case where name is a built-in macro is handled above")
                 },
             }) {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(
-                            context.diagnostic_text(context.string_cache.at(name.contents)),
+                            self.context
+                                .diagnostic_text(self.context.string_cache.at(name.contents)),
                         ),
                     source_vectors: name.source_vectors,
                 });
@@ -1079,14 +1098,13 @@ impl<'x> Expander<'_, '_, 'x> {
             let mut is_variadic = false;
             loop {
                 let Some(name_or_ellipsis) = self.expect_token_from_previous_phase::<true>(
-                    context,
-                    |_, _, t| {
+                    |_, t| {
                         t.kind.is_identifier()
                             || t.kind == PreprocessorTokenType::Ellipsis
                             || (t.kind == PreprocessorTokenType::ClosingParenthesis
                                 && argument_names.is_empty())
                     },
-                    |_, _, token| {
+                    |_, token| {
                         ControlFlow::Break(PreprocessorError {
                             error_type:
                                 PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(
@@ -1100,9 +1118,10 @@ impl<'x> Expander<'_, '_, 'x> {
                     break;
                 };
                 if is_variadic {
-                    context.preprocessor_error(PreprocessorError {
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::VariadicMacroMustBeLastParameter(
-                            context.diagnostic_text(context.string_cache.at(name.contents)),
+                            self.context
+                                .diagnostic_text(self.context.string_cache.at(name.contents)),
                         ),
                         source_vectors: name.source_vectors,
                     });
@@ -1110,14 +1129,13 @@ impl<'x> Expander<'_, '_, 'x> {
                 if name_or_ellipsis.kind == PreprocessorTokenType::Ellipsis {
                     is_variadic = true;
                 } else if name_or_ellipsis.kind.is_identifier() {
-                    argument_names.push(name_or_ellipsis.identifier_id(context));
+                    argument_names.push(name_or_ellipsis.identifier_id(self.context));
                 } else if name_or_ellipsis.kind == PreprocessorTokenType::ClosingParenthesis {
                     break;
                 }
                 let Some(comma_or_closing_parent) = self.expect_token_from_previous_phase::<true>(
-                    context,
-                    |_, _, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
-                    |_, _, token|
+                    |_, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
+                    |_, token|
                         ControlFlow::Break(PreprocessorError {
                                 error_type:     PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(token.kind),
                                 source_vectors: token.source_vectors,
@@ -1132,7 +1150,7 @@ impl<'x> Expander<'_, '_, 'x> {
             }
             let tokenizer = self.tokenizer.clone();
             _ = self.state.macro_definitions.insert(
-                name.identifier_id(context),
+                name.identifier_id(self.context),
                 MacroDefinition::FunctionLike {
                     tokenizer: self.state.lexed_files.persist(&tokenizer),
                     argument_names: self.state.arena.alloc_slice_copy(&argument_names),
@@ -1147,16 +1165,17 @@ impl<'x> Expander<'_, '_, 'x> {
                     unreachable!("The case where name is a built-in macro is handled above")
                 },
             }) {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(
-                            context.diagnostic_text(context.string_cache.at(name.contents)),
+                            self.context
+                                .diagnostic_text(self.context.string_cache.at(name.contents)),
                         ),
                     source_vectors: name.source_vectors,
                 });
             }
             _ = self.state.macro_definitions.insert(
-                name.identifier_id(context),
+                name.identifier_id(self.context),
                 MacroDefinition::ObjectLike {
                     tokenizer: self.state.lexed_files.persist(&tokenizer),
                 },
@@ -1169,7 +1188,7 @@ impl<'x> Expander<'_, '_, 'x> {
             let (mut new_tokenizer, parameters_match) = match (
                 self.state
                     .macro_definitions
-                    .get(&name.identifier_id(context)),
+                    .get(&name.identifier_id(self.context)),
                 &old_definition,
             ) {
                 | (
@@ -1198,34 +1217,36 @@ impl<'x> Expander<'_, '_, 'x> {
             };
             let mut error_has_been_generated = false;
             if !parameters_match {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
-                        context.diagnostic_text(context.string_cache.at(name.contents)),
+                        self.context
+                            .diagnostic_text(self.context.string_cache.at(name.contents)),
                     ),
                     source_vectors: name.source_vectors,
                 });
                 error_has_been_generated = true;
             }
             loop {
-                let old_next = old_tokenizer.next_item(context);
-                let new_next = new_tokenizer.next_item(context);
+                let old_next = old_tokenizer.next_item(self.context);
+                let new_next = new_tokenizer.next_item(self.context);
                 if let Some(t) = new_next.as_ref()
                     && t.kind == PreprocessorTokenType::HashHash
                     && last.is_none()
                 {
-                    context.preprocessor_error(PreprocessorError {
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator,
                         source_vectors: t.source_vectors,
                     });
                 }
-                if !same_replacement_token(context, old_next.as_ref(), new_next.as_ref())
+                if !same_replacement_token(self.context, old_next.as_ref(), new_next.as_ref())
                     && !error_has_been_generated
                 {
-                    context.preprocessor_error(PreprocessorError {
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
-                                context.diagnostic_text(context.string_cache.at(name.contents)),
+                                self.context
+                                    .diagnostic_text(self.context.string_cache.at(name.contents)),
                             ),
                         source_vectors: name.source_vectors,
                     });
@@ -1239,7 +1260,7 @@ impl<'x> Expander<'_, '_, 'x> {
                         .as_ref()
                         .is_some_and(|t| t.kind == PreprocessorTokenType::HashHash)
                     {
-                        context.preprocessor_error(PreprocessorError {
+                        self.context.preprocessor_error(PreprocessorError {
                             error_type:
                                 PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
                             source_vectors: last.unwrap().source_vectors,
@@ -1252,7 +1273,7 @@ impl<'x> Expander<'_, '_, 'x> {
         }
         if !line_ended {
             loop {
-                match self.tokenizer.next_item(context) {
+                match self.tokenizer.next_item(self.context) {
                     | Some(token) if token.kind == PreprocessorTokenType::Newline => break,
                     | None => break,
                     | Some(_) => continue,
@@ -1263,11 +1284,10 @@ impl<'x> Expander<'_, '_, 'x> {
         self.current_is_newline = true;
     }
 
-    fn parse_undef_directive(&mut self, context: &mut Context<'_>, _directive: PreprocessorToken) {
+    fn parse_undef_directive(&mut self, _directive: PreprocessorToken) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
-            context,
-            |_, _, t| t.kind.is_identifier(),
-            |_, _, token| {
+            |_, t| t.kind.is_identifier(),
+            |_, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::ExpectedIdentifierInUndefDirective(
                         token.kind,
@@ -1277,18 +1297,17 @@ impl<'x> Expander<'_, '_, 'x> {
             },
             "parsing undef directive",
         ) else {
-            self.skip_until_newline(context);
+            self.skip_until_newline();
             return;
         };
         _ = self
             .state
             .macro_definitions
-            .remove(&name.identifier_id(context));
+            .remove(&name.identifier_id(self.context));
         if self
             .expect_token_from_previous_phase::<true>(
-                context,
-                |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                |_, _, token| {
+                |_, t| t.kind == PreprocessorTokenType::Newline,
+                |_, token| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:     PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(
                             token.kind,
@@ -1300,17 +1319,16 @@ impl<'x> Expander<'_, '_, 'x> {
             )
             .is_none()
         {
-            self.skip_until_newline(context);
+            self.skip_until_newline();
         }
         self.last_was_newline = true;
         self.current_is_newline = true;
     }
 
-    fn parse_line_directive(&mut self, context: &mut Context<'_>, _directive: PreprocessorToken) {
+    fn parse_line_directive(&mut self, _directive: PreprocessorToken) {
         let Some(token) = self.expect_token_without_rewind::<true>(
-            context,
-            |_, _, t| t.kind == PreprocessorTokenType::Number,
-            |_, _, t| {
+            |_, t| t.kind == PreprocessorTokenType::Number,
+            |_, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::MissingNumberInLineDirective(t.kind),
                     source_vectors: t.source_vectors,
@@ -1318,19 +1336,20 @@ impl<'x> Expander<'_, '_, 'x> {
             },
             "parsing line directive",
         ) else {
-            self.skip_and_expand_until_newline(context);
+            self.skip_and_expand_until_newline();
             return;
         };
-        let digits = context
+        let digits = self
+            .context
             .string_cache
             .at(token.contents)
             .trim_end_matches('\0');
         if !digits.bytes().all(|b| b.is_ascii_digit()) {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence,
                 source_vectors: token.source_vectors,
             });
-            self.skip_and_expand_until_newline(context);
+            self.skip_and_expand_until_newline();
             return;
         }
         let value = digits.bytes().try_fold(0u32, |value, digit| {
@@ -1340,16 +1359,15 @@ impl<'x> Expander<'_, '_, 'x> {
                 .filter(|value| i32::try_from(*value).is_ok())
         });
         if value.is_none() {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(
-                    context.diagnostic_text(digits),
+                    self.context.diagnostic_text(digits),
                 ),
                 source_vectors: token.source_vectors,
             });
         }
         let name = self.expect_token_without_rewind::<true>(
-            context,
-            |_, _, t| {
+            |_, t| {
                 matches!(
                     t.kind,
                     PreprocessorTokenType::String
@@ -1357,7 +1375,7 @@ impl<'x> Expander<'_, '_, 'x> {
                         | PreprocessorTokenType::Newline
                 )
             },
-            |_, _, t| {
+            |_, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::MissingNewlineAfterLineDirective(t.kind),
                     source_vectors: t.source_vectors,
@@ -1366,7 +1384,7 @@ impl<'x> Expander<'_, '_, 'x> {
             "parsing line directive",
         );
         let Some(name) = name else {
-            self.skip_and_expand_until_newline(context);
+            self.skip_and_expand_until_newline();
             return;
         };
         let mut filename = None;
@@ -1377,7 +1395,7 @@ impl<'x> Expander<'_, '_, 'x> {
         {
             // Unlike include names, #line names use normal string-literal
             // decoding. Save the result until the directive is complete.
-            if let Some(token) = self.map_preprocessor_token(context, t)
+            if let Some(token) = self.map_preprocessor_token(t)
                 && let TokenType::String(
                     StringTokenType::String(contents) | StringTokenType::WideString(contents),
                 ) = token.kind
@@ -1386,11 +1404,12 @@ impl<'x> Expander<'_, '_, 'x> {
                     token.kind,
                     TokenType::String(StringTokenType::WideString(_))
                 );
-                filename = context
+                filename = self
+                    .context
                     .literal_text_in(self.scratch, contents, wide)
                     .filter(|text| !text.contains('\0'));
                 if filename.is_none() {
-                    context.preprocessor_error(PreprocessorError {
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::InvalidLineFilename,
                         source_vectors: token.source_vectors,
                     });
@@ -1398,9 +1417,8 @@ impl<'x> Expander<'_, '_, 'x> {
             }
             if self
                 .expect_token_without_rewind::<true>(
-                    context,
-                    |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                    |_, _, t| {
+                    |_, t| t.kind == PreprocessorTokenType::Newline,
+                    |_, t| {
                         ControlFlow::Break(PreprocessorError {
                             error_type:     PreprocessorErrorType::MissingNewlineAfterLineDirective(
                                 t.kind,
@@ -1412,55 +1430,52 @@ impl<'x> Expander<'_, '_, 'x> {
                 )
                 .is_none()
             {
-                self.skip_and_expand_until_newline(context);
+                self.skip_and_expand_until_newline();
                 return;
             }
         }
         // The newline ends any macro operand frames and returns us to the
         // containing source file. C99 §6.10.4p3 assigns the following line.
         if let Some(value) = value {
-            self.set_line(context, value);
+            self.set_line(value);
         }
         if let Some(filename) = filename {
-            let source_file_index = context.intern_source_file(Path::new(filename));
-            self.set_source_file_index(context, source_file_index);
+            let source_file_index = self.context.intern_source_file(Path::new(filename));
+            self.set_source_file_index(source_file_index);
         }
     }
 
-    fn parse_error_directive(&mut self, context: &mut Context<'_>, directive: PreprocessorToken) {
+    fn parse_error_directive(&mut self, directive: PreprocessorToken) {
         let mut contents = ArenaString::new_in(self.scratch);
         // A directive ending at end of file is complete; the missing final
         // newline is diagnosed on its own.
-        while let Some(token) = self.tokenizer.next_item(context) {
+        while let Some(token) = self.tokenizer.next_item(self.context) {
             if token.kind == PreprocessorTokenType::Newline {
                 break;
             }
             contents.push_str(
-                context
+                self.context
                     .string_cache
                     .at(token.contents)
                     .trim_end_matches('\0'),
             );
         }
-        context.preprocessor_error(PreprocessorError {
+        self.context.preprocessor_error(PreprocessorError {
             error_type:     PreprocessorErrorType::ErrorDirective(
-                context.diagnostic_text(&contents),
+                self.context.diagnostic_text(&contents),
             ),
             source_vectors: directive.source_vectors,
         });
     }
 
-    pub(super) fn parse_pragma_directive(
-        &mut self,
-        context: &mut Context<'_>,
-        _directive: PreprocessorToken,
-    ) -> bool {
+    pub(super) fn parse_pragma_directive(&mut self, _directive: PreprocessorToken) -> bool {
         let mut consumed_newline = false;
         let mut completed_stdc = false;
         'base: loop {
-            let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
-                let source_vectors = self.current_location(context);
-                context.preprocessor_error(PreprocessorError {
+            let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+            else {
+                let source_vectors = self.current_location();
+                self.context.preprocessor_error(PreprocessorError {
                     error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing pragma directive",
                     ),
@@ -1476,10 +1491,10 @@ impl<'x> Expander<'_, '_, 'x> {
                 },
                 | PreprocessorTokenType::Identifier
                 | PreprocessorTokenType::UniversalIdentifier => {
-                    match context.string_cache.at(token.contents) {
+                    match self.context.string_cache.at(token.contents) {
                         | "once" => {
                             if !self.current_is_header() {
-                                context.preprocessor_error(PreprocessorError {
+                                self.context.preprocessor_error(PreprocessorError {
                                     error_type:     PreprocessorErrorType::PragmaOnceInNonHeader,
                                     source_vectors: token.source_vectors,
                                 });
@@ -1488,13 +1503,13 @@ impl<'x> Expander<'_, '_, 'x> {
                                 .state
                                 .once_set
                                 .insert(self.physical_source_file_index());
-                            match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
+                            match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     consumed_newline = true;
                                     break 'base;
                                 },
                                 | Some(t) => {
-                                    context.preprocessor_error(PreprocessorError {
+                                    self.context.preprocessor_error(PreprocessorError {
                                         error_type:
                                             PreprocessorErrorType::ExtraTokensAfterPragmaOnce(
                                                 t.kind,
@@ -1504,8 +1519,8 @@ impl<'x> Expander<'_, '_, 'x> {
                                     break 'base;
                                 },
                                 | None => {
-                                    let source_vectors = self.current_location(context);
-                                    context.preprocessor_error(PreprocessorError {
+                                    let source_vectors = self.current_location();
+                                    self.context.preprocessor_error(PreprocessorError {
                                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                                             "parsing pragma directive",
                                         ),
@@ -1516,10 +1531,10 @@ impl<'x> Expander<'_, '_, 'x> {
                             }
                         },
                         | "STDC" => {
-                            match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
+                            match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     consumed_newline = true;
-                                    context.preprocessor_error(PreprocessorError {
+                                    self.context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutArgument,
                                                 source_vectors: token.source_vectors,
                                             },
@@ -1527,17 +1542,17 @@ impl<'x> Expander<'_, '_, 'x> {
                                     break 'base;
                                 },
                                 | Some(token) => {
-                                    let s = context.string_cache.at(token.contents);
+                                    let s = self.context.string_cache.at(token.contents);
                                     if !token.kind.is_identifier()
                                         || !matches!(
                                             s,
                                             "FP_CONTRACT" | "FENV_ACCESS" | "CX_LIMITED_RANGE"
                                         )
                                     {
-                                        context.preprocessor_error(PreprocessorError {
+                                        self.context.preprocessor_error(PreprocessorError {
                                             error_type:
                                                 PreprocessorErrorType::UnknownPragmaSTDCArgument(
-                                                    context.diagnostic_text(s),
+                                                    self.context.diagnostic_text(s),
                                                 ),
                                             source_vectors: token.source_vectors,
                                         });
@@ -1545,8 +1560,8 @@ impl<'x> Expander<'_, '_, 'x> {
                                     }
                                 },
                                 | None => {
-                                    let source_vectors = self.current_location(context);
-                                    context.preprocessor_error(PreprocessorError {
+                                    let source_vectors = self.current_location();
+                                    self.context.preprocessor_error(PreprocessorError {
                                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                                             "parsing pragma directive",
                                         ),
@@ -1556,10 +1571,10 @@ impl<'x> Expander<'_, '_, 'x> {
                                 },
                             }
 
-                            match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
+                            match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
                                 | Some(token) if token.kind == PreprocessorTokenType::Newline => {
                                     consumed_newline = true;
-                                    context.preprocessor_error(PreprocessorError {
+                                    self.context.preprocessor_error(PreprocessorError {
                                                 error_type:     PreprocessorErrorType::STDCPragmaDirectiveWithoutOnOffSwitch,
                                                 source_vectors: token.source_vectors,
                                             },
@@ -1567,12 +1582,12 @@ impl<'x> Expander<'_, '_, 'x> {
                                     break 'base;
                                 },
                                 | Some(token) => {
-                                    let s = context.string_cache.at(token.contents);
+                                    let s = self.context.string_cache.at(token.contents);
                                     if !token.kind.is_identifier()
                                         || !matches!(s, "ON" | "OFF" | "DEFAULT")
                                     {
-                                        context.preprocessor_error(PreprocessorError {
-                                                    error_type:     PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(context.diagnostic_text(s)),
+                                        self.context.preprocessor_error(PreprocessorError {
+                                                    error_type:     PreprocessorErrorType::MissingOnOffSwitchInSTDCPragma(self.context.diagnostic_text(s)),
                                                     source_vectors: token.source_vectors,
                                                 },
                                             );
@@ -1580,8 +1595,8 @@ impl<'x> Expander<'_, '_, 'x> {
                                     }
                                 },
                                 | None => {
-                                    let source_vectors = self.current_location(context);
-                                    context.preprocessor_error(PreprocessorError {
+                                    let source_vectors = self.current_location();
+                                    self.context.preprocessor_error(PreprocessorError {
                                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                                             "parsing pragma directive",
                                         ),
@@ -1598,7 +1613,7 @@ impl<'x> Expander<'_, '_, 'x> {
                                 // Preserve the caller's line state for _Pragma,
                                 // whose payload uses a temporary tokenizer.
                                 let line_state = (self.last_was_newline, self.current_is_newline);
-                                self.skip_until_newline(context);
+                                self.skip_until_newline();
                                 (self.last_was_newline, self.current_is_newline) = line_state;
                                 consumed_newline = true;
                             }
@@ -1607,7 +1622,7 @@ impl<'x> Expander<'_, '_, 'x> {
                     }
                 },
                 | _ => {
-                    context.preprocessor_error(PreprocessorError {
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::UnknownPragmaDirective,
                         source_vectors: token.source_vectors,
                     });

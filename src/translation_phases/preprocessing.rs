@@ -195,7 +195,9 @@ impl Debug for Preprocessor<'_, '_> {
 
 /// The preprocessor while it reads input: its long-lived state plus the
 /// expansion state, whose memory comes from the expansion arena `'x`.
-pub(crate) struct Expander<'tu, 'pp: 'x, 'x> {
+pub(crate) struct Expander<'c, 'tu, 'pp: 'x, 'x> {
+    /// The translation context, borrowed while this expander runs.
+    pub(crate) context:    &'c mut Context<'tu>,
     state:                 PreprocessorState<'pp>,
     /// Source and include frames remain between expansions. Macro frames
     /// share this stack until the current expansion finishes.
@@ -226,35 +228,35 @@ pub(crate) struct Expander<'tu, 'pp: 'x, 'x> {
     pushed_frames:         usize,
 }
 
-impl GetPosition for Expander<'_, '_, '_> {
+impl GetPosition for Expander<'_, '_, '_, '_> {
     #[inline(always)]
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.tokenizer.position(context)
     }
 }
 
-impl Expander<'_, '_, '_> {
+impl Expander<'_, '_, '_, '_> {
     /// Moves the current token source to `position`.
     #[inline(always)]
-    fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition) {
-        self.tokenizer.set_position(context, position);
+    fn set_position(&mut self, position: SourcePosition) {
+        self.tokenizer.set_position(self.context, position);
     }
 
     /// Moves the current token source to `line`, keeping its index and
     /// column.
-    fn set_line(&mut self, context: &mut Context<'_>, line: u32) {
-        let position = self.position(context);
-        self.set_position(context, SourcePosition { line, ..position });
+    fn set_line(&mut self, line: u32) {
+        let position = self.position(self.context);
+        self.set_position(SourcePosition { line, ..position });
     }
 
     /// Attributes the current token source to another source file.
-    fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32) {
+    fn set_source_file_index(&mut self, source_file_index: u32) {
         self.tokenizer
-            .set_source_file_index(context, source_file_index);
+            .set_source_file_index(self.context, source_file_index);
     }
 }
 
-impl GetSourceFileIndex for Expander<'_, '_, '_> {
+impl GetSourceFileIndex for Expander<'_, '_, '_, '_> {
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         self.tokenizer.source_file_index()
@@ -403,7 +405,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
     pub(crate) fn run<B>(
         &mut self,
         context: &mut Context<'tu>,
-        mut step: impl for<'x> FnMut(&mut Expander<'tu, 'pp, 'x>, &mut Context<'tu>) -> ControlFlow<B>,
+        mut step: impl for<'c, 'x> FnMut(&mut Expander<'c, 'tu, 'pp, 'x>) -> ControlFlow<B>,
     ) -> B {
         loop {
             // Nothing borrows the expansion arena between segments: the
@@ -413,9 +415,9 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                 .resting
                 .take()
                 .expect("preprocessing does not resume after stopping inside an expansion");
-            let mut expander = Expander::resume(resting, &self.expansion);
+            let mut expander = Expander::resume(resting, context, &self.expansion);
             let stopped = loop {
-                if let ControlFlow::Break(value) = step(&mut expander, context) {
+                if let ControlFlow::Break(value) = step(&mut expander) {
                     break Some(value);
                 }
                 if expander.pushed_frames >= RESET_EXPANSIONS_AFTER_FRAMES
@@ -424,7 +426,10 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     break None;
                 }
             };
-            self.end = (expander.position(context), expander.source_file_index());
+            self.end = (
+                expander.position(expander.context),
+                expander.source_file_index(),
+            );
             if expander.is_between_expansions() {
                 self.resting = Some(expander.suspend());
             }
@@ -442,14 +447,12 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         context: &mut Context<'tu>,
         mut visit: impl FnMut(&mut Context<'tu>, Token),
     ) {
-        self.run(context, |preprocessor, context| {
-            match preprocessor.next_item(context) {
-                | Some(token) => {
-                    visit(context, token);
-                    ControlFlow::Continue(())
-                },
-                | None => ControlFlow::Break(()),
-            }
+        self.run(context, |preprocessor| match preprocessor.next_item() {
+            | Some(token) => {
+                visit(preprocessor.context, token);
+                ControlFlow::Continue(())
+            },
+            | None => ControlFlow::Break(()),
         });
     }
 
@@ -461,10 +464,10 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         context: &mut Context<'tu>,
         mut visit: impl FnMut(&mut Context<'tu>, Token),
     ) {
-        self.run(context, |preprocessor, context| {
-            match preprocessor.next_iterator_item(context) {
+        self.run(context, |preprocessor| {
+            match preprocessor.next_iterator_item() {
                 | Some(token) => {
-                    visit(context, token);
+                    visit(preprocessor.context, token);
                     ControlFlow::Continue(())
                 },
                 | None => ControlFlow::Break(()),
@@ -502,10 +505,11 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         mut push: impl FnMut(Token),
     ) -> Option<Token> {
         self.resting_mut().source_segment_limit = source_segment_limit;
-        self.run(context, |preprocessor, context| {
-            let Some(mut token) = preprocessor.next_iterator_item(context) else {
+        self.run(context, |preprocessor| {
+            let Some(mut token) = preprocessor.next_iterator_item() else {
                 return ControlFlow::Break(None);
             };
+            let context = &mut *preprocessor.context;
             token.source_vectors = context.retain_token_source(token.source_vectors);
             push(token);
             if context.source_segment_count() > source_segment_limit {
@@ -520,10 +524,14 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
     }
 }
 
-impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
-    /// Continues reading the resting source files, taking expansion memory
-    /// from `scratch`.
-    fn resume(resting: Resting<'tu, 'pp>, scratch: &'x Bump) -> Self {
+impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
+    /// Continues reading the resting source files with `context`, taking
+    /// expansion memory from `scratch`.
+    fn resume(
+        resting: Resting<'tu, 'pp>,
+        context: &'c mut Context<'tu>,
+        scratch: &'x Bump,
+    ) -> Self {
         let Resting {
             mut state,
             tokenizer,
@@ -544,6 +552,7 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
             tokenizer:  frame.tokenizer,
         }));
         Self {
+            context,
             state,
             tokenizer_stack,
             tokenizer,
@@ -625,16 +634,17 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
         }
     }
 
-    fn next_parser_token(&mut self, context: &mut Context<'tu>) -> Option<Token> {
-        context.append_pending_errors(self.pending_parser_errors.drain(..));
+    fn next_parser_token(&mut self) -> Option<Token> {
+        self.context
+            .append_pending_errors(self.pending_parser_errors.drain(..));
         if let Some(token) = self.pending_parser_token.take() {
             return Some(token);
         }
         loop {
-            let Some(token) = self.next_preprocessor_token::<true>(context) else {
+            let Some(token) = self.next_preprocessor_token::<true>() else {
                 for vectors in self.state.open_conditionals.drain(..) {
-                    let source_vectors = context.push_source_vectors(vectors.source);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.context.push_source_vectors(vectors.source);
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
                         source_vectors,
                     });
@@ -642,11 +652,12 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
                 return None;
             };
 
-            if let Some(result) = self.map_preprocessor_token(context, token) {
+            if let Some(result) = self.map_preprocessor_token(token) {
                 if matches!(self.output_purpose, OutputPurpose::Parsing)
                     && let Some(site) = self.expansion_end()
                 {
-                    context.record_expansion_end(result.source_vectors, site);
+                    self.context
+                        .record_expansion_end(result.source_vectors, site);
                 }
                 return Some(result);
             }
@@ -658,11 +669,11 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
     /// Adjacent-string concatenation may already have mapped a later token or
     /// EOF diagnostic. Source-vector compaction therefore belongs to the
     /// producer that owns that buffered work, not to each iterator consumer.
-    pub(crate) fn next_iterator_item(&mut self, context: &mut Context<'tu>) -> Option<Token> {
+    pub(crate) fn next_iterator_item(&mut self) -> Option<Token> {
         if self.next_iterator_item_compacts() {
-            context.compact_preprocessor_vectors();
+            self.context.compact_preprocessor_vectors();
         }
-        self.next_item(context)
+        self.next_item()
     }
 
     /// Whether the next [`Self::next_iterator_item`] call discards the
@@ -681,11 +692,11 @@ impl<'tu, 'pp, 'x> Expander<'tu, 'pp, 'x> {
     }
 }
 
-impl<'tu> Expander<'tu, '_, '_> {
+impl Expander<'_, '_, '_, '_> {
     /// Returns the next phase-6 token, with adjacent string literals
     /// concatenated.
-    pub(crate) fn next_item(&mut self, context: &mut Context<'tu>) -> Option<Token> {
-        let token = self.next_parser_token(context)?;
-        Some(self.concatenate_adjacent_strings(context, token))
+    pub(crate) fn next_item(&mut self) -> Option<Token> {
+        let token = self.next_parser_token()?;
+        Some(self.concatenate_adjacent_strings(token))
     }
 }

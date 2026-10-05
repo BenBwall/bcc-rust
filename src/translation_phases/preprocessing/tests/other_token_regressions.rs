@@ -91,9 +91,15 @@ fn lexers_preserve_other_tokens_before_preprocessing() {
         SharedVec::default(),
     );
     let mut spellings = Vec::new();
-    preprocessor.run(&mut context, |preprocessor, context| {
-        while let Some(token) = preprocessor.tokenizer.next_item(context) {
-            spellings.push(context.string_cache.at(token.contents).to_owned());
+    preprocessor.run(&mut context, |preprocessor| {
+        while let Some(token) = preprocessor.tokenizer.next_item(preprocessor.context) {
+            spellings.push(
+                preprocessor
+                    .context
+                    .string_cache
+                    .at(token.contents)
+                    .to_owned(),
+            );
         }
         std::ops::ControlFlow::Break(())
     });

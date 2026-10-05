@@ -109,7 +109,7 @@ struct MacroCallCursor<'x> {
 }
 
 impl<'x> MacroCallCursor<'x> {
-    fn new(preprocessor: &Expander<'_, '_, 'x>) -> Self {
+    fn new(preprocessor: &Expander<'_, '_, '_, 'x>) -> Self {
         let mut frames = ArenaVec::new_in(preprocessor.scratch);
         frames.extend(preprocessor.tokenizer_stack.iter().cloned());
         frames.last_mut().unwrap().tokenizer = preprocessor.tokenizer.clone();
@@ -125,11 +125,7 @@ impl<'x> MacroCallCursor<'x> {
         }
     }
 
-    fn next(
-        &mut self,
-        preprocessor: &mut Expander<'_, '_, 'x>,
-        context: &mut Context<'_>,
-    ) -> Option<PreprocessorToken> {
+    fn next(&mut self, preprocessor: &mut Expander<'_, '_, '_, 'x>) -> Option<PreprocessorToken> {
         loop {
             if let Some(token) = self.pending.get(self.pending_head).copied() {
                 self.pending_head += 1;
@@ -139,8 +135,8 @@ impl<'x> MacroCallCursor<'x> {
             self.pending_head = 0;
             let index = self.index.filter(|index| *index >= self.floor)?;
             let frame = &mut self.frames[index];
-            let position = frame.tokenizer.position(context);
-            let token = frame.tokenizer.next_item(context);
+            let position = frame.tokenizer.position(preprocessor.context);
+            let token = frame.tokenizer.next_item(preprocessor.context);
             let ends = match (&mut frame.frame_type, token) {
                 | (TokenizerFrameType::SourceFile { .. }, None) => return None,
                 | (_, None) => true,
@@ -158,7 +154,6 @@ impl<'x> MacroCallCursor<'x> {
                     Some(token),
                 ) => {
                     match preprocessor.update_macro_argument_paren_depth(
-                        context,
                         token,
                         argument.name,
                         *depth,
@@ -173,7 +168,7 @@ impl<'x> MacroCallCursor<'x> {
                 | _ => false,
             };
             if ends {
-                frame.tokenizer.set_position(context, position);
+                frame.tokenizer.set_position(preprocessor.context, position);
                 self.index = index.checked_sub(1);
                 continue;
             }
@@ -191,53 +186,61 @@ impl<'x> MacroCallCursor<'x> {
                     | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
             ) || arguments.is_some();
             if replacement && token.kind == PreprocessorTokenType::Hash {
-                let position = frame.tokenizer.position(context);
-                let operand = Expander::next_ignore_whitespace(&mut frame.tokenizer, context);
+                let position = frame.tokenizer.position(preprocessor.context);
+                let operand =
+                    Expander::next_ignore_whitespace(&mut frame.tokenizer, preprocessor.context);
                 if let Some(operand) = operand
                     && let Some(argument) = arguments.and_then(|arguments| {
-                        find_argument(arguments, operand.identifier_id(context))
+                        find_argument(arguments, operand.identifier_id(preprocessor.context))
                     })
                 {
-                    let raw = preprocessor.read_argument(context, argument, false);
-                    token.contents = Expander::stringify(context, preprocessor.scratch, &raw);
+                    let raw = preprocessor.read_argument(argument, false);
+                    token.contents =
+                        Expander::stringify(preprocessor.context, preprocessor.scratch, &raw);
                     token.kind = PreprocessorTokenType::String;
-                    token.source_vectors =
-                        context.merge_vectors(token.source_vectors, operand.source_vectors);
+                    token.source_vectors = preprocessor
+                        .context
+                        .merge_vectors(token.source_vectors, operand.source_vectors);
                 } else {
-                    frame.tokenizer.set_position(context, position);
+                    frame.tokenizer.set_position(preprocessor.context, position);
                 }
             }
             let mut tokens = ArenaVec::new_in(preprocessor.scratch);
             let mut pasted = false;
             if replacement {
                 loop {
-                    let position = frame.tokenizer.position(context);
-                    let next = Expander::next_ignore_whitespace(&mut frame.tokenizer, context);
+                    let position = frame.tokenizer.position(preprocessor.context);
+                    let next = Expander::next_ignore_whitespace(
+                        &mut frame.tokenizer,
+                        preprocessor.context,
+                    );
                     if !next.is_some_and(|token| token.kind == PreprocessorTokenType::HashHash) {
-                        frame.tokenizer.set_position(context, position);
+                        frame.tokenizer.set_position(preprocessor.context, position);
                         break;
                     }
-                    let Some(rhs) = Expander::next_ignore_whitespace(&mut frame.tokenizer, context)
-                        .filter(|token| token.kind != PreprocessorTokenType::Newline)
-                    else {
-                        frame.tokenizer.set_position(context, position);
+                    let Some(rhs) = Expander::next_ignore_whitespace(
+                        &mut frame.tokenizer,
+                        preprocessor.context,
+                    )
+                    .filter(|token| token.kind != PreprocessorTokenType::Newline) else {
+                        frame.tokenizer.set_position(preprocessor.context, position);
                         break;
                     };
                     if !pasted {
                         tokens = if let Some(argument) = arguments.and_then(|arguments| {
-                            find_argument(arguments, token.identifier_id(context))
+                            find_argument(arguments, token.identifier_id(preprocessor.context))
                         }) {
-                            preprocessor.read_argument(context, argument, false)
+                            preprocessor.read_argument(argument, false)
                         } else {
                             let mut tokens = ArenaVec::new_in(preprocessor.scratch);
                             tokens.push(token);
                             tokens
                         };
                     }
-                    let mut right = if let Some(argument) = arguments
-                        .and_then(|arguments| find_argument(arguments, rhs.identifier_id(context)))
-                    {
-                        preprocessor.read_argument(context, argument, false)
+                    let mut right = if let Some(argument) = arguments.and_then(|arguments| {
+                        find_argument(arguments, rhs.identifier_id(preprocessor.context))
+                    }) {
+                        preprocessor.read_argument(argument, false)
                     } else {
                         let mut right = ArenaVec::new_in(preprocessor.scratch);
                         right.push(rhs);
@@ -246,7 +249,7 @@ impl<'x> MacroCallCursor<'x> {
                     if !tokens.is_empty() && !right.is_empty() {
                         let lhs = tokens.pop().unwrap();
                         let rhs = right.remove(0);
-                        if let Some(merged) = preprocessor.merge_tokens(context, lhs, rhs) {
+                        if let Some(merged) = preprocessor.merge_tokens(lhs, rhs) {
                             tokens.push(merged);
                         }
                     }
@@ -259,11 +262,12 @@ impl<'x> MacroCallCursor<'x> {
                 continue;
             }
             if token.kind.is_identifier()
-                && let Some(argument) = arguments
-                    .and_then(|arguments| find_argument(arguments, token.identifier_id(context)))
+                && let Some(argument) = arguments.and_then(|arguments| {
+                    find_argument(arguments, token.identifier_id(preprocessor.context))
+                })
             {
-                let mut expanded = preprocessor.expanded_argument(context, token, argument);
-                while let Some(token) = expanded.next_item(context) {
+                let mut expanded = preprocessor.expanded_argument(token, argument);
+                while let Some(token) = expanded.next_item(preprocessor.context) {
                     self.pending.push(token);
                 }
                 continue;
@@ -274,13 +278,12 @@ impl<'x> MacroCallCursor<'x> {
 
     fn commit(
         mut self,
-        preprocessor: &mut Expander<'_, '_, 'x>,
-        context: &Context<'_>,
+        preprocessor: &mut Expander<'_, '_, '_, 'x>,
         location: crate::translation_phases::SourceVector,
     ) {
         if self.pending_head < self.pending.len() {
             let tokenizer = TokenSource::replay(
-                context,
+                preprocessor.context,
                 preprocessor.scratch,
                 &[&self.pending[self.pending_head..]],
                 location,
@@ -303,19 +306,18 @@ impl<'x> MacroCallCursor<'x> {
     clippy::needless_continue,
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
 )]
-impl<'x> Expander<'_, '_, 'x> {
+impl<'x> Expander<'_, '_, '_, 'x> {
     /// Capture an invocation whose opening, arguments, or closing delimiter
     /// can come from different replacement/argument/source frames.
     pub(super) fn capture_cross_frame_call(
         &mut self,
-        context: &mut Context<'_>,
         invocation: PreprocessorToken,
         names: &[StringCacheId],
         variadic: bool,
     ) -> Option<(MacroArguments<'x>, crate::translation_phases::SourceVector)> {
         let mut cursor = MacroCallCursor::new(self);
         let opening = loop {
-            let token = cursor.next(self, context)?;
+            let token = cursor.next(self)?;
             if !matches!(
                 token.kind,
                 PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
@@ -331,8 +333,8 @@ impl<'x> Expander<'_, '_, 'x> {
         let mut group_ends = ArenaVec::new_in(self.scratch);
         let mut depth = 1usize;
         let closing = loop {
-            let Some(token) = cursor.next(self, context) else {
-                context.preprocessor_error(PreprocessorError {
+            let Some(token) = cursor.next(self) else {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing function-like macro invocation",
                     ),
@@ -372,7 +374,7 @@ impl<'x> Expander<'_, '_, 'x> {
             group_ends.len()
         };
         if (!variadic && count != names.len()) || (variadic && count < names.len()) {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:
                     PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
                         expected: names.len(),
@@ -381,16 +383,17 @@ impl<'x> Expander<'_, '_, 'x> {
                 source_vectors: invocation.source_vectors,
             });
         } else if variadic && count == names.len() {
-            let policy = context.configuration.extension_policy();
+            let policy = self.context.configuration.extension_policy();
             if policy != crate::configuration::ExtensionPolicy::Allow {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::MissingVariadicArgument(policy),
                     source_vectors: invocation.source_vectors,
                 });
             }
         }
         let disabled_macros = self.disabled_macros();
-        let location = context
+        let location = self
+            .context
             .get_source_vectors(closing.source_vectors)
             .first()
             .cloned()
@@ -400,7 +403,7 @@ impl<'x> Expander<'_, '_, 'x> {
         for (i, name) in names
             .iter()
             .copied()
-            .chain(variadic.then(|| context.string_cache.intern("__VA_ARGS__")))
+            .chain(variadic.then(|| self.context.string_cache.intern("__VA_ARGS__")))
             .enumerate()
         {
             // A normal argument cursor is terminated by a closing parenthesis.
@@ -411,7 +414,7 @@ impl<'x> Expander<'_, '_, 'x> {
                 | _ => &grouped[group_ends[i - 1]..group_ends[i]],
             };
             let tokenizer = TokenSource::replay(
-                context,
+                self.context,
                 self.scratch,
                 &[group, std::slice::from_ref(&closing)],
                 location.clone(),
@@ -431,7 +434,7 @@ impl<'x> Expander<'_, '_, 'x> {
             ) => invocation_end.clone(),
             | _ => location.clone(),
         };
-        cursor.commit(self, context, location);
+        cursor.commit(self, location);
         Some((arguments.leak(), invocation_end))
     }
 
@@ -447,7 +450,7 @@ impl<'x> Expander<'_, '_, 'x> {
         }
     }
 
-    pub(super) fn macro_argument_is_at_end(&mut self, context: &mut Context<'_>) -> bool {
+    pub(super) fn macro_argument_is_at_end(&mut self) -> bool {
         let Some(TokenizerFrame {
             frame_type:
                 TokenizerFrameType::FunctionLikeMacroArgument {
@@ -462,9 +465,9 @@ impl<'x> Expander<'_, '_, 'x> {
         };
         let name = argument.name;
         let depth = *paren_depth;
-        let position = self.position(context);
+        let position = self.position(self.context);
         let next_is_end = loop {
-            match self.tokenizer.next_item(context) {
+            match self.tokenizer.next_item(self.context) {
                 | Some(token)
                     if matches!(
                         token.kind,
@@ -473,13 +476,13 @@ impl<'x> Expander<'_, '_, 'x> {
                     continue,
                 | Some(token) =>
                     break depth.is_some_and(|depth| {
-                        self.update_macro_argument_paren_depth(context, token, name, depth)
+                        self.update_macro_argument_paren_depth(token, name, depth)
                             .is_none()
                     }),
                 | None => break true,
             }
         };
-        self.set_position(context, position);
+        self.set_position(position);
         next_is_end
     }
 
@@ -525,16 +528,15 @@ impl<'x> Expander<'_, '_, 'x> {
 
     pub(super) fn handle_macro_argument(
         &mut self,
-        context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Option<TokenizerFrame<'x>> {
         let arguments = self.get_arguments()?;
-        let argument = find_argument(arguments, token.identifier_id(context))?;
+        let argument = find_argument(arguments, token.identifier_id(self.context))?;
         // Prescan is isolated from the replacement list. Rescanning the result
         // then uses the callee's disabled-name set, not the caller's.
         Some(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan,
-            tokenizer:  self.expanded_argument(context, token, argument),
+            tokenizer:  self.expanded_argument(token, argument),
         })
     }
 
@@ -543,31 +545,27 @@ impl<'x> Expander<'_, '_, 'x> {
     /// `_Pragma` effects.
     fn expanded_argument(
         &mut self,
-        context: &mut Context<'_>,
         token: PreprocessorToken,
         argument: &'x FunctionLikeMacroArgument<'x>,
     ) -> TokenSource<'x> {
         if let Some(tokenizer) = argument.expanded.get() {
             return tokenizer.clone();
         }
-        let tokens = self.read_argument(context, argument, true);
-        let location = context
+        let tokens = self.read_argument(argument, true);
+        let location = self
+            .context
             .get_source_vectors(token.source_vectors)
             .first()
             .cloned()
             .unwrap_or_default();
-        let tokenizer = TokenSource::replay(context, self.scratch, &[&tokens], location);
+        let tokenizer = TokenSource::replay(self.context, self.scratch, &[&tokens], location);
         drop(argument.expanded.set(tokenizer.clone()));
         tokenizer
     }
 
-    fn raw_macro_argument_frame(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Option<TokenizerFrame<'x>> {
+    fn raw_macro_argument_frame(&mut self, token: PreprocessorToken) -> Option<TokenizerFrame<'x>> {
         if let Some(arguments) = self.get_arguments()
-            && let Some(arg) = find_argument(arguments, token.identifier_id(context))
+            && let Some(arg) = find_argument(arguments, token.identifier_id(self.context))
         {
             let frame = TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
@@ -594,12 +592,8 @@ impl<'x> Expander<'_, '_, 'x> {
     /// An argument written in a replacement list that has parameters of its
     /// own is replayed after those parameters are replaced, so the operand is
     /// what that enclosing replacement produced.
-    fn operand_frame(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Option<TokenizerFrame<'x>> {
-        let mut frame = self.raw_macro_argument_frame(context, token)?;
+    fn operand_frame(&mut self, token: PreprocessorToken) -> Option<TokenizerFrame<'x>> {
+        let mut frame = self.raw_macro_argument_frame(token)?;
         let TokenizerFrameType::FunctionLikeMacroArgument {
             argument,
             paren_depth,
@@ -609,13 +603,15 @@ impl<'x> Expander<'_, '_, 'x> {
             unreachable!("macro arguments are read by argument frames");
         };
         if argument.enclosing_arguments.is_some() {
-            let tokens = self.replace_operand_argument(context, argument);
-            let empty_location = context
+            let tokens = self.replace_operand_argument(argument);
+            let empty_location = self
+                .context
                 .get_source_vectors(token.source_vectors)
                 .first()
                 .cloned()
                 .unwrap_or_default();
-            let tokenizer = TokenSource::replay(context, self.scratch, &[&tokens], empty_location);
+            let tokenizer =
+                TokenSource::replay(self.context, self.scratch, &[&tokens], empty_location);
             // This frame reads its own replaced copy; the invocation keeps
             // the original argument.
             *argument = self.scratch.alloc(FunctionLikeMacroArgument {
@@ -640,15 +636,13 @@ impl<'x> Expander<'_, '_, 'x> {
     /// whitespace is not part of the result.
     fn replace_operand_argument(
         &mut self,
-        context: &mut Context<'_>,
         argument: &'x FunctionLikeMacroArgument<'x>,
     ) -> ArenaVec<'x, PreprocessorToken> {
-        self.read_argument(context, argument, false)
+        self.read_argument(argument, false)
     }
 
     fn read_argument(
         &mut self,
-        context: &mut Context<'_>,
         argument: &'x FunctionLikeMacroArgument<'x>,
         expand: bool,
     ) -> ArenaVec<'x, PreprocessorToken> {
@@ -667,7 +661,7 @@ impl<'x> Expander<'_, '_, 'x> {
         let fence = replace(&mut self.operand_fence, if expand { 0 } else { depth });
         let expansion_fence = replace(&mut self.expansion_fence, depth);
         let mut tokens = ArenaVec::new_in(self.scratch);
-        while let Some(token) = self.next_preprocessor_token::<false>(context) {
+        while let Some(token) = self.next_preprocessor_token::<false>() {
             tokens.push(token);
         }
         self.operand_fence = fence;
@@ -753,17 +747,16 @@ impl<'x> Expander<'_, '_, 'x> {
 
     fn parse_hash_hash_operator(
         &mut self,
-        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         _hash_hash: PreprocessorToken,
         rhs: PreprocessorToken,
         rhs_is_pasted: bool,
     ) -> Option<PreprocessorToken> {
-        let lhs_frame = self.operand_frame(context, lhs);
+        let lhs_frame = self.operand_frame(lhs);
         let rhs_frame = if rhs_is_pasted {
             None
         } else {
-            self.operand_frame(context, rhs)
+            self.operand_frame(rhs)
         };
         self.hash_hash_stack.push(HashHash::Empty);
         let rhs_is_macro_argument = if let Some(frame) = rhs_frame {
@@ -779,21 +772,16 @@ impl<'x> Expander<'_, '_, 'x> {
             *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs);
         } else {
             _ = self.hash_hash_stack.pop();
-            return self.merge_tokens(context, lhs, rhs);
+            return self.merge_tokens(lhs, rhs);
         }
         None
     }
 
-    fn parse_hash_operator(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> PreprocessorToken {
-        let position = self.position(context);
+    fn parse_hash_operator(&mut self, token: PreprocessorToken) -> PreprocessorToken {
+        let position = self.position(self.context);
         let Some(argument_name) = self.expect_token_from_previous_phase::<true>(
-            context,
-            |_, _, t| t.kind.is_identifier(),
-            |_, _, t| {
+            |_, t| t.kind.is_identifier(),
+            |_, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(t.kind),
@@ -802,10 +790,10 @@ impl<'x> Expander<'_, '_, 'x> {
             },
             "parsing '#' operator in function-like macro invocation.",
         ) else {
-            self.set_position(context, position);
+            self.set_position(position);
             return PreprocessorToken {
                 kind:           PreprocessorTokenType::String,
-                contents:       context.string_cache.intern("\"\""),
+                contents:       self.context.string_cache.intern("\"\""),
                 source_vectors: token.source_vectors,
             };
         };
@@ -813,21 +801,21 @@ impl<'x> Expander<'_, '_, 'x> {
             | TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { arguments, .. },
                 ..
-            } => match find_argument(arguments, argument_name.identifier_id(context)) {
+            } => match find_argument(arguments, argument_name.identifier_id(self.context)) {
                 | None => {
-                    self.set_position(context, position);
-                    context.preprocessor_error(PreprocessorError {
+                    self.set_position(position);
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::IdentifierNotMacroArgumentAfterHashOperator(
-                                context.diagnostic_text(
-                                    context.string_cache.at(argument_name.contents),
+                                self.context.diagnostic_text(
+                                    self.context.string_cache.at(argument_name.contents),
                                 ),
                             ),
                         source_vectors: argument_name.source_vectors,
                     });
                     return PreprocessorToken {
                         kind:           PreprocessorTokenType::String,
-                        contents:       context.string_cache.intern("\"\""),
+                        contents:       self.context.string_cache.intern("\"\""),
                         source_vectors: token.source_vectors,
                     };
                 },
@@ -836,10 +824,10 @@ impl<'x> Expander<'_, '_, 'x> {
             | _ => unreachable!(),
         };
         if argument.enclosing_arguments.is_some() {
-            let tokens = self.replace_operand_argument(context, argument);
+            let tokens = self.replace_operand_argument(argument);
             return PreprocessorToken {
                 kind:           PreprocessorTokenType::String,
-                contents:       Self::stringify(context, self.scratch, &tokens),
+                contents:       Self::stringify(self.context, self.scratch, &tokens),
                 source_vectors: token.source_vectors,
             };
         }
@@ -853,10 +841,10 @@ impl<'x> Expander<'_, '_, 'x> {
         'base: loop {
             let Some(token) = Self::next_treat_newlines_as_whitespace(
                 &mut token_tokenizer,
-                context,
+                self.context,
                 &mut last_was_whitespace,
             ) else {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing '#' operator in function-like macro invocation",
                     ),
@@ -864,7 +852,7 @@ impl<'x> Expander<'_, '_, 'x> {
                 });
                 break 'base;
             };
-            match self.update_macro_argument_paren_depth(context, token, argument_id, paren_depth) {
+            match self.update_macro_argument_paren_depth(token, argument_id, paren_depth) {
                 | Some(depth) => paren_depth = depth,
                 | None => break,
             }
@@ -877,29 +865,27 @@ impl<'x> Expander<'_, '_, 'x> {
             if take(&mut pending_space) {
                 synthetic_contents.push(' ');
             }
-            Self::append_stringified_token(context, &mut synthetic_contents, token);
+            Self::append_stringified_token(self.context, &mut synthetic_contents, token);
         }
         synthetic_contents.push('"');
         PreprocessorToken {
             kind:           PreprocessorTokenType::String,
-            contents:       context.string_cache.intern(&*synthetic_contents),
+            contents:       self.context.string_cache.intern(&*synthetic_contents),
             source_vectors: token.source_vectors,
         }
     }
 
     fn merge_token_contents(
         &mut self,
-        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
         result_token_type: PreprocessorTokenType,
     ) -> PreprocessorToken {
-        self.merge_token_contents_with_ranges(context, lhs, rhs, .., .., result_token_type)
+        self.merge_token_contents_with_ranges(lhs, rhs, .., .., result_token_type)
     }
 
     fn merge_token_contents_with_ranges(
         &mut self,
-        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
         lhs_range: impl RangeBounds<usize>,
@@ -908,44 +894,46 @@ impl<'x> Expander<'_, '_, 'x> {
     ) -> PreprocessorToken {
         let mut new_contents = ArenaString::new_in(self.scratch);
         new_contents.push_str(
-            &context.string_cache.at(lhs.contents)[(
+            &self.context.string_cache.at(lhs.contents)[(
                 lhs_range.start_bound().cloned(),
                 lhs_range.end_bound().cloned(),
             )],
         );
         new_contents.push_str(
-            &context.string_cache.at(rhs.contents)[(
+            &self.context.string_cache.at(rhs.contents)[(
                 rhs_range.start_bound().cloned(),
                 rhs_range.end_bound().cloned(),
             )],
         );
-        let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
+        let source_vectors = self
+            .context
+            .merge_vectors(lhs.source_vectors, rhs.source_vectors);
         PreprocessorToken {
             kind: result_token_type,
-            contents: context.string_cache.intern(new_contents.as_str()),
+            contents: self.context.string_cache.intern(new_contents.as_str()),
             source_vectors,
         }
     }
 
     fn create_merge_error(
         &mut self,
-        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> PreprocessorToken {
-        _ = self;
         // Number spellings carry a trailing NUL that is not source text.
         let spell = |token: PreprocessorToken| {
-            let contents = context.string_cache.at(token.contents);
-            context.diagnostic_text(match token.kind {
+            let contents = self.context.string_cache.at(token.contents);
+            self.context.diagnostic_text(match token.kind {
                 | PreprocessorTokenType::Number => contents.strip_suffix('\0').unwrap_or(contents),
                 | _ => contents,
             })
         };
         let lhs_contents = spell(lhs);
         let rhs_contents = spell(rhs);
-        let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
-        context.preprocessor_error(PreprocessorError {
+        let source_vectors = self
+            .context
+            .merge_vectors(lhs.source_vectors, rhs.source_vectors);
+        self.context.preprocessor_error(PreprocessorError {
             error_type: PreprocessorErrorType::TokenMergingError(lhs_contents, rhs_contents),
             source_vectors,
         });
@@ -956,26 +944,26 @@ impl<'x> Expander<'_, '_, 'x> {
     /// number spellings carry.
     fn extend_number(
         &mut self,
-        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> PreprocessorToken {
-        let lhs_contents = context.string_cache.at(lhs.contents);
+        let lhs_contents = self.context.string_cache.at(lhs.contents);
         let mut contents = ArenaString::new_in(self.scratch);
         contents.push_str(lhs_contents.strip_suffix('\0').unwrap_or(lhs_contents));
-        contents.push_str(context.string_cache.at(rhs.contents));
+        contents.push_str(self.context.string_cache.at(rhs.contents));
         contents.push_str("\0");
-        let source_vectors = context.merge_vectors(lhs.source_vectors, rhs.source_vectors);
+        let source_vectors = self
+            .context
+            .merge_vectors(lhs.source_vectors, rhs.source_vectors);
         PreprocessorToken {
             kind: PreprocessorTokenType::Number,
-            contents: context.string_cache.intern(contents.as_str()),
+            contents: self.context.string_cache.intern(contents.as_str()),
             source_vectors,
         }
     }
 
     pub(super) fn merge_tokens(
         &mut self,
-        context: &mut Context<'_>,
         mut lhs: PreprocessorToken,
         mut rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
@@ -984,13 +972,13 @@ impl<'x> Expander<'_, '_, 'x> {
                 token.kind = PreprocessorTokenType::Identifier;
             }
         }
-        let mut token = self.merge_tokens_impl(context, lhs, rhs)?;
+        let mut token = self.merge_tokens_impl(lhs, rhs)?;
         if token.kind == PreprocessorTokenType::Identifier
-            && context.string_cache.at(token.contents).contains('\\')
+            && self.context.string_cache.at(token.contents).contains('\\')
         {
             (token.kind, token.contents) =
                 crate::translation_phases::preprocessor_tokenizer::ucn::identifier(
-                    context,
+                    self.context,
                     self.scratch,
                     token.contents,
                 );
@@ -1000,7 +988,6 @@ impl<'x> Expander<'_, '_, 'x> {
 
     fn merge_tokens_impl(
         &mut self,
-        context: &mut Context<'_>,
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
@@ -1014,11 +1001,11 @@ impl<'x> Expander<'_, '_, 'x> {
                 | PreprocessorTokenType::Defined
                 | PreprocessorTokenType::Number,
             ) => {
-                let rhs_contents = context.string_cache.at(rhs.contents);
+                let rhs_contents = self.context.string_cache.at(rhs.contents);
                 // A pp-number with `.` or an exponent sign continues no
                 // identifier.
                 if rhs_contents.contains(['.', '+', '-']) {
-                    return Some(self.create_merge_error(context, lhs, rhs));
+                    return Some(self.create_merge_error(lhs, rhs));
                 }
                 let rhs_range = if rhs.kind == PreprocessorTokenType::Number {
                     0..rhs_contents.len() - 1
@@ -1026,14 +1013,13 @@ impl<'x> Expander<'_, '_, 'x> {
                     0..rhs_contents.len()
                 };
                 let new = self.merge_token_contents_with_ranges(
-                    context,
                     lhs,
                     rhs,
                     ..,
                     rhs_range,
                     PreprocessorTokenType::Identifier,
                 );
-                let kind = if context.string_cache.at(new.contents) == "defined" {
+                let kind = if self.context.string_cache.at(new.contents) == "defined" {
                     PreprocessorTokenType::Defined
                 } else {
                     PreprocessorTokenType::Identifier
@@ -1052,12 +1038,11 @@ impl<'x> Expander<'_, '_, 'x> {
             ) => {
                 // C99 §6.10.3.3p3: `L ## "x"` forms the wide literal `L"x"`,
                 // so the right-hand side must still be a narrow literal.
-                if context.string_cache.at(lhs.contents) == "L"
+                if self.context.string_cache.at(lhs.contents) == "L"
                     && (rhs.kind == PreprocessorTokenType::GeneratedString
-                        || !context.string_cache.at(rhs.contents).starts_with('L'))
+                        || !self.context.string_cache.at(rhs.contents).starts_with('L'))
                 {
                     Some(self.merge_token_contents(
-                        context,
                         lhs,
                         rhs,
                         match rhs.kind {
@@ -1067,14 +1052,14 @@ impl<'x> Expander<'_, '_, 'x> {
                         },
                     ))
                 } else {
-                    Some(self.create_merge_error(context, lhs, rhs))
+                    Some(self.create_merge_error(lhs, rhs))
                 }
             },
             | (
                 PreprocessorTokenType::Period | PreprocessorTokenType::Number,
                 PreprocessorTokenType::Number,
             ) => {
-                let lhs_contents = context.string_cache.at(lhs.contents);
+                let lhs_contents = self.context.string_cache.at(lhs.contents);
                 let lhs_range = if lhs.kind == PreprocessorTokenType::Number {
                     0..lhs_contents.len() - 1
                 } else {
@@ -1085,7 +1070,6 @@ impl<'x> Expander<'_, '_, 'x> {
                 // token, and number tokens should always have a
                 // trailing null byte.
                 Some(self.merge_token_contents_with_ranges(
-                    context,
                     lhs,
                     rhs,
                     lhs_range,
@@ -1100,172 +1084,100 @@ impl<'x> Expander<'_, '_, 'x> {
                 PreprocessorTokenType::Identifier
                 | PreprocessorTokenType::Defined
                 | PreprocessorTokenType::Period,
-            ) => Some(self.extend_number(context, lhs, rhs)),
+            ) => Some(self.extend_number(lhs, rhs)),
             | (
                 PreprocessorTokenType::Number,
                 PreprocessorTokenType::Plus | PreprocessorTokenType::Minus,
-            ) if context
+            ) if self
+                .context
                 .string_cache
                 .at(lhs.contents)
                 .trim_end_matches('\0')
                 .ends_with(['e', 'E', 'p', 'P']) =>
-                Some(self.extend_number(context, lhs, rhs)),
+                Some(self.extend_number(lhs, rhs)),
             | (PreprocessorTokenType::Plus, PreprocessorTokenType::Plus) =>
-                Some(self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PlusPlus)),
-            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Minus) => Some(
-                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::MinusMinus),
-            ),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::PlusPlus)),
+            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Minus) =>
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::MinusMinus)),
             | (PreprocessorTokenType::Minus, PreprocessorTokenType::GreaterThan) =>
-                Some(self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::Arrow)),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::Arrow)),
             // Digraphs retain their source spelling when pasted (C99 6.4.6).
-            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Colon) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::OpeningSquareBracket,
-                )),
-            | (PreprocessorTokenType::Colon, PreprocessorTokenType::GreaterThan) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::ClosingSquareBracket,
-                )),
+            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Colon) => Some(
+                self.merge_token_contents(lhs, rhs, PreprocessorTokenType::OpeningSquareBracket),
+            ),
+            | (PreprocessorTokenType::Colon, PreprocessorTokenType::GreaterThan) => Some(
+                self.merge_token_contents(lhs, rhs, PreprocessorTokenType::ClosingSquareBracket),
+            ),
             | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Percent) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::OpeningCurlyBrace,
-                )),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::OpeningCurlyBrace)),
             | (PreprocessorTokenType::Percent, PreprocessorTokenType::GreaterThan) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::ClosingCurlyBrace,
-                )),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::ClosingCurlyBrace)),
             | (PreprocessorTokenType::Percent, PreprocessorTokenType::Colon) =>
-                Some(self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::Hash)),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::Hash)),
             | (PreprocessorTokenType::Hash, PreprocessorTokenType::Hash) => {
                 // Mixing the spellings, such as `#` and `%:`, produces two
                 // preprocessing tokens rather than one valid paste.
-                let lhs_contents = context.string_cache.at(lhs.contents);
-                let rhs_contents = context.string_cache.at(rhs.contents);
+                let lhs_contents = self.context.string_cache.at(lhs.contents);
+                let rhs_contents = self.context.string_cache.at(rhs.contents);
                 if (lhs_contents == "#" && rhs_contents == "#")
                     || (lhs_contents == "%:" && rhs_contents == "%:")
                 {
-                    Some(self.merge_token_contents(
-                        context,
-                        lhs,
-                        rhs,
-                        PreprocessorTokenType::HashHash,
-                    ))
+                    Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::HashHash))
                 } else {
-                    Some(self.create_merge_error(context, lhs, rhs))
+                    Some(self.create_merge_error(lhs, rhs))
                 }
             },
-            | (PreprocessorTokenType::Plus, PreprocessorTokenType::Equals) => Some(
-                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PlusEquals),
-            ),
-            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Equals) => Some(
-                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::MinusEquals),
-            ),
-            | (PreprocessorTokenType::Asterisk, PreprocessorTokenType::Equals) => Some(
-                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::AsteriskEquals),
-            ),
+            | (PreprocessorTokenType::Plus, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::PlusEquals)),
+            | (PreprocessorTokenType::Minus, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::MinusEquals)),
+            | (PreprocessorTokenType::Asterisk, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::AsteriskEquals)),
             | (PreprocessorTokenType::ForwardSlash, PreprocessorTokenType::Equals) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::ForwardSlashEquals,
-                )),
-            | (PreprocessorTokenType::Percent, PreprocessorTokenType::Equals) => Some(
-                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PercentEquals),
-            ),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::ForwardSlashEquals)),
+            | (PreprocessorTokenType::Percent, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::PercentEquals)),
             | (PreprocessorTokenType::LessThan, PreprocessorTokenType::LessThan) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::LessThanLessThan,
-                )),
-            | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::GreaterThan) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::GreaterThanGreaterThan,
-                )),
-            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Equals) => Some(
-                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::LessThanEquals),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::LessThanLessThan)),
+            | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::GreaterThan) => Some(
+                self.merge_token_contents(lhs, rhs, PreprocessorTokenType::GreaterThanGreaterThan),
             ),
+            | (PreprocessorTokenType::LessThan, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::LessThanEquals)),
             | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::Equals) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::GreaterThanEquals,
-                )),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::GreaterThanEquals)),
             | (PreprocessorTokenType::LessThan, PreprocessorTokenType::LessThanEquals)
-            | (PreprocessorTokenType::LessThanLessThan, PreprocessorTokenType::Equals) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::LessThanLessThanEquals,
-                )),
+            | (PreprocessorTokenType::LessThanLessThan, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(lhs, rhs, PreprocessorTokenType::LessThanLessThanEquals),
+            ),
             | (PreprocessorTokenType::GreaterThan, PreprocessorTokenType::GreaterThanEquals)
             | (PreprocessorTokenType::GreaterThanGreaterThan, PreprocessorTokenType::Equals) =>
                 Some(self.merge_token_contents(
-                    context,
                     lhs,
                     rhs,
                     PreprocessorTokenType::GreaterThanGreaterThanEquals,
                 )),
             | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Equals) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::AmpersandEquals,
-                )),
-            | (PreprocessorTokenType::Caret, PreprocessorTokenType::Equals) => Some(
-                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::CaretEquals),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::AmpersandEquals)),
+            | (PreprocessorTokenType::Caret, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::CaretEquals)),
+            | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::PipeEquals)),
+            | (PreprocessorTokenType::ExclamationMark, PreprocessorTokenType::Equals) => Some(
+                self.merge_token_contents(lhs, rhs, PreprocessorTokenType::ExclamationMarkEquals),
             ),
-            | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Equals) => Some(
-                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PipeEquals),
-            ),
-            | (PreprocessorTokenType::ExclamationMark, PreprocessorTokenType::Equals) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::ExclamationMarkEquals,
-                )),
-            | (PreprocessorTokenType::Equals, PreprocessorTokenType::Equals) => Some(
-                self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::EqualsEquals),
-            ),
+            | (PreprocessorTokenType::Equals, PreprocessorTokenType::Equals) =>
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::EqualsEquals)),
             | (PreprocessorTokenType::Pipe, PreprocessorTokenType::Pipe) =>
-                Some(self.merge_token_contents(context, lhs, rhs, PreprocessorTokenType::PipePipe)),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::PipePipe)),
             | (PreprocessorTokenType::Ampersand, PreprocessorTokenType::Ampersand) =>
-                Some(self.merge_token_contents(
-                    context,
-                    lhs,
-                    rhs,
-                    PreprocessorTokenType::AmpersandAmpersand,
-                )),
+                Some(self.merge_token_contents(lhs, rhs, PreprocessorTokenType::AmpersandAmpersand)),
 
-            | _ => Some(self.create_merge_error(context, lhs, rhs)),
+            | _ => Some(self.create_merge_error(lhs, rhs)),
         }
     }
 
-    fn expand_macros<const SHOULD_IGNORE_WHITESPACE: bool>(
-        &mut self,
-        context: &mut Context<'_>,
-    ) -> Option<PreprocessorToken> {
+    fn expand_macros<const SHOULD_IGNORE_WHITESPACE: bool>(&mut self) -> Option<PreprocessorToken> {
         'base: loop {
             if self.tokenizer_stack.is_empty() {
                 std::hint::cold_path();
@@ -1274,7 +1186,7 @@ impl<'x> Expander<'_, '_, 'x> {
             if self.tokenizer_stack.len() < self.operand_fence.max(self.expansion_fence) {
                 break 'base None;
             }
-            match self.tokenizer.next_item(context) {
+            match self.tokenizer.next_item(self.context) {
                 | Some(token)
                     if token.kind == PreprocessorTokenType::Whitespace
                         && SHOULD_IGNORE_WHITESPACE =>
@@ -1290,7 +1202,7 @@ impl<'x> Expander<'_, '_, 'x> {
                             ..
                         } =>
                             if token.kind == PreprocessorTokenType::Newline {
-                                self.pop_tokenizer_frame(context);
+                                self.pop_tokenizer_frame();
                                 continue 'base;
                             },
                         | TokenizerFrame {
@@ -1307,12 +1219,7 @@ impl<'x> Expander<'_, '_, 'x> {
                             let has_generated_token = *has_generated_token;
                             let next_paren_depth = match paren_depth {
                                 | Some(depth) => self
-                                    .update_macro_argument_paren_depth(
-                                        context,
-                                        token,
-                                        argument_name,
-                                        depth,
-                                    )
+                                    .update_macro_argument_paren_depth(token, argument_name, depth)
                                     .map(Some),
                                 | None => Some(None),
                             };
@@ -1337,9 +1244,9 @@ impl<'x> Expander<'_, '_, 'x> {
                                         | PreprocessorTokenType::Newline
                                 );
                             } else {
-                                self.pop_tokenizer_frame(context);
+                                self.pop_tokenizer_frame();
                                 if self.generate_placeholders && !has_generated_token {
-                                    break 'base Some(Self::placeholder(context));
+                                    break 'base Some(Self::placeholder(self.context));
                                 }
                                 continue 'base;
                             }
@@ -1348,7 +1255,7 @@ impl<'x> Expander<'_, '_, 'x> {
                                     continue 'base;
                                 }
                                 token.kind = PreprocessorTokenType::Whitespace;
-                                token.contents = context.string_cache.intern(" ");
+                                token.contents = self.context.string_cache.intern(" ");
                             }
                         },
                         | TokenizerFrame {
@@ -1373,9 +1280,9 @@ impl<'x> Expander<'_, '_, 'x> {
                             ..
                         })
                     );
-                    self.pop_tokenizer_frame(context);
+                    self.pop_tokenizer_frame();
                     if self.generate_placeholders && is_empty_replay {
-                        break 'base Some(Self::placeholder(context));
+                        break 'base Some(Self::placeholder(self.context));
                     }
                     continue 'base;
                 },
@@ -1393,7 +1300,6 @@ impl<'x> Expander<'_, '_, 'x> {
 
     fn update_macro_argument_paren_depth(
         &self,
-        context: &Context<'_>,
         token: PreprocessorToken,
         argument_name: StringCacheId,
         paren_depth: usize,
@@ -1403,7 +1309,7 @@ impl<'x> Expander<'_, '_, 'x> {
         // named argument.
         if paren_depth == 1
             && ((token.kind == PreprocessorTokenType::Comma
-                && context.string_cache.at(argument_name) != "__VA_ARGS__")
+                && self.context.string_cache.at(argument_name) != "__VA_ARGS__")
                 || token.kind == PreprocessorTokenType::ClosingParenthesis)
         {
             return None;
@@ -1430,9 +1336,8 @@ impl<'x> Expander<'_, '_, 'x> {
 
     fn handle_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context<'_>,
     ) -> Option<PreprocessorToken> {
-        let token = self.expand_macros::<SHOULD_IGNORE_WHITESPACE>(context)?;
+        let token = self.expand_macros::<SHOULD_IGNORE_WHITESPACE>()?;
 
         match token.kind {
             | PreprocessorTokenType::Hash => {
@@ -1443,7 +1348,7 @@ impl<'x> Expander<'_, '_, 'x> {
                         ..
                     })
                 ) {
-                    Some(self.parse_hash_operator(context, token))
+                    Some(self.parse_hash_operator(token))
                 } else {
                     Some(token)
                 }
@@ -1456,10 +1361,9 @@ impl<'x> Expander<'_, '_, 'x> {
     /// tells whether `##` formed the token, which then names no parameter.
     pub(super) fn handle_hash_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
-        context: &mut Context<'_>,
     ) -> Option<(PreprocessorToken, bool)> {
         'base: loop {
-            let lhs = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>(context)?;
+            let lhs = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>()?;
             let replacement_list = match self.tokenizer_stack.last().map(|frame| &frame.frame_type)
             {
                 | Some(
@@ -1471,13 +1375,13 @@ impl<'x> Expander<'_, '_, 'x> {
                 | _ => false,
             };
             let hash_hash = if replacement_list {
-                let save = self.position(context);
-                context.set_ignore_tokenizer_errors(true);
-                let hash_hash = Self::next_ignore_whitespace(&mut self.tokenizer, context);
-                context.set_ignore_tokenizer_errors(false);
-                self.set_position(context, save);
+                let save = self.position(self.context);
+                self.context.set_ignore_tokenizer_errors(true);
+                let hash_hash = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+                self.context.set_ignore_tokenizer_errors(false);
+                self.set_position(save);
                 if hash_hash.is_some_and(|v| v.kind == PreprocessorTokenType::HashHash) {
-                    Self::next_ignore_whitespace(&mut self.tokenizer, context)
+                    Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
                 } else {
                     None
                 }
@@ -1485,10 +1389,9 @@ impl<'x> Expander<'_, '_, 'x> {
                 None
             };
             if let Some(h) = hash_hash {
-                let Some((rhs, rhs_is_pasted)) = self.handle_hash_hash_operator::<true>(context)
-                else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                let Some((rhs, rhs_is_pasted)) = self.handle_hash_hash_operator::<true>() else {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::UnexpectedEndOfInput(
                             "parsing hash-hash operator. Hash hash operator must be followed by a \
                              preprocessor token on the same line.",
@@ -1497,8 +1400,7 @@ impl<'x> Expander<'_, '_, 'x> {
                     });
                     return Some((lhs, false));
                 };
-                if let Some(r) = self.parse_hash_hash_operator(context, lhs, h, rhs, rhs_is_pasted)
-                {
+                if let Some(r) = self.parse_hash_hash_operator(lhs, h, rhs, rhs_is_pasted) {
                     return Some((r, true));
                 }
                 continue 'base;

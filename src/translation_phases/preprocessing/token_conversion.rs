@@ -105,12 +105,8 @@ impl<'pp> LiteralScratch<'pp> {
     }
 }
 
-impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
-    pub(super) fn concatenate_adjacent_strings(
-        &mut self,
-        context: &mut Context<'tu>,
-        first: Token,
-    ) -> Token {
+impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
+    pub(super) fn concatenate_adjacent_strings(&mut self, first: Token) -> Token {
         let TokenType::String(first_kind) = first.kind else {
             return first;
         };
@@ -125,25 +121,25 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
         loop {
             // Diagnostics reported while reading the next token stay after
             // the ones already pending.
-            let existing_errors = context.pending_error_count();
-            let next = self.next_parser_token(context);
+            let existing_errors = self.context.pending_error_count();
+            let next = self.next_parser_token();
 
-            if context.source_segment_count() > self.source_segment_limit {
+            if self.context.source_segment_count() > self.source_segment_limit {
                 self.pending_parser_token = next;
                 self.pending_parser_errors
-                    .extend(context.split_off_pending_errors(existing_errors));
+                    .extend(self.context.split_off_pending_errors(existing_errors));
                 break;
             }
 
             let Some(next) = next else {
                 self.pending_parser_errors
-                    .extend(context.split_off_pending_errors(existing_errors));
+                    .extend(self.context.split_off_pending_errors(existing_errors));
                 break;
             };
             let TokenType::String(next_kind) = next.kind else {
                 self.pending_parser_token = Some(next);
                 self.pending_parser_errors
-                    .extend(context.split_off_pending_errors(existing_errors));
+                    .extend(self.context.split_off_pending_errors(existing_errors));
                 break;
             };
             let next_contents = match next_kind {
@@ -157,53 +153,51 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 let mut builder = self.state.literal_scratch.take_builder();
                 builder
                     .units
-                    .extend_from_slice(context.literal_units(first_contents));
+                    .extend_from_slice(self.context.literal_units(first_contents));
                 builder.sources.push(first.source_vectors);
                 builder
                     .spelling
-                    .push_str(context.string_cache.at(first.contents));
+                    .push_str(self.context.string_cache.at(first.contents));
                 builder
             });
             builder
                 .units
-                .extend_from_slice(context.literal_units(next_contents));
+                .extend_from_slice(self.context.literal_units(next_contents));
             builder.sources.push(next.source_vectors);
             builder.spelling.push(' ');
             builder
                 .spelling
-                .push_str(context.string_cache.at(next.contents));
+                .push_str(self.context.string_cache.at(next.contents));
         }
 
         let Some(builder) = builder else {
             return first;
         };
-        let contents = context.intern_literal(&builder.units);
+        let contents = self.context.intern_literal(&builder.units);
         let token = Token {
             kind:           if wide {
                 TokenType::String(StringTokenType::WideString(contents))
             } else {
                 TokenType::String(StringTokenType::String(contents))
             },
-            contents:       context.string_cache.intern(&*builder.spelling),
-            source_vectors: context.merge_vector_list(&builder.sources),
+            contents:       self.context.string_cache.intern(&*builder.spelling),
+            source_vectors: self.context.merge_vector_list(&builder.sources),
         };
         self.state.literal_scratch.return_builder(builder);
         token
     }
 
     #[inline(always)]
-    fn parse_integer_radix<'ctx>(
+    fn parse_integer_radix(
         &mut self,
-        context: &mut Context<'ctx>,
         radix: u32,
         start_index: usize,
-        invalid_integer_literal_error: PreprocessorErrorType<'ctx>,
+        invalid_integer_literal_error: PreprocessorErrorType<'tu>,
         token: PreprocessorToken,
     ) -> Token {
-        _ = self;
         let mut index = start_index;
         let (result, did_overflow) = {
-            let contents = context.string_cache.at(token.contents);
+            let contents = self.context.string_cache.at(token.contents);
             let mut result = 0u64;
             let mut did_overflow = false;
             while let Some(digit) = contents.char_at(index).and_then(|c| c.to_digit(radix)) {
@@ -223,12 +217,12 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
         };
         let missing_digits = radix == 16 && index == start_index;
         if did_overflow {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::IntegerLiteralOverflow,
                 source_vectors: token.source_vectors,
             });
         }
-        let contents = context.string_cache.at(token.contents);
+        let contents = self.context.string_cache.at(token.contents);
         let suffix_type = match (
             contents.char_at(index),
             contents.char_at(index + 1),
@@ -260,7 +254,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
             | _ => None,
         };
         if missing_digits || index != contents.len() - 1 {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     invalid_integer_literal_error,
                 source_vectors: token.source_vectors,
             });
@@ -274,7 +268,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 contents:       token.contents,
             },
             | Some(IntegerSuffix::LongLong) if result > i64::MAX as u64 => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
                         from: SignedIntegerLiteralType::LongLong,
                         to:   UnsignedIntegerLiteralType::UnsignedLongLong,
@@ -304,7 +298,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 contents:       token.contents,
             },
             | Some(IntegerSuffix::Long) if result > i64::MAX as u64 => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
                         from: SignedIntegerLiteralType::Long,
                         to:   UnsignedIntegerLiteralType::UnsignedLong,
@@ -327,7 +321,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 contents:       token.contents,
             },
             | Some(IntegerSuffix::Unsigned) if result > u64::from(u32::MAX) => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ForcedUnsignedPromotion {
                         from: UnsignedIntegerLiteralType::UnsignedInt,
                         to:   UnsignedIntegerLiteralType::UnsignedLong,
@@ -352,7 +346,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 contents:       token.contents,
             },
             | None if result > i64::MAX as u64 => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
                         from: SignedIntegerLiteralType::Int,
                         to:   UnsignedIntegerLiteralType::UnsignedLongLong,
@@ -368,7 +362,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 }
             },
             | None if result > i32::MAX as u64 => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::ForcedSignedPromotion {
                         from: SignedIntegerLiteralType::Int,
                         to:   SignedIntegerLiteralType::Long,
@@ -395,13 +389,8 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
         }
     }
 
-    fn parse_hexadecimal_integer(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Token {
+    fn parse_hexadecimal_integer(&mut self, token: PreprocessorToken) -> Token {
         self.parse_integer_radix(
-            context,
             16,
             2,
             PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
@@ -409,13 +398,8 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
         )
     }
 
-    fn parse_binary_integer(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Token {
+    fn parse_binary_integer(&mut self, token: PreprocessorToken) -> Token {
         self.parse_integer_radix(
-            context,
             2,
             2,
             PreprocessorErrorType::InvalidBinaryIntegerLiteral,
@@ -423,13 +407,8 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
         )
     }
 
-    fn parse_octal_integer(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Token {
+    fn parse_octal_integer(&mut self, token: PreprocessorToken) -> Token {
         self.parse_integer_radix(
-            context,
             8,
             1,
             PreprocessorErrorType::InvalidOctalIntegerLiteral,
@@ -437,13 +416,8 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
         )
     }
 
-    fn parse_decimal_integer(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Token {
+    fn parse_decimal_integer(&mut self, token: PreprocessorToken) -> Token {
         self.parse_integer_radix(
-            context,
             10,
             0,
             PreprocessorErrorType::InvalidDecimalIntegerLiteral,
@@ -452,14 +426,12 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
     }
 
     #[inline(always)]
-    fn parse_float<'ctx>(
+    fn parse_float(
         &mut self,
-        context: &mut Context<'ctx>,
-        invalid_float_literal_error: PreprocessorErrorType<'ctx>,
+        invalid_float_literal_error: PreprocessorErrorType<'tu>,
         token: PreprocessorToken,
     ) -> Token {
-        _ = self;
-        let contents = context.string_cache.at(token.contents);
+        let contents = self.context.string_cache.at(token.contents);
 
         let res = match contents.char_at(contents.len() - 2) {
             | Some('f' | 'F') => string_to_float(contents).map(FloatTokenType::Float),
@@ -474,7 +446,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 contents:       token.contents,
             },
             | Err(ParseFloatError::Invalid(kind)) => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     invalid_float_literal_error,
                     source_vectors: token.source_vectors,
                 });
@@ -485,7 +457,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 }
             },
             | Err(ParseFloatError::OutOfRange(kind, error)) => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::FloatConstantOutOfRange {
                         type_name: kind.type_name(),
                         error,
@@ -501,28 +473,12 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
         }
     }
 
-    fn parse_hexadecimal_float(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Token {
-        self.parse_float(
-            context,
-            PreprocessorErrorType::InvalidHexadecimalFloatLiteral,
-            token,
-        )
+    fn parse_hexadecimal_float(&mut self, token: PreprocessorToken) -> Token {
+        self.parse_float(PreprocessorErrorType::InvalidHexadecimalFloatLiteral, token)
     }
 
-    fn parse_decimal_float(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Token {
-        self.parse_float(
-            context,
-            PreprocessorErrorType::InvalidDecimalFloatLiteral,
-            token,
-        )
+    fn parse_decimal_float(&mut self, token: PreprocessorToken) -> Token {
+        self.parse_float(PreprocessorErrorType::InvalidDecimalFloatLiteral, token)
     }
 
     /// Appends the units `token` spells to `units`, which start empty, and
@@ -667,58 +623,55 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
         Self::build_token(token, TokenType::Operator(kind))
     }
 
-    pub(super) fn parse_number(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Token {
-        let contents = context.string_cache.at(token.contents);
+    pub(super) fn parse_number(&mut self, token: PreprocessorToken) -> Token {
+        let contents = self.context.string_cache.at(token.contents);
         let is_hex = contents.starts_with("0x") || contents.starts_with("0X");
         let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
         let is_octal = contents.starts_with('0') && !is_hex && !is_binary;
         if is_hex {
             if contents.contains(['.', 'p', 'P']) {
-                self.parse_hexadecimal_float(context, token)
+                self.parse_hexadecimal_float(token)
             } else {
-                self.parse_hexadecimal_integer(context, token)
+                self.parse_hexadecimal_integer(token)
             }
         } else if is_binary {
-            self.parse_binary_integer(context, token)
+            self.parse_binary_integer(token)
         } else if contents.contains(['.', 'e', 'E']) {
-            self.parse_decimal_float(context, token)
+            self.parse_decimal_float(token)
         } else if is_octal {
-            self.parse_octal_integer(context, token)
+            self.parse_octal_integer(token)
         } else {
-            self.parse_decimal_integer(context, token)
+            self.parse_decimal_integer(token)
         }
     }
 
-    fn parse_string(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> StringTokenType {
+    fn parse_string(&mut self, token: PreprocessorToken) -> StringTokenType {
         let mut units = self.state.literal_scratch.take_units();
-        _ = Self::eval_escape_sequences(context, token, &mut units);
-        let cached_contents = context.intern_literal(&units);
+        _ = Self::eval_escape_sequences(self.context, token, &mut units);
+        let cached_contents = self.context.intern_literal(&units);
         self.state.literal_scratch.return_units(units);
-        if context.string_cache.at(token.contents).starts_with('L') {
+        if self
+            .context
+            .string_cache
+            .at(token.contents)
+            .starts_with('L')
+        {
             StringTokenType::WideString(cached_contents)
         } else {
             StringTokenType::String(cached_contents)
         }
     }
 
-    pub(super) fn parse_character(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> CharacterTokenType {
+    pub(super) fn parse_character(&mut self, token: PreprocessorToken) -> CharacterTokenType {
         let mut units = self.state.literal_scratch.take_units();
-        let had_escape_error = Self::eval_escape_sequences(context, token, &mut units);
-        let wide = context.string_cache.at(token.contents).starts_with('L');
-        _ = context.intern_literal(&units);
-        let character = Self::character_value(context, token, &units, wide, had_escape_error);
+        let had_escape_error = Self::eval_escape_sequences(self.context, token, &mut units);
+        let wide = self
+            .context
+            .string_cache
+            .at(token.contents)
+            .starts_with('L');
+        _ = self.context.intern_literal(&units);
+        let character = Self::character_value(self.context, token, &units, wide, had_escape_error);
         self.state.literal_scratch.return_units(units);
         character
     }
@@ -775,26 +728,26 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
         }
     }
 
-    pub(super) fn map_preprocessor_token(
-        &mut self,
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-    ) -> Option<Token> {
+    pub(super) fn map_preprocessor_token(&mut self, token: PreprocessorToken) -> Option<Token> {
         Some(match token.kind {
             | PreprocessorTokenType::Other => {
-                let character = context
+                let character = self
+                    .context
                     .string_cache
                     .at(token.contents)
                     .chars()
                     .next()
                     .expect("Other tokens contain one character");
-                let source = context.first_source_vector(token.source_vectors).clone();
-                context.preprocessor_tokenizer_error(
+                let source = self
+                    .context
+                    .first_source_vector(token.source_vectors)
+                    .clone();
+                self.context.preprocessor_tokenizer_error(
                     PreprocessorTokenizerError::unknown_character(source, character),
                 );
                 return None;
             },
-            | PreprocessorTokenType::Number => self.parse_number(context, token),
+            | PreprocessorTokenType::Number => self.parse_number(token),
             | PreprocessorTokenType::Newline => return None,
             | PreprocessorTokenType::Hash => {
                 if matches!(
@@ -806,16 +759,16 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 ) {
                     unreachable!("Handled in next_preprocessor_token");
                 }
-                self.parse_directive(context, token);
+                self.parse_directive(token);
                 return None;
             },
             | PreprocessorTokenType::GeneratedString
             | PreprocessorTokenType::WideGeneratedString => {
                 let wide = token.kind == PreprocessorTokenType::WideGeneratedString;
-                let text = &context.string_cache.at(token.contents)[usize::from(wide)..];
+                let text = &self.context.string_cache.at(token.contents)[usize::from(wide)..];
                 let mut units = self.state.literal_scratch.take_units();
                 units.extend(text.chars().map(LiteralUnit::Character));
-                let id = context.intern_literal(&units);
+                let id = self.context.intern_literal(&units);
                 self.state.literal_scratch.return_units(units);
                 Token {
                     kind: TokenType::String(if wide {
@@ -827,12 +780,12 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 }
             },
             | PreprocessorTokenType::String => Token {
-                kind:           TokenType::String(self.parse_string(context, token)),
+                kind:           TokenType::String(self.parse_string(token)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             },
             | PreprocessorTokenType::Character => Token {
-                kind:           TokenType::Character(self.parse_character(context, token)),
+                kind:           TokenType::Character(self.parse_character(token)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             },
@@ -841,7 +794,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
             | PreprocessorTokenType::UnavailableIdentifier
             | PreprocessorTokenType::UnavailableUniversalIdentifier
             | PreprocessorTokenType::Defined => {
-                let contents = token.identifier_id(context);
+                let contents = token.identifier_id(self.context);
                 Token {
                     kind: KeywordTokenType::from_cache_id(contents)
                         .map_or(TokenType::Identifier, TokenType::Keyword),
@@ -955,7 +908,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
                 } else {
                     PreprocessorErrorType::HashHashUsedOutsideOfMacro
                 };
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type,
                     source_vectors: token.source_vectors,
                 });
@@ -963,7 +916,7 @@ impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
             },
 
             | PreprocessorTokenType::Placeholder | PreprocessorTokenType::Whitespace => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedTokenAtPhase7(token.kind),
                     source_vectors: token.source_vectors,
                 });

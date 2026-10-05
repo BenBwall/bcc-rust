@@ -261,8 +261,8 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
             contents,
         };
         assert_eq!(
-            preprocessor.run(&mut context, |preprocessor, context| {
-                std::ops::ControlFlow::Break(preprocessor.map_preprocessor_token(context, token))
+            preprocessor.run(&mut context, |preprocessor| {
+                std::ops::ControlFlow::Break(preprocessor.map_preprocessor_token(token))
             }),
             None
         );

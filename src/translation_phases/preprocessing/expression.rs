@@ -508,7 +508,7 @@ impl<'pp> PreprocessorExpressionParser<'pp> {
     clippy::cast_possible_truncation,
     reason = "Integer literal values are range-checked before narrowing."
 )]
-impl Expander<'_, '_, '_> {
+impl<'tu> Expander<'_, 'tu, '_, '_> {
     fn map_operator(&mut self, operator: PreprocessorToken) -> PreprocessorExpressionOperator {
         let state = replace(
             &mut self.expression_parser.state,
@@ -561,16 +561,12 @@ impl Expander<'_, '_, '_> {
         reason = "This function is long because it contains the logic for evaluating an operator \
                   in a constant expression. I don't think splitting it up would anything clearer."
     )]
-    fn handle_expression_operator(
-        &mut self,
-        context: &mut Context<'_>,
-        operator: LocatedExpressionOperator,
-    ) {
+    fn handle_expression_operator(&mut self, operator: LocatedExpressionOperator) {
         match operator.kind {
             | PreprocessorExpressionOperator::UnaryPlus => {
                 if self.expression_parser.operand_stack.is_empty() {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::UnaryPlusWithoutOperand,
                         source_vectors,
                     });
@@ -578,8 +574,8 @@ impl Expander<'_, '_, '_> {
             },
             | PreprocessorExpressionOperator::UnaryMinus => {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::UnaryMinusWithoutOperand,
                         source_vectors,
                     });
@@ -598,8 +594,8 @@ impl Expander<'_, '_, '_> {
             },
             | PreprocessorExpressionOperator::BitwiseNot => {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::BitwiseNotWithoutOperand,
                         source_vectors,
                     });
@@ -611,8 +607,8 @@ impl Expander<'_, '_, '_> {
             },
             | PreprocessorExpressionOperator::LogicalNot => {
                 let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::LogicalNotWithoutOperand,
                         source_vectors,
                     });
@@ -631,8 +627,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::BinaryPlusWithoutRhs,
                         source_vectors,
                     });
@@ -660,8 +656,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::BinaryMinusWithoutRhs,
                         source_vectors,
                     });
@@ -689,8 +685,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::MultiplyWithoutRhs,
                         source_vectors,
                     });
@@ -718,8 +714,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::DivideWithoutRhs,
                         source_vectors,
                     });
@@ -761,8 +757,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::ModuloWithoutRhs,
                         source_vectors,
                     });
@@ -804,8 +800,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::LeftShiftWithoutRhs,
                         source_vectors,
                     });
@@ -839,8 +835,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::RightShiftWithoutRhs,
                         source_vectors,
                     });
@@ -878,8 +874,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::LessThanWithoutRhs,
                         source_vectors,
                     });
@@ -903,8 +899,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::LessThanEqualsWithoutRhs,
                         source_vectors,
                     });
@@ -928,8 +924,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::GreaterThanWithoutRhs,
                         source_vectors,
                     });
@@ -953,8 +949,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::GreaterThanEqualsWithoutRhs,
                         source_vectors,
                     });
@@ -978,8 +974,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::EqualsWithoutRhs,
                         source_vectors,
                     });
@@ -999,8 +995,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::NotEqualsWithoutRhs,
                         source_vectors,
                     });
@@ -1020,8 +1016,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::BitwiseAndWithoutRhs,
                         source_vectors,
                     });
@@ -1043,8 +1039,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::BitwiseXorWithoutRhs,
                         source_vectors,
                     });
@@ -1066,8 +1062,8 @@ impl Expander<'_, '_, '_> {
                     .pop()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::BitwiseOrWithoutRhs,
                         source_vectors,
                     });
@@ -1089,8 +1085,8 @@ impl Expander<'_, '_, '_> {
                     .pop_isolated()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop_isolated() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::LogicalAndWithoutRhs,
                         source_vectors,
                     });
@@ -1123,8 +1119,8 @@ impl Expander<'_, '_, '_> {
                     .pop_isolated()
                     .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
                 let Some(lhs) = self.expression_parser.operand_stack.pop_isolated() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::LogicalOrWithoutRhs,
                         source_vectors,
                     });
@@ -1169,7 +1165,7 @@ impl Expander<'_, '_, '_> {
                 );
             },
             | PreprocessorExpressionOperator::QuestionMark => {
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::TernaryOperatorWithoutColon,
                     source_vectors: operator.source_vectors,
                 });
@@ -1184,8 +1180,8 @@ impl Expander<'_, '_, '_> {
             | PreprocessorExpressionOperator::Conditional => {
                 let Some(final_operand) = self.expression_parser.operand_stack.pop_isolated()
                 else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::TernaryOperatorWithoutRhs,
                         source_vectors,
                     });
@@ -1196,8 +1192,8 @@ impl Expander<'_, '_, '_> {
                 };
                 let Some(middle_operand) = self.expression_parser.operand_stack.pop_isolated()
                 else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
                         source_vectors,
                     });
@@ -1207,8 +1203,8 @@ impl Expander<'_, '_, '_> {
                     return;
                 };
                 let Some(condition) = self.expression_parser.operand_stack.pop_isolated() else {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::TernaryOperatorWithoutRhs,
                         source_vectors,
                     });
@@ -1245,7 +1241,7 @@ impl Expander<'_, '_, '_> {
             },
             | PreprocessorExpressionOperator::OpeningParenthesis => {
                 let source_vectors = operator.source_vectors;
-                context.preprocessor_error(PreprocessorError {
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression,
                     source_vectors,
                 });
@@ -1254,10 +1250,9 @@ impl Expander<'_, '_, '_> {
         }
     }
 
-    fn parse_defined_operator(&mut self, context: &mut Context<'_>) {
-        let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase::<true>(context,
-            |_, _, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::OpeningParenthesis),
-            |_, _, t|
+    fn parse_defined_operator(&mut self) {
+        let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase::<true>(|_, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::OpeningParenthesis),
+            |_, t|
                 ControlFlow::Break(PreprocessorError {
                         error_type:     PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(t.kind),
                         source_vectors: t.source_vectors,
@@ -1268,7 +1263,7 @@ impl Expander<'_, '_, '_> {
         ) else {
             // The malformed operator still stands for one operand, so the
             // expression continues in the binary state without cascading.
-            self.skip_token_unless_line_end(context);
+            self.skip_token_unless_line_end();
             self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
             self.expression_parser.state = PreprocessorExpressionParserState::Binary;
             return;
@@ -1277,7 +1272,7 @@ impl Expander<'_, '_, '_> {
             let is_defined = self
                 .state
                 .macro_definitions
-                .contains_key(&ident_or_opening_paren.identifier_id(context));
+                .contains_key(&ident_or_opening_paren.identifier_id(self.context));
             self.expression_parser
                 .operand_stack
                 .push(PreprocessorExpressionOperand::Signed(i64::from(is_defined)));
@@ -1290,9 +1285,8 @@ impl Expander<'_, '_, '_> {
             "Compiler bug: ident_or_opening_paren should be an opening parenthesis or identifier."
         );
         let Some(ident) = self.expect_token_from_previous_phase::<true>(
-            context,
-            |_, _, t| t.kind.is_identifier(),
-            |_, _, t| {
+            |_, t| t.kind.is_identifier(),
+            |_, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     PreprocessorErrorType::MissingIdentifierInDefinedDirective(
                         t.kind,
@@ -1302,7 +1296,7 @@ impl Expander<'_, '_, '_> {
             },
             "parsing defined operator",
         ) else {
-            self.skip_token_unless_line_end(context);
+            self.skip_token_unless_line_end();
             self.expression_parser
                 .operand_stack
                 .push(PreprocessorExpressionOperand::Signed(0));
@@ -1311,9 +1305,8 @@ impl Expander<'_, '_, '_> {
         };
 
         _ = self.expect_token_from_previous_phase::<true>(
-            context,
-            |_, _, t| matches!(t.kind, PreprocessorTokenType::ClosingParenthesis),
-            |_, _, t| {
+            |_, t| matches!(t.kind, PreprocessorTokenType::ClosingParenthesis),
+            |_, t| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(t.kind),
@@ -1325,7 +1318,7 @@ impl Expander<'_, '_, '_> {
         let is_defined = self
             .state
             .macro_definitions
-            .contains_key(&ident.identifier_id(context));
+            .contains_key(&ident.identifier_id(self.context));
         self.expression_parser
             .operand_stack
             .push(PreprocessorExpressionOperand::Signed(i64::from(is_defined)));
@@ -1334,11 +1327,11 @@ impl Expander<'_, '_, '_> {
 
     /// Consumes the next token of a directive after it was diagnosed, unless
     /// it ends the line.
-    fn skip_token_unless_line_end(&mut self, context: &mut Context<'_>) {
-        let position = self.position(context);
-        match Self::next_ignore_whitespace(&mut self.tokenizer, context) {
+    fn skip_token_unless_line_end(&mut self) {
+        let position = self.position(self.context);
+        match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
             | Some(token) if token.kind != PreprocessorTokenType::Newline => {},
-            | _ => self.set_position(context, position),
+            | _ => self.set_position(position),
         }
     }
 
@@ -1353,19 +1346,18 @@ impl Expander<'_, '_, '_> {
         stack.floor = self.expression_parser.open_parentheses.pop().unwrap_or(0);
     }
 
-    pub(super) fn eval_preprocessor_expression<'tu>(
+    pub(super) fn eval_preprocessor_expression(
         &mut self,
-        context: &mut Context<'tu>,
         on_no_expression_error: PreprocessorErrorType<'tu>,
     ) -> bool {
         const UNARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Unary;
         const BINARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Binary;
         self.expression_parser.reset();
         'main: loop {
-            match self.next_preprocessor_token::<true>(context) {
+            match self.next_preprocessor_token::<true>() {
                 | None => {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(
                         PreprocessorError {
                             error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
                             source_vectors,
@@ -1382,7 +1374,7 @@ impl Expander<'_, '_, '_> {
                     (PreprocessorTokenType::Tilde, UNARY) =>
                         self.expression_parser.operator_stack.push(LocatedExpressionOperator { kind: PreprocessorExpressionOperator::BitwiseNot, source_vectors: token.source_vectors }),
                     (PreprocessorTokenType::Tilde, BINARY) =>
-                        context.preprocessor_error(PreprocessorError {
+                        self.context.preprocessor_error(PreprocessorError {
                                 error_type: PreprocessorErrorType::TildeInsteadOfBinaryOperatorInPreprocessorExpression,
                                 source_vectors: token.source_vectors,
                             },
@@ -1391,7 +1383,7 @@ impl Expander<'_, '_, '_> {
                     (PreprocessorTokenType::ExclamationMark, UNARY) =>
                         self.expression_parser.operator_stack.push(LocatedExpressionOperator { kind: PreprocessorExpressionOperator::LogicalNot, source_vectors: token.source_vectors }),
                     (PreprocessorTokenType::ExclamationMark, BINARY) =>
-                        context.preprocessor_error(PreprocessorError {
+                        self.context.preprocessor_error(PreprocessorError {
                                 error_type:     PreprocessorErrorType::ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression,
                                 source_vectors: token.source_vectors,
                             },
@@ -1404,7 +1396,7 @@ impl Expander<'_, '_, '_> {
                         stack.floor = stack.values.len();
                     }
                     (PreprocessorTokenType::OpeningParenthesis, BINARY) => {
-                        context.preprocessor_error(PreprocessorError {
+                        self.context.preprocessor_error(PreprocessorError {
                                 error_type:     PreprocessorErrorType::FunctionCallOperatorNotSupportedInPreprocessorExpression,
                                 source_vectors: token.source_vectors,
                             },
@@ -1412,10 +1404,10 @@ impl Expander<'_, '_, '_> {
                         let mut paren_depth = 1;
                         // Step over function call.
                         while paren_depth > 0 {
-                            match self.next_preprocessor_token::<true>(context) {
+                            match self.next_preprocessor_token::<true>() {
                                 | None => {
-                                    let source_vectors = self.current_location(context);
-                                    context.preprocessor_error(PreprocessorError {
+                                    let source_vectors = self.current_location();
+                                    self.context.preprocessor_error(PreprocessorError {
                                             error_type: PreprocessorErrorType::UnexpectedEndOfInput("parsing preprocessor expression"),
                                             source_vectors,
                                         },
@@ -1433,7 +1425,7 @@ impl Expander<'_, '_, '_> {
                     }
                     (PreprocessorTokenType::ClosingParenthesis, state) => {
                         if self.expression_parser.open_parentheses.is_empty() {
-                            context.preprocessor_error(PreprocessorError {
+                            self.context.preprocessor_error(PreprocessorError {
                                     error_type:     PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(token.kind),
                                     source_vectors: token.source_vectors,
                                 },
@@ -1449,7 +1441,7 @@ impl Expander<'_, '_, '_> {
                                 | Some(PreprocessorExpressionOperator::OpeningParenthesis) | None => PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression,
                                 | Some(operator) => PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(operator),
                             };
-                            context.preprocessor_error(PreprocessorError {
+                            self.context.preprocessor_error(PreprocessorError {
                                 error_type,
                                 source_vectors: token.source_vectors,
                             });
@@ -1463,29 +1455,29 @@ impl Expander<'_, '_, '_> {
                                 self.finish_expression_group();
                                 break;
                             }
-                            self.handle_expression_operator(context, op);
+                            self.handle_expression_operator(op);
                         }
                     }
                     (PreprocessorTokenType::Defined, UNARY) =>
-                        self.parse_defined_operator(context),
-                    (PreprocessorTokenType::Defined, BINARY) => context.preprocessor_error(PreprocessorError {
+                        self.parse_defined_operator(),
+                    (PreprocessorTokenType::Defined, BINARY) => self.context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
                     ),
-                    (PreprocessorTokenType::Asterisk, UNARY) => context.preprocessor_error(PreprocessorError {
+                    (PreprocessorTokenType::Asterisk, UNARY) => self.context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::DereferenceOperatorNotSupportedInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
                     ),
-                    (PreprocessorTokenType::Ampersand, UNARY) => context.preprocessor_error(PreprocessorError {
+                    (PreprocessorTokenType::Ampersand, UNARY) => self.context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::AddressOfOperatorNotSupportedInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
                     ),
                     (PreprocessorTokenType::Colon, state) => {
                         if state == UNARY {
-                            context.preprocessor_error(PreprocessorError {
+                            self.context.preprocessor_error(PreprocessorError {
                                 error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
                                 source_vectors: token.source_vectors,
                             });
@@ -1504,7 +1496,7 @@ impl Expander<'_, '_, '_> {
                                 | PreprocessorExpressionOperator::OpeningParenthesis => break,
                                 | _ => {
                                     let operator = self.expression_parser.operator_stack.pop().unwrap();
-                                    self.handle_expression_operator(context, operator);
+                                    self.handle_expression_operator(operator);
                                 },
                             }
                         }
@@ -1514,7 +1506,7 @@ impl Expander<'_, '_, '_> {
                             }
                             self.expression_parser.state = UNARY;
                         } else {
-                            context.preprocessor_error(PreprocessorError {
+                            self.context.preprocessor_error(PreprocessorError {
                                 error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
                                 source_vectors: token.source_vectors,
                             });
@@ -1526,10 +1518,13 @@ impl Expander<'_, '_, '_> {
                         PreprocessorTokenType::GreaterThanEquals | PreprocessorTokenType::EqualsEquals | PreprocessorTokenType::ExclamationMarkEquals |
                         PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
                         PreprocessorTokenType::Comma,
-                        UNARY) => context.preprocessor_error(PreprocessorError {
-                            error_type: PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(self.map_operator(token)),
-                            source_vectors: token.source_vectors,
-                        }),
+                        UNARY) => {
+                            let operator = self.map_operator(token);
+                            self.context.preprocessor_error(PreprocessorError {
+                                error_type: PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(operator),
+                                source_vectors: token.source_vectors,
+                            });
+                        },
                     | (PreprocessorTokenType::Plus | PreprocessorTokenType::Minus | PreprocessorTokenType::Asterisk
                     | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
                     PreprocessorTokenType::GreaterThanGreaterThan | PreprocessorTokenType::LessThan | PreprocessorTokenType::LessThanEquals | PreprocessorTokenType::GreaterThan |
@@ -1545,7 +1540,7 @@ impl Expander<'_, '_, '_> {
                                 self.expression_parser.operator_stack.push(op);
                                 break;
                             } else if op.kind.has_precedence_over(token_op) {
-                                self.handle_expression_operator(context, op);
+                                self.handle_expression_operator(op);
                             } else {
                                 self.expression_parser.operator_stack.push(op);
                                 break;
@@ -1555,12 +1550,12 @@ impl Expander<'_, '_, '_> {
                         self.expression_parser.state = UNARY;
                     },
                     (PreprocessorTokenType::Number, UNARY) => {
-                        match self.parse_number(context, token,).kind {
+                        match self.parse_number(token,).kind {
                             | TokenType::Float(_) => {
                                 // C99 §6.10.1p1 admits only integer constant
                                 // expressions. Recover with a zero operand
                                 // so evaluation continues without cascading.
-                                context.preprocessor_error(PreprocessorError {
+                                self.context.preprocessor_error(PreprocessorError {
                                     error_type: PreprocessorErrorType::FloatInsteadOfIntegerInPreprocessorExpression,
                                     source_vectors: token.source_vectors,
                                 });
@@ -1578,36 +1573,36 @@ impl Expander<'_, '_, '_> {
                         }
                         self.expression_parser.state = BINARY;
                     },
-                    (PreprocessorTokenType::Number, BINARY) => context.preprocessor_error(PreprocessorError {
+                    (PreprocessorTokenType::Number, BINARY) => self.context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::NumberInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
                     ),
                     (PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::UnavailableIdentifier | PreprocessorTokenType::UnavailableUniversalIdentifier, UNARY) => {
-                        context.preprocessor_error(PreprocessorError {
-                                    error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(context.diagnostic_text(context.string_cache.at(token.contents))),
+                        self.context.preprocessor_error(PreprocessorError {
+                                    error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(self.context.diagnostic_text(self.context.string_cache.at(token.contents))),
                                     source_vectors: token.source_vectors,
                                 },
                         );
                         self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
                         self.expression_parser.state = BINARY;
                     },
-                    (PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::UnavailableIdentifier | PreprocessorTokenType::UnavailableUniversalIdentifier, BINARY) => context.preprocessor_error(PreprocessorError {
+                    (PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::UnavailableIdentifier | PreprocessorTokenType::UnavailableUniversalIdentifier, BINARY) => self.context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::IdentifierInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
                     ),
                     (PreprocessorTokenType::Character, UNARY) => {
-                        let value = i64::from(self.parse_character(context, token));
+                        let value = i64::from(self.parse_character(token));
                         self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(value));
                         self.expression_parser.state = BINARY;
                     },
-                    (PreprocessorTokenType::Character, BINARY) => context.preprocessor_error(PreprocessorError {
+                    (PreprocessorTokenType::Character, BINARY) => self.context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::CharacterInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,
                         },
                     ),
-                    _ => context.preprocessor_error(PreprocessorError {
+                    _ => self.context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(token.kind),
                             source_vectors: token.source_vectors,
                         },
@@ -1626,7 +1621,7 @@ impl Expander<'_, '_, '_> {
                 | PreprocessorExpressionOperator::LogicalNot => PreprocessorErrorType::LogicalNotWithoutOperand,
                 | other => PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(other),
             };
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type,
                 source_vectors: operator.source_vectors,
             });
@@ -1635,20 +1630,20 @@ impl Expander<'_, '_, '_> {
                 .push(PreprocessorExpressionOperand::Signed(0));
         }
         while let Some(op) = self.expression_parser.operator_stack.pop() {
-            self.handle_expression_operator(context, op);
+            self.handle_expression_operator(op);
         }
         match self.expression_parser.operand_stack.len() {
             | 1 => {
                 let operand = self.expression_parser.operand_stack.pop_isolated().unwrap();
                 self.expression_parser
                     .operand_stack
-                    .emit_faults(context, operand.arithmetic_faults);
-                let extension_policy = match context.configuration.standard() {
-                    | CStandard::C99 => context.configuration.extension_policy(),
+                    .emit_faults(self.context, operand.arithmetic_faults);
+                let extension_policy = match self.context.configuration.standard() {
+                    | CStandard::C99 => self.context.configuration.extension_policy(),
                 };
                 if operand.contains_evaluated_comma && extension_policy != ExtensionPolicy::Allow {
-                    let source_vectors = self.current_location(context);
-                    context.preprocessor_error(PreprocessorError {
+                    let source_vectors = self.current_location();
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
                             extension_policy,
                         ),
@@ -1658,16 +1653,16 @@ impl Expander<'_, '_, '_> {
                 operand.as_signed() != 0
             },
             | 0 => {
-                let source_vectors = self.current_location(context);
-                context.preprocessor_error(PreprocessorError {
+                let source_vectors = self.current_location();
+                self.context.preprocessor_error(PreprocessorError {
                     error_type: on_no_expression_error,
                     source_vectors,
                 });
                 true
             },
             | _ => {
-                let source_vectors = self.current_location(context);
-                context.preprocessor_error(PreprocessorError {
+                let source_vectors = self.current_location();
+                self.context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::ExpectedBinaryOperatorInPreprocessorExpression,
                     source_vectors,
