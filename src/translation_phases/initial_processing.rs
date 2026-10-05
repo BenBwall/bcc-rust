@@ -14,10 +14,14 @@ use super::{
     SourceVector,
     SourceVectors,
 };
-use crate::diagnostics::{
-    Diagnostic,
-    Explanation,
-    ToDiagnostic,
+use crate::{
+    diagnostics::{
+        Diagnostic,
+        Explanation,
+        ToDiagnostic,
+        format_in,
+    },
+    util::bump::Bump,
 };
 
 #[derive(Debug, Error)]
@@ -29,9 +33,15 @@ pub(crate) enum InitialProcessorError {
 }
 
 impl ToDiagnostic for InitialProcessorError {
-    fn to_diagnostic(&self, _context: &Context<'_>, source: SourceVectors) -> Diagnostic {
+    fn diagnostic_in<'d>(
+        &self,
+        _context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
+        let message = format_in!(arena, "{self}");
         match self {
-            | Self::EscapedFinalNewline(_) => Explanation::new(self.to_string())
+            | Self::EscapedFinalNewline(_) => Explanation::new(arena, message)
                 .label("this splice removes the final physical newline")
                 .note(
                     "C99 5.1.1.2p2: the final newline shall not be immediately preceded by a \
@@ -39,7 +49,7 @@ impl ToDiagnostic for InitialProcessorError {
                 )
                 .help("add an unescaped newline at the end of the file")
                 .at(self.severity(), source),
-            | Self::MissingFinalNewline(_) => Explanation::new(self.to_string())
+            | Self::MissingFinalNewline(_) => Explanation::new(arena, message)
                 .label("the file ends without a newline")
                 .note("C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character")
                 .help("add a newline at the end of the file")

@@ -602,6 +602,13 @@ impl<'a> ArenaString<'a> {
         // SAFETY: construction and mutation only append valid UTF-8 sequences.
         unsafe { std::str::from_utf8_unchecked(&self.bytes) }
     }
+
+    /// Finishes the string, leaving its text in the arena.
+    pub(crate) fn into_str(self) -> &'a str {
+        let bytes = self.bytes.leak();
+        // SAFETY: construction and mutation only append valid UTF-8 sequences.
+        unsafe { std::str::from_utf8_unchecked(bytes) }
+    }
 }
 
 impl Deref for ArenaString<'_> {

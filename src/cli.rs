@@ -199,7 +199,7 @@ fn print_preprocessor_output<'tu>(
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
 ) {
-    let mut reporter = DiagnosticReporter::new(RenderColor::for_stderr());
+    let mut reporter = DiagnosticReporter::new(context.tu_arena(), RenderColor::for_stderr());
     let stderr = &mut io::stderr();
     let items = with_preprocessor(
         context,
@@ -303,7 +303,7 @@ fn print_parser_output<'tu>(
         quote_include,
         system_include,
     );
-    let mut reporter = DiagnosticReporter::new(RenderColor::for_stderr());
+    let mut reporter = DiagnosticReporter::new(context.tu_arena(), RenderColor::for_stderr());
     let stderr = &mut io::stderr();
     expect_stderr(reporter.report_pending(context, stderr));
 
@@ -356,7 +356,7 @@ pub fn compile_file_measured(
     });
     let mut result = Ok(());
     measure(CompileStep::Report, &mut || {
-        let mut reporter = DiagnosticReporter::new(RenderColor::Plain);
+        let mut reporter = DiagnosticReporter::new(&tu, RenderColor::Plain);
         result = reporter
             .report_pending(&mut context, out)
             .and_then(|()| reporter.finish(&context, out));
@@ -393,9 +393,11 @@ fn render_raw_syntax(unit: &ParsedTranslationUnit<'_>) -> String {
 /// them, otherwise into a lexing or preprocessing error at that place; a
 /// preprocessing error into the preprocessing error just before it. The
 /// parser and the preprocessor are considered separately.
-struct DiagnosticReporter {
+struct DiagnosticReporter<'tu> {
+    /// Pending diagnostics are built here and live until they are flushed.
+    diagnostics:  &'tu Bump,
     renderer:     Renderer,
-    pending:      Vec<PendingDiagnostic>,
+    pending:      Vec<PendingDiagnostic<'tu>>,
     /// The parser diagnostic reported last: where it was folded or stored,
     /// and the input the parser had consumed by then.
     last_parser:  Option<(usize, usize)>,
@@ -408,8 +410,8 @@ struct DiagnosticReporter {
 }
 
 /// One diagnostic awaiting rendering, with any later errors folded in.
-struct PendingDiagnostic {
-    diagnostic: Diagnostic,
+struct PendingDiagnostic<'tu> {
+    diagnostic: Diagnostic<'tu>,
     location: Vec<SourceVector>,
     ordering_location: Option<(u32, u32)>,
     /// Whether errors at the same place may be folded into this one.
@@ -419,7 +421,7 @@ struct PendingDiagnostic {
     preserve_empty_translation_unit: bool,
 }
 
-impl PendingDiagnostic {
+impl PendingDiagnostic<'_> {
     fn absorbs(&self, location: &[SourceVector]) -> bool {
         self.foldable
             && self.diagnostic.severity == ErrorSeverity::Error
@@ -427,22 +429,23 @@ impl PendingDiagnostic {
     }
 }
 
-impl DiagnosticReporter {
-    fn new(color: RenderColor) -> Self {
+impl<'tu> DiagnosticReporter<'tu> {
+    fn new(diagnostics: &'tu Bump, color: RenderColor) -> Self {
         Self {
-            renderer:     Renderer::new(color),
-            pending:      Vec::new(),
-            last_parser:  None,
-            last_other:   None,
+            diagnostics,
+            renderer: Renderer::new(color),
+            pending: Vec::new(),
+            last_parser: None,
+            last_other: None,
             other_errors: HashMap::default(),
-            errors:       0,
-            warnings:     0,
+            errors: 0,
+            warnings: 0,
         }
     }
 
     fn report(&mut self, error: &TranslationError<'_>, context: &mut Context<'_>) {
         let source = error.source_vectors(context);
-        let diagnostic = error.to_diagnostic(context, source);
+        let diagnostic = error.diagnostic_in(context, source, self.diagnostics);
         let location = context.get_source_vectors(source).to_vec();
         let ordering_location = match error {
             | TranslationError::Parsing(error) => error.ordering_location,
@@ -546,7 +549,7 @@ impl DiagnosticReporter {
                 | ErrorSeverity::Warning => self.warnings += 1,
                 | ErrorSeverity::Note => {},
             }
-            out.write_all(self.renderer.render(&diagnostic, context).as_bytes())?;
+            out.write_all(self.renderer.render_text(&diagnostic, context).as_bytes())?;
         }
         Ok(())
     }
@@ -556,7 +559,7 @@ impl DiagnosticReporter {
         let counts: Vec<String> = [(self.errors, "error"), (self.warnings, "warning")]
             .into_iter()
             .filter(|&(count, _)| count > 0)
-            .map(|(count, noun)| count_of(count, noun))
+            .map(|(count, noun)| count_of(count, noun).to_string())
             .collect();
         if !counts.is_empty() {
             writeln!(out, "{} generated.", counts.join(" and "))?;

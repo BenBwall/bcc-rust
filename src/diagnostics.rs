@@ -16,7 +16,11 @@
 //! representation (arena indices, interned-string handles, Rust `Debug`
 //! output) may appear in a diagnostic.
 
-use std::fmt::Write as _;
+use std::fmt::{
+    self,
+    Display,
+    Write as _,
+};
 
 use owo_colors::{
     OwoColorize,
@@ -45,56 +49,69 @@ const TAB_WIDTH: usize = 4;
 /// Longest token spelling quoted inline in a message before it is shortened.
 const MAX_QUOTED_SPELLING: usize = 40;
 
-/// A diagnostic ready to be rendered.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Diagnostic {
+/// Formats text into an arena, like `format!` into a `String`; the result
+/// borrows the arena. Text without arguments is returned without copying.
+macro_rules! format_in {
+    ($arena:expr, $($arguments:tt)*) => {
+        $crate::diagnostics::format_arguments_in($arena, format_args!($($arguments)*))
+    };
+}
+pub(crate) use format_in;
+
+/// The function behind [`format_in!`].
+pub(crate) fn format_arguments_in<'d>(arena: &'d Bump, arguments: fmt::Arguments<'_>) -> &'d str {
+    if let Some(text) = arguments.as_str() {
+        return text;
+    }
+    let mut text = ArenaString::new_in(arena);
+    let _ = text.write_fmt(arguments);
+    text.into_str()
+}
+
+/// A diagnostic ready to be rendered. Its text and labels live in the arena
+/// it was built in.
+#[derive(Debug)]
+pub(crate) struct Diagnostic<'d> {
     pub(crate) severity: ErrorSeverity,
-    pub(crate) message:  String,
-    labels:              Vec<Label>,
-    notes:               Vec<String>,
-    help:                Vec<String>,
+    pub(crate) message:  &'d str,
+    labels:              ArenaVec<'d, Label<'d>>,
+    notes:               ArenaVec<'d, &'d str>,
+    help:                ArenaVec<'d, &'d str>,
 }
 
 /// A source range the diagnostic points at, optionally with a short message
 /// printed under it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Label {
-    source:  LabelSource,
-    message: Option<String>,
+#[derive(Debug)]
+struct Label<'d> {
+    source:  LabelSource<'d>,
+    message: Option<&'d str>,
     primary: bool,
 }
 
 /// Where a label points: a provenance range, or explicit segments when only
 /// part of a range is relevant.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum LabelSource {
+#[derive(Debug, Clone, Copy)]
+enum LabelSource<'d> {
     Range(SourceVectors),
-    Segments(Vec<SourceVector>),
+    Segments(&'d [SourceVector]),
 }
 
-impl LabelSource {
-    fn vectors<'a>(&'a self, context: &'a Context<'_>) -> &'a [SourceVector] {
+impl<'d> LabelSource<'d> {
+    fn vectors<'a>(self, context: &'a Context<'_>) -> &'a [SourceVector]
+    where
+        'd: 'a,
+    {
         match self {
-            | Self::Range(source) => context.get_source_vectors(*source),
+            | Self::Range(source) => context.get_source_vectors(source),
             | Self::Segments(segments) => segments,
         }
     }
 }
 
-impl Diagnostic {
-    pub(crate) fn new(severity: ErrorSeverity, message: impl Into<String>) -> Self {
-        Self {
-            severity,
-            message: message.into(),
-            labels: Vec::new(),
-            notes: Vec::new(),
-            help: Vec::new(),
-        }
-    }
-
+impl<'d> Diagnostic<'d> {
     /// Adds the range the diagnostic is about. Its first location becomes the
     /// `-->` location.
-    pub(crate) fn primary(mut self, source: SourceVectors, label: Option<String>) -> Self {
+    pub(crate) fn primary(mut self, source: SourceVectors, label: Option<&'d str>) -> Self {
         self.labels.push(Label {
             source:  LabelSource::Range(source),
             message: label,
@@ -104,10 +121,10 @@ impl Diagnostic {
     }
 
     /// Adds a related range, drawn with `-` instead of `^`.
-    pub(crate) fn secondary(mut self, source: SourceVectors, label: impl Into<String>) -> Self {
+    pub(crate) fn secondary(mut self, source: SourceVectors, label: &'d str) -> Self {
         self.labels.push(Label {
             source:  LabelSource::Range(source),
-            message: Some(label.into()),
+            message: Some(label),
             primary: false,
         });
         self
@@ -130,12 +147,12 @@ impl Diagnostic {
     /// Adds a related range given as explicit segments.
     pub(crate) fn secondary_segments(
         mut self,
-        segments: Vec<SourceVector>,
-        label: impl Into<String>,
+        segments: &'d [SourceVector],
+        label: &'d str,
     ) -> Self {
         self.labels.push(Label {
             source:  LabelSource::Segments(segments),
-            message: Some(label.into()),
+            message: Some(label),
             primary: false,
         });
         self
@@ -147,66 +164,183 @@ impl Diagnostic {
 /// `source` is the error's primary range, already materialized by
 /// [`GetSourceVectors`](crate::translation_phases::GetSourceVectors).
 pub(crate) trait ToDiagnostic {
-    fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic;
+    /// Builds the diagnostic in `arena`.
+    fn diagnostic_in<'d>(
+        &self,
+        context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d>;
+
+    /// The diagnostic with owned text, for tests to inspect.
+    #[cfg(test)]
+    fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> OwnedDiagnostic {
+        self.diagnostic_in(context, source, context.tu_arena())
+            .to_owned_diagnostic()
+    }
 }
 
 /// The location-independent part of a diagnostic: what went wrong, a short
-/// label for the primary range, and any notes and help.
+/// label for the primary range, and any notes and help, all in one arena.
+pub(crate) struct Explanation<'d> {
+    arena:              &'d Bump,
+    pub(crate) message: &'d str,
+    pub(crate) label:   Option<&'d str>,
+    pub(crate) notes:   ArenaVec<'d, &'d str>,
+    pub(crate) help:    ArenaVec<'d, &'d str>,
+}
+
+impl<'d> Explanation<'d> {
+    pub(crate) fn new(arena: &'d Bump, message: &'d str) -> Self {
+        Self {
+            arena,
+            message,
+            label: None,
+            notes: ArenaVec::new_in(arena),
+            help: ArenaVec::new_in(arena),
+        }
+    }
+
+    pub(crate) fn label(mut self, label: &'d str) -> Self {
+        self.label = Some(label);
+        self
+    }
+
+    pub(crate) fn note(mut self, note: &'d str) -> Self {
+        self.notes.push(note);
+        self
+    }
+
+    pub(crate) fn help(mut self, help: &'d str) -> Self {
+        self.help.push(help);
+        self
+    }
+
+    /// Attaches the explanation to the source it is about.
+    pub(crate) fn at(self, severity: ErrorSeverity, source: SourceVectors) -> Diagnostic<'d> {
+        Diagnostic {
+            severity,
+            message: self.message,
+            labels: ArenaVec::new_in(self.arena),
+            notes: self.notes,
+            help: self.help,
+        }
+        .primary(source, self.label)
+    }
+
+    /// The explanation with owned text, for tests to inspect.
+    #[cfg(test)]
+    pub(crate) fn to_owned_explanation(&self) -> OwnedExplanation {
+        OwnedExplanation {
+            message: self.message.to_owned(),
+            label:   self.label.map(str::to_owned),
+            notes:   self.notes.iter().map(|&note| note.to_owned()).collect(),
+            help:    self.help.iter().map(|&help| help.to_owned()).collect(),
+        }
+    }
+}
+
+/// An [`Explanation`] with owned text, for tests.
+#[cfg(test)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct Explanation {
+pub(crate) struct OwnedExplanation {
     pub(crate) message: String,
     pub(crate) label:   Option<String>,
     pub(crate) notes:   Vec<String>,
     pub(crate) help:    Vec<String>,
 }
 
-impl Explanation {
-    pub(crate) fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            ..Self::default()
+/// A [`Diagnostic`] with owned text, for tests.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnedDiagnostic {
+    pub(crate) severity: ErrorSeverity,
+    pub(crate) message:  String,
+    labels:              Vec<(OwnedLabelSource, Option<String>, bool)>,
+    notes:               Vec<String>,
+    help:                Vec<String>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OwnedLabelSource {
+    Range(SourceVectors),
+    Segments(Vec<SourceVector>),
+}
+
+#[cfg(test)]
+impl Diagnostic<'_> {
+    pub(crate) fn to_owned_diagnostic(&self) -> OwnedDiagnostic {
+        OwnedDiagnostic {
+            severity: self.severity,
+            message:  self.message.to_owned(),
+            labels:   self
+                .labels
+                .iter()
+                .map(|label| {
+                    let source = match label.source {
+                        | LabelSource::Range(source) => OwnedLabelSource::Range(source),
+                        | LabelSource::Segments(segments) =>
+                            OwnedLabelSource::Segments(segments.to_vec()),
+                    };
+                    (source, label.message.map(str::to_owned), label.primary)
+                })
+                .collect(),
+            notes:    self.notes.iter().map(|&note| note.to_owned()).collect(),
+            help:     self.help.iter().map(|&help| help.to_owned()).collect(),
         }
     }
+}
 
-    pub(crate) fn label(mut self, label: impl Into<String>) -> Self {
-        self.label = Some(label.into());
-        self
-    }
-
-    pub(crate) fn note(mut self, note: impl Into<String>) -> Self {
-        self.notes.push(note.into());
-        self
-    }
-
-    pub(crate) fn help(mut self, help: impl Into<String>) -> Self {
-        self.help.push(help.into());
-        self
-    }
-
-    /// Attaches the explanation to the source it is about.
-    pub(crate) fn at(self, severity: ErrorSeverity, source: SourceVectors) -> Diagnostic {
-        let mut diagnostic = Diagnostic::new(severity, self.message).primary(source, self.label);
-        diagnostic.notes = self.notes;
-        diagnostic.help = self.help;
-        diagnostic
+#[cfg(test)]
+impl OwnedDiagnostic {
+    /// The diagnostic, borrowing this one's text, with its lists in `arena`.
+    fn borrowed<'d>(&'d self, arena: &'d Bump) -> Diagnostic<'d> {
+        let mut labels = ArenaVec::new_in(arena);
+        labels.extend(self.labels.iter().map(|(source, message, primary)| Label {
+            source:  match source {
+                | OwnedLabelSource::Range(source) => LabelSource::Range(*source),
+                | OwnedLabelSource::Segments(segments) => LabelSource::Segments(segments),
+            },
+            message: message.as_deref(),
+            primary: *primary,
+        }));
+        let mut notes = ArenaVec::new_in(arena);
+        notes.extend(self.notes.iter().map(String::as_str));
+        let mut help = ArenaVec::new_in(arena);
+        help.extend(self.help.iter().map(String::as_str));
+        Diagnostic {
+            severity: self.severity,
+            message: &self.message,
+            labels,
+            notes,
+            help,
+        }
     }
 }
 
 /// Formats `count noun`, pluralizing the noun with `s` when needed.
-pub(crate) fn count_of(count: usize, noun: &str) -> String {
-    if count == 1 {
-        format!("{count} {noun}")
-    } else {
-        format!("{count} {noun}s")
-    }
+pub(crate) fn count_of(count: usize, noun: &str) -> impl Display {
+    fmt::from_fn(move |f| {
+        if count == 1 {
+            write!(f, "{count} {noun}")
+        } else {
+            write!(f, "{count} {noun}s")
+        }
+    })
 }
 
 /// Returns the candidate closest to `word` when it is a plausible typo
 /// (at most two single-character edits, and fewer than the word's length).
-pub(crate) fn closest_match<'a>(word: &str, candidates: &[&'a str]) -> Option<&'a str> {
+/// The comparison works in `scratch`.
+pub(crate) fn closest_match<'a>(
+    scratch: &Bump,
+    word: &str,
+    candidates: &[&'a str],
+) -> Option<&'a str> {
     let distance = |a: &str, b: &str| {
-        let b: Vec<char> = b.chars().collect();
-        let mut row: Vec<usize> = (0..=b.len()).collect();
+        let b = scratch.alloc_slice_fill_iter(b.chars());
+        let row = scratch.alloc_slice_fill_iter(0..=b.len());
         for (i, ca) in a.chars().enumerate() {
             let mut diagonal = row[0];
             row[0] = i + 1;
@@ -229,14 +363,17 @@ pub(crate) fn closest_match<'a>(word: &str, candidates: &[&'a str]) -> Option<&'
 }
 
 /// Quotes a token spelling for use inside a message, shortening long ones.
-pub(crate) fn quote_spelling(spelling: &str) -> String {
+pub(crate) fn quote_spelling(spelling: &str) -> impl Display {
     let spelling = spelling.trim_end_matches('\0');
-    if spelling.chars().count() <= MAX_QUOTED_SPELLING {
-        format!("`{spelling}`")
-    } else {
-        let prefix: String = spelling.chars().take(MAX_QUOTED_SPELLING - 1).collect();
-        format!("`{prefix}…`")
-    }
+    fmt::from_fn(move |f| {
+        match spelling.char_indices().nth(MAX_QUOTED_SPELLING - 1) {
+            // Longer than the limit: keep the characters before the last one
+            // that would fit.
+            | Some((cut, _)) if spelling.chars().nth(MAX_QUOTED_SPELLING).is_some() =>
+                write!(f, "`{}…`", &spelling[..cut]),
+            | _ => write!(f, "`{spelling}`"),
+        }
+    })
 }
 
 /// Spells a string as C source text inside the given quotes, escaping
@@ -329,8 +466,8 @@ struct Painted<'a> {
     color: ColorChoice,
 }
 
-impl std::fmt::Display for Painted<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Painted<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.color {
             | ColorChoice::Plain => f.write_str(self.text),
             | ColorChoice::Ansi => write!(f, "{}", self.text.style(self.style)),
@@ -348,6 +485,8 @@ struct Mark<'a> {
     end:     usize,
     primary: bool,
     label:   Option<&'a str>,
+    /// Where the mark was made among the diagnostic's marks.
+    order:   usize,
 }
 
 impl Renderer {
@@ -409,14 +548,14 @@ impl Renderer {
     }
 
     fn marks<'a, 'scratch>(
-        diagnostic: &'a Diagnostic,
+        diagnostic: &'a Diagnostic<'_>,
         context: &Context<'_>,
         scratch: &'scratch Bump,
         line_starts: &mut ArenaMap<'scratch, u32, ArenaVec<'scratch, usize>>,
     ) -> ArenaVec<'scratch, Mark<'a>> {
         let mut marks: ArenaVec<'_, Mark<'a>> = ArenaVec::new_in(scratch);
         for label in &diagnostic.labels {
-            let mut label_text = label.message.as_deref();
+            let mut label_text = label.message;
             for vector in label.source.vectors(context) {
                 let file = vector.source_file_index;
                 let Some(text) = context.source_text(file) else {
@@ -445,15 +584,33 @@ impl Renderer {
                     end,
                     primary: label.primary,
                     label: label_text.take(),
+                    order: marks.len(),
                 });
             }
         }
         marks
     }
 
-    /// Renders one diagnostic, ending with a blank line.
-    pub(crate) fn render(&mut self, diagnostic: &Diagnostic, context: &Context<'_>) -> String {
+    /// Renders one diagnostic, ending with a blank line. The text lives in
+    /// the renderer's scratch arena until the next diagnostic is rendered.
+    pub(crate) fn render_text(
+        &mut self,
+        diagnostic: &Diagnostic<'_>,
+        context: &Context<'_>,
+    ) -> &str {
         self.scratch.reset();
+        self.render_in_scratch(diagnostic, context)
+    }
+
+    /// Renders a diagnostic with owned text, for tests.
+    #[cfg(test)]
+    pub(crate) fn render(&mut self, diagnostic: &OwnedDiagnostic, context: &Context<'_>) -> String {
+        self.scratch.reset();
+        let diagnostic = diagnostic.borrowed(&self.scratch);
+        self.render_in_scratch(&diagnostic, context).to_owned()
+    }
+
+    fn render_in_scratch(&self, diagnostic: &Diagnostic<'_>, context: &Context<'_>) -> &str {
         let scratch = &self.scratch;
         let mut line_starts = ArenaMap::with_hasher_in(FxBuildHasher, scratch);
         let mut out = ArenaString::new_in(scratch);
@@ -467,7 +624,7 @@ impl Renderer {
             out,
             "{} {}",
             self.paint(severity, severity_style),
-            self.paint(&diagnostic.message, Style::new().bold()),
+            self.paint(diagnostic.message, Style::new().bold()),
         );
 
         let marks = Self::marks(diagnostic, context, scratch, &mut line_starts);
@@ -535,7 +692,7 @@ impl Renderer {
                 &marks,
                 (file, text, starts),
                 diagnostic.severity,
-                gutter_width,
+                (gutter_width, pad.as_str()),
                 scratch,
             );
         }
@@ -564,7 +721,7 @@ impl Renderer {
             }
         }
         out.push('\n');
-        out.as_str().to_owned()
+        out.into_str()
     }
 
     fn render_file_lines(
@@ -573,16 +730,18 @@ impl Renderer {
         marks: &[Mark<'_>],
         (file, text, starts): (u32, &str, &[usize]),
         severity: ErrorSeverity,
-        gutter_width: usize,
+        (gutter_width, pad): (usize, &str),
         scratch: &Bump,
     ) {
-        let pad = " ".repeat(gutter_width);
         let bar = self.paint("|", Self::gutter_style());
         // Sort once and walk the marks line by line: rescanning every mark
         // for each line made a label spanning many lines quadratic.
         let mut file_marks = ArenaVec::new_in(scratch);
         file_marks.extend(marks.iter().filter(|mark| mark.file == file));
-        file_marks.sort_by_key(|mark| (mark.line, mark.start, !mark.primary));
+        // Equal marks keep the order they were made in. An unstable sort with
+        // that tiebreak needs no buffer, where a stable sort of many marks
+        // would allocate one.
+        file_marks.sort_unstable_by_key(|mark| (mark.line, mark.start, !mark.primary, mark.order));
         let line_text = |line: usize| -> &str {
             let start = starts.get(line - 1).copied().unwrap_or(text.len());
             let end = starts
@@ -788,7 +947,8 @@ mod tests {
         with_context(text, |context, file| {
             let primary = span(context, file, text, "\"abc\"");
             let secondary = span(context, file, text, "x");
-            let diagnostic = Explanation::new("expected `;`, found string literal")
+            let arena = Bump::new();
+            let diagnostic = Explanation::new(&arena, "expected `;`, found string literal")
                 .label("expected `;`")
                 .note("a declaration ends with `;`")
                 .help("add `;` after `x`")
@@ -796,7 +956,7 @@ mod tests {
                 .secondary(secondary, "declarator");
 
             let mut renderer = Renderer::new(ColorChoice::Plain);
-            let actual = renderer.render(&diagnostic, context);
+            let actual = renderer.render_text(&diagnostic, context).to_owned();
 
             assert_eq!(
                 actual,
@@ -804,7 +964,7 @@ mod tests {
                  \"abc\";\n  |     - ^^^^^ expected `;`\n  |     |\n  |     declarator\n  |\n  = \
                  note: a declaration ends with `;`\n  = help: add `;` after `x`\n\n"
             );
-            assert_eq!(renderer.render(&diagnostic, context), actual);
+            assert_eq!(renderer.render_text(&diagnostic, context), actual);
         });
     }
 
@@ -813,13 +973,15 @@ mod tests {
         let mut renderer = Renderer::new(ColorChoice::Plain);
         with_context("first line", |context, file| {
             let source = span(context, file, "first line", "first");
-            let diagnostic = Explanation::new("first").at(ErrorSeverity::Error, source);
-            drop(renderer.render(&diagnostic, context));
+            let arena = Bump::new();
+            let diagnostic = Explanation::new(&arena, "first").at(ErrorSeverity::Error, source);
+            _ = renderer.render_text(&diagnostic, context);
         });
         with_context("x\ny\n", |context, file| {
             let source = span(context, file, "x\ny\n", "y");
-            let diagnostic = Explanation::new("second").at(ErrorSeverity::Error, source);
-            let output = renderer.render(&diagnostic, context);
+            let arena = Bump::new();
+            let diagnostic = Explanation::new(&arena, "second").at(ErrorSeverity::Error, source);
+            let output = renderer.render_text(&diagnostic, context);
             assert!(output.contains("2 | y"), "{output}");
         });
     }
@@ -837,12 +999,14 @@ mod tests {
                 file,
                 0,
             );
-            let diagnostic =
-                Explanation::new("no newline at end of file").at(ErrorSeverity::Warning, end);
+            let arena = Bump::new();
+            let diagnostic = Explanation::new(&arena, "no newline at end of file")
+                .at(ErrorSeverity::Warning, end);
 
-            let rendered = Renderer::new(ColorChoice::Plain).render(&diagnostic, context);
+            let mut renderer = Renderer::new(ColorChoice::Plain);
+            let output = renderer.render_text(&diagnostic, context);
 
-            assert!(rendered.contains("1 | int x\n  |      ^\n"), "{rendered}");
+            assert!(output.contains("1 | int x\n  |      ^\n"), "{output}");
         });
     }
 
@@ -850,6 +1014,14 @@ mod tests {
     fn quoted_strings_use_c_escapes() {
         assert_eq!(c_quoted("L", '"', "a\n\"\u{1b}"), "L\"a\\n\\\"\\033\"");
         assert_eq!(c_quoted("", '\'', "'"), "'\\''");
-        assert_eq!(quote_spelling("12\0"), "`12`");
+        assert_eq!(quote_spelling("12\0").to_string(), "`12`");
+        let long = "a".repeat(MAX_QUOTED_SPELLING);
+        assert_eq!(quote_spelling(&long).to_string(), format!("`{long}`"));
+        assert_eq!(
+            quote_spelling(&format!("{long}é")).to_string(),
+            format!("`{}…`", &long[1..])
+        );
+        assert_eq!(count_of(1, "error").to_string(), "1 error");
+        assert_eq!(count_of(2, "error").to_string(), "2 errors");
     }
 }

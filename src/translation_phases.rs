@@ -34,9 +34,12 @@ use self::{
     preprocessing::PreprocessorError,
     preprocessor_tokenizer::PreprocessorTokenizerError,
 };
-use crate::diagnostics::{
-    Diagnostic,
-    ToDiagnostic,
+use crate::{
+    diagnostics::{
+        Diagnostic,
+        ToDiagnostic,
+    },
+    util::bump::Bump,
 };
 
 #[derive(Error, Debug)]
@@ -78,12 +81,17 @@ impl GetSeverity for TranslationError<'_> {
 }
 
 impl ToDiagnostic for TranslationError<'_> {
-    fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic {
+    fn diagnostic_in<'d>(
+        &self,
+        context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
         match self {
-            | Self::InitialProcessing(error) => error.to_diagnostic(context, source),
-            | Self::PreprocessorTokenizining(error) => error.to_diagnostic(context, source),
-            | Self::Preprocessing(error) => error.to_diagnostic(context, source),
-            | Self::Parsing(error) => error.to_diagnostic(context, source),
+            | Self::InitialProcessing(error) => error.diagnostic_in(context, source, arena),
+            | Self::PreprocessorTokenizining(error) => error.diagnostic_in(context, source, arena),
+            | Self::Preprocessing(error) => error.diagnostic_in(context, source, arena),
+            | Self::Parsing(error) => error.diagnostic_in(context, source, arena),
         }
     }
 }

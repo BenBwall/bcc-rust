@@ -5,7 +5,10 @@ mod tests;
 mod token_source;
 pub(crate) mod ucn;
 
-use std::fmt::Display;
+use std::fmt::{
+    self,
+    Display,
+};
 
 pub(crate) use batch::{
     LogicalCharacter,
@@ -32,9 +35,13 @@ use crate::{
         Diagnostic,
         Explanation,
         ToDiagnostic,
+        format_in,
         quote_spelling,
     },
-    util::string_cache::StringCacheId,
+    util::{
+        bump::Bump,
+        string_cache::StringCacheId,
+    },
 };
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -49,36 +56,37 @@ pub(crate) enum PreprocessorTokenizerErrorType {
 
 impl PreprocessorTokenizerErrorType {
     /// Describes the error; `spelling` is the source text it points at.
-    pub(crate) fn explain(self, spelling: Option<&str>) -> Explanation {
+    pub(crate) fn explain_in<'d>(self, arena: &'d Bump, spelling: Option<&str>) -> Explanation<'d> {
+        let new = |message: &'d str| Explanation::new(arena, message);
         match self {
             | Self::UnknownToken => {
                 let character = spelling.and_then(|spelling| spelling.chars().next());
-                let quoted = match character {
-                    | Some('`') => "'`'".to_owned(),
-                    | Some(c) if c.is_control() => format!("U+{:04X}", u32::from(c)),
-                    | Some(c) => format!("`{c}`"),
-                    | None => "character".to_owned(),
-                };
-                Explanation::new(format!("unexpected character {quoted} in source"))
+                let quoted = fmt::from_fn(|f| match character {
+                    | Some('`') => f.write_str("'`'"),
+                    | Some(c) if c.is_control() => write!(f, "U+{:04X}", u32::from(c)),
+                    | Some(c) => write!(f, "`{c}`"),
+                    | None => f.write_str("character"),
+                });
+                new(format_in!(arena, "unexpected character {quoted} in source"))
                     .label("no C token starts with this character")
                     .note(
                         "C99 §6.4: a preprocessing token that survives replacement must be \
                          convertible to a C token",
                     )
             },
-            | Self::UnterminatedBlockComment => Explanation::new("unterminated block comment")
+            | Self::UnterminatedBlockComment => new("unterminated block comment")
                 .label("the file ends before the closing `*/`")
                 .note("C99 §5.1.1.2p3: a source file shall not end in a partial comment")
                 .help("close the comment with `*/`"),
-            | Self::UnterminatedCharacter => Explanation::new("unterminated character constant")
-                .label("the file ends before the closing `'`"),
-            | Self::UnterminatedString => Explanation::new("unterminated string literal")
-                .label("the file ends before the closing `\"`"),
-            | Self::NewlineInCharacter => Explanation::new("unterminated character constant")
+            | Self::UnterminatedCharacter =>
+                new("unterminated character constant").label("the file ends before the closing `'`"),
+            | Self::UnterminatedString =>
+                new("unterminated string literal").label("the file ends before the closing `\"`"),
+            | Self::NewlineInCharacter => new("unterminated character constant")
                 .label("the line ends before the closing `'`")
                 .note("C99 §6.4.4.4: a character constant cannot span lines")
                 .help("write `\\n` for a newline character"),
-            | Self::NewlineInString => Explanation::new("unterminated string literal")
+            | Self::NewlineInString => new("unterminated string literal")
                 .label("the line ends before the closing `\"`")
                 .note("C99 §6.4.5: a string literal cannot span lines")
                 .help(
@@ -90,8 +98,9 @@ impl PreprocessorTokenizerErrorType {
 }
 
 impl Display for PreprocessorTokenizerErrorType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.explain(None).message)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let arena = Bump::new();
+        f.write_str(self.explain_in(&arena, None).message)
     }
 }
 
@@ -176,7 +185,7 @@ impl PreprocessorTokenType {
 
     /// Describes a found token, quoting its spelling when the kind alone
     /// does not say what was written.
-    pub(crate) fn found(self, spelling: Option<&str>) -> String {
+    pub(crate) fn found(self, spelling: Option<&str>) -> impl Display {
         let spelled = matches!(
             self,
             Self::Identifier
@@ -187,11 +196,11 @@ impl PreprocessorTokenType {
                 | Self::Character
                 | Self::Other
         );
-        match spelling {
+        fmt::from_fn(move |f| match spelling {
             | Some(spelling) if spelled && !spelling.is_empty() =>
-                format!("{} {}", self.description(), quote_spelling(spelling)),
-            | _ => self.description().to_owned(),
-        }
+                write!(f, "{} {}", self.description(), quote_spelling(spelling)),
+            | _ => f.write_str(self.description()),
+        })
     }
 }
 
@@ -258,20 +267,25 @@ impl GetSeverity for PreprocessorTokenizerError {
 }
 
 impl Display for PreprocessorTokenizerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.error_type)
     }
 }
 
 impl ToDiagnostic for PreprocessorTokenizerError {
-    fn to_diagnostic(&self, context: &Context<'_>, source: SourceVectors) -> Diagnostic {
+    fn diagnostic_in<'d>(
+        &self,
+        context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
         let mut buffer = [0; 4];
         let spelling = match self.character {
             | Some(character) => Some(&*character.encode_utf8(&mut buffer)),
             | None => context.source_spelling(source),
         };
         self.error_type
-            .explain(spelling)
+            .explain_in(arena, spelling)
             .at(self.severity(), source)
     }
 }
