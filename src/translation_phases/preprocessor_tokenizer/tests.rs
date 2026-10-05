@@ -384,7 +384,7 @@ fn preprocess(source: &str, path: &Path, include_directory: Option<&Path>) -> Ve
         drain_diagnostics(context, &mut events);
         events.push(format!(
             "{} {:?}",
-            describe_token(token, context),
+            describe_token(token, context, &crate::util::bump::Bump::new()),
             context.get_source_vectors(token.source_vectors)
         ));
     });

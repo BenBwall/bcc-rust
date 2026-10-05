@@ -35,7 +35,7 @@ use crate::{
 fn token_description(token: Token, context: &Context<'_>) -> String {
     format!(
         "{} {:?}",
-        describe_token(token, context),
+        describe_token(token, context, &crate::util::bump::Bump::new()),
         context.get_source_vectors(token.source_vectors),
     )
 }

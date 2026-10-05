@@ -6,6 +6,7 @@ use std::{
         split_paths,
         var_os,
     },
+    fmt::Write as _,
     io::{
         self,
         Write,
@@ -58,6 +59,7 @@ use crate::{
     },
     util::bump::{
         ArenaMap,
+        ArenaString,
         ArenaVec,
         Bump,
     },
@@ -207,6 +209,7 @@ fn print_preprocessor_output<'tu>(
         RenderColor::for_stderr(),
     );
     let stderr = &mut io::stderr();
+    let mut scratch = Bump::new();
     let items = with_preprocessor(
         context,
         source_filename,
@@ -219,7 +222,8 @@ fn print_preprocessor_output<'tu>(
         match item {
             | Ok(token) => {
                 expect_stderr(reporter.flush(context, stderr));
-                eprintln!("{}", describe_token(token, context));
+                scratch.reset();
+                eprintln!("{}", describe_token(token, context, &scratch));
             },
             | Err(error) => reporter.report(&error, context),
         }
@@ -235,31 +239,51 @@ fn expect_stderr(result: io::Result<()>) {
 }
 
 /// One line per token: its location, kind, source spelling, and for
-/// constants the value and type the preprocessor assigned.
-pub(crate) fn describe_token(token: Token, context: &Context<'_>) -> String {
+/// constants the value and type the preprocessor assigned. The line is
+/// written in `scratch`.
+pub(crate) fn describe_token<'a>(
+    token: Token,
+    context: &Context<'_>,
+    scratch: &'a Bump,
+) -> &'a str {
     let spelling = context
         .string_cache
         .at(token.contents)
         .trim_end_matches('\0');
-    let description = match token.kind {
-        | TokenType::Identifier => format!("identifier `{spelling}`"),
-        | TokenType::Keyword(keyword) => format!("keyword `{}`", keyword.spelling()),
-        | TokenType::Operator(operator) => format!("punctuator `{}`", operator.spelling()),
-        | TokenType::String(StringTokenType::String(contents)) => format!(
-            "string literal {}",
-            context.literal_spelling(contents, false)
-        ),
-        | TokenType::String(StringTokenType::WideString(contents)) => format!(
-            "wide string literal {}",
-            context.literal_spelling(contents, true)
-        ),
+    let literal = match token.kind {
+        | TokenType::String(StringTokenType::String(contents)) =>
+            context.literal_spelling_in(scratch, scratch, contents, false),
+        | TokenType::String(StringTokenType::WideString(contents)) =>
+            context.literal_spelling_in(scratch, scratch, contents, true),
+        | _ => "",
+    };
+    let mut line = ArenaString::new_in(scratch);
+    if let Some(vector) = context.get_source_vectors(token.source_vectors).first() {
+        _ = write!(
+            line,
+            "{}:{}:{}: ",
+            context.get_source_file(vector.source_file_index).display(),
+            vector.line,
+            vector.column,
+        );
+    }
+    _ = match token.kind {
+        | TokenType::Identifier => write!(line, "identifier `{spelling}`"),
+        | TokenType::Keyword(keyword) => write!(line, "keyword `{}`", keyword.spelling()),
+        | TokenType::Operator(operator) => write!(line, "punctuator `{}`", operator.spelling()),
+        | TokenType::String(StringTokenType::String(_)) => write!(line, "string literal {literal}"),
+        | TokenType::String(StringTokenType::WideString(_)) =>
+            write!(line, "wide string literal {literal}"),
         | TokenType::Character(character) => {
             let (value, type_name) = match character {
                 | CharacterTokenType::Char(c) => (i64::from(u32::from(c)), "int"),
                 | CharacterTokenType::WideChar(c) => (i64::from(c), "wchar_t"),
                 | CharacterTokenType::MultiChar(value) => (i64::from(value), "int"),
             };
-            format!("character constant `{spelling}` = {value} ({type_name})")
+            write!(
+                line,
+                "character constant `{spelling}` = {value} ({type_name})"
+            )
         },
         | TokenType::Integer(integer) => {
             let (value, type_name) = match integer {
@@ -272,22 +296,18 @@ pub(crate) fn describe_token(token: Token, context: &Context<'_>) -> String {
                 | IntegerTokenType::UnsignedLongLong(value) =>
                     (i128::from(value.get()), "unsigned long long"),
             };
-            format!("integer constant `{spelling}` = {value} ({type_name})")
+            write!(
+                line,
+                "integer constant `{spelling}` = {value} ({type_name})"
+            )
         },
-        | TokenType::Float(float) => format!(
+        | TokenType::Float(float) => write!(
+            line,
             "floating constant `{spelling}` = {float} ({})",
             float.type_name()
         ),
     };
-    match context.get_source_vectors(token.source_vectors).first() {
-        | Some(vector) => format!(
-            "{}:{}:{}: {description}",
-            context.get_source_file(vector.source_file_index).display(),
-            vector.line,
-            vector.column,
-        ),
-        | None => description,
-    }
+    line.into_str()
 }
 
 fn print_parser_output<'tu>(
@@ -330,7 +350,7 @@ fn print_parser_output<'tu>(
         );
     }
     if output.raw_syntax {
-        eprintln!("{}", render_raw_syntax(&unit));
+        print_raw_syntax(&unit);
     }
     expect_stderr(reporter.finish(context, stderr));
 }
@@ -382,18 +402,23 @@ pub fn compile_file_measured(
 /// reserved, not committed, so unused depth costs only address space.
 const RAW_SYNTAX_STACK_BYTES: usize = 1 << 30;
 
-/// The whole syntax tree in Rust debug form, rendered on a thread with a
-/// stack deep enough for deeply nested syntax.
-fn render_raw_syntax(unit: &ParsedTranslationUnit<'_>) -> String {
+/// Prints the whole syntax tree in Rust debug form to stderr, rendered in
+/// an arena on a thread with a stack deep enough for deeply nested syntax.
+fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("raw-syntax".to_owned())
             .stack_size(RAW_SYNTAX_STACK_BYTES)
-            .spawn_scoped(scope, || format!("{:#?}", unit.raw_debug()))
+            .spawn_scoped(scope, || {
+                let arena = Bump::new();
+                let mut text = ArenaString::new_in(&arena);
+                _ = write!(text, "{:#?}", unit.raw_debug());
+                eprintln!("{text}");
+            })
             .expect("the raw syntax thread starts")
             .join()
-            .expect("raw syntax rendering finishes")
-    })
+            .expect("raw syntax rendering finishes");
+    });
 }
 
 /// Renders diagnostics to stderr and summarizes them at the end, like
