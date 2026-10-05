@@ -66,7 +66,17 @@ This is not yet a production-ready or conforming C99 compiler.
 - For Windows GNU, MinGW headers. The build finds the installation through
   `gcc.exe` on `PATH`, or accepts `MINGW_ROOT` explicitly. GCC does not compile
   the C helper. For MSVC, the Visual Studio C headers and SDK are required.
-- On Linux, the target's static C runtime development libraries.
+- On Linux, the target's static C runtime development libraries. Instead of
+  building LLVM, a Linux host can use LLVM's official prebuilt release of the
+  same version (`LLVM-23.1.1-Linux-X64` from the `llvmorg-23.1.1` GitHub
+  release). Unpack it, point `target/llvm` at it, and write `23.1.1` to its
+  `.installed-version`; the build then skips compiling LLVM and still checks
+  every tool's version. If the release's `ld.lld` cannot load its ICU
+  libraries, as on Ubuntu 26.04, replace it with a link to the pinned
+  toolchain's `lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld`, which is
+  LLD 23.1.1 from the same LLVM revision as rustc. The build uses only
+  `clang`, `llvm-ar`, `ld.lld`, `libclang`, and Clang's resource headers from
+  the release.
 - Nightly Rustfmt for the repository's unstable formatting options.
 - A 64-bit host and target. Every arena and growable compiler buffer
   reserves 100 GiB of address space, which costs no memory until it is
@@ -260,7 +270,12 @@ each input and phase range (1-3, 1-6, 1-7) in a fresh process and reports
 the operating system's peak commit and peak working set (peak resident
 memory on Unix, where peak commit is unavailable). It then reports each
 arena's high-water mark and the peak region count, reserved address space,
-and arena commit.
+and arena commit. On Linux, arena regions request transparent huge pages and
+commit whole 2 MiB pages, which removes nearly all page faults at the cost of
+higher resident memory for small inputs. Measure Linux performance on Linux
+itself where possible: under WSL 2, each page fault also goes through the
+hypervisor's nested page tables (about 2 µs per minor fault in WSL
+measurements), which exaggerates fault-heavy differences.
 
 The `Parser only` group measures phase 7 with preprocessing in untimed setup.
 It also includes expression-heavy and declaration-heavy inputs to exercise
