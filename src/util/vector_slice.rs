@@ -19,6 +19,13 @@ pub(crate) struct VectorSlice<T> {
     _marker:           PhantomData<AtomicPtr<T>>,
 }
 
+// The niche that `start_plus_one` provides: syntax nodes hold many optional
+// source vectors, and each must stay as small as a plain one.
+const _: () = assert!(
+    size_of::<Option<VectorSlice<u8>>>() == size_of::<VectorSlice<u8>>(),
+    "an optional vector slice is as small as a vector slice"
+);
+
 impl<T> Copy for VectorSlice<T> {}
 impl<T> Clone for VectorSlice<T> {
     fn clone(&self) -> Self {
