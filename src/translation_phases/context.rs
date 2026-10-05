@@ -478,6 +478,18 @@ impl<'tu> Context<'tu> {
         id: LiteralId,
         wide: bool,
     ) -> Option<&'a str> {
+        let text = self.decode_literal_text(arena, id, wide)?.leak();
+        // SAFETY: decoding checked that these bytes are UTF-8.
+        Some(unsafe { std::str::from_utf8_unchecked(text) })
+    }
+
+    /// The literal's characters as UTF-8 in `arena`, if they are text.
+    fn decode_literal_text<'a>(
+        &self,
+        arena: &'a Bump,
+        id: LiteralId,
+        wide: bool,
+    ) -> Option<ArenaVec<'a, u8>> {
         let mut text = ArenaVec::new_in(arena);
         for unit in self.literal_units(id) {
             let character = match *unit {
@@ -490,26 +502,66 @@ impl<'tu> Context<'tu> {
             };
             text.extend_from_slice(character.encode_utf8(&mut [0; 4]).as_bytes());
         }
-        std::str::from_utf8(text.leak()).ok()
+        std::str::from_utf8(&text).is_ok().then_some(text)
     }
 
     pub(crate) fn literal_spelling(&self, id: LiteralId, wide: bool) -> String {
-        use std::fmt::Write;
-        if let Some(text) = self.literal_text(id, wide) {
-            return crate::diagnostics::c_quoted(if wide { "L" } else { "" }, '"', &text);
-        }
-        let mut spelling = String::from(if wide { "L\"" } else { "\"" });
-        if wide {
-            for unit in self.literal_wide_units(id) {
-                let _ = write!(spelling, "\\x{unit:x}");
-            }
-        } else {
-            for byte in self.literal_bytes(id) {
-                let _ = write!(spelling, "\\{byte:03o}");
-            }
-        }
-        spelling.push('"');
+        let mut spelling = String::new();
+        let text = self.literal_text(id, wide);
+        self.write_literal_spelling(&mut spelling, text.as_deref(), id, wide)
+            .expect("writing to a string cannot fail");
         spelling
+    }
+
+    /// [`Self::literal_spelling`] in `arena`. The literal's text is decoded
+    /// in `scratch` and taken back, unless something else is allocated there
+    /// meanwhile.
+    pub(crate) fn literal_spelling_in<'a>(
+        &self,
+        arena: &'a Bump,
+        scratch: &Bump,
+        id: LiteralId,
+        wide: bool,
+    ) -> &'a str {
+        let mut spelling = ArenaString::new_in(arena);
+        let text = self.decode_literal_text(scratch, id, wide);
+        let text = text
+            .as_deref()
+            .and_then(|text| std::str::from_utf8(text).ok());
+        self.write_literal_spelling(&mut spelling, text, id, wide)
+            .expect("arena formatting cannot fail");
+        spelling.into_str()
+    }
+
+    /// Writes the literal as a C string literal: quoted and escaped when
+    /// `text` holds its characters, and as numeric escapes otherwise.
+    fn write_literal_spelling(
+        &self,
+        out: &mut impl std::fmt::Write,
+        text: Option<&str>,
+        id: LiteralId,
+        wide: bool,
+    ) -> std::fmt::Result {
+        if let Some(text) = text {
+            return crate::diagnostics::write_c_quoted(out, if wide { "L" } else { "" }, '"', text);
+        }
+        out.write_str(if wide { "L\"" } else { "\"" })?;
+        for unit in self.literal_units(id) {
+            match *unit {
+                | LiteralUnit::Character(c) if wide => write!(out, "\\x{:x}", u32::from(c))?,
+                | LiteralUnit::Numeric(code) if wide => write!(out, "\\x{code:x}")?,
+                | LiteralUnit::Character(c) =>
+                    for byte in c.encode_utf8(&mut [0; 4]).bytes() {
+                        write!(out, "\\{byte:03o}")?;
+                    },
+                | LiteralUnit::Numeric(code) => write!(
+                    out,
+                    "\\{:03o}",
+                    u8::try_from(code).expect("narrow escape checked during decoding")
+                )?,
+            }
+        }
+        out.write_char('"')
     }
 
     pub(crate) fn push_source_vector(

@@ -719,9 +719,9 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         let found_spelling = token.map(|token| -> &str {
             match token.kind {
                 | TokenType::String(StringTokenType::String(contents)) =>
-                    context.diagnostic_text(&context.literal_spelling(contents, false)),
+                    context.literal_spelling_in(context.tu_arena(), self.arena, contents, false),
                 | TokenType::String(StringTokenType::WideString(contents)) =>
-                    context.diagnostic_text(&context.literal_spelling(contents, true)),
+                    context.literal_spelling_in(context.tu_arena(), self.arena, contents, true),
                 | _ => context.diagnostic_text(
                     context
                         .string_cache

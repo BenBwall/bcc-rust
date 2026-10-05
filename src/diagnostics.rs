@@ -380,37 +380,42 @@ pub(crate) fn quote_spelling(spelling: &str) -> impl Display {
 /// characters that would otherwise be invisible or ambiguous.
 pub(crate) fn c_quoted(prefix: &str, quote: char, value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2 + prefix.len());
-    out.push_str(prefix);
-    out.push(quote);
-    for c in value.chars() {
-        match c {
-            | '\\' => out.push_str("\\\\"),
-            | '\n' => out.push_str("\\n"),
-            | '\t' => out.push_str("\\t"),
-            | '\r' => out.push_str("\\r"),
-            | '\x07' => out.push_str("\\a"),
-            | '\x08' => out.push_str("\\b"),
-            | '\x0B' => out.push_str("\\v"),
-            | '\x0C' => out.push_str("\\f"),
-            // A fixed-width escape cannot absorb a following octal digit.
-            | '\0' => out.push_str("\\000"),
-            | c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            },
-            | c if u32::from(c) < 0x20 || c == '\x7F' => {
-                let _ = write!(out, "\\{:03o}", u32::from(c));
-            },
-            | c if c.is_control() => {
-                let _ = write!(out, "\\u{:04X}", u32::from(c));
-            },
-            | c => out.push(c),
-        }
-    }
-    out.push(quote);
+    write_c_quoted(&mut out, prefix, quote, value).expect("writing to a string cannot fail");
     out
 }
 
+/// Writes [`c_quoted`]'s spelling of `value` to `out`.
+pub(crate) fn write_c_quoted(
+    out: &mut impl fmt::Write,
+    prefix: &str,
+    quote: char,
+    value: &str,
+) -> fmt::Result {
+    out.write_str(prefix)?;
+    out.write_char(quote)?;
+    for c in value.chars() {
+        match c {
+            | '\\' => out.write_str("\\\\")?,
+            | '\n' => out.write_str("\\n")?,
+            | '\t' => out.write_str("\\t")?,
+            | '\r' => out.write_str("\\r")?,
+            | '\x07' => out.write_str("\\a")?,
+            | '\x08' => out.write_str("\\b")?,
+            | '\x0B' => out.write_str("\\v")?,
+            | '\x0C' => out.write_str("\\f")?,
+            // A fixed-width escape cannot absorb a following octal digit.
+            | '\0' => out.write_str("\\000")?,
+            | c if c == quote => {
+                out.write_char('\\')?;
+                out.write_char(c)?;
+            },
+            | c if u32::from(c) < 0x20 || c == '\x7F' => write!(out, "\\{:03o}", u32::from(c))?,
+            | c if c.is_control() => write!(out, "\\u{:04X}", u32::from(c))?,
+            | c => out.write_char(c)?,
+        }
+    }
+    out.write_char(quote)
+}
 /// Byte offsets at which each physical line of `text` starts. Like initial
 /// processing, LF, CRLF, and a lone CR each end a line; every terminator is
 /// one byte before the next start once a CRLF's CR is trimmed.
