@@ -186,8 +186,7 @@ fn line_directive_applies_to_the_following_line_and_strips_file_delimiters() {
             };
             assert_eq!(
                 context
-                    .literal_text(contents, false)
-                    .as_deref()
+                    .literal_text_in(context.tu_arena(), contents, false)
                     .expect("UTF-8 test literal"),
                 "logical.c"
             );
@@ -264,8 +263,7 @@ fn line_filename_escapes_follow_string_literal_rules() {
             };
             assert_eq!(
                 context
-                    .literal_text(contents, false)
-                    .as_deref()
+                    .literal_text_in(context.tu_arena(), contents, false)
                     .expect("UTF-8 test literal"),
                 "dir\\file.c"
             );
@@ -286,8 +284,7 @@ fn line_filename_may_be_generated_by_stringification() {
             };
             assert_eq!(
                 context
-                    .literal_text(contents, false)
-                    .as_deref()
+                    .literal_text_in(context.tu_arena(), contents, false)
                     .expect("UTF-8 test literal"),
                 "logical.c"
             );

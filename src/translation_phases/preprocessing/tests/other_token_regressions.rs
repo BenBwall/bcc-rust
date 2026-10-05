@@ -32,8 +32,7 @@ fn record_token(token: Token, context: &Context<'_>, observation: &mut Observati
         | TokenType::String(StringTokenType::String(contents)) => format!(
             "string:{}",
             context
-                .literal_text(contents, false)
-                .as_deref()
+                .literal_text_in(context.tu_arena(), contents, false)
                 .expect("UTF-8 test literal")
         ),
         | _ => context.string_cache.at(token.contents).to_owned(),

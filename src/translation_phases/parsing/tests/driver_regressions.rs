@@ -34,11 +34,13 @@ fn located_tree(source: &str) -> String {
     let unit =
         Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
     unit.inspect(
+        context.tu_arena(),
         &context,
         InspectionOptions {
             show_locations: true,
         },
     )
+    .to_owned()
 }
 
 #[test]

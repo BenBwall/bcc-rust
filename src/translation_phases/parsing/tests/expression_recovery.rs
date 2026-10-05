@@ -75,8 +75,20 @@ fn adjacent_strings_merge_across_macro_expansion_and_preserve_width() {
             let (StringTokenType::WideString(wide), wide_source_vectors) = literal(1) else {
                 panic!("a mixed concatenation must become wide")
             };
-            assert_eq!(parsed.context.literal_text(ordinary, false).unwrap(), "ab");
-            assert_eq!(parsed.context.literal_text(wide, true).unwrap(), "xy");
+            assert_eq!(
+                parsed
+                    .context
+                    .literal_text_in(parsed.context.tu_arena(), ordinary, false)
+                    .unwrap(),
+                "ab"
+            );
+            assert_eq!(
+                parsed
+                    .context
+                    .literal_text_in(parsed.context.tu_arena(), wide, true)
+                    .unwrap(),
+                "xy"
+            );
             assert_eq!(sourced_text(parsed, ordinary_source_vectors), "\"a\"\"b\"");
             assert_eq!(sourced_text(parsed, wide_source_vectors), "\"x\"L\"y\"");
             assert!(parser_errors(parsed).next().is_none());

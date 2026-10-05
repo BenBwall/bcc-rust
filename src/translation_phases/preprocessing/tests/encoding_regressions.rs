@@ -8,6 +8,8 @@ use crate::{
     translation_phases::{
         Context,
         preprocessing::{
+            LiteralId,
+            LiteralUnit,
             StringTokenType,
             Token,
             TokenType,
@@ -34,10 +36,25 @@ fn record(token: Token, context: &Context<'_>, result: &mut Observation) {
     );
     match token.kind {
         | TokenType::String(StringTokenType::String(id)) =>
-            result.narrow.push(context.literal_bytes(id)),
+            result.narrow.push(literal_bytes(context, id)),
         | TokenType::Character(value) => result.characters.push(i64::from(value)),
         | _ => {},
     }
+}
+
+/// The narrow literal's execution bytes.
+fn literal_bytes(context: &Context<'_>, id: LiteralId) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for unit in context.literal_units(id) {
+        match *unit {
+            | LiteralUnit::Character(c) => {
+                bytes.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
+            },
+            | LiteralUnit::Numeric(code) =>
+                bytes.push(u8::try_from(code).expect("narrow escape checked during decoding")),
+        }
+    }
+    bytes
 }
 
 fn observe(source: &str) -> Observation {

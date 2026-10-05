@@ -339,9 +339,11 @@ fn print_parser_output<'tu>(
     expect_stderr(reporter.report_pending(context, stderr));
 
     if output.syntax_tree {
+        let inspection = Bump::new();
         eprint!(
             "{}",
             unit.inspect(
+                &inspection,
                 context,
                 InspectionOptions {
                     show_locations: output.syntax_locations,

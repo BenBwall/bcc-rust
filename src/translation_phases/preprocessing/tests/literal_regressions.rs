@@ -43,16 +43,14 @@ fn record_token(token: Token, context: &Context<'_>, observation: &mut Observati
         | TokenType::String(StringTokenType::String(contents)) => observation.strings.push((
             false,
             context
-                .literal_text(contents, false)
-                .as_deref()
+                .literal_text_in(context.tu_arena(), contents, false)
                 .expect("UTF-8 test literal")
                 .to_owned(),
         )),
         | TokenType::String(StringTokenType::WideString(contents)) => observation.strings.push((
             true,
             context
-                .literal_text(contents, true)
-                .as_deref()
+                .literal_text_in(context.tu_arena(), contents, true)
                 .expect("UTF-8 test literal")
                 .to_owned(),
         )),

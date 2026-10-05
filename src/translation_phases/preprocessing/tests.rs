@@ -460,16 +460,14 @@ fn string_value(context: &Context<'_>, token: Token) -> (bool, String) {
         | TokenType::String(StringTokenType::String(contents)) => (
             false,
             context
-                .literal_text(contents, false)
-                .as_deref()
+                .literal_text_in(context.tu_arena(), contents, false)
                 .expect("UTF-8 test literal")
                 .to_owned(),
         ),
         | TokenType::String(StringTokenType::WideString(contents)) => (
             true,
             context
-                .literal_text(contents, true)
-                .as_deref()
+                .literal_text_in(context.tu_arena(), contents, true)
                 .expect("UTF-8 test literal")
                 .to_owned(),
         ),
@@ -670,8 +668,7 @@ fn expansion_of<R>(source: &str, inspect: impl FnOnce(String, &[TranslationError
                 | TokenType::String(StringTokenType::String(contents)) => format!(
                     "{:?}",
                     context
-                        .literal_text(contents, false)
-                        .as_deref()
+                        .literal_text_in(context.tu_arena(), contents, false)
                         .expect("UTF-8 test literal")
                 ),
                 | _ => context

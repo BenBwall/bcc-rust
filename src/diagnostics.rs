@@ -376,15 +376,8 @@ pub(crate) fn quote_spelling(spelling: &str) -> impl Display {
     })
 }
 
-/// Spells a string as C source text inside the given quotes, escaping
+/// Writes `value` as C source text inside the given quotes, escaping
 /// characters that would otherwise be invisible or ambiguous.
-pub(crate) fn c_quoted(prefix: &str, quote: char, value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2 + prefix.len());
-    write_c_quoted(&mut out, prefix, quote, value).expect("writing to a string cannot fail");
-    out
-}
-
-/// Writes [`c_quoted`]'s spelling of `value` to `out`.
 pub(crate) fn write_c_quoted(
     out: &mut impl fmt::Write,
     prefix: &str,
@@ -1013,6 +1006,12 @@ mod tests {
 
             assert!(output.contains("1 | int x\n  |      ^\n"), "{output}");
         });
+    }
+
+    fn c_quoted(prefix: &str, quote: char, value: &str) -> String {
+        let mut out = String::new();
+        write_c_quoted(&mut out, prefix, quote, value).expect("writing to a string cannot fail");
+        out
     }
 
     #[test]

@@ -1,16 +1,13 @@
 //! Deterministic, source-oriented syntax-tree inspection.
 
-use std::{
-    collections::{
-        HashMap,
-        HashSet,
-        hash_map::Entry,
-    },
-    fmt::{
-        Display,
-        Write,
-    },
+use std::fmt::{
+    self,
+    Display,
+    Write,
 };
+
+use hashbrown::hash_map::Entry;
+use rustc_hash::FxBuildHasher;
 
 use super::{
     ParsedTranslationUnit,
@@ -55,7 +52,7 @@ use super::{
     },
 };
 use crate::{
-    diagnostics::c_quoted,
+    diagnostics::write_c_quoted,
     translation_phases::{
         Context,
         GetPosition,
@@ -65,6 +62,13 @@ use crate::{
             IntegerTokenType,
             StringTokenType,
         },
+    },
+    util::bump::{
+        ArenaMap,
+        ArenaSet,
+        ArenaString,
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -102,20 +106,31 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         clippy::too_many_lines,
         reason = "One iterative dispatcher keeps traversal order and cycle handling centralized."
     )]
-    pub(crate) fn inspect(&self, context: &Context<'_>, options: InspectionOptions) -> String {
-        let mut output = String::new();
-        let mut work = self
-            .roots
-            .iter()
-            .copied()
-            .enumerate()
-            .rev()
-            .map(|(ordinal, root)| Work::Root(root, ordinal))
-            .collect::<Vec<_>>();
-        let mut seen_declarators = HashSet::new();
+    pub(crate) fn inspect<'a>(
+        &self,
+        arena: &'a Bump,
+        context: &Context<'_>,
+        options: InspectionOptions,
+    ) -> &'a str {
+        let mut output = ArenaString::new_in(arena);
+        // Each working collection has its own arena, so each grows in place.
+        let work_arena = Bump::new();
+        let declarator_arena = Bump::new();
+        let visited_arena = Bump::new();
+        let mut literal_scratch = Bump::new();
+        let mut work = ArenaVec::with_capacity_in(self.roots.len(), &work_arena);
+        work.extend(
+            self.roots
+                .iter()
+                .copied()
+                .enumerate()
+                .rev()
+                .map(|(ordinal, root)| Work::Root(root, ordinal)),
+        );
+        let mut seen_declarators = ArenaSet::with_hasher_in(FxBuildHasher, &declarator_arena);
         // Nodes reached through references, keyed by kind and address, with
         // the order in which each was first visited.
-        let mut visited = HashMap::new();
+        let mut visited = ArenaMap::with_hasher_in(FxBuildHasher, &visited_arena);
 
         while let Some(item) = work.pop() {
             match item {
@@ -134,7 +149,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     | ExternalDeclaration::Error(source) => Self::line(
                         &mut output,
                         0,
-                        &format!("root[{ordinal}] error"),
+                        format_args!("root[{ordinal}] error"),
                         Some(source),
                         context,
                         options,
@@ -156,7 +171,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: declaration{} storage={} type={} qualifiers={} \
                              function-specifiers={}",
                             if declaration.recovered {
@@ -206,7 +221,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!("declarator {name}"),
+                        format_args!("declarator {name}"),
                         Some(init.source_vectors),
                         context,
                         options,
@@ -238,7 +253,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role} {name}{} type={} storage={} qualifiers={} \
                              function-specifiers={}",
                             if function.recovered { " recovered" } else { "" },
@@ -289,7 +304,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         Self::line(
                             &mut output,
                             indent,
-                            &format!("{role}: declarator (shared)"),
+                            format_args!("{role}: declarator (shared)"),
                             None,
                             context,
                             options,
@@ -300,7 +315,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!("{role}: declarator pointer-levels={}", pointers.len()),
+                        format_args!("{role}: declarator pointer-levels={}", pointers.len()),
                         Some(declarator.source_vectors),
                         context,
                         options,
@@ -309,7 +324,10 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         Self::line(
                             &mut output,
                             indent + 1,
-                            &format!("pointer {level} qualifiers={}", qualifier_list(*qualifiers)),
+                            format_args!(
+                                "pointer {level} qualifiers={}",
+                                qualifier_list(*qualifiers)
+                            ),
                             None,
                             context,
                             options,
@@ -358,7 +376,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         Self::line(
                             &mut output,
                             indent,
-                            &format!(
+                            format_args!(
                                 "array static={is_static} variable-length={is_pointer} \
                                  qualifiers={}",
                                 qualifier_list(type_qualifiers)
@@ -378,7 +396,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         Self::line(
                             &mut output,
                             indent,
-                            &format!("function variadic={is_variadic}"),
+                            format_args!("function variadic={is_variadic}"),
                             None,
                             context,
                             options,
@@ -391,7 +409,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 | Work::Identifier(identifier, indent, role) => Self::line(
                     &mut output,
                     indent,
-                    &format!("{role} {}", context.string_cache.at(identifier.name)),
+                    format_args!("{role} {}", context.string_cache.at(identifier.name)),
                     Some(identifier.source_vectors),
                     context,
                     options,
@@ -400,7 +418,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "parameter type={} storage={} qualifiers={} function-specifiers={}",
                             Self::type_label(
                                 parameter.declaration_specifiers.type_specifiers,
@@ -448,7 +466,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!("{kind} {name}"),
+                        format_args!("{kind} {name}"),
                         Some(specifier.source_vectors),
                         context,
                         options,
@@ -463,7 +481,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "member-declaration type={} qualifiers={}",
                             Self::type_label(declaration.type_specifiers, context),
                             qualifier_list(declaration.type_qualifiers),
@@ -507,7 +525,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!("enum {name}"),
+                        format_args!("enum {name}"),
                         Some(specifier.source_vectors),
                         context,
                         options,
@@ -522,7 +540,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "enumerator {}",
                             context.string_cache.at(enumerator.name.name)
                         ),
@@ -550,7 +568,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: {}{}",
                             Self::statement_label(&statement.kind, context),
                             if statement.recovered {
@@ -578,12 +596,13 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         );
                         continue;
                     }
+                    literal_scratch.reset();
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: {}{}",
-                            Self::expression_label(&expression.kind, context),
+                            Self::expression_label(&expression.kind, context, &literal_scratch),
                             if expression.recovered {
                                 " recovered"
                             } else {
@@ -599,7 +618,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 | Work::Missing(source, indent, role) => Self::line(
                     &mut output,
                     indent,
-                    &format!("{role}: missing"),
+                    format_args!("{role}: missing"),
                     Some(source),
                     context,
                     options,
@@ -620,7 +639,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: {}{}",
                             match initializer.kind {
                                 | InitializerType::AssignmentExpression(_) => {
@@ -670,7 +689,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "designation{}",
                             if designation.recovered {
                                 " recovered"
@@ -687,18 +706,19 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::Designator(designator, indent) => {
-                    let label = match designator.kind {
-                        | DesignatorType::Array(_) => "array-designator".to_owned(),
-                        | DesignatorType::Field(identifier) => format!(
+                    let label = fmt::from_fn(|f| match designator.kind {
+                        | DesignatorType::Array(_) => f.write_str("array-designator"),
+                        | DesignatorType::Field(identifier) => write!(
+                            f,
                             "field-designator .{}",
                             context.string_cache.at(identifier.name)
                         ),
-                        | DesignatorType::Error => "error-designator".to_owned(),
-                    };
+                        | DesignatorType::Error => f.write_str("error-designator"),
+                    });
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{label}{}",
                             if designator.recovered {
                                 " recovered"
@@ -730,7 +750,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: type-name{} type={} qualifiers={}",
                             if type_name.recovered {
                                 " recovered"
@@ -758,11 +778,11 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 },
             }
         }
-        output
+        output.into_str()
     }
 
     fn push_type_details(
-        work: &mut Vec<Work<'tu>>,
+        work: &mut ArenaVec<'_, Work<'tu>>,
         specifiers: TypeSpecifiers<'tu>,
         indent: usize,
     ) {
@@ -773,31 +793,33 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         }
     }
 
-    fn type_label(specifiers: TypeSpecifiers<'_>, context: &Context<'_>) -> String {
-        match specifiers {
+    fn type_label<'a>(specifiers: TypeSpecifiers<'a>, context: &'a Context<'_>) -> impl Display {
+        fmt::from_fn(move |f| match specifiers {
             | TypeSpecifiers::TypedefName(identifier) => {
-                format!("typedef {}", context.string_cache.at(identifier.name))
+                write!(f, "typedef {}", context.string_cache.at(identifier.name))
             },
             | TypeSpecifiers::StructOrUnion(specifier) => {
                 let kind = match specifier.struct_or_union {
                     | StructOrUnion::Struct => "struct",
                     | StructOrUnion::Union => "union",
                 };
-                specifier.identifier.map_or_else(
-                    || format!("{kind} <anonymous>"),
-                    |identifier| format!("{kind} {}", context.string_cache.at(identifier.name)),
-                )
+                match specifier.identifier {
+                    | None => write!(f, "{kind} <anonymous>"),
+                    | Some(identifier) =>
+                        write!(f, "{kind} {}", context.string_cache.at(identifier.name)),
+                }
             },
-            | TypeSpecifiers::Enum(specifier) => specifier.name.map_or_else(
-                || "enum <anonymous>".to_owned(),
-                |identifier| format!("enum {}", context.string_cache.at(identifier.name)),
-            ),
-            | _ => specifiers.to_string(),
-        }
+            | TypeSpecifiers::Enum(specifier) => match specifier.name {
+                | None => f.write_str("enum <anonymous>"),
+                | Some(identifier) =>
+                    write!(f, "enum {}", context.string_cache.at(identifier.name)),
+            },
+            | _ => write!(f, "{specifiers}"),
+        })
     }
 
     fn push_statement_children(
-        work: &mut Vec<Work<'tu>>,
+        work: &mut ArenaVec<'_, Work<'tu>>,
         kind: &StatementType<'tu>,
         indent: usize,
     ) {
@@ -894,68 +916,86 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         }
     }
 
-    fn statement_label(kind: &StatementType<'tu>, context: &Context<'_>) -> String {
-        match kind {
-            | StatementType::Label(identifier, _) => {
-                format!("label {}", context.string_cache.at(identifier.name))
-            },
-            | StatementType::Case(..) => "case".to_owned(),
-            | StatementType::Default(..) => "default".to_owned(),
-            | StatementType::Compound { .. } => "compound".to_owned(),
-            | StatementType::Expression(..) => "expression".to_owned(),
-            | StatementType::If { .. } => "if".to_owned(),
-            | StatementType::Switch { .. } => "switch".to_owned(),
-            | StatementType::While { .. } => "while".to_owned(),
-            | StatementType::DoWhile { .. } => "do-while".to_owned(),
-            | StatementType::For { .. } => "for".to_owned(),
-            | StatementType::Goto(identifier) => {
-                format!("goto {}", context.string_cache.at(identifier.name))
-            },
-            | StatementType::Continue => "continue".to_owned(),
-            | StatementType::Break => "break".to_owned(),
-            | StatementType::Return(..) => "return".to_owned(),
-            | StatementType::Null => "null".to_owned(),
-        }
+    fn statement_label<'a>(kind: &'a StatementType<'tu>, context: &'a Context<'_>) -> impl Display {
+        fmt::from_fn(move |f| {
+            f.write_str(match kind {
+                | StatementType::Label(identifier, _) => {
+                    return write!(f, "label {}", context.string_cache.at(identifier.name));
+                },
+                | StatementType::Goto(identifier) => {
+                    return write!(f, "goto {}", context.string_cache.at(identifier.name));
+                },
+                | StatementType::Case(..) => "case",
+                | StatementType::Default(..) => "default",
+                | StatementType::Compound { .. } => "compound",
+                | StatementType::Expression(..) => "expression",
+                | StatementType::If { .. } => "if",
+                | StatementType::Switch { .. } => "switch",
+                | StatementType::While { .. } => "while",
+                | StatementType::DoWhile { .. } => "do-while",
+                | StatementType::For { .. } => "for",
+                | StatementType::Continue => "continue",
+                | StatementType::Break => "break",
+                | StatementType::Return(..) => "return",
+                | StatementType::Null => "null",
+            })
+        })
     }
 
-    fn expression_label(kind: &ExpressionType<'tu>, context: &Context<'_>) -> String {
-        match kind {
-            | ExpressionType::Parenthesized { .. } => "parenthesized".to_owned(),
-            | ExpressionType::Conditional { .. } => "conditional ?:".to_owned(),
-            | ExpressionType::Binary { operator, .. } =>
-                format!("binary {}", binary_operator_spelling(*operator)),
-            | ExpressionType::Unary { operator, .. } =>
-                format!("unary {}", unary_operator_spelling(*operator)),
-            | ExpressionType::Call { .. } => "call".to_owned(),
-            | ExpressionType::DirectMember { member, .. } => {
-                format!("member .{}", context.string_cache.at(member.name))
-            },
-            | ExpressionType::IndirectMember { member, .. } => {
-                format!("member ->{}", context.string_cache.at(member.name))
-            },
-            | ExpressionType::CompoundLiteral { .. } => "compound-literal".to_owned(),
-            | ExpressionType::Identifier(identifier) => {
-                format!("identifier {}", context.string_cache.at(identifier.name))
-            },
-            | ExpressionType::Constant(constant) =>
-                format!("constant {}", constant_label(constant)),
-            | ExpressionType::StringLiteral(string) => match string {
-                | StringTokenType::String(contents) => {
-                    format!("string {}", context.literal_spelling(*contents, false))
+    /// Spells a string literal in `scratch`.
+    fn expression_label<'a>(
+        kind: &'a ExpressionType<'tu>,
+        context: &'a Context<'_>,
+        scratch: &'a Bump,
+    ) -> impl Display {
+        fmt::from_fn(move |f| {
+            f.write_str(match kind {
+                | ExpressionType::Binary { operator, .. } => {
+                    return write!(f, "binary {}", binary_operator_spelling(*operator));
                 },
-                | StringTokenType::WideString(contents) => {
-                    format!("wide-string {}", context.literal_spelling(*contents, true))
+                | ExpressionType::Unary { operator, .. } => {
+                    return write!(f, "unary {}", unary_operator_spelling(*operator));
                 },
-            },
-            | ExpressionType::SizeofType(..) => "sizeof type".to_owned(),
-            | ExpressionType::SizeofExpr(..) => "sizeof expression".to_owned(),
-            | ExpressionType::Cast { .. } => "cast".to_owned(),
-            | ExpressionType::Error => "error-expression".to_owned(),
-        }
+                | ExpressionType::DirectMember { member, .. } => {
+                    return write!(f, "member .{}", context.string_cache.at(member.name));
+                },
+                | ExpressionType::IndirectMember { member, .. } => {
+                    return write!(f, "member ->{}", context.string_cache.at(member.name));
+                },
+                | ExpressionType::Identifier(identifier) => {
+                    return write!(f, "identifier {}", context.string_cache.at(identifier.name));
+                },
+                | ExpressionType::Constant(constant) => {
+                    return write!(f, "constant {}", constant_label(constant));
+                },
+                | ExpressionType::StringLiteral(string) => {
+                    return match string {
+                        | StringTokenType::String(contents) => write!(
+                            f,
+                            "string {}",
+                            context.literal_spelling_in(scratch, scratch, *contents, false)
+                        ),
+                        | StringTokenType::WideString(contents) => write!(
+                            f,
+                            "wide-string {}",
+                            context.literal_spelling_in(scratch, scratch, *contents, true)
+                        ),
+                    };
+                },
+                | ExpressionType::Parenthesized { .. } => "parenthesized",
+                | ExpressionType::Conditional { .. } => "conditional ?:",
+                | ExpressionType::Call { .. } => "call",
+                | ExpressionType::CompoundLiteral { .. } => "compound-literal",
+                | ExpressionType::SizeofType(..) => "sizeof type",
+                | ExpressionType::SizeofExpr(..) => "sizeof expression",
+                | ExpressionType::Cast { .. } => "cast",
+                | ExpressionType::Error => "error-expression",
+            })
+        })
     }
 
     fn push_slot(
-        work: &mut Vec<Work<'tu>>,
+        work: &mut ArenaVec<'_, Work<'tu>>,
         slot: ExpressionSlot<'tu>,
         indent: usize,
         role: &'static str,
@@ -967,7 +1007,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
     }
 
     fn push_expression_children(
-        work: &mut Vec<Work<'tu>>,
+        work: &mut ArenaVec<'_, Work<'tu>>,
         kind: &ExpressionType<'tu>,
         indent: usize,
     ) {
@@ -1039,7 +1079,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
     }
 
     fn shared(
-        output: &mut String,
+        output: &mut ArenaString<'_>,
         indent: usize,
         role: &str,
         kind: &str,
@@ -1050,7 +1090,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         Self::line(
             output,
             indent,
-            &format!("{role}: {kind}#{index} (shared)"),
+            format_args!("{role}: {kind}#{index} (shared)"),
             None,
             context,
             options,
@@ -1058,18 +1098,20 @@ impl<'tu> ParsedTranslationUnit<'tu> {
     }
 
     fn line(
-        output: &mut String,
+        output: &mut ArenaString<'_>,
         indent: usize,
-        text: &str,
+        text: impl Display,
         source: Option<SourceVectors>,
         context: &Context<'_>,
         options: InspectionOptions,
     ) {
-        let _ = write!(output, "{}", "  ".repeat(indent.min(32)));
+        for _ in 0..indent.min(32) {
+            output.push_str("  ");
+        }
         if indent > 32 {
             let _ = write!(output, "[depth={indent}] ");
         }
-        output.push_str(text);
+        let _ = write!(output, "{text}");
         if options.show_locations
             && let Some(source) = source
             && source.length > 0
@@ -1097,21 +1139,25 @@ impl<'tu> ParsedTranslationUnit<'tu> {
 }
 
 /// Lists qualifiers in C spelling, such as `const volatile`, or `none`.
-fn qualifier_list(qualifiers: TypeQualifiers) -> String {
-    let names: Vec<&str> = [
-        (TypeQualifiers::CONST, "const"),
-        (TypeQualifiers::VOLATILE, "volatile"),
-        (TypeQualifiers::RESTRICT, "restrict"),
-    ]
-    .into_iter()
-    .filter(|&(flag, _)| qualifiers.contains(flag))
-    .map(|(_, name)| name)
-    .collect();
-    if names.is_empty() {
-        "none".to_owned()
-    } else {
-        names.join(" ")
-    }
+fn qualifier_list(qualifiers: TypeQualifiers) -> impl Display {
+    fmt::from_fn(move |f| {
+        let mut names = [
+            (TypeQualifiers::CONST, "const"),
+            (TypeQualifiers::VOLATILE, "volatile"),
+            (TypeQualifiers::RESTRICT, "restrict"),
+        ]
+        .into_iter()
+        .filter(|&(flag, _)| qualifiers.contains(flag))
+        .map(|(_, name)| name);
+        let Some(first) = names.next() else {
+            return f.write_str("none");
+        };
+        f.write_str(first)?;
+        for name in names {
+            write!(f, " {name}")?;
+        }
+        Ok(())
+    })
 }
 
 fn binary_operator_spelling(operator: BinaryOperator) -> &'static str {
@@ -1168,8 +1214,8 @@ fn unary_operator_spelling(operator: UnaryOperator) -> &'static str {
 /// Renders a constant's value and C type. Floating values print exactly:
 /// `float` and `double` as the shortest decimal that round-trips, `long
 /// double` in hexadecimal.
-fn constant_label(constant: &Constant) -> String {
-    match *constant {
+fn constant_label(constant: &Constant) -> impl Display {
+    fmt::from_fn(move |f| match *constant {
         | Constant::Integer(integer) => {
             let (value, type_name) = match integer {
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),
@@ -1181,27 +1227,33 @@ fn constant_label(constant: &Constant) -> String {
                 | IntegerTokenType::UnsignedLongLong(value) =>
                     (i128::from(value.get()), "unsigned long long"),
             };
-            format!("{value} ({type_name})")
+            write!(f, "{value} ({type_name})")
         },
-        | Constant::Float(float) => format!("{float} ({})", float.type_name()),
-        | Constant::Char(CharacterTokenType::Char(c)) =>
-            format!("{} (int)", c_quoted("", '\'', &c.to_string())),
-        | Constant::Char(CharacterTokenType::WideChar(c)) => format!(
-            "{} (wchar_t)",
-            char::from_u32(c).map_or_else(
-                || format!("L\'\\x{c:x}\'"),
-                |c| c_quoted("L", '\'', &c.to_string())
-            )
-        ),
+        | Constant::Float(float) => write!(f, "{float} ({})", float.type_name()),
+        | Constant::Char(CharacterTokenType::Char(c)) => {
+            write_c_quoted(f, "", '\'', c.encode_utf8(&mut [0; 4]))?;
+            f.write_str(" (int)")
+        },
+        | Constant::Char(CharacterTokenType::WideChar(c)) => {
+            match char::from_u32(c) {
+                | Some(c) => write_c_quoted(f, "L", '\'', c.encode_utf8(&mut [0; 4]))?,
+                | None => write!(f, "L\'\\x{c:x}\'")?,
+            }
+            f.write_str(" (wchar_t)")
+        },
         | Constant::Char(CharacterTokenType::MultiChar(value)) =>
-            format!("{value} (int, multi-character)"),
-    }
+            write!(f, "{value} (int, multi-character)"),
+    })
 }
 
 /// Records a node reached through a reference. Returns `None` on the first
 /// visit, or the order in which the node was first visited when it is
 /// reached again through another parent.
-fn first_visit<T>(visited: &mut HashMap<(u8, usize), usize>, kind: u8, node: &T) -> Option<usize> {
+fn first_visit<T>(
+    visited: &mut ArenaMap<'_, (u8, usize), usize>,
+    kind: u8,
+    node: &T,
+) -> Option<usize> {
     let ordinal = visited.len();
     match visited.entry((kind, std::ptr::from_ref(node).addr())) {
         | Entry::Occupied(first) => Some(*first.get()),

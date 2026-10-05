@@ -54,7 +54,7 @@ fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
             .iter()
             .all(|error| { !matches!(error, TranslationError::Parsing(_)) })
     );
-    let output = unit.inspect(&context, InspectionOptions::default());
+    let output = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
     for name in ["f", "pointer", "g"] {
         assert!(output.contains(&format!("declarator {name}")), "{output}");
     }
@@ -170,6 +170,7 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
     assert_eq!((include_vectors[0].line, include_vectors[0].column), (1, 5));
 
     let inspected = unit.inspect(
+        context.tu_arena(),
         &context,
         InspectionOptions {
             show_locations: true,
@@ -207,8 +208,8 @@ fn deterministic_inspection_uses_spellings_and_marks_recovery() {
     );
     let unit =
         Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
-    let first = unit.inspect(&context, InspectionOptions::default());
-    let second = unit.inspect(&context, InspectionOptions::default());
+    let first = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
+    let second = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
 
     assert_eq!(first, second);
     let good = first.find("declarator good").expect("good declaration");
@@ -238,7 +239,7 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
     );
     let unit =
         Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
-    let output = unit.inspect(&context, InspectionOptions::default());
+    let output = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
 
     for expected in [
         "struct S",
@@ -268,7 +269,11 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
     );
     let multi = Parser::new(preprocessor, &mut multi_context, &parse_arena)
         .parse_translation_unit(&mut multi_context);
-    let multi = multi.inspect(&multi_context, InspectionOptions::default());
+    let multi = multi.inspect(
+        multi_context.tu_arena(),
+        &multi_context,
+        InspectionOptions::default(),
+    );
     let a = multi.find("declarator a").expect("first declarator");
     let one = multi.find("constant 1 (int)").expect("first initializer");
     let b = multi.find("declarator b").expect("second declarator");
@@ -280,7 +285,10 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
 fn inspection_has_a_stable_statement_expression_and_missing_slot_golden() {
     let output = with_parsed(
         "int f(void) { if (x) return a + 1; else return 0; if () ; switch (x) { case : ; } }\n",
-        |unit, context| unit.inspect(context, InspectionOptions::default()),
+        |unit, context| {
+            unit.inspect(context.tu_arena(), context, InspectionOptions::default())
+                .to_owned()
+        },
     );
 
     let expected = [

@@ -39,8 +39,7 @@ fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError
             | TokenType::String(StringTokenType::String(contents)) => format!(
                 "{:?}",
                 context
-                    .literal_text(contents, false)
-                    .as_deref()
+                    .literal_text_in(context.tu_arena(), contents, false)
                     .expect("UTF-8 test literal")
             ),
             | _ => context

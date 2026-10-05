@@ -475,43 +475,9 @@ impl<'tu> Context<'tu> {
         self.literal_values[id.0]
     }
 
-    pub(crate) fn literal_bytes(&self, id: LiteralId) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        for unit in self.literal_units(id) {
-            match *unit {
-                | LiteralUnit::Character(c) => {
-                    bytes.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
-                },
-                | LiteralUnit::Numeric(code) =>
-                    bytes.push(u8::try_from(code).expect("narrow escape checked during decoding")),
-            }
-        }
-        bytes
-    }
-
-    pub(crate) fn literal_wide_units(&self, id: LiteralId) -> Vec<u32> {
-        self.literal_units(id)
-            .iter()
-            .map(|unit| match *unit {
-                | LiteralUnit::Character(c) => u32::from(c),
-                | LiteralUnit::Numeric(code) => code,
-            })
-            .collect()
-    }
-
-    /// Text-only consumers (filenames and tests) must reject non-UTF-8 values.
-    pub(crate) fn literal_text(&self, id: LiteralId, wide: bool) -> Option<String> {
-        if wide {
-            self.literal_wide_units(id)
-                .into_iter()
-                .map(char::from_u32)
-                .collect()
-        } else {
-            String::from_utf8(self.literal_bytes(id)).ok()
-        }
-    }
-
-    /// Like [`Self::literal_text`], spelled in `arena`.
+    /// The literal's characters spelled in `arena`, if they are text.
+    /// Text-only consumers (filenames and tests) must reject non-UTF-8
+    /// values.
     pub(crate) fn literal_text_in<'a>(
         &self,
         arena: &'a Bump,
@@ -545,17 +511,10 @@ impl<'tu> Context<'tu> {
         std::str::from_utf8(&text).is_ok().then_some(text)
     }
 
-    pub(crate) fn literal_spelling(&self, id: LiteralId, wide: bool) -> String {
-        let mut spelling = String::new();
-        let text = self.literal_text(id, wide);
-        self.write_literal_spelling(&mut spelling, text.as_deref(), id, wide)
-            .expect("writing to a string cannot fail");
-        spelling
-    }
-
-    /// [`Self::literal_spelling`] in `arena`. The literal's text is decoded
-    /// in `scratch` and taken back, unless something else is allocated there
-    /// meanwhile.
+    /// The literal as a C string literal in `arena`: quoted and escaped when
+    /// its characters are text, and as numeric escapes otherwise. The text is
+    /// decoded in `scratch` and taken back, unless something else is
+    /// allocated there meanwhile.
     pub(crate) fn literal_spelling_in<'a>(
         &self,
         arena: &'a Bump,
