@@ -472,4 +472,174 @@ mod tests {
 
         assert!(stderr.contains("2 errors generated."), "{stderr}");
     }
+
+    /// Dumps the tokens of `__DATE__` and `__TIME__` with `arguments` added,
+    /// and `SOURCE_DATE_EPOCH` set to `variable`, or unset.
+    fn run_timestamp(arguments: &[&str], variable: Option<&str>) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+        _ = command
+            .args(arguments)
+            .args(["--tokens", "--input", "__DATE__\n,\n__TIME__\n"]);
+        _ = match variable {
+            | Some(value) => command.env("SOURCE_DATE_EPOCH", value),
+            | None => command.env_remove("SOURCE_DATE_EPOCH"),
+        };
+        command.output().expect("the bcc-rust test binary must run")
+    }
+
+    /// The `__DATE__` and `__TIME__` spellings of a successful
+    /// [`run_timestamp`].
+    fn timestamp(output: &Output) -> (String, String) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{output:?}");
+        let literals: Vec<&str> = stderr
+            .lines()
+            .filter_map(|line| {
+                line.split_once(": string literal ")
+                    .map(|(_, literal)| literal)
+            })
+            .collect();
+        match literals[..] {
+            | [date, time] => (date.to_owned(), time.to_owned()),
+            | _ => panic!("expected two string literals: {stderr}"),
+        }
+    }
+
+    fn pinned(date: &str, time: &str) -> (String, String) {
+        (format!("\"{date}\""), format!("\"{time}\""))
+    }
+
+    /// Whether a timestamp spells `"Mmm dd yyyy"` (the day space-padded) and
+    /// `"hh:mm:ss"`.
+    fn is_timestamp_spelling((date, time): &(String, String)) -> bool {
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let digits = |text: &str| text.bytes().all(|byte| byte.is_ascii_digit());
+        let date = date.trim_matches('"');
+        let time = time.trim_matches('"');
+        date.len() == 11
+            && MONTHS.contains(&&date[..3])
+            && &date[3..4] == " "
+            && (&date[4..5] == " " || digits(&date[4..5]))
+            && digits(&date[5..6])
+            && &date[6..7] == " "
+            && digits(&date[7..])
+            && time.len() == 8
+            && time.split(':').count() == 3
+            && time.split(':').all(|part| part.len() == 2 && digits(part))
+    }
+
+    /// `text` without the ANSI styles clap always adds.
+    fn without_styles(text: &str) -> String {
+        let mut plain = String::new();
+        let mut rest = text;
+        while let Some((before, escape)) = rest.split_once('\u{1b}') {
+            plain.push_str(before);
+            rest = escape.split_once('m').map_or("", |(_, after)| after);
+        }
+        plain.push_str(rest);
+        plain
+    }
+
+    #[test]
+    fn source_date_epoch_flag_pins_date_and_time_in_utc() {
+        for (seconds, date, time) in [
+            ("0", "Jan  1 1970", "00:00:00"),
+            ("1700000000", "Nov 14 2023", "22:13:20"),
+            ("-1", "Dec 31 1969", "23:59:59"),
+        ] {
+            let output = run_timestamp(&["--source-date-epoch", seconds], None);
+            assert_eq!(timestamp(&output), pinned(date, time), "{seconds}");
+        }
+    }
+
+    #[test]
+    fn source_date_epoch_variable_pins_date_and_time_in_utc() {
+        // As before the CLI read it: an optional sign and surrounding
+        // whitespace are accepted.
+        for (seconds, date, time) in [
+            ("0", "Jan  1 1970", "00:00:00"),
+            ("1700000000", "Nov 14 2023", "22:13:20"),
+            (" +5 ", "Jan  1 1970", "00:00:05"),
+            ("-1", "Dec 31 1969", "23:59:59"),
+        ] {
+            let output = run_timestamp(&[], Some(seconds));
+            assert_eq!(timestamp(&output), pinned(date, time), "{seconds:?}");
+        }
+    }
+
+    #[test]
+    fn source_date_epoch_flag_overrides_the_variable() {
+        for variable in ["1700000000", "malformed"] {
+            let output = run_timestamp(&["--source-date-epoch=0"], Some(variable));
+            assert_eq!(
+                timestamp(&output),
+                pinned("Jan  1 1970", "00:00:00"),
+                "{variable}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_source_date_epoch_flag_is_an_argument_error() {
+        for (seconds, reason) in [
+            ("soon", "invalid digit found in string"),
+            ("1.5", "invalid digit found in string"),
+            ("", "cannot parse integer from empty string"),
+            ("99999999999999", "is not in"),
+            ("9223372036854775808", "number too large"),
+        ] {
+            for variable in [None, Some("0")] {
+                let output = run_timestamp(&["--source-date-epoch", seconds], variable);
+                let stderr = without_styles(&String::from_utf8_lossy(&output.stderr));
+                assert_eq!(output.status.code(), Some(2), "{seconds:?}: {output:?}");
+                assert!(output.stdout.is_empty(), "{seconds:?}: {output:?}");
+                assert!(
+                    stderr.contains("invalid value") && stderr.contains(reason),
+                    "{seconds:?}: {stderr}"
+                );
+                assert!(
+                    stderr.contains("--source-date-epoch <SECONDS>"),
+                    "{seconds:?}: {stderr}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_source_date_epoch_variable_is_ignored() {
+        // Values that are not integers, or that no date can represent, leave
+        // the local time, as before the CLI read the variable.
+        for variable in ["soon", "1.5", "", "99999999999999", "9223372036854775808"] {
+            let output = run_timestamp(&[], Some(variable));
+            let stamp = timestamp(&output);
+            assert!(is_timestamp_spelling(&stamp), "{variable:?}: {stamp:?}");
+            assert_ne!(stamp.0, "\"Jan  1 1970\"", "{variable:?}");
+        }
+    }
+
+    #[test]
+    fn date_and_time_default_to_the_local_time() {
+        let stamp = timestamp(&run_timestamp(&[], None));
+        assert!(is_timestamp_spelling(&stamp), "{stamp:?}");
+    }
+
+    #[test]
+    fn help_documents_the_source_date_epoch_flag_and_variable() {
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .arg("--help")
+            .env_remove("SOURCE_DATE_EPOCH")
+            .output()
+            .expect("the bcc-rust test binary must run");
+        let stdout = without_styles(&String::from_utf8_lossy(&output.stdout));
+        assert!(output.status.success(), "{output:?}");
+        for expected in [
+            "--source-date-epoch <SECONDS>",
+            "[env: SOURCE_DATE_EPOCH=]",
+            "The flag overrides `SOURCE_DATE_EPOCH`",
+        ] {
+            assert!(stdout.contains(expected), "{expected}: {stdout}");
+        }
+    }
 }

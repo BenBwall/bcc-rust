@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use super::Preprocessor;
 use crate::{
+    configuration::CompilerConfiguration,
     translation_phases::{
         Context,
         SourceVector,
@@ -51,8 +52,12 @@ fn record_errors(context: &mut Context<'_>, observation: &mut Observation) {
 }
 
 fn observe(source: &str) -> Observation {
+    observe_with(source, CompilerConfiguration::default())
+}
+
+fn observe_with(source: &str, configuration: CompilerConfiguration) -> Observation {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(&tu, configuration);
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -199,4 +204,84 @@ fn ordinary_macro_definitions_and_undef_remain_usable() {
         ["normal_defined", "normal_undef", "STDC", "after"]
     );
     assert!(observation.errors.is_empty(), "{observation:#?}");
+}
+
+/// The spellings of `__DATE__` and `__TIME__` under `source_date_epoch`.
+fn translation_timestamp(source_date_epoch: Option<i64>) -> (String, String) {
+    let configuration = CompilerConfiguration::default().with_source_date_epoch(source_date_epoch);
+    let observation = observe_with("__DATE__, __TIME__; __DATE__\n", configuration);
+    assert!(observation.errors.is_empty(), "{observation:#?}");
+    assert!(
+        matches!(
+            observation.kinds[..],
+            [
+                TokenType::String(_),
+                TokenType::Operator(_),
+                TokenType::String(_),
+                TokenType::Operator(_),
+                TokenType::String(_),
+            ]
+        ),
+        "{observation:#?}"
+    );
+    let [date, _, time, _, again] =
+        <[String; 5]>::try_from(observation.spellings).expect("five tokens were matched above");
+    assert_eq!(date, again, "every __DATE__ in a unit agrees");
+    (date, time)
+}
+
+#[test]
+fn configured_source_date_epoch_spells_utc_date_and_time() {
+    for (seconds, date, time) in [
+        (0, "\"Jan  1 1970\"", "\"00:00:00\""),
+        (1_700_000_000, "\"Nov 14 2023\"", "\"22:13:20\""),
+        (-1, "\"Dec 31 1969\"", "\"23:59:59\""),
+    ] {
+        assert_eq!(
+            translation_timestamp(Some(seconds)),
+            (date.to_owned(), time.to_owned()),
+            "{seconds}"
+        );
+    }
+}
+
+/// Whether `date` spells a `__DATE__` (`"Mmm dd yyyy"`, the day space-padded)
+/// and `time` a `__TIME__` (`"hh:mm:ss"`).
+fn is_timestamp_spelling(date: &str, time: &str) -> bool {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let digits = |text: &str| text.bytes().all(|byte| byte.is_ascii_digit());
+    let date_parts = date
+        .strip_prefix('"')
+        .and_then(|date| date.strip_suffix('"'))
+        .filter(|date| date.len() == 11)
+        .is_some_and(|date| {
+            MONTHS.contains(&&date[..3])
+                && &date[3..4] == " "
+                && (&date[4..5] == " " || digits(&date[4..5]))
+                && digits(&date[5..6])
+                && &date[6..7] == " "
+                && digits(&date[7..])
+        });
+    let time_parts = time
+        .strip_prefix('"')
+        .and_then(|time| time.strip_suffix('"'))
+        .filter(|time| time.len() == 8)
+        .is_some_and(|time| {
+            time.split(':').count() == 3
+                && time.split(':').all(|part| part.len() == 2 && digits(part))
+        });
+    date_parts && time_parts
+}
+
+#[test]
+fn translation_timestamp_without_a_representable_epoch_spells_the_local_time() {
+    for source_date_epoch in [None, Some(i64::MAX), Some(i64::MIN)] {
+        let (date, time) = translation_timestamp(source_date_epoch);
+        assert!(
+            is_timestamp_spelling(&date, &time),
+            "{source_date_epoch:?}: {date} {time}"
+        );
+    }
 }

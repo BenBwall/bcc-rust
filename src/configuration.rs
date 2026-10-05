@@ -17,6 +17,9 @@ pub(crate) struct CompilerConfiguration {
     standard:                    CStandard,
     extension_policy:            ExtensionPolicy,
     repeated_specifier_warnings: bool,
+    /// Seconds since the Unix epoch that `__DATE__` and `__TIME__` spell, in
+    /// UTC, or `None` for the local time of translation.
+    source_date_epoch:           Option<i64>,
 }
 
 impl CompilerConfiguration {
@@ -25,6 +28,7 @@ impl CompilerConfiguration {
             standard,
             extension_policy,
             repeated_specifier_warnings: true,
+            source_date_epoch: None,
         }
     }
 
@@ -42,6 +46,15 @@ impl CompilerConfiguration {
 
     pub(crate) const fn with_repeated_specifier_warnings(mut self, enabled: bool) -> Self {
         self.repeated_specifier_warnings = enabled;
+        self
+    }
+
+    pub(crate) const fn source_date_epoch(self) -> Option<i64> {
+        self.source_date_epoch
+    }
+
+    pub(crate) const fn with_source_date_epoch(mut self, seconds: Option<i64>) -> Self {
+        self.source_date_epoch = seconds;
         self
     }
 }

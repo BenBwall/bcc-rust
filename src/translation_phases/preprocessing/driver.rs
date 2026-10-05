@@ -114,20 +114,14 @@ pub(super) struct TranslationTimestamp<'pp> {
 }
 
 impl<'pp> TranslationTimestamp<'pp> {
-    /// Honors `SOURCE_DATE_EPOCH` (reproducible-builds.org, also used by GCC
-    /// and Clang) so builds can pin the expansion; otherwise uses local time.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "std returns `SOURCE_DATE_EPOCH` as an owned `String`; it is read at most once \
-                  per translation unit, at the first `__DATE__` or `__TIME__`."
-    )]
-    fn now(pp: &'pp Bump) -> Self {
-        let pinned = std::env::var("SOURCE_DATE_EPOCH")
-            .ok()
-            .and_then(|seconds| seconds.trim().parse::<i64>().ok())
+    /// Spells `source_date_epoch`, seconds since the Unix epoch, in UTC, so
+    /// builds can pin the expansion (the CLI takes it from `SOURCE_DATE_EPOCH`,
+    /// as GCC and Clang do). Without it, or for seconds that no date can
+    /// represent, spells the local time.
+    fn new(pp: &'pp Bump, source_date_epoch: Option<i64>) -> Self {
+        let time = source_date_epoch
             .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
-            .map(|time| time.naive_utc());
-        let time = pinned.unwrap_or_else(|| Local::now().naive_local());
+            .map_or_else(|| Local::now().naive_local(), |time| time.naive_utc());
         let mut date = ArenaString::new_in(pp);
         let mut clock = ArenaString::new_in(pp);
         write!(date, "{}", time.format("%b %e %Y")).expect("arena formatting cannot fail");
@@ -885,10 +879,11 @@ impl<'x> Expander<'_, '_, 'x> {
                         },
                         | name @ ("__DATE__" | "__TIME__") => {
                             let is_date = name == "__DATE__";
-                            let timestamp = self
-                                .state
-                                .translation_timestamp
-                                .get_or_insert_with(|| TranslationTimestamp::now(self.state.arena));
+                            let source_date_epoch = context.configuration.source_date_epoch();
+                            let timestamp =
+                                self.state.translation_timestamp.get_or_insert_with(|| {
+                                    TranslationTimestamp::new(self.state.arena, source_date_epoch)
+                                });
                             let contents = intern_string_literal(
                                 context,
                                 self.scratch,

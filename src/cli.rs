@@ -11,23 +11,37 @@ use std::{
         split_paths,
         var_os,
     },
+    ffi::OsStr,
     fmt::Write as _,
     io::{
         self,
         Write,
     },
+    ops::RangeInclusive,
     path::Path,
 };
 
+use chrono::{
+    DateTime,
+    Utc,
+};
 use clap::{
+    Arg,
     Args,
     ColorChoice,
+    Command,
     Parser,
+    builder::{
+        RangedI64ValueParser,
+        TypedValueParser,
+    },
+    parser::ValueSource,
 };
 use rustc_hash::FxBuildHasher;
 use thiserror::Error;
 
 use crate::{
+    configuration::CompilerConfiguration,
     diagnostics::{
         ColorChoice as RenderColor,
         Diagnostic,
@@ -87,6 +101,71 @@ struct Cli {
     /// Suppress the `repeated-specifiers` quality warning group.
     #[clap(long)]
     no_repeated_specifier_warnings: bool,
+    /// Spell `__DATE__` and `__TIME__` from seconds since the Unix epoch, in
+    /// UTC.
+    ///
+    /// The flag overrides `SOURCE_DATE_EPOCH`. Without either, `__DATE__` and
+    /// `__TIME__` spell the local time of translation. A malformed
+    /// `SOURCE_DATE_EPOCH` is ignored; a malformed flag value is an error.
+    #[arg(
+        long,
+        env = "SOURCE_DATE_EPOCH",
+        value_name = "SECONDS",
+        allow_negative_numbers = true,
+        value_parser = SourceDateEpochParser
+    )]
+    source_date_epoch: Option<SourceDateEpoch>,
+}
+
+/// The seconds since the Unix epoch that `__DATE__` and `__TIME__` spell,
+/// or `None` for a malformed `SOURCE_DATE_EPOCH`, which is ignored.
+#[derive(Debug, Clone, Copy)]
+struct SourceDateEpoch(Option<i64>);
+
+/// The seconds since the Unix epoch that a date can represent.
+const SOURCE_DATE_EPOCH_RANGE: RangeInclusive<i64> =
+    DateTime::<Utc>::MIN_UTC.timestamp()..=DateTime::<Utc>::MAX_UTC.timestamp();
+
+/// Parses a [`SourceDateEpoch`]: a decimal integer with an optional sign and
+/// surrounding whitespace, within [`SOURCE_DATE_EPOCH_RANGE`]. The
+/// `SOURCE_DATE_EPOCH` variable ignores any other value, as reproducible
+/// builds expect and as the preprocessor did when it read the variable
+/// itself; the `--source-date-epoch` flag rejects it.
+#[derive(Debug, Clone, Copy)]
+struct SourceDateEpochParser;
+
+impl TypedValueParser for SourceDateEpochParser {
+    type Value = SourceDateEpoch;
+
+    fn parse_ref(
+        &self,
+        cmd: &Command,
+        arg: Option<&Arg>,
+        value: &OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        self.parse_ref_(cmd, arg, value, ValueSource::CommandLine)
+    }
+
+    fn parse_ref_(
+        &self,
+        cmd: &Command,
+        arg: Option<&Arg>,
+        value: &OsStr,
+        source: ValueSource,
+    ) -> Result<Self::Value, clap::Error> {
+        let seconds = value
+            .to_str()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .filter(|seconds| SOURCE_DATE_EPOCH_RANGE.contains(seconds));
+        if seconds.is_some() || source == ValueSource::EnvVariable {
+            return Ok(SourceDateEpoch(seconds));
+        }
+        // Clap's own integer parser explains why the value is invalid.
+        RangedI64ValueParser::<i64>::new()
+            .range(SOURCE_DATE_EPOCH_RANGE)
+            .parse_ref(cmd, arg, value)
+            .map(|seconds| SourceDateEpoch(Some(seconds)))
+    }
 }
 
 #[derive(Args)]
@@ -189,7 +268,9 @@ pub fn run() -> Result<(), MainError> {
     system_include.extend(include_path_from_env("C_INCLUDE_PATH"));
     let quote_include = tu.alloc_slice_fill_iter(args.quote_include.iter().map(Path::new));
     let system_include = tu.alloc_slice_fill_iter(system_include.iter().map(Path::new));
-    let mut context = Context::new(&tu);
+    let configuration = CompilerConfiguration::default()
+        .with_source_date_epoch(args.source_date_epoch.and_then(|epoch| epoch.0));
+    let mut context = Context::with_configuration(&tu, configuration);
 
     if args.output.tokens {
         print_preprocessor_output(
