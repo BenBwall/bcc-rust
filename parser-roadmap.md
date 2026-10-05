@@ -113,12 +113,16 @@ Exit:
 
 ## Maintenance contracts
 
-`Parser::parse_translation_unit` and the read-only `SyntaxTree` are the shared
-caller and behavior-test interface. `next_item` adapts the same machine for
-streaming. Keep private frame phases and mutable arenas behind that interface.
-Function prototypes remain declarations; only definitions with bodies become
-function-definition nodes. Preserve source order in block items, arguments,
-initializer elements, and designators through lists of typed handles.
+`Parser::parse_translation_unit` returns the shared caller and behavior-test
+interface, `ParsedTranslationUnit<'tu>`, whose source-ordered roots refer to
+immutable syntax nodes in the translation-unit arena. `next_item` drives the
+same machine one external declaration at a time over the already
+preprocessed token array; the batch pipeline finishes preprocessing before
+either begins. Keep private frame phases and parse-arena working state behind
+that interface. Function prototypes remain declarations; only definitions
+with bodies become function-definition nodes. Preserve source order in block
+items, arguments, initializer elements, and designators through immutable
+arena lists.
 
 ### Grammar ownership
 
@@ -180,7 +184,9 @@ the presentation order.
 
 Defaults must meet the C99 translation floors in the compliance checklist.
 Configured or representational resource exhaustion should produce a stable
-diagnostic; process-wide allocator failure is outside that recovery guarantee.
+diagnostic. Exhausting operating-system memory or an arena's address-space
+reservation is outside that recovery guarantee, except that a source file
+that cannot be read into its arena is reported like any other unreadable file.
 Measure storage growth for deeply nested and macro-fragmented syntax, and keep
 inspection iterative and bounded by reachable syntax.
 

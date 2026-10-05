@@ -32,7 +32,7 @@ A segment of original-source provenance attached to generated characters, prepro
 _Avoid_: Source span
 
 **Context**:
-The compilation-wide state shared by translation phases, including interned spellings, source files, source vectors, and pending diagnostics.
+The compilation-wide state shared by translation phases, including interned spellings, source files, source vectors, and pending diagnostics. The object running a phase (the parser, or the preprocessor while it reads input) holds the context exclusively for as long as it runs, rather than receiving it with each call.
 _Avoid_: Parser context
 
 ## Storage and lifetimes
@@ -59,13 +59,13 @@ The phase arena for parser frames, open scopes, and recovery state. It ends when
 Independent storage for a buffer that exists once per compilation and must grow without moving. It lasts as long as that buffer is needed; per-file temporary buffers instead belong in a phase arena.
 
 **Commit follows use**:
-The boundary between reserved address space and memory made available for use: a growing arena or buffer commits pages just ahead of written data, rather than its full reserved capacity.
+The boundary between reserved address space and memory made available for use: a growing arena or buffer commits pages just ahead of written data, rather than its full reserved capacity. Its address space is itself reserved only when it is first used.
 
 **Tail vector**:
 A temporary, growable sequence occupying the unused tail of an arena while its final length is unknown. When finished, only its written contents remain in the arena; unfinished contents are abandoned.
 
 **File-scope typedef set**:
-The parser's classification of names whose latest file-scope declaration is a typedef, retained through parsing. An ordinary file-scope declaration removes that name; nested scopes may temporarily shadow it without changing the file-scope classification.
+The parser's classification of names whose latest file-scope declaration is a typedef, retained through parsing in a dedicated region rather than the parse arena. An ordinary file-scope declaration removes that name; nested scopes may temporarily shadow it without changing the file-scope classification.
 
 **Chunking seam**:
 The boundary reserved for a future pipeline that preprocesses and parses successive token chunks. State that crosses a chunk boundary remains in its phase arena; expansion storage may reset after active expansions finish, and token storage after parsing consumes the chunk.
@@ -84,9 +84,9 @@ seam.
 **Syntax tree**:
 The declarations, definitions, statements, expressions, type names, and
 initializers reachable from the parsed roots. Nodes live in the
-translation-unit arena and refer to their children by reference and slice; a
-node never changes once allocated. The raw Rust debug form is an opt-in debug
-view, not the normal consumer interface.
+translation-unit arena and refer to their children by reference and by
+immutable list; a node never changes once allocated. The raw Rust debug form
+is an opt-in debug view, not the normal consumer interface.
 
 **External declaration**:
 A top-level declaration or function definition within a translation unit.
@@ -169,7 +169,7 @@ translation units, declarations, function definitions, statements,
 expressions, type names, initializers, and recovery.
 
 **ParserMachine** *(implemented as `Parser`)*:
-The single driver that owns the buffered token cursor, control stack, typed child return, syntax-node count, file-scope name classification, and diagnostic/recovery state for language parsing. It allocates syntax nodes in the translation-unit arena and its working memory in the parse arena.
+The single driver that holds the context and owns the token cursor, control stack, typed child return, syntax-node count, file-scope name classification, and diagnostic/recovery state for language parsing. It allocates syntax nodes in the translation-unit arena and its working memory in the parse arena.
 _Avoid_: Recursive-descent parser
 
 **ParseFrame** *(implemented)*:
@@ -225,8 +225,8 @@ rule), and help. Rendering never exposes internal representation.
 _Avoid_: Debug-formatted error
 
 **Parser resource limit**:
-A configured ceiling for external roots, syntax nodes, or active frame depth.
-Crossing a ceiling emits a stable resource diagnostic, clears transient parser
+A configured ceiling for external roots, syntax nodes, active frame depth, or
+stored source-vector segments. Crossing a ceiling emits a stable resource diagnostic, clears transient parser
 state, and returns an explicit external error root rather than panicking.
 
 **Syntax inspection view**:
