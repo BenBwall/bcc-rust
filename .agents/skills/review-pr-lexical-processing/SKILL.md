@@ -12,10 +12,10 @@ Review translation phases 1-3 as an ordered transformation with source provenanc
 - source-character mapping, newline normalization, trigraph replacement, and their lookahead boundaries;
 - escaped-newline deletion after phase-1 mapping, including repeated splices and EOF;
 - comment replacement, whitespace-sequence behavior, and preservation of newlines needed by directives;
-- preprocessing-token categories and longest-match behavior, including identifiers, pp-numbers, character and string literals, header-name contexts, punctuators, and partial invalid prefixes;
+- preprocessing-token categories and longest-match behavior, including identifiers, pp-numbers, character and string literals, punctuators, and partial invalid prefixes; `#include` operands are ordinary tokens, since the lexer forms no header names;
 - the distinction between preprocessing tokens and parser-facing tokens;
 - source vectors across replacement, deletion, normalization, multi-character tokens, and zero-width diagnostics; and
-- streaming progress and bounded lookahead at chunk, line, and EOF boundaries.
+- whole-file lexing progress, bounded lookahead at line and EOF boundaries, and rewinds that land on lexed-entry boundaries.
 
 Transformation ordering is part of correctness: a case that works when each operation is tested alone may fail when trigraph replacement creates a splice or when splicing changes comment/token adjacency. Build paired cases around those compositions and around inputs with the same prefix but different lexical outcomes.
 

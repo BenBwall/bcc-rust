@@ -15,7 +15,7 @@ Review syntax parsing as an explicit, non-recursive control machine:
 - declaration-versus-expression and cast-versus-grouping decisions using parser-visible typedef and ordinary-name classification;
 - scope entry, publication, shadowing, restoration, and distinct C namespaces needed to choose grammar;
 - ownership of lookahead and delimiters across parent/child frames, typed child results, push/reduce/reprocess actions, and EOF;
-- AST arena handles, ordered children, explicit recovered variants, and complete original-source provenance; and
+- immutable AST nodes referenced in the translation-unit arena, ordered children, explicit recovered variants, and complete original-source provenance; and
 - diagnostics and synchronization that preserve the nearest caller-owned boundary and following valid construct.
 
 Keep syntax and semantics separate. Flag a semantic check in the parser when it prematurely constrains valid syntax or corrupts the AST, but do not demand type checking, constraint validation, linkage analysis, or code generation that the roadmap assigns to later compiler projects.
