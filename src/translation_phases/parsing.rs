@@ -146,8 +146,8 @@ pub(crate) struct Parser<'tu, 'p> {
     /// [`Self::alloc_syntax_list`].
     syntax_nodes: usize,
     /// Roots parsed so far. They are output rather than working memory, so
-    /// they grow in place in their own region instead of the parse arena,
-    /// and the finished list is copied once into the translation-unit arena.
+    /// they grow in place in their own region instead of the parse arena.
+    /// The finished vector becomes the parsed unit's, without a copy.
     emitted_roots: RegionVec<ExternalDeclaration<'tu>>,
     /// Parser-visible ordinary-name classification used for typedef ambiguity.
     scopes: ScopeStack<'p>,
@@ -212,11 +212,14 @@ impl Default for ParserLimits {
 /// One completely parsed translation unit: its source-ordered roots, which
 /// borrow the syntax tree from the translation-unit arena.
 ///
+/// The roots themselves stay in the region the parser collected them in,
+/// which the unit owns and releases when it is dropped.
+///
 /// This is the shared boundary for callers, inspection, tests, and the future
 /// semantic-analysis phase. Parser-machine state is deliberately not exposed.
 #[derive(Debug)]
 pub(crate) struct ParsedTranslationUnit<'tu> {
-    roots: &'tu [ExternalDeclaration<'tu>],
+    roots: RegionVec<ExternalDeclaration<'tu>>,
 }
 
 impl<'tu> ParsedTranslationUnit<'tu> {
@@ -227,16 +230,16 @@ impl<'tu> ParsedTranslationUnit<'tu> {
             reason = "The CLI reads roots through inspection; tests and benchmarks read them here."
         )
     )]
-    pub(crate) fn external_declarations(&self) -> &'tu [ExternalDeclaration<'tu>] {
-        self.roots
+    pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration<'tu>] {
+        &self.roots
     }
 
     /// The whole tree as Rust debug output, for storage debugging. Each root
     /// prints on one line in compact form even under `{:#?}`: indenting a
     /// deeply nested tree would make the output grow with the square of its
     /// depth.
-    pub(crate) fn raw_debug(&self) -> impl Debug + '_ {
-        RawRoots(self.roots)
+    pub(crate) fn raw_debug(&self) -> impl Debug + Send + '_ {
+        RawRoots(&self.roots)
     }
 }
 

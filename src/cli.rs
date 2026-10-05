@@ -539,7 +539,7 @@ pub fn compile_file_measured(
     let source = tu.read_to_str_lossy(path)?;
     let mut context = Context::new(&tu);
     measure(CompileStep::Parse, &mut || {
-        _ = parse_translation_unit(&mut context, path, source, &[], &[]);
+        drop(parse_translation_unit(&mut context, path, source, &[], &[]));
     });
     let mut result = Ok(());
     measure(CompileStep::Report, &mut || {
@@ -566,14 +566,15 @@ const RAW_SYNTAX_STACK_BYTES: usize = 1 << 30;
               allocates in std anyway."
 )]
 fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
+    let raw = unit.raw_debug();
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("raw-syntax".to_owned())
             .stack_size(RAW_SYNTAX_STACK_BYTES)
-            .spawn_scoped(scope, || {
+            .spawn_scoped(scope, move || {
                 let arena = Bump::new();
                 let mut text = ArenaString::new_in(&arena);
-                _ = write!(text, "{:#?}", unit.raw_debug());
+                _ = write!(text, "{raw:#?}");
                 eprintln!("{text}");
             })
             .expect("the raw syntax thread starts")

@@ -208,7 +208,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
             self.emitted_roots.push(root);
         }
         ParsedTranslationUnit {
-            roots: self.tree.alloc_slice_copy(&self.emitted_roots),
+            roots: self.emitted_roots,
         }
     }
 
