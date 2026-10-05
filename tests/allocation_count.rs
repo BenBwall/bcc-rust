@@ -35,10 +35,13 @@
 )]
 
 #[cfg(test)]
-#[expect(
-    clippy::missing_const_for_thread_local,
-    reason = "Every thread-local initializer here is `const`; the lint misreads the macro in this \
-              test crate."
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::missing_const_for_thread_local,
+        reason = "Every thread-local initializer here is `const`; the lint misreads the macro in \
+                  this test crate."
+    )
 )]
 #[expect(
     clippy::disallowed_types,

@@ -257,9 +257,12 @@ fn next_commit(committed: usize, needed: usize, reserved: usize, page: usize) ->
 /// neither `Send` nor `Sync`, so each one is counted on the thread that owns
 /// it.
 #[cfg(any(test, feature = "benchmarking-internals"))]
-#[expect(
-    clippy::missing_const_for_thread_local,
-    reason = "The initializers are const blocks; Clippy misreads their expansion."
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::missing_const_for_thread_local,
+        reason = "The initializers are const blocks; Clippy misreads their expansion."
+    )
 )]
 pub(crate) mod accounting {
     use std::cell::Cell;
@@ -313,9 +316,12 @@ pub(crate) mod accounting {
 
 /// Injected OS failures for tests, per thread like the regions they affect.
 #[cfg(test)]
-#[expect(
-    clippy::missing_const_for_thread_local,
-    reason = "The initializers are const blocks; Clippy misreads their expansion."
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::missing_const_for_thread_local,
+        reason = "The initializers are const blocks; Clippy misreads their expansion."
+    )
 )]
 pub(crate) mod faults {
     use std::{
