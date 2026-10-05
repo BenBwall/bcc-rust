@@ -26,7 +26,6 @@ use owo_colors::{
     OwoColorize,
     Style,
 };
-use rustc_hash::FxBuildHasher;
 
 use crate::{
     translation_phases::{
@@ -36,7 +35,6 @@ use crate::{
         SourceVectors,
     },
     util::bump::{
-        ArenaMap,
         ArenaString,
         ArenaVec,
         Bump,
@@ -433,25 +431,6 @@ pub(crate) fn write_c_quoted(
     }
     out.write_char(quote)
 }
-/// Byte offsets at which each physical line of `text` starts. Like initial
-/// processing, LF, CRLF, and a lone CR each end a line; every terminator is
-/// one byte before the next start once a CRLF's CR is trimmed.
-fn physical_line_starts<'a>(text: &str, scratch: &'a Bump) -> ArenaVec<'a, usize> {
-    let bytes = text.as_bytes();
-    let mut starts = ArenaVec::new_in(scratch);
-    starts.extend(
-        std::iter::once(0).chain(
-            bytes
-                .iter()
-                .enumerate()
-                .filter(|&(index, &byte)| {
-                    byte == b'\n' || (byte == b'\r' && bytes.get(index + 1) != Some(&b'\n'))
-                })
-                .map(|(index, _)| index + 1),
-        ),
-    );
-    starts
-}
 
 /// How rendered text is decorated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -550,16 +529,7 @@ impl Renderer {
 
     /// Returns the 1-based physical line containing `offset` and the byte
     /// range of that line, excluding its terminator.
-    fn locate<'scratch>(
-        line_starts: &mut ArenaMap<'scratch, u32, ArenaVec<'scratch, usize>>,
-        scratch: &'scratch Bump,
-        file: u32,
-        text: &str,
-        offset: usize,
-    ) -> (usize, usize, usize) {
-        let starts = line_starts
-            .entry(file)
-            .or_insert_with(|| physical_line_starts(text, scratch));
+    fn locate(starts: &[usize], text: &str, offset: usize) -> (usize, usize, usize) {
         let line = starts.partition_point(|&start| start <= offset);
         let start = starts[line - 1];
         let end = starts
@@ -578,7 +548,6 @@ impl Renderer {
         diagnostic: &'a Diagnostic<'_>,
         context: &Context<'_>,
         scratch: &'scratch Bump,
-        line_starts: &mut ArenaMap<'scratch, u32, ArenaVec<'scratch, usize>>,
     ) -> ArenaVec<'scratch, Mark<'a>> {
         let mut marks: ArenaVec<'_, Mark<'a>> = ArenaVec::new_in(scratch);
         for label in &diagnostic.labels {
@@ -588,9 +557,11 @@ impl Renderer {
                 let Some(text) = context.source_text(file) else {
                     continue;
                 };
+                let starts = context
+                    .source_line_starts(file)
+                    .expect("recorded source text has a line index");
                 let offset = (vector.index as usize).min(text.len());
-                let (line, line_start, line_end) =
-                    Self::locate(line_starts, scratch, file, text, offset);
+                let (line, line_start, line_end) = Self::locate(starts, text, offset);
                 let start = offset.max(line_start);
                 let end = vector.end().clamp(start, line_end);
                 // Adjacent segments of one range on one line form one mark.
@@ -644,7 +615,6 @@ impl Renderer {
 
     fn render_in_scratch(&self, diagnostic: &Diagnostic<'_>, context: &Context<'_>) -> &str {
         let scratch = &self.scratch;
-        let mut line_starts = ArenaMap::with_hasher_in(FxBuildHasher, scratch);
         let mut out = ArenaString::new_in(scratch);
         let severity_style = Self::severity_style(diagnostic.severity);
         let severity = match diagnostic.severity {
@@ -659,7 +629,7 @@ impl Renderer {
             self.paint(diagnostic.message, Style::new().bold()),
         );
 
-        let marks = Self::marks(diagnostic, context, scratch, &mut line_starts);
+        let marks = Self::marks(diagnostic, context, scratch);
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
         let gutter_width = if max_line == 0 {
             1
@@ -718,7 +688,7 @@ impl Renderer {
                 column,
             );
             let _ = writeln!(out, "{pad} {bar}");
-            let starts = line_starts.get(&file).map_or(&[0][..], ArenaVec::as_slice);
+            let starts = context.source_line_starts(file).unwrap_or(&[0]);
             self.render_file_lines(
                 &mut out,
                 &marks,
@@ -1022,6 +992,56 @@ mod tests {
             let diagnostic = Explanation::new(&arena, "second").at(ErrorSeverity::Error, source);
             let output = renderer.render_text(&diagnostic, context);
             assert!(output.contains("2 | y"), "{output}");
+        });
+    }
+
+    #[test]
+    fn per_diagnostic_scratch_does_not_scale_with_source_line_count() {
+        let scratch_for = |lines| {
+            with_context(&"int x;\n".repeat(lines), |context, file| {
+                let source = span(context, file, "int x;\n", "x");
+                let arena = Bump::new();
+                let diagnostic =
+                    Explanation::new(&arena, "example").at(ErrorSeverity::Error, source);
+                let mut renderer = Renderer::new(ColorChoice::Plain);
+                let first = renderer.render_text(&diagnostic, context).to_owned();
+                let used = context.tu_arena().used();
+                for _ in 0..16 {
+                    assert_eq!(renderer.render_text(&diagnostic, context), first);
+                }
+                assert_eq!(context.tu_arena().used(), used);
+                renderer.scratch.high_water()
+            })
+        };
+        assert_eq!(scratch_for(32), scratch_for(8_192));
+    }
+
+    #[test]
+    fn replaced_source_text_uses_its_own_line_index() {
+        with_context("first line", |context, file| {
+            let mut renderer = Renderer::new(ColorChoice::Plain);
+            let arena = Bump::new();
+            let source = span(context, file, "first line", "first");
+            let diagnostic = Explanation::new(&arena, "first").at(ErrorSeverity::Error, source);
+            _ = renderer.render_text(&diagnostic, context);
+
+            let text = "x\r\ny\rz\n";
+            context.record_source_text(file, text);
+            let source = context.create_source_vectors(
+                crate::translation_phases::SourcePosition {
+                    index:  5,
+                    line:   3,
+                    column: 1,
+                },
+                file,
+                1,
+            );
+            let diagnostic = Explanation::new(&arena, "second").at(ErrorSeverity::Error, source);
+            let output = renderer.render_text(&diagnostic, context);
+            assert_eq!(
+                output,
+                "error: second\n --> example.c:3:1\n  |\n3 | z\n  | ^\n\n"
+            );
         });
     }
 

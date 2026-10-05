@@ -2,6 +2,7 @@
 //! arenas, interned strings, source files, and pending diagnostics.
 
 use std::{
+    cell::OnceCell,
     ffi::OsStr,
     path::Path,
 };
@@ -329,6 +330,15 @@ impl<'tu> ExpansionSites<'tu> {
         self.ends.clear();
     }
 }
+
+/// Source text and its lazily built physical-line index share one identity.
+/// Replacing the text replaces the index, while rendering another diagnostic
+/// reuses it without rescanning the file.
+struct SourceText<'tu> {
+    text:        &'tu str,
+    line_starts: OnceCell<&'tu [usize]>,
+}
+
 pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
@@ -350,7 +360,7 @@ pub(crate) struct Context<'tu> {
     system_include_directories: &'tu [&'tu Path],
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
-    source_texts: ArenaVec<'tu, Option<&'tu str>>,
+    source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
 }
 
 impl<'tu> Context<'tu> {
@@ -1042,9 +1052,12 @@ impl<'tu> Context<'tu> {
     pub(crate) fn record_arena_source_text(&mut self, index: u32, text: &'tu str) {
         let index = index as usize;
         if self.source_texts.len() <= index {
-            self.source_texts.resize(index + 1, None);
+            self.source_texts.resize_with(index + 1, || None);
         }
-        self.source_texts[index] = Some(text);
+        self.source_texts[index] = Some(SourceText {
+            text,
+            line_starts: OnceCell::new(),
+        });
     }
 
     /// Reads and retains an included file without a temporary heap string.
@@ -1059,7 +1072,29 @@ impl<'tu> Context<'tu> {
         self.source_texts
             .get(index as usize)?
             .as_ref()
-            .map(|text| &**text)
+            .map(|source| source.text)
+    }
+
+    /// Byte offsets at which physical lines start, built only when a
+    /// diagnostic needs them and retained across renderers. LF, CRLF, and
+    /// lone CR each end a line, just as in initial processing.
+    pub(crate) fn source_line_starts(&self, index: u32) -> Option<&'tu [usize]> {
+        let source = self.source_texts.get(index as usize)?.as_ref()?;
+        Some(*source.line_starts.get_or_init(|| {
+            let bytes = source.text.as_bytes();
+            self.tu.alloc_slice_fill_iter(
+                std::iter::once(0).chain(
+                    bytes
+                        .iter()
+                        .enumerate()
+                        .filter(|&(index, &byte)| {
+                            byte == b'\n'
+                                || (byte == b'\r' && bytes.get(index + 1) != Some(&b'\n'))
+                        })
+                        .map(|(index, _)| index + 1),
+                ),
+            )
+        }))
     }
 
     /// Returns the exact source spelling covered by a single-segment range.
@@ -1137,6 +1172,40 @@ mod tests {
         SourceArena,
         SourceVector,
     };
+
+    #[test]
+    fn source_line_indices_are_lazy_reused_and_replaced_with_the_text() {
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let file = context.intern_source_file(std::path::Path::new("example.c"));
+        assert_eq!(context.source_line_starts(file), None);
+        context.record_arena_source_text(file, "a\r\nb\rc\n");
+        assert!(
+            context.source_texts[file as usize]
+                .as_ref()
+                .unwrap()
+                .line_starts
+                .get()
+                .is_none()
+        );
+        let starts = context.source_line_starts(file).unwrap();
+        assert_eq!(starts, &[0, 3, 5, 7]);
+        let used = tu.used();
+        for _ in 0..1_000 {
+            assert!(std::ptr::eq(
+                context.source_line_starts(file).unwrap(),
+                starts
+            ));
+        }
+        assert_eq!(tu.used(), used);
+
+        context.record_arena_source_text(file, "x\ny");
+        assert_eq!(context.source_line_starts(file), Some(&[0, 2][..]));
+        // A previously borrowed index still lives as long as the TU arena.
+        assert_eq!(starts, &[0, 3, 5, 7]);
+        context.record_arena_source_text(file, "");
+        assert_eq!(context.source_line_starts(file), Some(&[0][..]));
+    }
 
     #[test]
     fn segmented_vectors_keep_order_across_segments_and_reuse_them() {
