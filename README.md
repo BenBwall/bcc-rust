@@ -155,6 +155,15 @@ libclang is loaded only by the binding generator during the build. It is not
 linked into the resulting executable. Rust's `llvm-tools` component supplies
 optional symbol and disassembly tools for inspecting the executable.
 
+The source pin matters as well as the reported LLVM version: Rust may carry
+LLVM changes that a same-version external Clang does not contain. Keep Clang,
+libclang, the archiver, and LLD on Rust's pinned LLVM revision. When changing
+this setup, verify that the C archive contains LLVM bitcode, inspect the linked
+executable for cross-language optimization and dynamic dependencies, and run
+float, double, and long-double hex-literal inputs with only the intended system
+runtime available. A successful link alone does not demonstrate cross-language
+LTO or a self-contained executable.
+
 Float and double conversions go through the C helper as well. On MinGW it
 selects the C99 conversion routines explicitly, so hex floats keep working
 without relying on the linker's choice of a legacy Windows `strtod` symbol.
@@ -197,23 +206,31 @@ makes the result wide. Literal values are interned separately from UTF-8 source
 spellings. Identifier UCNs follow C99 Annex D and share identity with their
 UTF-8 spellings.
 
-### Benchmarks and preprocessing strategies
+### Pipeline order and benchmarks
 
-The front end can schedule its translation phases three ways: *streaming*
-pulls each token through every phase when the parser asks for it; *batch
-lexing* lexes each source file completely when it is opened and replays its
-preprocessing tokens; *batch* also preprocesses the whole translation unit
-before parsing, as a standalone preprocessor would. All three produce the same
-tokens and diagnostics. The parser CLI renders each consecutive same-file
-run of parser diagnostics and preprocessing warnings in physical source order,
-using invocation positions for macro errors. Preprocessing errors and
-include-file transitions retain their reporting order. The hidden
-`--preprocessing-strategy streaming|batch-lexing|batch` option selects one.
+The front end runs its translation phases in order over the whole
+translation unit: each source file is lexed completely when it is opened, the
+whole unit is preprocessed, as a standalone preprocessor would, and only then
+is it parsed. Every preprocessing diagnostic is therefore reported before any
+parser diagnostic. The parser CLI renders each consecutive same-file run of
+parser diagnostics and preprocessing warnings in physical source order, using
+invocation positions for macro errors. Preprocessing errors and include-file
+transitions retain their reporting order. `--tokens` prints each token after
+the diagnostics reported while it was produced.
 
-The lexers' byte-class scans use `std::simd` when the nightly-only
+An `#include` operand is lexed as ordinary preprocessing tokens; the
+directive takes the header name from the source text between `<` and `>` or
+between the string literal's quotes. It reports `'`, `//` and `/*` in either
+form, and `\` or `"` in the `<…>` form, which C99 §6.4.7p3 leaves undefined,
+as well as a missing closing delimiter. A `\` in a `"…"` name is accepted as a
+path character, an extension that the configured extension policy can turn
+into a warning or an error.
+
+The lexer's byte-class scans use `std::simd` when the nightly-only
 `portable-simd` feature is enabled and scalar loops otherwise. Criterion
-benchmarks compare the strategies over generated plain, mixed, and
-macro-heavy inputs, and a second harness reports their peak heap use.
+benchmarks measure the lexer, the preprocessor, and the full pipeline over
+generated plain, mixed, and macro-heavy inputs, and a second harness reports
+peak heap use.
 
 The `Parser only` group measures phase 7 with preprocessing in untimed setup.
 It also includes expression-heavy and declaration-heavy inputs to exercise
@@ -225,6 +242,25 @@ and nested reused arguments.
 cargo +nightly bench --features benchmarking-internals,portable-simd --bench bench
 cargo +nightly bench --features benchmarking-internals,portable-simd --bench memory
 ```
+
+### Performance changes
+
+Record the commit, toolchain, input, and feature set for each baseline. On a noisy shared machine, compare at least seven interleaved
+runs and report their minimum alongside Criterion estimates. Separate full
+pipeline time from `Parser only` time; preprocessing changes can otherwise look
+like parser improvements. Track peak heap use, source-vector growth, and driver
+steps per token when changing provenance or frame scheduling.
+
+Keep syntax trees, diagnostics, recovery, and ordered source provenance
+equivalent. Exercise macro/include locations, malformed-input continuation,
+deep nesting, and resource boundaries; never weaken limits or drop provenance
+to make a benchmark pass. Keep temporary counters out of production changes.
+Run the canonical checks plus
+`cargo clippy --lib --bench bench --features benchmarking-internals -- -D warnings`.
+
+The binary built with `benchmarking-internals` runs a preprocessing workload
+instead of the normal CLI. Its Unix `coz` progress point measures preprocessing,
+not parser time. Use the parser benchmark groups for parser measurements.
 
 ### External torture corpus
 
@@ -273,8 +309,8 @@ before a real cleanup; only local branches are deleted. Run its tests with
 
 | Area | Role |
 | --- | --- |
-| [`src/translation_phases/initial_processing.rs`](src/translation_phases/initial_processing.rs) | Normalizes source characters, line endings, trigraphs, escaped newlines, and comments. |
-| [`src/translation_phases/preprocessor_tokenizer.rs`](src/translation_phases/preprocessor_tokenizer.rs) | Produces preprocessing tokens while retaining source provenance. |
+| [`src/translation_phases/initial_processing.rs`](src/translation_phases/initial_processing.rs) | Defines the diagnostics of translation phases 1 and 2: a missing or escaped final newline. |
+| [`src/translation_phases/preprocessor_tokenizer.rs`](src/translation_phases/preprocessor_tokenizer.rs) and [`preprocessor_tokenizer/`](src/translation_phases/preprocessor_tokenizer/) | Lexes each source buffer completely when it is opened (phases 1-3: trigraphs, line splices, comments, and preprocessing tokens) and replays its tokens to preprocessing, retaining source provenance. |
 | [`src/translation_phases/preprocessing.rs`](src/translation_phases/preprocessing.rs) and [`preprocessing/`](src/translation_phases/preprocessing/) | Handles macros, directives, includes, conditional preprocessing, literals, and conversion to parser-facing tokens. It owns the preprocessor-expression evaluator and its values and diagnostics; each concern has its own submodule. |
 | [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) and [`parsing/`](src/translation_phases/parsing/) | Contains the explicit parser driver; declaration, function-definition, statement, expression, type-name, initializer, declarator, and tag frames (one submodule per frame); syntax nodes and scopes; and parser diagnostics. |
 | [`src/translation_phases.rs`](src/translation_phases.rs) | Defines the shared translation-phase interface and diagnostic plumbing; [`context.rs`](src/translation_phases/context.rs) and [`provenance.rs`](src/translation_phases/provenance.rs) hold the compilation context and source provenance. |
@@ -302,34 +338,20 @@ All five syntax-parser phases are complete. Phase 05 audited the full grammar
 and closed cross-family recovery, provenance, inspection, phase-7 totality,
 diagnostics, and translation limits.
 
-The authoritative phase boundaries and the distinction between
-parser-complete and compiler-complete are in the
-[language parser roadmap](parser-roadmap.md). The completed implementation brief
-is available as the [Phase 03 Markdown plan](phase-03-statements-and-function-definitions-plan.md)
-and its [HTML companion](phase-03-statements-and-function-definitions-plan.html).
-The merged Phase 04 scope is defined by the
-[Phase 04 Markdown plan](phase-04-expressions-and-type-names-plan.md) and its
-[HTML companion](phase-04-expressions-and-type-names-plan.html).
-Phase 05 closure is defined by the
-[Phase 05 plan](phase-05-recovery-and-c99-parser-closure-plan.md) and the
-[C99 parser compliance checklist](c99-parser-compliance-checklist.md).
+The [language parser roadmap](parser-roadmap.md) records the completed phase
+boundaries, ongoing maintenance contracts, and remaining compiler work. The
+[C99 parser compliance checklist](c99-parser-compliance-checklist.md) records
+grammar ownership, supported behavior, and evidence.
 
 ## Further reading
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — commit-message format and hook setup.
 - [`GLOSSARY.md`](GLOSSARY.md) — canonical compiler-domain and parser vocabulary.
 - [`parser-roadmap.md`](parser-roadmap.md) — authoritative Phase 01–05 language-parser sequence and exit gates.
-- [`phase-03-statements-and-function-definitions-plan.md`](phase-03-statements-and-function-definitions-plan.md) — completed Phase 03 implementation brief and acceptance criteria.
-- [`phase-03-statements-and-function-definitions-codex-prompt.md`](phase-03-statements-and-function-definitions-codex-prompt.md) — archived task prompt used to implement Phase 03.
-- [`phase-04-expressions-and-type-names-plan.md`](phase-04-expressions-and-type-names-plan.md) — completed merged Phase 04 implementation plan for expressions, type names, initializers, and expression-dependent declarations.
-- [`phase-04-expressions-type-names-and-initializers-codex-prompt.md`](phase-04-expressions-type-names-and-initializers-codex-prompt.md) — ready-to-use Codex implementation prompt for merged Phase 04.
+- [`c99-parser-compliance-checklist.md`](c99-parser-compliance-checklist.md) — C99 grammar, ownership, and regression evidence.
+- [`tests/fixtures/diagnostics/COVERAGE.md`](tests/fixtures/diagnostics/COVERAGE.md) — diagnostic golden corpus, review criteria, and remaining output issues.
 - [`.agents/AGENTS.md`](.agents/AGENTS.md) — compact operational guidance for coding agents; `.claude/CLAUDE.md` imports the same file.
-- [`project-status-report.html`](project-status-report.html) — point-in-time repository assessment.
-- [`parser-status-report.html`](parser-status-report.html) — detailed parser audit.
-- [`double-e-integration-report.html`](double-e-integration-report.html) — feasibility and architecture study for the non-recursive parser.
-- [The Double-E Method](https://erikeidt.github.io/The-Double-E-Method.html) — the algorithm description referenced by the architecture study.
-
-The HTML reports are local research notes dated 21 August 2026. Revalidate their claims against the current source and command output before relying on them.
+- [The Double-E Method](https://erikeidt.github.io/The-Double-E-Method.html) — background for the expression reducer. Use the algorithm description as a conceptual reference; verify source licensing before copying any reference implementation.
 
 ## License
 
