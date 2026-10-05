@@ -1,6 +1,6 @@
 # bcc-rust Compiler Domain
 
-This glossary defines the canonical language for bcc-rust's C front end and its agreed parser direction.
+This glossary defines the canonical language for bcc-rust's C front end.
 
 ## Translation pipeline
 
@@ -15,10 +15,10 @@ A lexical unit recognized before macro expansion and directive handling; it pres
 _Avoid_: Token
 
 **Batch pipeline**:
-How the front end schedules translation phases 1 through 7. Initial processing and preprocessing-token recognition run over a whole source buffer when it is opened, and preprocessing replays those tokens; nothing downstream asks the lexer to lex again. The whole translation unit is preprocessed before parsing begins, so every preprocessing diagnostic is reported before any parser diagnostic.
+How the front end schedules translation phases 1 through 7. Each opened source file is lexed in full, the whole translation unit is preprocessed, and only then is it parsed; preprocessing diagnostics precede parser diagnostics.
 
 **Header name**:
-The `<…>` or `"…"` operand of `#include` (C99 §6.4.7). The lexer does not form header names: the operand is ordinary preprocessing tokens, and the `#include` handler takes the name from the source text between the delimiters. For a macro-expanded operand (§6.10.2p4) it combines the tokens' spellings instead.
+The `<…>` or `"…"` operand of `#include` (C99 §6.4.7). It is interpreted in the directive from ordinary preprocessing tokens, using the source text between delimiters for a written operand or combined token spellings for a macro-expanded one.
 
 **Preprocessing**:
 The phase that expands macros, executes directives, resolves includes and conditional groups, and converts surviving preprocessing tokens into parser-facing tokens.
@@ -28,13 +28,47 @@ A parser-facing lexical unit whose category already distinguishes identifiers, k
 _Avoid_: Preprocessing token
 
 **Source vector**:
-A segment of original-source provenance attached to generated characters, preprocessing tokens, tokens, and diagnostics. A value may carry multiple source vectors when preprocessing combines or transforms input.
-A value refers to its ordered source vectors as one contiguous range in a context-owned arena. Each phase-6 output token's source vectors are copied once into a token arena in output order, so merging the provenance of consecutive syntax extends a range instead of copying it; any merge yields exactly the first value's source vectors followed by the second's. The preprocessor's own arena is then discarded between output tokens; ranges that pending diagnostics still name move to a retained arena first.
+A segment of original-source provenance attached to generated characters, preprocessing tokens, tokens, and diagnostics. A value may carry multiple ordered source vectors when preprocessing combines or transforms input; provenance needed after preprocessing is retained for the translation unit.
 _Avoid_: Source span
 
 **Context**:
 The compilation-wide state shared by translation phases, including interned spellings, source files, source vectors, and pending diagnostics.
 _Avoid_: Parser context
+
+## Storage and lifetimes
+
+**Translation-unit arena** (`'tu`):
+Storage retained across preprocessing and parsing for one translation unit, including source text, diagnostic data, and the syntax tree. It ends when that translation unit is finished; retained provenance shares its lifetime in dedicated regions.
+
+**Phase arena**:
+Storage owned by one translation phase for its working state and released when that phase ends. The preprocessing arena (`'pp`) spans preprocessing, while the parse arena (`'parse`) spans parsing; neither owns the retained syntax tree.
+
+**Preprocessing arena** (`'pp`):
+The phase arena for lexed files, macro definitions, and include and conditional state. It ends after the whole translation unit has been preprocessed, before parsing begins; source provenance that must survive it is retained separately.
+
+**Expansion arena** (`'x`):
+Resettable storage for temporary macro-expansion work within preprocessing. It is reused between completed top-level expansions while the preprocessing arena keeps state that must survive them.
+
+**Expansion scope** (`'x`):
+The lifetime of one active expansion's temporary references and state. It ends before the expansion arena is reset; references that must survive an expansion belong to a longer-lived arena.
+
+**Parse arena** (`'parse`):
+The phase arena for parser frames, open scopes, and recovery state. It ends when parsing finishes; syntax reachable from the parsed translation unit remains in the translation-unit arena.
+
+**Dedicated region**:
+Independent storage for a buffer that exists once per compilation and must grow without moving. It lasts as long as that buffer is needed; per-file temporary buffers instead belong in a phase arena.
+
+**Commit follows use**:
+The boundary between reserved address space and memory made available for use: a growing arena or buffer commits pages just ahead of written data, rather than its full reserved capacity.
+
+**Tail vector**:
+A temporary, growable sequence occupying the unused tail of an arena while its final length is unknown. When finished, only its written contents remain in the arena; unfinished contents are abandoned.
+
+**File-scope typedef set**:
+The parser's classification of names whose latest file-scope declaration is a typedef, retained through parsing. An ordinary file-scope declaration removes that name; nested scopes may temporarily shadow it without changing the file-scope classification.
+
+**Chunking seam**:
+The boundary reserved for a future pipeline that preprocesses and parses successive token chunks. State that crosses a chunk boundary remains in its phase arena; expansion storage may reset after active expansions finish, and token storage after parsing consumes the chunk.
 
 ## C syntax
 
@@ -98,9 +132,6 @@ A syntax tree for operators and operands that may compute a value, designate an 
 
 **Abstract syntax tree (AST)**:
 The structured syntax representation produced by language parsing. It records grammatical form and provenance without deciding every semantic property of the program.
-
-**Arena**:
-Memory that a phase allocates from and frees all at once when the phase or translation unit ends, so objects in it refer to each other by plain reference rather than nested ownership. Syntax nodes of every kind live in the translation-unit arena.
 
 **Index handle**:
 A small typed numeric key into one specific structure, kept where identity or compactness matters more than direct access: interned strings, literal values, source files, and source-vector ranges. Syntax nodes are references, not handles.
