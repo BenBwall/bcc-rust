@@ -200,37 +200,33 @@ pub(crate) trait GetSourceVectors {
     fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors;
 }
 
+/// Moves a reader to a source position. The derived setters read the rest
+/// of the current position through [`GetPosition`].
 pub(crate) trait SetPosition: GetPosition {
-    fn set_position(&mut self, context: &mut Context<'_>, position: SourcePosition);
+    fn set_position(&mut self, position: SourcePosition);
     #[expect(
         dead_code,
         reason = "Position setters are retained for translation-phase implementations."
     )]
     #[inline(always)]
-    fn set_index(&mut self, context: &mut Context<'_>, index: usize) {
-        self.set_position(
-            context,
-            SourcePosition {
-                index,
-                line: self.line(context),
-                column: self.column(context),
-            },
-        );
+    fn set_index(&mut self, context: &Context<'_>, index: usize) {
+        self.set_position(SourcePosition {
+            index,
+            line: self.line(context),
+            column: self.column(context),
+        });
     }
     #[expect(
         dead_code,
         reason = "Position setters are retained for translation-phase implementations."
     )]
     #[inline(always)]
-    fn set_column(&mut self, context: &mut Context<'_>, column: u32) {
-        self.set_position(
-            context,
-            SourcePosition {
-                index: self.index(context),
-                line: self.line(context),
-                column,
-            },
-        );
+    fn set_column(&mut self, context: &Context<'_>, column: u32) {
+        self.set_position(SourcePosition {
+            index: self.index(context),
+            line: self.line(context),
+            column,
+        });
     }
     #[cfg_attr(
         not(test),
@@ -240,20 +236,17 @@ pub(crate) trait SetPosition: GetPosition {
         )
     )]
     #[inline(always)]
-    fn set_line(&mut self, context: &mut Context<'_>, line: u32) {
-        self.set_position(
-            context,
-            SourcePosition {
-                index: self.index(context),
-                line,
-                column: self.column(context),
-            },
-        );
+    fn set_line(&mut self, context: &Context<'_>, line: u32) {
+        self.set_position(SourcePosition {
+            index: self.index(context),
+            line,
+            column: self.column(context),
+        });
     }
 }
 
 pub(crate) trait SetSourceFileIndex {
-    fn set_source_file_index(&mut self, context: &mut Context<'_>, source_file_index: u32);
+    fn set_source_file_index(&mut self, source_file_index: u32);
 }
 
 impl GetPosition for Infallible {

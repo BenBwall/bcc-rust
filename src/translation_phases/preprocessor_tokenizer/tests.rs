@@ -99,9 +99,9 @@ fn walk(source: &str, steps: &[Step]) -> Vec<String> {
             | Step::Save => saved.push(tokens.position(&context)),
             | Step::Restore =>
                 if let Some(&position) = saved.last() {
-                    tokens.set_position(&mut context, position);
+                    tokens.set_position(position);
                 },
-            | Step::SetLine(line) => tokens.set_line(&mut context, *line),
+            | Step::SetLine(line) => tokens.set_line(&context, *line),
         }
     }
     let mut remaining = 0;

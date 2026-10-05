@@ -25,7 +25,6 @@ use crate::{
     },
     translation_phases::{
         Context,
-        GetPosition,
         SourceVectors,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -1328,7 +1327,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// Consumes the next token of a directive after it was diagnosed, unless
     /// it ends the line.
     fn skip_token_unless_line_end(&mut self) {
-        let position = self.position(self.context);
+        let position = self.position();
         match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
             | Some(token) if token.kind != PreprocessorTokenType::Newline => {},
             | _ => self.set_position(position),

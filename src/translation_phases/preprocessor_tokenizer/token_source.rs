@@ -101,7 +101,7 @@ impl GetPosition for TokenSource<'_> {
 
 impl SetPosition for TokenSource<'_> {
     #[inline(always)]
-    fn set_position(&mut self, _context: &mut Context<'_>, position: SourcePosition) {
+    fn set_position(&mut self, position: SourcePosition) {
         match self {
             | Self::File(cursor) => cursor.set_position(position),
             | Self::Replay(cursor) => cursor.set_position(position),
@@ -120,7 +120,7 @@ impl GetSourceFileIndex for TokenSource<'_> {
 }
 
 impl SetSourceFileIndex for TokenSource<'_> {
-    fn set_source_file_index(&mut self, _context: &mut Context<'_>, source_file_index: u32) {
+    fn set_source_file_index(&mut self, source_file_index: u32) {
         match self {
             | Self::File(cursor) => cursor.source_file_index = source_file_index,
             // Replayed tokens keep the files they came from.

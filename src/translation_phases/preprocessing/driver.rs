@@ -33,7 +33,6 @@ use crate::{
     },
     translation_phases::{
         Context,
-        GetPosition,
         GetSourceFileIndex,
         SetPosition,
         SourcePosition,
@@ -252,7 +251,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
 
     /// A zero-length diagnostic location at the current input position.
     pub(super) fn current_location(&mut self) -> SourceVectors {
-        self.location_at(self.position(self.context))
+        self.location_at(self.position())
     }
 
     /// A zero-length diagnostic location at `position` of the current token
@@ -340,7 +339,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         rewind_on_error: bool,
     ) -> Option<PreprocessorToken> {
         loop {
-            let start = self.position(self.context);
+            let start = self.position();
             match self.next_preprocessor_token::<SHOULD_IGNORE_WHITESPACE>() {
                 | Some(token) => {
                     if SHOULD_IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
@@ -385,7 +384,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         eof_message: &'static str,
     ) -> Option<PreprocessorToken> {
         loop {
-            let start = self.position(self.context);
+            let start = self.position();
             match self.tokenizer.next_item(self.context) {
                 | Some(token) => {
                     if SHOULD_IGNORE_WHITESPACE && token.kind == PreprocessorTokenType::Whitespace {
@@ -565,7 +564,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             });
                             continue;
                         }
-                        let position = self.position(self.context);
+                        let position = self.position();
                         // A source newline is whitespace between a function
                         // macro's name and `(`. In a replacement list it ends
                         // the frame and must not expose the definition's
@@ -620,7 +619,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             let tokenizer = self.tokenizer.clone();
                             let mut has_argument_token = false;
                             loop {
-                                let before = is_variadic.then(|| self.position(self.context));
+                                let before = is_variadic.then(|| self.position());
                                 match self.tokenizer.next_item(self.context) {
                                     | Some(token)
                                         if token.kind
@@ -734,7 +733,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             let va_args_tokenizer = match closed_at {
                                 | Some(position) => {
                                     let mut closing = self.tokenizer.clone();
-                                    closing.set_position(self.context, position);
+                                    closing.set_position(position);
                                     closing
                                 },
                                 | None => self.tokenizer.clone(),
@@ -788,7 +787,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                 invocation_end: SourceVector::new(
-                                    self.position(self.context),
+                                    self.position(),
                                     self.source_file_index(),
                                     0,
                                 ),

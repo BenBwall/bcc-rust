@@ -228,31 +228,29 @@ pub(crate) struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     pushed_frames:         usize,
 }
 
-impl GetPosition for Expander<'_, '_, '_, '_> {
-    #[inline(always)]
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        self.tokenizer.position(context)
-    }
-}
-
 impl Expander<'_, '_, '_, '_> {
+    /// The current position of the current token source.
+    #[inline(always)]
+    fn position(&self) -> SourcePosition {
+        self.tokenizer.position(self.context)
+    }
+
     /// Moves the current token source to `position`.
     #[inline(always)]
     fn set_position(&mut self, position: SourcePosition) {
-        self.tokenizer.set_position(self.context, position);
+        self.tokenizer.set_position(position);
     }
 
     /// Moves the current token source to `line`, keeping its index and
     /// column.
     fn set_line(&mut self, line: u32) {
-        let position = self.position(self.context);
+        let position = self.position();
         self.set_position(SourcePosition { line, ..position });
     }
 
     /// Attributes the current token source to another source file.
     fn set_source_file_index(&mut self, source_file_index: u32) {
-        self.tokenizer
-            .set_source_file_index(self.context, source_file_index);
+        self.tokenizer.set_source_file_index(source_file_index);
     }
 }
 
@@ -426,10 +424,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     break None;
                 }
             };
-            self.end = (
-                expander.position(expander.context),
-                expander.source_file_index(),
-            );
+            self.end = (expander.position(), expander.source_file_index());
             if expander.is_between_expansions() {
                 self.resting = Some(expander.suspend());
             }

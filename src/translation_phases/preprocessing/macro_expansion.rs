@@ -168,7 +168,7 @@ impl<'x> MacroCallCursor<'x> {
                 | _ => false,
             };
             if ends {
-                frame.tokenizer.set_position(preprocessor.context, position);
+                frame.tokenizer.set_position(position);
                 self.index = index.checked_sub(1);
                 continue;
             }
@@ -202,7 +202,7 @@ impl<'x> MacroCallCursor<'x> {
                         .context
                         .merge_vectors(token.source_vectors, operand.source_vectors);
                 } else {
-                    frame.tokenizer.set_position(preprocessor.context, position);
+                    frame.tokenizer.set_position(position);
                 }
             }
             let mut tokens = ArenaVec::new_in(preprocessor.scratch);
@@ -215,7 +215,7 @@ impl<'x> MacroCallCursor<'x> {
                         preprocessor.context,
                     );
                     if !next.is_some_and(|token| token.kind == PreprocessorTokenType::HashHash) {
-                        frame.tokenizer.set_position(preprocessor.context, position);
+                        frame.tokenizer.set_position(position);
                         break;
                     }
                     let Some(rhs) = Expander::next_ignore_whitespace(
@@ -223,7 +223,7 @@ impl<'x> MacroCallCursor<'x> {
                         preprocessor.context,
                     )
                     .filter(|token| token.kind != PreprocessorTokenType::Newline) else {
-                        frame.tokenizer.set_position(preprocessor.context, position);
+                        frame.tokenizer.set_position(position);
                         break;
                     };
                     if !pasted {
@@ -465,7 +465,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         };
         let name = argument.name;
         let depth = *paren_depth;
-        let position = self.position(self.context);
+        let position = self.position();
         let next_is_end = loop {
             match self.tokenizer.next_item(self.context) {
                 | Some(token)
@@ -778,7 +778,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     }
 
     fn parse_hash_operator(&mut self, token: PreprocessorToken) -> PreprocessorToken {
-        let position = self.position(self.context);
+        let position = self.position();
         let Some(argument_name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
             |_, t| {
@@ -1375,7 +1375,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 | _ => false,
             };
             let hash_hash = if replacement_list {
-                let save = self.position(self.context);
+                let save = self.position();
                 self.context.set_ignore_tokenizer_errors(true);
                 let hash_hash = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
                 self.context.set_ignore_tokenizer_errors(false);

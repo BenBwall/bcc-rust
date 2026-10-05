@@ -273,9 +273,10 @@ impl Debug for CompactRoot<'_, '_> {
     }
 }
 
-impl GetPosition for Parser<'_, '_, '_> {
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        self.cursor.upstream.position(context)
+impl Parser<'_, '_, '_> {
+    /// Where the preprocessor stopped reading, for end-of-input locations.
+    fn position(&self) -> SourcePosition {
+        self.cursor.upstream.position(self.context)
     }
 }
 

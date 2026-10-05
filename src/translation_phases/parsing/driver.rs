@@ -399,11 +399,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 .context
                 .create_retained_source_vectors(position, source_file_index, 0);
         }
-        self.context.create_retained_source_vectors(
-            self.position(self.context),
-            self.source_file_index(),
-            0,
-        )
+        self.context
+            .create_retained_source_vectors(self.position(), self.source_file_index(), 0)
     }
 
     /// Allocates one node in the translation-unit arena and counts it toward
@@ -480,7 +477,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         let source_vectors = token.map_or_else(
             || {
                 self.context.create_retained_source_vectors(
-                    self.position(self.context),
+                    self.position(),
                     self.source_file_index(),
                     0,
                 )
