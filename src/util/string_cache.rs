@@ -196,30 +196,30 @@ impl<'tu> StringCache<'tu> {
         }
         let data = Self::bytes_str(&self.data);
         let candidate = &data[start..];
-        let hash = FxBuildHasher.hash_one(candidate);
         let ends = &self.ends;
-        let existing = self
-            .dedup
-            .find(hash, |id| candidate == Self::at_impl(data, ends, *id))
-            .copied();
-        if let Some(id) = existing {
-            self.data.truncate(start);
-            return id;
+        match self.dedup.entry(
+            FxBuildHasher.hash_one(candidate),
+            |id| candidate == Self::at_impl(data, ends, *id),
+            |id| FxBuildHasher.hash_one(Self::at_impl(data, ends, *id)),
+        ) {
+            | Entry::Occupied(entry) => {
+                let id = *entry.get();
+                self.data.truncate(start);
+                id
+            },
+            | Entry::Vacant(entry) => {
+                let end = u32::try_from(self.data.len())
+                    .ok()
+                    .filter(|&end| end < u32::MAX)
+                    .expect("StringCache: string cache cannot store more than 4GB.");
+                self.ends.push(end);
+                let id = StringCacheId::from_u32(
+                    u32::try_from(self.ends.len() - 1).expect("string cache index overflow"),
+                );
+                _ = entry.insert(id);
+                id
+            },
         }
-        let end = u32::try_from(self.data.len())
-            .ok()
-            .filter(|&end| end < u32::MAX)
-            .expect("StringCache: string cache cannot store more than 4GB.");
-        self.ends.push(end);
-        let id = StringCacheId::from_u32(
-            u32::try_from(self.ends.len() - 1).expect("string cache index overflow"),
-        );
-        let data = Self::bytes_str(&self.data);
-        let ends = &self.ends;
-        _ = self.dedup.insert_unique(hash, id, |id| {
-            FxBuildHasher.hash_one(Self::at_impl(data, ends, *id))
-        });
-        id
     }
 
     #[cfg_attr(
@@ -297,6 +297,21 @@ mod tests {
         assert_eq!(cache.intern("a"), before_growth);
         assert_eq!(cache.at(before_growth), "a");
         assert_eq!(cache.get_id_from_string("a"), Some(before_growth));
+    }
+
+    #[test]
+    fn concatenated_parts_intern_like_the_whole_string() {
+        let arena = crate::util::bump::Bump::new();
+        let mut cache = StringCache::new(&arena);
+        let whole = cache.intern("12\0");
+        assert_eq!(cache.intern_concat(&["12", "\0"]), whole);
+        let new = cache.intern_concat(&["3", "4", "\0"]);
+        assert_eq!(cache.at(new), "34\0");
+        assert_eq!(cache.intern("34\0"), new);
+        // Taking back a duplicate leaves the next string where it belongs.
+        let after = cache.intern("after");
+        assert_eq!(cache.at(after), "after");
+        assert_eq!(cache.at(whole), "12\0");
     }
 
     #[test]
