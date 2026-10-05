@@ -65,6 +65,7 @@ mod tests {
         WORD_BITS,
     };
     use crate::util::vm::{
+        MAX_COMMIT_AHEAD,
         MAX_COMMIT_STEP,
         accounting,
     };
@@ -136,7 +137,7 @@ mod tests {
         let committed = accounting::live().committed - before.committed;
         assert!(committed >= set.words.len() * 8, "{committed}");
         assert!(
-            committed <= set.words.len() * 8 + MAX_COMMIT_STEP,
+            committed <= set.words.len() * 8 + MAX_COMMIT_AHEAD,
             "{committed}"
         );
         assert_eq!(accounting::live().regions, before.regions + 1);

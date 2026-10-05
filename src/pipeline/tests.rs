@@ -475,9 +475,21 @@ fn assert_within_budget(usage: crate::util::vm::accounting::Usage, what: &str) {
         usage.reserved <= MAX_REGIONS_PER_COMPILATION * 100 * (1 << 30),
         "{what}: {usage:?}"
     );
-    // Commit starts at 64 KiB per region and grows with use.
-    assert!(usage.committed <= 1 << 20, "{what}: {usage:?}");
+    assert!(
+        usage.committed <= MAX_SMALL_COMPILATION_COMMIT,
+        "{what}: {usage:?}"
+    );
 }
+
+/// Commit a small compilation may hold at once. Commit starts at 64 KiB per
+/// region and grows with use, so 1 MiB holds every region's first step. On
+/// Linux a region commits whole 2 MiB huge pages, so each region in use
+/// holds at least one, and the bound is one per region the budget allows.
+const MAX_SMALL_COMPILATION_COMMIT: usize = if cfg!(all(target_os = "linux", not(miri))) {
+    MAX_REGIONS_PER_COMPILATION * crate::util::vm::HUGE_PAGE
+} else {
+    1 << 20
+};
 
 #[test]
 fn small_compilations_hold_few_regions_and_commit_little() {

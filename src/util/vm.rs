@@ -4,6 +4,12 @@
 //! but does not make it writable. Callers commit page-aligned subranges before
 //! writing and must not retain references across decommit or release.
 //!
+//! On Linux a region of at least one huge page starts on a
+//! transparent-huge-page boundary, is advised as huge pages
+//! (`MADV_HUGEPAGE`), and commits whole, aligned [`HUGE_PAGE`]s, so the
+//! kernel can back each 2 MiB with one page and one fault instead of 512.
+//! Other platforms commit ordinary pages in smaller steps.
+//!
 //! Tests can make reservations and commits fail ([`faults`]). Under Miri,
 //! the OS is modelled by one allocation whose uncommitted bytes are
 //! unreachable through the pointers a [`GrowingRegion`] hands out.
@@ -52,6 +58,31 @@ impl Region {
 
     pub(crate) fn reserved(&self) -> usize {
         self.reserved
+    }
+
+    /// Advises the whole region as transparent huge pages, reporting whether
+    /// the kernel accepted the advice. The region must span at least one huge
+    /// page and start on a huge-page boundary; a page size other than 4 KiB,
+    /// where a huge page may not be 2 MiB, gets no advice.
+    #[cfg(all(target_os = "linux", not(miri)))]
+    fn advise_huge_pages(&self) -> bool {
+        if self.page != 4096
+            || self.reserved < HUGE_PAGE
+            || !(self.base.as_ptr() as usize).is_multiple_of(HUGE_PAGE)
+        {
+            return false;
+        }
+        // SAFETY: the range is this region's own mapping, and MADV_HUGEPAGE
+        // only changes how the kernel backs its pages, not their contents or
+        // protection.
+        let advised = unsafe {
+            libc::madvise(
+                self.base.as_ptr().cast(),
+                self.reserved,
+                libc::MADV_HUGEPAGE,
+            )
+        };
+        advised == 0
     }
 
     fn checked_range(&self, offset: usize, bytes: usize) -> io::Result<*mut u8> {
@@ -119,24 +150,46 @@ impl Drop for Region {
 /// A fixed reservation whose writable prefix grows in page-aligned steps.
 /// The untouched tail remains inaccessible on native platforms.
 pub(crate) struct GrowingRegion {
-    region:    Region,
-    committed: usize,
+    region:     Region,
+    committed:  usize,
+    /// Whether commits cover whole huge pages.
+    huge_pages: bool,
     /// Under Miri, the base as seen through the committed prefix only, so an
     /// access past it is reported as undefined behavior, as the inaccessible
     /// pages would fault natively.
     #[cfg(miri)]
-    view:      NonNull<u8>,
+    view:       NonNull<u8>,
 }
 
 impl GrowingRegion {
+    /// Reserves `bytes`. On Linux, a region of at least one huge page asks
+    /// for transparent huge pages and commits whole ones; if the kernel
+    /// refuses the advice, the region commits ordinary pages instead.
     pub(crate) fn reserve(bytes: usize) -> io::Result<Self> {
         let region = Region::reserve(bytes)?;
-        Ok(Self {
+        #[cfg(all(target_os = "linux", not(miri)))]
+        let huge_pages = region.advise_huge_pages();
+        #[cfg(not(all(target_os = "linux", not(miri))))]
+        let huge_pages = false;
+        Ok(Self::with_huge_pages(region, huge_pages))
+    }
+
+    fn with_huge_pages(region: Region, huge_pages: bool) -> Self {
+        Self {
             #[cfg(miri)]
             view: committed_view(region.as_ptr(), 0),
             region,
             committed: 0,
-        })
+            huge_pages,
+        }
+    }
+
+    /// A region whose commits cover whole huge pages, or not, on every
+    /// platform and without asking the OS for huge pages, so tests can pin
+    /// either commit pattern (under Miri too) wherever they run.
+    #[cfg(test)]
+    pub(crate) fn reserve_with_huge_pages(bytes: usize, huge_pages: bool) -> io::Result<Self> {
+        Ok(Self::with_huge_pages(Region::reserve(bytes)?, huge_pages))
     }
 
     /// The region's base. Memory is reachable through it only up to the
@@ -156,12 +209,20 @@ impl GrowingRegion {
 
     /// Commits at least the first `needed` bytes, plus at most one commit
     /// step beyond them, so commit follows what callers write rather than
-    /// what they might write. If the step cannot be committed, only the pages
-    /// `needed` reaches are tried before reporting failure.
+    /// what they might write. On a huge-page region the step ends on the next
+    /// huge-page boundary, less than one huge page beyond `needed`. If the
+    /// step cannot be committed, only the pages `needed` reaches are tried
+    /// before reporting failure.
     pub(crate) fn ensure_committed(&mut self, needed: usize) -> io::Result<()> {
         let page = self.region.page;
-        let target = next_commit(self.committed, needed, self.region.reserved(), page)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::OutOfMemory, "region exhausted"))?;
+        let target = next_commit(
+            self.committed,
+            needed,
+            self.region.reserved(),
+            page,
+            self.huge_pages,
+        )
+        .ok_or_else(|| io::Error::new(io::ErrorKind::OutOfMemory, "region exhausted"))?;
         if target == self.committed {
             return Ok(());
         }
@@ -235,11 +296,36 @@ const FIRST_COMMIT_STEP: usize = 64 * 1024;
 /// hundreds of first-touch page faults, which cost far more, and the
 /// ten-odd regions of a compilation together leave at most about 10 MiB
 /// committed ahead of use. Doubling without a cap left up to half of a large
-/// region committed but never written.
+/// region committed but never written. A huge-page region instead commits
+/// up to the next [`HUGE_PAGE`] boundary, under one huge page beyond what
+/// was asked for.
 pub(crate) const MAX_COMMIT_STEP: usize = 1024 * 1024;
 
+/// A transparent huge page: one page-table entry maps 2 MiB on x86-64 and
+/// 64-bit Arm with 4 KiB pages. A Linux region commits whole, aligned huge
+/// pages, because the kernel backs a range with one only when all 2 MiB of
+/// it are mapped with the same protection. A huge page is backed in full
+/// once any byte of it is touched, so on Linux every region in use holds at
+/// least 2 MiB.
+pub(crate) const HUGE_PAGE: usize = 2 * 1024 * 1024;
+
+/// The most a region can commit beyond what it was asked for: one commit
+/// step, or on Linux, where regions may commit whole huge pages, just under
+/// one huge page.
+#[cfg(all(test, target_os = "linux", not(miri)))]
+pub(crate) const MAX_COMMIT_AHEAD: usize = HUGE_PAGE;
+#[cfg(all(test, not(all(target_os = "linux", not(miri)))))]
+pub(crate) const MAX_COMMIT_AHEAD: usize = MAX_COMMIT_STEP;
+
 /// Pure commit-charge bookkeeping, also exercised under Miri without OS calls.
-fn next_commit(committed: usize, needed: usize, reserved: usize, page: usize) -> Option<usize> {
+/// With `huge_pages`, the target is rounded up to a whole huge page.
+fn next_commit(
+    committed: usize,
+    needed: usize,
+    reserved: usize,
+    page: usize,
+    huge_pages: bool,
+) -> Option<usize> {
     if needed > reserved {
         return None;
     }
@@ -249,7 +335,12 @@ fn next_commit(committed: usize, needed: usize, reserved: usize, page: usize) ->
     let step = committed
         .clamp(FIRST_COMMIT_STEP, MAX_COMMIT_STEP)
         .min(reserved - committed);
-    let target = committed.checked_add(step)?.max(needed);
+    let mut target = committed.checked_add(step)?.max(needed);
+    if huge_pages {
+        // `needed` fits the reservation, so capping the rounded end at the
+        // reservation still covers it.
+        target = round_up(target, HUGE_PAGE)?.min(reserved);
+    }
     round_up(target, page).filter(|&rounded| rounded <= reserved)
 }
 
@@ -466,8 +557,58 @@ fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
     NonNull::new(ptr.cast()).ok_or_else(io::Error::last_os_error)
 }
 
-#[cfg(all(unix, not(miri)))]
+#[cfg(all(unix, not(target_os = "linux"), not(miri)))]
 fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
+    os_map(bytes)
+}
+
+/// Maps `bytes` at a huge-page boundary when they span at least one huge
+/// page, so the region's huge pages line up with the kernel's: it maps
+/// enough extra to find the boundary and unmaps the unaligned ends.
+#[cfg(all(target_os = "linux", not(miri)))]
+fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
+    if bytes < HUGE_PAGE {
+        return os_map(bytes);
+    }
+    let page = page_size()?;
+    let padded = bytes
+        .checked_add(HUGE_PAGE - page)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid region size"))?;
+    let mapped = os_map(padded)?;
+    let address = mapped.as_ptr() as usize;
+    // mmap returns a page-aligned address, so the boundary lies within the
+    // first `HUGE_PAGE - page` bytes and `bytes` fit after it.
+    let head = address.next_multiple_of(HUGE_PAGE) - address;
+    let tail = padded - head - bytes;
+    let base = mapped.as_ptr().wrapping_add(head);
+    // The tail goes first, so if either unmap fails, what is still mapped is
+    // one range starting at `mapped`, released without touching addresses
+    // another thread may since have mapped.
+    for (start, length, left) in [
+        (base.wrapping_add(bytes), tail, padded),
+        (mapped.as_ptr(), head, head + bytes),
+    ] {
+        if length == 0 {
+            continue;
+        }
+        // SAFETY: each end lies inside the mapping just made, which nothing
+        // else refers to yet, and is page-aligned because the mapping, the
+        // boundary, and `bytes` all are.
+        if unsafe { libc::munmap(start.cast(), length) } != 0 {
+            let error = io::Error::last_os_error();
+            // SAFETY: `left` bytes from `mapped` are exactly what is still
+            // mapped of this reservation.
+            _ = unsafe { libc::munmap(mapped.as_ptr().cast(), left) };
+            return Err(error);
+        }
+    }
+    // SAFETY: the base lies inside a successful mapping, so it is not null.
+    Ok(unsafe { NonNull::new_unchecked(base) })
+}
+
+/// A new reservation: an anonymous private mapping with no access.
+#[cfg(all(unix, not(miri)))]
+fn os_map(bytes: usize) -> io::Result<NonNull<u8>> {
     #[cfg(target_os = "linux")]
     const NO_RESERVE: i32 = libc::MAP_NORESERVE;
     #[cfg(not(target_os = "linux"))]
@@ -601,23 +742,38 @@ mod tests {
     fn commit_growth_stays_page_aligned_and_within_reservation() {
         let gib = 1024 * 1024 * 1024;
         let reserved = 100 * gib;
-        assert_eq!(next_commit(0, 1, reserved, 4096), Some(FIRST_COMMIT_STEP));
         assert_eq!(
-            next_commit(FIRST_COMMIT_STEP, 1, reserved, 4096),
+            next_commit(0, 1, reserved, 4096, false),
             Some(FIRST_COMMIT_STEP)
         );
         assert_eq!(
-            next_commit(FIRST_COMMIT_STEP, FIRST_COMMIT_STEP + 1, reserved, 4096),
+            next_commit(FIRST_COMMIT_STEP, 1, reserved, 4096, false),
+            Some(FIRST_COMMIT_STEP)
+        );
+        assert_eq!(
+            next_commit(
+                FIRST_COMMIT_STEP,
+                FIRST_COMMIT_STEP + 1,
+                reserved,
+                4096,
+                false
+            ),
             Some(2 * FIRST_COMMIT_STEP)
         );
         assert_eq!(
-            next_commit(4 * 1024 * 1024, 9 * 1024 * 1024, reserved, 4096),
+            next_commit(4 * 1024 * 1024, 9 * 1024 * 1024, reserved, 4096, false),
             Some(9 * 1024 * 1024)
         );
         // Doubling stops at the largest step: a large region commits one
         // step ahead of what it is asked for, not twice its size.
         assert_eq!(
-            next_commit(MAX_COMMIT_STEP / 2, MAX_COMMIT_STEP / 2 + 1, reserved, 4096),
+            next_commit(
+                MAX_COMMIT_STEP / 2,
+                MAX_COMMIT_STEP / 2 + 1,
+                reserved,
+                4096,
+                false
+            ),
             Some(MAX_COMMIT_STEP)
         );
         assert_eq!(
@@ -625,7 +781,8 @@ mod tests {
                 64 * MAX_COMMIT_STEP,
                 64 * MAX_COMMIT_STEP + 1,
                 reserved,
-                4096
+                4096,
+                false
             ),
             Some(65 * MAX_COMMIT_STEP)
         );
@@ -634,20 +791,191 @@ mod tests {
                 64 * MAX_COMMIT_STEP,
                 70 * MAX_COMMIT_STEP + 1,
                 reserved,
-                4096
+                4096,
+                false
             ),
             Some(70 * MAX_COMMIT_STEP + 4096)
         );
         assert_eq!(
-            next_commit(reserved - 4096, reserved, reserved, 4096),
+            next_commit(reserved - 4096, reserved, reserved, 4096, false),
             Some(reserved)
         );
-        assert_eq!(next_commit(reserved, reserved + 1, reserved, 4096), None);
+        assert_eq!(
+            next_commit(reserved, reserved + 1, reserved, 4096, false),
+            None
+        );
+    }
+
+    #[test]
+    fn huge_page_commits_end_on_huge_page_boundaries() {
+        let mib = 1024 * 1024;
+        let reserved = 100 * 1024 * mib;
+        // The first commit is a whole huge page, however little is needed.
+        assert_eq!(next_commit(0, 1, reserved, 4096, true), Some(HUGE_PAGE));
+        assert_eq!(
+            next_commit(0, HUGE_PAGE, reserved, 4096, true),
+            Some(HUGE_PAGE)
+        );
+        assert_eq!(
+            next_commit(HUGE_PAGE, HUGE_PAGE, reserved, 4096, true),
+            Some(HUGE_PAGE)
+        );
+        assert_eq!(
+            next_commit(HUGE_PAGE, HUGE_PAGE + 1, reserved, 4096, true),
+            Some(2 * HUGE_PAGE)
+        );
+        assert_eq!(
+            next_commit(0, 9 * mib, reserved, 4096, true),
+            Some(10 * mib)
+        );
+        // A prefix that a failed step left short of a boundary is completed.
+        assert_eq!(
+            next_commit(4096, 4097, reserved, 4096, true),
+            Some(HUGE_PAGE)
+        );
+        for committed in [0, HUGE_PAGE, 7 * HUGE_PAGE] {
+            for more in [
+                1,
+                4096,
+                MAX_COMMIT_STEP,
+                HUGE_PAGE,
+                HUGE_PAGE + 1,
+                5 * mib + 3,
+            ] {
+                let needed = committed + more;
+                let target = next_commit(committed, needed, reserved, 4096, true).unwrap();
+                assert!(target.is_multiple_of(HUGE_PAGE), "{target}");
+                assert!(target >= needed, "{target}");
+                assert!(target - needed < HUGE_PAGE, "{target}");
+            }
+        }
+        // The reservation's end caps the last, partial huge page.
+        let short = 3 * mib;
+        assert_eq!(
+            next_commit(HUGE_PAGE, HUGE_PAGE + 1, short, 4096, true),
+            Some(short)
+        );
+        assert_eq!(next_commit(short, short + 1, short, 4096, true), None);
+    }
+
+    #[test]
+    fn huge_page_regions_commit_and_write_whole_huge_pages() {
+        let before = accounting::live();
+        let mut region = GrowingRegion::reserve_with_huge_pages(16 * 1024 * 1024, true).unwrap();
+        region.ensure_committed(1).unwrap();
+        assert_eq!(region.committed(), HUGE_PAGE);
+        region.ensure_committed(HUGE_PAGE + 1).unwrap();
+        assert_eq!(region.committed(), 2 * HUGE_PAGE);
+        assert_eq!(
+            accounting::live().committed - before.committed,
+            2 * HUGE_PAGE
+        );
+        let base = region.as_ptr().as_ptr();
+        let last = base.wrapping_add(region.committed() - 1);
+        // SAFETY: both bytes lie in the committed prefix, which `base`
+        // reaches because it was taken after the commit.
+        unsafe {
+            base.write(1);
+        }
+        // SAFETY: as above.
+        unsafe {
+            last.write(2);
+        }
+        // SAFETY: as above, and the byte was just written.
+        assert_eq!(unsafe { last.read() }, 2);
+        drop(region);
+        assert_eq!(accounting::live(), before);
+    }
+
+    #[test]
+    fn a_failed_huge_page_commit_falls_back_to_the_pages_needed() {
+        let mut region = GrowingRegion::reserve_with_huge_pages(16 * 1024 * 1024, true).unwrap();
+        let page = region.region.page;
+        {
+            let _limited = faults::limit_commits(page);
+            region.ensure_committed(1).unwrap();
+            assert_eq!(region.committed(), page);
+        }
+        // The next commit completes the huge page the fallback started.
+        region.ensure_committed(page + 1).unwrap();
+        assert_eq!(region.committed(), HUGE_PAGE);
+    }
+
+    #[test]
+    fn regions_smaller_than_a_huge_page_have_no_huge_pages() {
+        for bytes in [4096, 1024 * 1024, HUGE_PAGE - 4096] {
+            let mut region = GrowingRegion::reserve(bytes).unwrap();
+            assert!(!region.huge_pages, "{bytes}");
+            region.ensure_committed(1).unwrap();
+            assert_eq!(region.committed(), FIRST_COMMIT_STEP.min(bytes));
+        }
+    }
+
+    /// The `/proc/self/smaps` entry of the mapping that starts at `start`:
+    /// its end and its `VmFlags`.
+    #[cfg(all(target_os = "linux", not(miri)))]
+    #[expect(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "The test reads the kernel's view of its mappings with std."
+    )]
+    fn mapping_at(start: usize) -> Option<(usize, String)> {
+        let smaps = std::fs::read_to_string("/proc/self/smaps").unwrap();
+        let mut found = None;
+        for line in smaps.lines() {
+            let range = line
+                .split_once(' ')
+                .and_then(|(range, _)| range.split_once('-'))
+                .and_then(|(from, to)| {
+                    Some((
+                        usize::from_str_radix(from, 16).ok()?,
+                        usize::from_str_radix(to, 16).ok()?,
+                    ))
+                });
+            if let Some((from, to)) = range {
+                found = (from == start).then_some(to);
+            } else if let (Some(end), Some(flags)) = (found, line.strip_prefix("VmFlags:")) {
+                return Some((end, flags.trim().to_owned()));
+            }
+        }
+        None
+    }
+
+    #[cfg(all(target_os = "linux", not(miri)))]
+    #[test]
+    fn linux_regions_start_on_a_huge_page_and_commit_whole_advised_huge_pages() {
+        let mut region = GrowingRegion::reserve(REGION_BYTES).unwrap();
+        let base = region.as_ptr().as_ptr() as usize;
+        assert!(base.is_multiple_of(HUGE_PAGE), "{base:#x}");
+        if !std::path::Path::new("/sys/kernel/mm/transparent_hugepage").exists() {
+            // A kernel without transparent huge pages refuses the advice.
+            assert!(!region.huge_pages);
+            return;
+        }
+        assert!(region.huge_pages);
+        region.ensure_committed(HUGE_PAGE + 1).unwrap();
+        assert_eq!(region.committed(), 2 * HUGE_PAGE);
+        let byte = region.as_ptr().as_ptr().wrapping_add(HUGE_PAGE);
+        // SAFETY: the byte lies in the committed prefix.
+        unsafe {
+            byte.write_volatile(1);
+        }
+        let has = |flags: &str, flag: &str| flags.split(' ').any(|each| each == flag);
+        // The committed huge pages are one writable, advised mapping, and the
+        // reserved rest of the region another, inaccessible one.
+        let (committed_end, committed_flags) = mapping_at(base).unwrap();
+        assert_eq!(committed_end, base + 2 * HUGE_PAGE);
+        assert!(has(&committed_flags, "hg"), "{committed_flags}");
+        assert!(has(&committed_flags, "wr"), "{committed_flags}");
+        let (rest_end, rest_flags) = mapping_at(committed_end).unwrap();
+        assert_eq!(rest_end, base + REGION_BYTES);
+        assert!(has(&rest_flags, "hg"), "{rest_flags}");
+        assert!(!has(&rest_flags, "wr"), "{rest_flags}");
     }
 
     #[test]
     fn failed_commit_step_falls_back_to_the_pages_needed() {
-        let mut region = GrowingRegion::reserve(16 * 1024 * 1024).unwrap();
+        let mut region = GrowingRegion::reserve_with_huge_pages(16 * 1024 * 1024, false).unwrap();
         let page = region.region.page;
         region.ensure_committed(FIRST_COMMIT_STEP).unwrap();
         assert_eq!(region.committed(), FIRST_COMMIT_STEP);

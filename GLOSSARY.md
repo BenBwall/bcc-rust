@@ -59,7 +59,7 @@ The phase arena for parser frames, open scopes, and recovery state. It ends when
 Independent storage for a buffer that exists once per compilation and must grow without moving. It lasts as long as that buffer is needed; per-file temporary buffers instead belong in a phase arena.
 
 **Commit follows use**:
-The boundary between reserved address space and memory made available for use: a growing arena or buffer commits pages just ahead of written data, rather than its full reserved capacity. Its address space is itself reserved only when it is first used.
+The boundary between reserved address space and memory made available for use: a growing arena or buffer commits pages just ahead of written data, rather than its full reserved capacity. Its address space is itself reserved only when it is first used. On Linux, regions commit whole 2 MiB transparent huge pages, so commit may run up to one huge page ahead of written data, and a region in use commits at least one huge page.
 
 **Tail vector**:
 A temporary, growable sequence occupying the unused tail of an arena while its final length is unknown. When finished, only its written contents remain in the arena; unfinished contents are abandoned.

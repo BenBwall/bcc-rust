@@ -7,7 +7,9 @@
 //! need destruction, since the arena does not run destructors.
 //!
 //! Commit follows use: the region commits pages as the bump pointer reaches
-//! them, at most one commit step ahead. A [`TailVec`] takes the rest of the
+//! them, at most one commit step ahead; on Linux, where regions use
+//! transparent huge pages, that step ends on the next 2 MiB huge-page
+//! boundary (see [`super::vm`]). A [`TailVec`] takes the rest of the
 //! reservation as its capacity and commits as it is written, so a vector
 //! whose final length is unknown never commits room it does not fill.
 

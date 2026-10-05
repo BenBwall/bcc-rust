@@ -2,10 +2,11 @@
 //!
 //! Its capacity is the region's whole reservation from the start, so it
 //! never grows, reallocates, or moves its elements. Pages are committed a
-//! step at a time just ahead of the last element written, so the commit
-//! charge follows the vector's length rather than a doubled capacity. This
-//! is why it is its own type rather than an `allocator_api2` vector over an
-//! arena: such a vector asks its allocator for whole capacities, and an
+//! step at a time just ahead of the last element written (on Linux, whole
+//! 2 MiB huge pages), so the commit charge follows the vector's length
+//! rather than a doubled capacity.
+//! This is why it is its own type rather than an `allocator_api2` vector over
+//! an arena: such a vector asks its allocator for whole capacities, and an
 //! allocator has to commit every byte it hands out.
 
 use std::{
