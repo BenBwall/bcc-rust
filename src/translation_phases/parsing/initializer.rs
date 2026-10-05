@@ -264,7 +264,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         .push((token.expect("an unowned closing delimiter exists")).source_vectors);
                     return ParseAction::Consume;
                 }
-                match self.list_boundary(parser, context, token) {
+                match self.list_boundary(parser, token) {
                     | ListBoundary::None => {},
                     | ListBoundary::MissingClose => {
                         parser.report(
@@ -433,8 +433,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         ),
                         token,
                     );
-                    let closing_bracket_follows =
-                        Self::closing_bracket_follows(parser, context, token);
+                    let closing_bracket_follows = Self::closing_bracket_follows(parser, token);
                     self.designation_state().synchronized_designator =
                         Some(SynchronizedDesignator {
                             expression,
@@ -495,7 +494,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 // unmatched sibling delimiter.
                 if self.at_array_designator_sync_boundary(
                     parser,
-                    context,
                     token,
                     depth,
                     closing_bracket_follows,
@@ -668,7 +666,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     // following `,` or `}` is still this list's separator.
                     return ParseAction::Consume;
                 }
-                let boundary = self.list_boundary(parser, context, token);
+                let boundary = self.list_boundary(parser, token);
                 parser.report(
                     context,
                     ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
@@ -782,7 +780,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     fn at_array_designator_sync_boundary(
         &self,
         parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
         token: Option<Token>,
         depth: DelimiterDepth,
         closing_bracket_follows: bool,
@@ -810,7 +807,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 && (is_statement_keyword(token.kind)
                     || ExpressionFrame::is_strong_grammar_boundary_for(
                         parser,
-                        context,
                         token,
                         ExpressionBoundary::Initializer,
                     ))
@@ -824,11 +820,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     /// still closes it, e.g. `[1, 2] = 3`. Without that `]`, as in
     /// `{ [1 = 2 }`, the `,` or `=` is where the bracket went missing. The
     /// scan is bounded so repeated errors in one long list stay linear.
-    fn closing_bracket_follows(
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-        token: Option<Token>,
-    ) -> bool {
+    fn closing_bracket_follows(parser: &mut Parser<'tu, 'p>, token: Option<Token>) -> bool {
         const SCAN_LIMIT: usize = 32;
         let mut depth = DelimiterDepth {
             parentheses: 0,
@@ -878,7 +870,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 },
                 | _ => {},
             }
-            next = parser.cursor.lookahead(context, index);
+            next = parser.cursor.lookahead(index);
         }
         false
     }
@@ -922,12 +914,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         })
     }
 
-    fn list_boundary(
-        &self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-        token: Option<Token>,
-    ) -> ListBoundary {
+    fn list_boundary(&self, parser: &mut Parser<'tu, 'p>, token: Option<Token>) -> ListBoundary {
         if self.at_caller_boundary(token) {
             return ListBoundary::MissingClose;
         }
@@ -935,24 +922,21 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             return ListBoundary::MissingClose;
         };
         if token.kind == TokenType::Identifier
-            && parser.cursor.following(context).is_some_and(|following| {
+            && parser.cursor.following().is_some_and(|following| {
                 following.kind == TokenType::Operator(OperatorTokenType::Colon)
             })
         {
             return ListBoundary::MissingClose;
         }
         let identifier_continues_initializer = token.kind == TokenType::Identifier
-            && parser.cursor.following(context).is_some_and(|following| {
+            && parser.cursor.following().is_some_and(|following| {
                 binary_operator(following.kind).is_some() || is_postfix_starter(following.kind)
             });
         let starts_declaration_or_statement = is_statement_keyword(token.kind)
-            || parser.declaration_recovery_starts_here(context, token)
+            || parser.declaration_recovery_starts_here(token)
                 && !identifier_continues_initializer
                 && !matches!(
-                    parser
-                        .cursor
-                        .following(context)
-                        .map(|following| following.kind),
+                    parser.cursor.following().map(|following| following.kind),
                     Some(TokenType::Operator(
                         OperatorTokenType::Comma
                             | OperatorTokenType::Semicolon
@@ -961,7 +945,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 );
         if !starts_declaration_or_statement {
             ListBoundary::None
-        } else if Self::closing_brace_follows(parser, context) {
+        } else if Self::closing_brace_follows(parser) {
             ListBoundary::MalformedElement
         } else {
             ListBoundary::MissingClose
@@ -975,11 +959,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     /// otherwise start a following declaration or statement is a malformed
     /// element when the list's own `}` comes first, as in `{ 1, int 0 }`.
     /// The scan is bounded so repeated errors in one long list stay linear.
-    fn closing_brace_follows(parser: &mut Parser<'tu, 'p>, context: &mut Context<'_>) -> bool {
+    fn closing_brace_follows(parser: &mut Parser<'tu, 'p>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {
-            let Some(token) = parser.cursor.lookahead(context, index) else {
+            let Some(token) = parser.cursor.lookahead(index) else {
                 return false;
             };
             match token.kind {

@@ -510,11 +510,7 @@ impl<'pp> PreprocessorExpressionParser<'pp> {
     reason = "Integer literal values are range-checked before narrowing."
 )]
 impl Expander<'_, '_, '_> {
-    fn map_operator(
-        &mut self,
-        _context: &Context<'_>,
-        operator: PreprocessorToken,
-    ) -> PreprocessorExpressionOperator {
+    fn map_operator(&mut self, operator: PreprocessorToken) -> PreprocessorExpressionOperator {
         let state = replace(
             &mut self.expression_parser.state,
             PreprocessorExpressionParserState::Unary,
@@ -1532,7 +1528,7 @@ impl Expander<'_, '_, '_> {
                         PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
                         PreprocessorTokenType::Comma,
                         UNARY) => context.preprocessor_error(PreprocessorError {
-                            error_type: PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(self.map_operator(context, token)),
+                            error_type: PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(self.map_operator(token)),
                             source_vectors: token.source_vectors,
                         }),
                     | (PreprocessorTokenType::Plus | PreprocessorTokenType::Minus | PreprocessorTokenType::Asterisk
@@ -1542,7 +1538,7 @@ impl Expander<'_, '_, '_> {
                     PreprocessorTokenType::Caret | PreprocessorTokenType::Pipe | PreprocessorTokenType::AmpersandAmpersand | PreprocessorTokenType::PipePipe | PreprocessorTokenType::QuestionMark |
                     PreprocessorTokenType::Comma,
                     BINARY) => {
-                        let token_op = self.map_operator(context, token);
+                        let token_op = self.map_operator(token);
                         while let Some(op) = self.expression_parser.operator_stack.pop() {
                             if op.kind == PreprocessorExpressionOperator::QuestionMark
                                 && token_op == PreprocessorExpressionOperator::Comma

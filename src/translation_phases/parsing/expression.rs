@@ -202,7 +202,6 @@ const BRACE_GROUP_LOOKAHEAD: usize = 256;
 /// contains `;` or a statement keyword (§6.5, pp. 67-94; PDF pp. 79-106).
 pub(super) fn closer_follows_stray_run(
     parser: &mut Parser<'_, '_>,
-    context: &mut Context<'_>,
     closer: fn(TokenType) -> bool,
     stop_at_declarations: bool,
 ) -> Option<usize> {
@@ -213,9 +212,9 @@ pub(super) fn closer_follows_stray_run(
     let mut previous = None;
     for index in 0..STRAY_RUN_LOOKAHEAD {
         let token = if index == 0 {
-            parser.cursor.current(context)?
+            parser.cursor.current()?
         } else {
-            parser.cursor.lookahead(context, index - 1)?
+            parser.cursor.lookahead(index - 1)?
         };
         if depth == 0 && closer(token.kind) {
             return (index > 0).then_some(index);
@@ -271,13 +270,13 @@ pub(super) fn closer_follows_stray_run(
 /// Returns whether the brace group starting at the current `{` reads as a
 /// statement block rather than a misplaced initializer list: it contains a
 /// `;` or a statement keyword, is empty, or does not close within reach.
-fn brace_group_is_block(parser: &mut Parser<'_, '_>, context: &mut Context<'_>) -> bool {
+fn brace_group_is_block(parser: &mut Parser<'_, '_>) -> bool {
     let mut depth = 0_usize;
     for index in 0..BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
-            parser.cursor.current(context)
+            parser.cursor.current()
         } else {
-            parser.cursor.lookahead(context, index - 1)
+            parser.cursor.lookahead(index - 1)
         };
         let Some(token) = token else {
             return true;
@@ -312,16 +311,13 @@ const PARENTHESIZED_BRACE_GROUP_LOOKAHEAD: usize = 4096;
 /// C99: a `{` cannot start a primary expression (§6.5.1, p. 69; PDF p. 81),
 /// so the whole group is skipped as one diagnosed operand (§5.1.1.3, p. 11;
 /// PDF p. 23).
-fn brace_group_closes_before_parenthesis(
-    parser: &mut Parser<'_, '_>,
-    context: &mut Context<'_>,
-) -> bool {
+fn brace_group_closes_before_parenthesis(parser: &mut Parser<'_, '_>) -> bool {
     let mut depth = 0_usize;
     for index in 0..PARENTHESIZED_BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
-            parser.cursor.current(context)
+            parser.cursor.current()
         } else {
-            parser.cursor.lookahead(context, index - 1)
+            parser.cursor.lookahead(index - 1)
         };
         let Some(token) = token else {
             return false;
@@ -331,7 +327,7 @@ fn brace_group_closes_before_parenthesis(
             | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    return parser.cursor.lookahead(context, index).is_some_and(|next| {
+                    return parser.cursor.lookahead(index).is_some_and(|next| {
                         next.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                     });
                 }
@@ -346,16 +342,13 @@ fn brace_group_closes_before_parenthesis(
 /// reach and is followed by `)`, `]`, or `,`: the group then sits inside an
 /// expression, as in `if (x == {}) ...`, rather than being a statement body
 /// left after a missing `)`.
-fn brace_group_continues_expression(
-    parser: &mut Parser<'_, '_>,
-    context: &mut Context<'_>,
-) -> bool {
+fn brace_group_continues_expression(parser: &mut Parser<'_, '_>) -> bool {
     let mut depth = 0_usize;
     for index in 0..PARENTHESIZED_BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
-            parser.cursor.current(context)
+            parser.cursor.current()
         } else {
-            parser.cursor.lookahead(context, index - 1)
+            parser.cursor.lookahead(index - 1)
         };
         let Some(token) = token else {
             return false;
@@ -365,7 +358,7 @@ fn brace_group_continues_expression(
             | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    return parser.cursor.lookahead(context, index).is_some_and(|next| {
+                    return parser.cursor.lookahead(index).is_some_and(|next| {
                         matches!(
                             next.kind,
                             TokenType::Operator(
@@ -667,7 +660,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 // Avoid retrying the boundary as another call argument.
                 if token.is_some_and(|token| {
                     is_expression_operand_starter(token.kind)
-                        && !self.is_strong_grammar_boundary(parser, context, token)
+                        && !self.is_strong_grammar_boundary(parser, token)
                 }) {
                     parser.report(
                         context,
@@ -771,7 +764,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 debug_assert!(returned.is_none());
                 if let Some(opening) = token
                     && opening.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
-                    && Self::parenthesized_type_name_follows(parser, context)
+                    && Self::parenthesized_type_name_follows(parser)
                 {
                     self.phase = ExpressionPhase::PushTypeName(
                         opening.source_vectors,
@@ -839,10 +832,10 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                     false
                 };
                 let starts_compound_literal = consume
-                    && parser.cursor.following(context).is_some_and(|following| {
+                    && parser.cursor.following().is_some_and(|following| {
                         following.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
                     })
-                    && !parser.cursor.lookahead(context, 1).is_some_and(|first| {
+                    && !parser.cursor.lookahead(1).is_some_and(|first| {
                         first.kind != TokenType::Identifier
                             && (parser.declaration_starter(first)
                                 || is_statement_keyword(first.kind))
@@ -870,7 +863,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                             // the `{` of a compound literal is missing after
                             // the `)`. Report it there and keep the operand as
                             // a recovered cast.
-                            let following = parser.cursor.following(context);
+                            let following = parser.cursor.following();
                             parser.report(
                                 context,
                                 ParserErrorType::ExpectedStatementExpression(
@@ -1141,7 +1134,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 && parser.cursor.previous.is_some_and(|previous| {
                     previous.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
                 })
-                && brace_group_closes_before_parenthesis(parser, context)
+                && brace_group_closes_before_parenthesis(parser)
             {
                 parser.report(
                     context,
@@ -1158,10 +1151,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             // primary expression. At the first initializer operand, do
             // not reinterpret declaration-shaped
             // lookahead as recovery evidence.
-            let following_kind = parser
-                .cursor
-                .following(context)
-                .map(|following| following.kind);
+            let following_kind = parser.cursor.following().map(|following| following.kind);
             let identifier_is_unambiguous_recovery_boundary = token.kind == TokenType::Identifier
                 && (following_kind == Some(TokenType::Operator(OperatorTokenType::Colon))
                     || self.recovery_boundary == ExpressionBoundary::Initializer
@@ -1172,7 +1162,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 || self.recovery_boundary != self.boundary
                     && Self::is_owning_boundary_for(self.recovery_boundary, token.kind);
             if owned_boundary
-                || !identifier_is_operand && self.is_strong_grammar_boundary(parser, context, token)
+                || !identifier_is_operand && self.is_strong_grammar_boundary(parser, token)
             {
                 // A declaration-specifier keyword inside this expression's
                 // own delimiters, such as `f(int)` or `(static int)`, is a
@@ -1182,7 +1172,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                     && matches!(token.kind, TokenType::Keyword(_))
                     && let Some(closer) = self.closer()
                 {
-                    closer_follows_stray_run(parser, context, closer, false)
+                    closer_follows_stray_run(parser, closer, false)
                 } else {
                     None
                 };
@@ -1211,14 +1201,13 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 return ParseAction::Consume;
             }
             if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
-                let type_name_use =
-                    Self::parenthesized_type_name_follows(parser, context).then(|| {
-                        if self.mode == ExpressionMode::UnaryExpression {
-                            TypeNameUse::UnaryCompoundLiteral
-                        } else {
-                            TypeNameUse::Cast
-                        }
-                    });
+                let type_name_use = Self::parenthesized_type_name_follows(parser).then(|| {
+                    if self.mode == ExpressionMode::UnaryExpression {
+                        TypeNameUse::UnaryCompoundLiteral
+                    } else {
+                        TypeNameUse::Cast
+                    }
+                });
                 if let Some(type_name_use) = type_name_use {
                     self.phase = ExpressionPhase::PushTypeName(token.source_vectors, type_name_use);
                     return ParseAction::Consume;
@@ -1281,7 +1270,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 && parser.cursor.previous.is_some_and(|previous| {
                     previous.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                 })
-                && !brace_group_is_block(parser, context)
+                && !brace_group_is_block(parser)
             {
                 let operand = self.pop_operand().expression;
                 if !operand.recovered {
@@ -1427,8 +1416,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 // to the closer that follows it. Without such a closer, the
                 // closer itself is missing: finish quietly so its owner
                 // names the missing `)`, `]`, or `:` at this token.
-                let Some(stray_run) = closer_follows_stray_run(parser, context, closer, false)
-                else {
+                let Some(stray_run) = closer_follows_stray_run(parser, closer, false) else {
                     return self.finish(parser, context);
                 };
                 if !self.stray_error_operand {
@@ -1507,11 +1495,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// Returns whether the current `(` opens a type name: a type-name starter
     /// follows, or a storage-class or `inline` keyword that a type-name frame
     /// diagnoses as not allowed before one, as in `(static int)x`.
-    fn parenthesized_type_name_follows(
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-    ) -> bool {
-        let Some(following) = parser.cursor.following(context) else {
+    fn parenthesized_type_name_follows(parser: &mut Parser<'tu, 'p>) -> bool {
+        let Some(following) = parser.cursor.following() else {
             return false;
         };
         parser.type_name_starter(following)
@@ -1527,7 +1512,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 )
             ) && parser
                 .cursor
-                .lookahead(context, 1)
+                .lookahead(1)
                 .is_some_and(|next| parser.type_name_starter(next))
     }
 
@@ -1769,16 +1754,11 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         }
     }
 
-    fn is_strong_grammar_boundary(
-        &self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-        token: Token,
-    ) -> bool {
+    fn is_strong_grammar_boundary(&self, parser: &mut Parser<'tu, 'p>, token: Token) -> bool {
         let identifier_precedes_conditional_colon = self.boundary
             == ExpressionBoundary::Statement(ExpressionTerminator::Colon)
             && token.kind == TokenType::Identifier
-            && parser.cursor.following(context).is_some_and(|following| {
+            && parser.cursor.following().is_some_and(|following| {
                 following.kind == TokenType::Operator(OperatorTokenType::Colon)
             });
         // A brace in a statement-level expression ends it only when the
@@ -1790,40 +1770,31 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 self.recovery_boundary,
                 ExpressionBoundary::Statement(_) | ExpressionBoundary::ClosingParenthesis
             )
-            && brace_group_is_block(parser, context)
-            && !brace_group_continues_expression(parser, context)
-            || Self::is_strong_grammar_boundary_for(parser, context, token, self.boundary)
+            && brace_group_is_block(parser)
+            && !brace_group_continues_expression(parser)
+            || Self::is_strong_grammar_boundary_for(parser, token, self.boundary)
             || self.recovery_boundary != self.boundary
                 && !identifier_precedes_conditional_colon
-                && Self::is_strong_grammar_boundary_for(
-                    parser,
-                    context,
-                    token,
-                    self.recovery_boundary,
-                )
+                && Self::is_strong_grammar_boundary_for(parser, token, self.recovery_boundary)
     }
 
     pub(super) fn is_strong_grammar_boundary_for(
         parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
         token: Token,
         boundary: ExpressionBoundary,
     ) -> bool {
         let identifier_continues_as_postfix = token.kind == TokenType::Identifier
             && parser
                 .cursor
-                .following(context)
+                .following()
                 .is_some_and(|following| is_postfix_starter(following.kind));
-        let declaration_starts_here = parser.declaration_recovery_starts_here(context, token);
+        let declaration_starts_here = parser.declaration_recovery_starts_here(token);
         match boundary {
             | ExpressionBoundary::Initializer =>
                 is_statement_keyword(token.kind)
                     || declaration_starts_here
                         && !matches!(
-                            parser
-                                .cursor
-                                .following(context)
-                                .map(|following| following.kind),
+                            parser.cursor.following().map(|following| following.kind),
                             Some(TokenType::Operator(
                                 OperatorTokenType::Comma
                                     | OperatorTokenType::Semicolon
@@ -1834,20 +1805,14 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 token.kind != TokenType::Identifier
                     && parser.declaration_starter(token)
                     && !matches!(
-                        parser
-                            .cursor
-                            .following(context)
-                            .map(|following| following.kind),
+                        parser.cursor.following().map(|following| following.kind),
                         Some(TokenType::Operator(OperatorTokenType::ClosingSquareBracket))
                     ),
             | ExpressionBoundary::StructMember =>
                 token.kind != TokenType::Identifier
                     && parser.declaration_starter(token)
                     && !matches!(
-                        parser
-                            .cursor
-                            .following(context)
-                            .map(|following| following.kind),
+                        parser.cursor.following().map(|following| following.kind),
                         Some(TokenType::Operator(
                             OperatorTokenType::Comma
                                 | OperatorTokenType::Semicolon
@@ -1858,10 +1823,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 token.kind != TokenType::Identifier
                     && parser.declaration_starter(token)
                     && !matches!(
-                        parser
-                            .cursor
-                            .following(context)
-                            .map(|following| following.kind),
+                        parser.cursor.following().map(|following| following.kind),
                         Some(TokenType::Operator(
                             OperatorTokenType::Comma | OperatorTokenType::ClosingCurlyBrace
                         ))
@@ -1873,7 +1835,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                         boundary,
                         ExpressionBoundary::Statement(ExpressionTerminator::Semicolon)
                     ) && token.kind == TokenType::Identifier
-                        && parser.cursor.following(context).is_some_and(|following| {
+                        && parser.cursor.following().is_some_and(|following| {
                             following.kind == TokenType::Operator(OperatorTokenType::Colon)
                         }),
             | ExpressionBoundary::ClosingSquareBracket

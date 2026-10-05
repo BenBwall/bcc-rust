@@ -311,7 +311,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             && parser.scopes.is_typedef(token.contents)
             && (self.mode == SpecifierMode::TypeName
                 || self.specifiers.type_specifiers == TypeSpecifiers::Empty
-                || parser.typedef_name_continues_specifiers(context))
+                || parser.typedef_name_continues_specifiers())
         {
             // A visible typedef spelling is still allowed to become the
             // declarator name. Consume it as a specifier only when no
@@ -339,7 +339,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             && self.specifiers.type_specifiers == TypeSpecifiers::Empty
             && !self.invalid_type_seen
             && !parser.scopes.is_typedef(token.contents)
-            && parser.cursor.following(context).is_some_and(|following| {
+            && parser.cursor.following().is_some_and(|following| {
                 following.kind == TokenType::Identifier
                     || following.kind == TokenType::Operator(OperatorTokenType::Asterisk)
                     || parser.declaration_starter(following)

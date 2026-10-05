@@ -265,11 +265,7 @@ impl<'x> Expander<'_, '_, 'x> {
         self.tokenizer.location_at(context, position)
     }
 
-    pub(super) fn push_tokenizer_frame(
-        &mut self,
-        _context: &mut Context<'_>,
-        frame: TokenizerFrame<'x>,
-    ) {
+    pub(super) fn push_tokenizer_frame(&mut self, frame: TokenizerFrame<'x>) {
         self.tokenizer_stack.last_mut().unwrap().tokenizer = take(&mut self.tokenizer);
         self.tokenizer = frame.tokenizer.clone();
         self.tokenizer_stack.push(frame);
@@ -517,7 +513,7 @@ impl<'x> Expander<'_, '_, 'x> {
             // list is rescanned, so a parameter hides a macro of its name.
             // `##` runs after replacement, so its result names no parameter.
             if !is_pasted && let Some(frame) = self.handle_macro_argument(context, token) {
-                self.push_tokenizer_frame(context, frame);
+                self.push_tokenizer_frame(frame);
                 continue;
             }
             if self.is_reading_operand() {
@@ -555,7 +551,7 @@ impl<'x> Expander<'_, '_, 'x> {
                             },
                             tokenizer,
                         };
-                        self.push_tokenizer_frame(context, frame);
+                        self.push_tokenizer_frame(frame);
                         continue;
                     },
                     | MacroDefinition::FunctionLike {
@@ -575,19 +571,16 @@ impl<'x> Expander<'_, '_, 'x> {
                             ) else {
                                 break 'base Some(token);
                             };
-                            self.push_tokenizer_frame(
-                                context,
-                                TokenizerFrame {
-                                    frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
-                                        invocation_end,
-                                        invocation: self.invocation_location(context, token),
-                                        name: token.identifier_id(context),
-                                        arguments,
-                                        is_variadic,
-                                    },
-                                    tokenizer,
+                            self.push_tokenizer_frame(TokenizerFrame {
+                                frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
+                                    invocation_end,
+                                    invocation: self.invocation_location(context, token),
+                                    name: token.identifier_id(context),
+                                    arguments,
+                                    is_variadic,
                                 },
-                            );
+                                tokenizer,
+                            });
                             continue;
                         }
                         let position = self.position(context);
@@ -618,7 +611,7 @@ impl<'x> Expander<'_, '_, 'x> {
                             }
                         }
                         let mut i = 0;
-                        let enclosing_arguments = self.get_arguments(context);
+                        let enclosing_arguments = self.get_arguments();
                         let disabled_macros = self.disabled_macros();
                         let mut arguments = ArenaVec::with_capacity_in(
                             argument_names.len() + usize::from(is_variadic),
@@ -825,7 +818,7 @@ impl<'x> Expander<'_, '_, 'x> {
                             },
                             tokenizer,
                         };
-                        self.push_tokenizer_frame(context, frame);
+                        self.push_tokenizer_frame(frame);
                         continue;
                     },
                     | MacroDefinition::BuiltIn => match context.string_cache.at(token.contents) {

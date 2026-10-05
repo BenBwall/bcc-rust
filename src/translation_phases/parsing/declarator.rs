@@ -455,7 +455,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     parser.merge_source(context, &mut self.source_vectors, token);
                     return ParseAction::Consume;
                 }
-                if is_array_pointer_marker(parser, context, token) {
+                if is_array_pointer_marker(parser, token) {
                     let token = token.expect("asterisk token exists");
                     // C99 §6.7.6p1: an abstract declarator's `[ * ]` takes no
                     // qualifiers, whichever suffixes or grouping precede it.

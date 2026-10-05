@@ -334,7 +334,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     != self.starting_error_count
                     && token.is_some_and(|token| parser.declaration_starter(token))
                     && old_style_parameters.is_some_and(|parameters| {
-                        parser.next_declaration_declares_one_of(context, parameters.as_slice())
+                        parser.next_declaration_declares_one_of(parameters.as_slice())
                     });
                 let starts_function_definition = self.context == DeclarationContext::External
                     && has_sole_uninitialized_declarator
@@ -433,7 +433,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     DeclarationContext::Block | DeclarationContext::ForInitializer
                 ) && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                     || token.is_some_and(|token| token.kind == TokenType::Identifier)
-                        && is_operator(parser.cursor.following(context), OperatorTokenType::Colon))
+                        && is_operator(parser.cursor.following(), OperatorTokenType::Colon))
                 {
                     parser.report(
                         context,

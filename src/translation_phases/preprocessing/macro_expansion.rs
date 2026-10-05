@@ -435,7 +435,7 @@ impl<'x> Expander<'_, '_, 'x> {
         Some((arguments.leak(), invocation_end))
     }
 
-    pub(super) fn get_arguments(&self, _context: &Context<'_>) -> Option<MacroArguments<'x>> {
+    pub(super) fn get_arguments(&self) -> Option<MacroArguments<'x>> {
         match self.tokenizer_stack.last().map(|frame| &frame.frame_type) {
             // Argument tokens belong to the invocation's caller. Looking them
             // up in the callee's map can make a same-named parameter expand itself.
@@ -528,7 +528,7 @@ impl<'x> Expander<'_, '_, 'x> {
         context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Option<TokenizerFrame<'x>> {
-        let arguments = self.get_arguments(context)?;
+        let arguments = self.get_arguments()?;
         let argument = find_argument(arguments, token.identifier_id(context))?;
         // Prescan is isolated from the replacement list. Rescanning the result
         // then uses the callee's disabled-name set, not the caller's.
@@ -566,7 +566,7 @@ impl<'x> Expander<'_, '_, 'x> {
         context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> Option<TokenizerFrame<'x>> {
-        if let Some(arguments) = self.get_arguments(context)
+        if let Some(arguments) = self.get_arguments()
             && let Some(arg) = find_argument(arguments, token.identifier_id(context))
         {
             let frame = TokenizerFrame {
@@ -655,17 +655,14 @@ impl<'x> Expander<'_, '_, 'x> {
         let hash_hash_stack = replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
         let generate_placeholders = self.generate_placeholders;
         let newlines = (self.last_was_newline, self.current_is_newline);
-        self.push_tokenizer_frame(
-            context,
-            TokenizerFrame {
-                frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
-                    argument,
-                    paren_depth: Some(1),
-                    has_generated_token: false,
-                },
-                tokenizer:  argument.tokenizer.clone(),
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
+                argument,
+                paren_depth: Some(1),
+                has_generated_token: false,
             },
-        );
+            tokenizer:  argument.tokenizer.clone(),
+        });
         let depth = self.tokenizer_stack.len();
         let fence = replace(&mut self.operand_fence, if expand { 0 } else { depth });
         let expansion_fence = replace(&mut self.expansion_fence, depth);
@@ -770,14 +767,14 @@ impl<'x> Expander<'_, '_, 'x> {
         };
         self.hash_hash_stack.push(HashHash::Empty);
         let rhs_is_macro_argument = if let Some(frame) = rhs_frame {
-            self.push_tokenizer_frame(context, frame);
+            self.push_tokenizer_frame(frame);
             true
         } else {
             *self.hash_hash_stack.last_mut().unwrap() = HashHash::Rhs(rhs);
             false
         };
         if let Some(frame) = lhs_frame {
-            self.push_tokenizer_frame(context, frame);
+            self.push_tokenizer_frame(frame);
         } else if rhs_is_macro_argument {
             *self.hash_hash_stack.last_mut().unwrap() = HashHash::Lhs(lhs);
         } else {
@@ -1420,7 +1417,7 @@ impl<'x> Expander<'_, '_, 'x> {
         Some(paren_depth)
     }
 
-    pub(super) fn current_is_header(&self, _context: &Context<'_>) -> bool {
+    pub(super) fn current_is_header(&self) -> bool {
         // The first in the tokenizer stack is the original source file.
         for frame in self.tokenizer_stack.iter().skip(1).rev() {
             match frame.frame_type {

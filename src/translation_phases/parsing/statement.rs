@@ -246,7 +246,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
                 if let Some(token) = token
                     && token.kind == TokenType::Identifier
-                    && is_operator(parser.cursor.following(context), OperatorTokenType::Colon)
+                    && is_operator(parser.cursor.following(), OperatorTokenType::Colon)
                 {
                     let identifier = Identifier::from_token(token);
                     if let Some(labels) = parser.label_scopes.innermost_mut() {
@@ -361,7 +361,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 // frame starts, so only substatements reach this point.
                 if let Some(token) = token
                     && token.kind == TokenType::Identifier
-                    && parser.declaration_recovery_starts_here(context, token)
+                    && parser.declaration_recovery_starts_here(token)
                 {
                     parser.report(
                         context,
@@ -449,7 +449,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 debug_assert!(returned.is_none());
                 let identifier_continues_expression = token
                     .is_some_and(|token| token.kind == TokenType::Identifier)
-                    && parser.cursor.following(context).is_some_and(|following| {
+                    && parser.cursor.following().is_some_and(|following| {
                         following.kind == TokenType::Operator(OperatorTokenType::Asterisk)
                             || is_postfix_starter(following.kind)
                     });
@@ -460,10 +460,10 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 } else if Self::at_expression_boundary(token, ExpressionTerminator::Semicolon)
                     || token.is_some_and(|token| {
                         !identifier_continues_expression
-                            && parser.declaration_recovery_starts_here(context, token)
+                            && parser.declaration_recovery_starts_here(token)
                     })
                     || token.is_some_and(|token| token.kind == TokenType::Identifier)
-                        && is_operator(parser.cursor.following(context), OperatorTokenType::Colon)
+                        && is_operator(parser.cursor.following(), OperatorTokenType::Colon)
                 {
                     self.phase = StatementPhase::ReturnSemicolon(None);
                     ParseAction::Reprocess
@@ -585,7 +585,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::CaseColon(expression) => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::Semicolon)
-                    && is_operator(parser.cursor.following(context), OperatorTokenType::Colon)
+                    && is_operator(parser.cursor.following(), OperatorTokenType::Colon)
                 {
                     self.own_colon_or_report(parser, context, token, "case label");
                     self.merge_token(parser, context, token.expect("semicolon exists"));
@@ -597,7 +597,6 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     && !is_operator(token, OperatorTokenType::Colon)
                     && super::expression::closer_follows_stray_run(
                         parser,
-                        context,
                         |token| token == TokenType::Operator(OperatorTokenType::Colon),
                         true,
                     )
@@ -712,7 +711,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon)
                     && is_operator(
-                        parser.cursor.following(context),
+                        parser.cursor.following(),
                         OperatorTokenType::ClosingParenthesis,
                     )
                 {
@@ -932,7 +931,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon)
                     && is_operator(
-                        parser.cursor.following(context),
+                        parser.cursor.following(),
                         OperatorTokenType::ClosingParenthesis,
                     )
                 {
@@ -1116,7 +1115,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon)
                     && is_operator(
-                        parser.cursor.following(context),
+                        parser.cursor.following(),
                         OperatorTokenType::ClosingParenthesis,
                     )
                 {
@@ -1157,7 +1156,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon)
                     && is_operator(
-                        parser.cursor.following(context),
+                        parser.cursor.following(),
                         OperatorTokenType::ClosingParenthesis,
                     )
                 {
@@ -1185,7 +1184,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     // of the header is skipped by count once lookahead has
                     // found its `)`.
                     if is_operator(token, OperatorTokenType::Semicolon)
-                        && let Some(distance) = Self::for_header_closer_distance(parser, context)
+                        && let Some(distance) = Self::for_header_closer_distance(parser)
                     {
                         self.phase = StatementPhase::ForSkipHeader(
                             initializer,
@@ -1274,12 +1273,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
     /// following statement (a brace, a statement keyword, or a declaration
     /// starter outside parentheses), at the end of input, or after
     /// [`HEADER_RECOVERY_LOOKAHEAD`] tokens.
-    fn for_header_closer_distance(
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-    ) -> Option<u16> {
+    fn for_header_closer_distance(parser: &mut Parser<'tu, 'p>) -> Option<u16> {
         let mut depth = 0_usize;
-        let mut token = parser.cursor.current(context);
+        let mut token = parser.cursor.current();
         for distance in 0..HEADER_RECOVERY_LOOKAHEAD {
             let current = token?;
             match current.kind {
@@ -1298,7 +1294,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 | _ if depth == 0 && parser.declaration_starter(current) => return None,
                 | _ => {},
             }
-            token = parser.cursor.lookahead(context, usize::from(distance));
+            token = parser.cursor.lookahead(usize::from(distance));
         }
         None
     }

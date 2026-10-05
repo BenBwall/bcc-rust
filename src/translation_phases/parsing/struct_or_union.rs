@@ -436,7 +436,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    if Self::member_list_continues(parser, context) {
+                    if Self::member_list_continues(parser) {
                         // A stray `)` cannot end the member list; its `}`
                         // follows, so the member continues after it.
                         if !(resuming_after_recovery || width_recovered) {
@@ -522,7 +522,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     /// `int f(struct S { int x ) int after;`, the `)` closes that
     /// parenthesis and the body's `}` is missing. The scan is bounded so
     /// repeated errors stay linear.
-    fn member_list_continues(parser: &mut Parser<'tu, 'p>, context: &mut Context<'_>) -> bool {
+    fn member_list_continues(parser: &mut Parser<'tu, 'p>) -> bool {
         const SCAN_LIMIT: usize = 64;
         // Parentheses and brackets, which never contain `;`.
         let mut groups = 0_u32;
@@ -534,7 +534,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
         let mut previous = None;
         let mut before_previous = None;
         for index in 0..SCAN_LIMIT {
-            let Some(token) = parser.cursor.lookahead(context, index) else {
+            let Some(token) = parser.cursor.lookahead(index) else {
                 return false;
             };
             let kind = token.kind;

@@ -130,7 +130,7 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else {
                     let is_label = token.is_some_and(|token| token.kind == TokenType::Identifier)
-                        && is_operator(parser.cursor.following(context), OperatorTokenType::Colon);
+                        && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
                     if !is_label && token.is_some_and(|token| parser.declaration_starter(token)) {
                         self.phase = CompoundStatementPhase::AwaitDeclaration;
                         ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(

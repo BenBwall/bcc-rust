@@ -12,7 +12,6 @@ use super::{
     },
 };
 use crate::translation_phases::{
-    Context,
     SourceVectors,
     preprocessing::{
         KeywordTokenType,
@@ -196,14 +195,10 @@ pub(super) fn is_postfix_starter(token: TokenType) -> bool {
     )
 }
 
-pub(super) fn is_array_pointer_marker(
-    parser: &mut Parser<'_, '_>,
-    context: &mut Context<'_>,
-    token: Option<Token>,
-) -> bool {
+pub(super) fn is_array_pointer_marker(parser: &mut Parser<'_, '_>, token: Option<Token>) -> bool {
     is_operator(token, OperatorTokenType::Asterisk)
         && is_operator(
-            parser.cursor.following(context),
+            parser.cursor.following(),
             OperatorTokenType::ClosingSquareBracket,
         )
 }

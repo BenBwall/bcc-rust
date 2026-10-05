@@ -246,7 +246,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                         ),
                         token,
                     );
-                    if Self::enumerator_list_continues(parser, context) {
+                    if Self::enumerator_list_continues(parser) {
                         // A stray `)` cannot end the list; its `}` follows.
                         let token = token.expect("closing-parenthesis token exists");
                         self.source_vectors.push(token.source_vectors);
@@ -265,7 +265,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
                 } else if let Some(misplaced) = token
-                    && Self::misplaced_enumerator(parser, context, misplaced)
+                    && Self::misplaced_enumerator(parser, misplaced)
                 {
                     // C99 §6.7.2.2p1: an enumeration constant is an
                     // identifier. A keyword or constant written in its place
@@ -379,7 +379,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    let stray = Self::enumerator_list_continues(parser, context);
+                    let stray = Self::enumerator_list_continues(parser);
                     if !(stray && resuming_after_error) {
                         parser.report(
                             context,
@@ -409,7 +409,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::EnumeratorOrClose;
                     ParseAction::Reprocess
                 } else if let Some(misplaced) = token
-                    && Self::misplaced_enumerator(parser, context, misplaced)
+                    && Self::misplaced_enumerator(parser, misplaced)
                 {
                     // The `,` is missing before a keyword or constant that
                     // stands in for the next enumerator; consume it so it is
@@ -472,11 +472,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
     /// enumerator position: a non-identifier, non-delimiter token followed by
     /// `,`, `=`, or `}`. Anything else keeps the malformed-body recovery that
     /// stops before a following declaration.
-    fn misplaced_enumerator(
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-        token: Token,
-    ) -> bool {
+    fn misplaced_enumerator(parser: &mut Parser<'tu, 'p>, token: Token) -> bool {
         token.kind != TokenType::Identifier
             && !matches!(
                 token.kind,
@@ -492,7 +488,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                         | OperatorTokenType::Equals
                 )
             )
-            && parser.cursor.following(context).is_some_and(|following| {
+            && parser.cursor.following().is_some_and(|following| {
                 matches!(
                     following.kind,
                     TokenType::Operator(
@@ -513,11 +509,11 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
     /// `int f(enum E { A ) int after;`, the `)` closes that parenthesis and
     /// the body's `}` is missing. The scan is bounded so repeated errors stay
     /// linear.
-    fn enumerator_list_continues(parser: &mut Parser<'tu, 'p>, context: &mut Context<'_>) -> bool {
+    fn enumerator_list_continues(parser: &mut Parser<'tu, 'p>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {
-            let Some(token) = parser.cursor.lookahead(context, index) else {
+            let Some(token) = parser.cursor.lookahead(index) else {
                 return false;
             };
             match token.kind {

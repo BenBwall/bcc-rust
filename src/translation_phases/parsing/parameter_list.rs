@@ -158,21 +158,18 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
     /// `(size_t n, int m)`, a bounded scan of the rest of the list looks for
     /// declaration syntax; without it, `(a b, c)` stays an identifier list with
     /// an omitted comma.
-    fn unknown_type_name_starts_prototype(
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-    ) -> bool {
+    fn unknown_type_name_starts_prototype(parser: &mut Parser<'tu, 'p>) -> bool {
         /// Tokens examined after two adjacent identifiers before the list is
         /// assumed to be an identifier list.
         const SCAN_LIMIT: usize = 64;
-        let Some(following) = parser.cursor.following(context) else {
+        let Some(following) = parser.cursor.following() else {
             return false;
         };
         match following.kind {
             | TokenType::Operator(OperatorTokenType::Asterisk) => true,
             | TokenType::Identifier => {
                 for index in 1..=SCAN_LIMIT {
-                    let Some(token) = parser.cursor.lookahead(context, index) else {
+                    let Some(token) = parser.cursor.lookahead(index) else {
                         return false;
                     };
                     if parser.declaration_starter(token)
@@ -226,7 +223,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                         token.kind == TokenType::Identifier
                             && !parser.scopes.is_typedef(token.contents)
                     })
-                    && !Self::unknown_type_name_starts_prototype(parser, context)
+                    && !Self::unknown_type_name_starts_prototype(parser)
                 {
                     self.phase = ParameterListPhase::KAndRIdentifier;
                 } else {

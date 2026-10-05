@@ -981,16 +981,13 @@ impl<'x> Expander<'_, '_, 'x> {
             .state
             .lexed_files
             .open(context, header_source_index, header_string);
-        self.push_tokenizer_frame(
-            context,
-            TokenizerFrame {
-                frame_type: TokenizerFrameType::SourceFile {
-                    conditional_base:           self.state.open_conditionals.len(),
-                    physical_source_file_index: header_source_index,
-                },
-                tokenizer,
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::SourceFile {
+                conditional_base:           self.state.open_conditionals.len(),
+                physical_source_file_index: header_source_index,
             },
-        );
+            tokenizer,
+        });
         self.last_was_newline = true;
         self.current_is_newline = true;
     }
@@ -1483,7 +1480,7 @@ impl<'x> Expander<'_, '_, 'x> {
                 | PreprocessorTokenType::UniversalIdentifier => {
                     match context.string_cache.at(token.contents) {
                         | "once" => {
-                            if !self.current_is_header(context) {
+                            if !self.current_is_header() {
                                 context.preprocessor_error(PreprocessorError {
                                     error_type:     PreprocessorErrorType::PragmaOnceInNonHeader,
                                     source_vectors: token.source_vectors,

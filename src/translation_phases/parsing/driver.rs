@@ -255,7 +255,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
             );
 
             if self.frames.is_empty() {
-                if self.cursor.current(context).is_none() {
+                if self.cursor.current().is_none() {
                     if !self.has_external_declaration && !self.reported_empty_translation_unit {
                         self.reported_empty_translation_unit = true;
                         self.report(context, ParserErrorType::EmptyTranslationUnit, None);
@@ -293,7 +293,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                 "syntax-node limit holds between steps"
             );
 
-            let token = self.cursor.current(context);
+            let token = self.cursor.current();
             let returned = self.returned.take();
             // Step the active frame in place. Frames never inspect the control
             // stack, so it is detached while the frame borrows the parser.
@@ -402,7 +402,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
     /// preprocessor has read ahead, so every preprocessing strategy places
     /// recovered and missing nodes identically.
     pub(super) fn missing_syntax_source(&mut self, context: &mut Context<'_>) -> SourceVectors {
-        if let Some(token) = self.cursor.current(context)
+        if let Some(token) = self.cursor.current()
             && let Some(first) = context.get_source_vectors(token.source_vectors).first()
         {
             let (position, source_file_index) = (first.position(context), first.source_file_index);
@@ -483,7 +483,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         }
         self.resource_limit_reported = true;
         self.has_external_declaration = true;
-        let token = token_override.or_else(|| self.cursor.current(context));
+        let token = token_override.or_else(|| self.cursor.current());
         let source_vectors = token.map_or_else(
             || {
                 context.create_retained_source_vectors(
@@ -528,7 +528,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         let mut consumed_tokens = 0_usize;
         self.recovery.begin(set);
 
-        while let Some(token) = self.cursor.current(context) {
+        while let Some(token) = self.cursor.current() {
             let state = self.recovery.active();
             let recovery_set = state.set;
             let at_top_level = state.parentheses == 0 && state.brackets == 0 && state.braces == 0;
@@ -607,7 +607,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                     && at_top_level
                     && !has_pending_conditional_at_depth
                     && token.kind == TokenType::Identifier
-                    && is_operator(self.cursor.following(context), OperatorTokenType::Colon);
+                    && is_operator(self.cursor.following(), OperatorTokenType::Colon);
             let at_statement_body_brace = (matches!(
                 recovery_set.kind,
                 SynchronizationKind::StatementExpression(
@@ -622,7 +622,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                     != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
                     || !state.last_closed_parenthesis_was_type_name
                     || state.last_closed_parenthesis_was_sizeof_type_name
-                        && self.cursor.following(context).is_some_and(|following| {
+                        && self.cursor.following().is_some_and(|following| {
                             is_statement_keyword(following.kind)
                                 || following.kind != TokenType::Identifier
                                     && self.declaration_starter(following)
@@ -658,7 +658,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                 == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
                 && self
                     .cursor
-                    .following(context)
+                    .following()
                     .is_some_and(|following| self.declaration_starter(following));
             self.recovery.consume(token.kind, opens_type_name);
 
@@ -673,7 +673,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
             self.cursor.consume();
             consumed_tokens += 1;
         }
-        let stopped_token = self.cursor.current(context);
+        let stopped_token = self.cursor.current();
         let stopped_at = stopped_token.map(|token| token.kind);
         let ranges = source_vectors.map(|discarded| context.diagnostic_slice(&[discarded]));
         let related = stopped_token.map(|token| {
@@ -910,14 +910,9 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         }
     }
 
-    pub(super) fn declaration_recovery_starts_here(
-        &mut self,
-        context: &mut Context<'_>,
-        token: Token,
-    ) -> bool {
+    pub(super) fn declaration_recovery_starts_here(&mut self, token: Token) -> bool {
         self.declaration_starter(token)
-            && (token.kind != TokenType::Identifier
-                || self.typedef_name_continues_specifiers(context))
+            && (token.kind != TokenType::Identifier || self.typedef_name_continues_specifiers())
     }
 
     /// Resolves the declaration-specifier/declarator ambiguity after a visible
@@ -932,19 +927,15 @@ impl<'tu, 'p> Parser<'tu, 'p> {
     /// old-style parameter declaration from an unrelated declaration that
     /// follows a head missing its `;`. When the scan runs out of lookahead it
     /// answers yes, keeping the definition reading.
-    pub(super) fn next_declaration_declares_one_of(
-        &mut self,
-        context: &mut Context<'_>,
-        parameters: &[Identifier],
-    ) -> bool {
+    pub(super) fn next_declaration_declares_one_of(&mut self, parameters: &[Identifier]) -> bool {
         const LOOKAHEAD: usize = 32;
         let mut after_tag_keyword = false;
         let mut depth = 0_usize;
         for index in 0..LOOKAHEAD {
             let token = if index == 0 {
-                self.cursor.current(context)
+                self.cursor.current()
             } else {
-                self.cursor.lookahead(context, index - 1)
+                self.cursor.lookahead(index - 1)
             };
             let Some(token) = token else {
                 return false;
@@ -979,13 +970,13 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         true
     }
 
-    pub(super) fn typedef_name_continues_specifiers(&mut self, context: &mut Context<'_>) -> bool {
-        let Some(following) = self.cursor.following(context) else {
+    pub(super) fn typedef_name_continues_specifiers(&mut self) -> bool {
+        let Some(following) = self.cursor.following() else {
             return false;
         };
         following.kind == TokenType::Identifier
             || is_operator(Some(following), OperatorTokenType::Asterisk)
-            || self.parenthesized_declarator_follows_typedef(context)
+            || self.parenthesized_declarator_follows_typedef()
             || self.declaration_starter(following)
     }
 
@@ -995,18 +986,15 @@ impl<'tu, 'p> Parser<'tu, 'p> {
     /// C99: parenthesized direct-declarator and pointer are §6.7.5,
     /// p. 114; PDF p. 126; typedef-name is §6.7.7, pp. 123-124;
     /// PDF pp. 135-136.
-    fn parenthesized_declarator_follows_typedef(&mut self, context: &mut Context<'_>) -> bool {
+    fn parenthesized_declarator_follows_typedef(&mut self) -> bool {
         let mut index = 0;
         while is_operator(
-            self.cursor.lookahead(context, index),
+            self.cursor.lookahead(index),
             OperatorTokenType::OpeningParenthesis,
         ) {
             index += 1;
         }
-        is_operator(
-            self.cursor.lookahead(context, index),
-            OperatorTokenType::Asterisk,
-        )
+        is_operator(self.cursor.lookahead(index), OperatorTokenType::Asterisk)
     }
 
     pub(super) fn store_expression(
