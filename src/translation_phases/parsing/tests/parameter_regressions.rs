@@ -169,7 +169,14 @@ fn k_and_r_names_survive_a_mixed_prototype_parameter() {
         };
         let names = parameters
             .iter()
-            .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
+            .map(|identifier| {
+                parsed
+                    .parser
+                    .context
+                    .string_cache
+                    .at(identifier.name)
+                    .to_owned()
+            })
             .collect::<Vec<_>>();
         assert_eq!(names, ["a", "b"]);
     });

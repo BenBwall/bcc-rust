@@ -255,7 +255,8 @@ fn parser_diagnostics_expose_structured_context_and_fifo_recovery() {
             .collect::<Vec<_>>();
         assert_eq!(warnings.len(), 2);
         assert!(
-            warnings[0].position(parsed.context).index < warnings[1].position(parsed.context).index
+            warnings[0].position(parsed.parser.context).index
+                < warnings[1].position(parsed.parser.context).index
         );
     });
 }

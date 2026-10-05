@@ -42,7 +42,6 @@ use super::{
 };
 use crate::{
     translation_phases::{
-        Context,
         SourceVectors,
         preprocessing::{
             OperatorTokenType,
@@ -170,8 +169,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -202,7 +200,6 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     if specifiers.storage_class == Some(StorageClass::Typedef) {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedDeclaratorInTypedef(
                                 token.map(|token| token.kind),
                             ),
@@ -228,7 +225,6 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 };
                 let Some(declarator) = declarator else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclaratorInDeclaration(
                             token.map(|token| token.kind),
                         ),
@@ -384,7 +380,6 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     && is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -395,7 +390,6 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -419,7 +413,6 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                         ) && is_statement_keyword(token.kind)
                 }) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -436,7 +429,6 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                         && is_operator(parser.cursor.following(), OperatorTokenType::Colon))
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -447,7 +439,6 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             None,
                             self.continuation(),
@@ -458,7 +449,6 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -498,13 +488,14 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 let initializer_source = self
                     .initializer_source
                     .map_or(source_vectors, |equals_source| {
-                        context.merge_vectors(equals_source, source_vectors)
+                        parser.context.merge_vectors(equals_source, source_vectors)
                     });
                 self.source_vectors.push(source_vectors);
                 if let Some(init_declarator) = self.init_declarators.last_mut() {
                     init_declarator.initializer = Some(initializer_index);
-                    init_declarator.source_vectors =
-                        context.merge_vectors(init_declarator.source_vectors, initializer_source);
+                    init_declarator.source_vectors = parser
+                        .context
+                        .merge_vectors(init_declarator.source_vectors, initializer_source);
                 }
                 self.phase = DeclarationPhase::AfterDeclarator;
                 ParseAction::Continue
@@ -528,7 +519,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 // Arena insertion is the reduction boundary: all child
                 // slices and source ranges are complete before the
                 // declaration is stored and returned.
-                let source_vectors = context.merge_vector_list(&self.source_vectors);
+                let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
                 let init_declarators = parser.alloc_syntax_list(&mut self.init_declarators);
                 let declaration = parser.alloc_syntax(Declaration {
                     declaration_specifiers: self

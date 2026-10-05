@@ -50,11 +50,10 @@ use crate::{
 };
 
 struct Parsed<'a, 'tu> {
-    parser:  Parser<'tu, 'a>,
-    context: &'a mut Context<'tu>,
-    items:   Vec<ExternalDeclaration<'tu>>,
-    errors:  Vec<TranslationError<'tu>>,
-    source:  String,
+    parser: Parser<'a, 'tu, 'a>,
+    items:  Vec<ExternalDeclaration<'tu>>,
+    errors: Vec<TranslationError<'tu>>,
+    source: String,
 }
 
 fn with_parse<R>(source: &str, inspect: impl FnOnce(&mut Parsed<'_, '_>) -> R) -> R {
@@ -98,8 +97,7 @@ fn with_parsed<R>(
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit =
-        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
     inspect(&unit, &mut context)
 }
 
@@ -130,7 +128,7 @@ fn with_parse_with<R>(
     )
     .with_action_budget(source.len().saturating_mul(256).saturating_add(4_096));
     let mut items = Vec::new();
-    while let Some(item) = parser.next_item(&mut context) {
+    while let Some(item) = parser.next_item() {
         items.push(item);
         assert!(
             items.len() < 10_000,
@@ -138,12 +136,11 @@ fn with_parse_with<R>(
         );
     }
     let mut errors = Vec::new();
-    while let Some(error) = context.pop_pending_error() {
+    while let Some(error) = parser.context.pop_pending_error() {
         errors.push(error);
     }
     inspect(&mut Parsed {
         parser,
-        context: &mut context,
         items,
         errors,
         source,
@@ -184,9 +181,14 @@ fn block_items<'tu>(statement: &Statement<'tu>) -> &'tu [BlockItem<'tu>] {
 }
 
 fn identifier_name(parsed: &Parsed<'_, '_>, declarator: Declarator<'_>) -> Option<String> {
-    declarator
-        .identifier()
-        .map(|identifier| parsed.context.string_cache.at(identifier.name).to_owned())
+    declarator.identifier().map(|identifier| {
+        parsed
+            .parser
+            .context
+            .string_cache
+            .at(identifier.name)
+            .to_owned()
+    })
 }
 
 fn parser_errors<'a, 'tu>(
@@ -200,6 +202,7 @@ fn parser_errors<'a, 'tu>(
 
 fn sourced_text(parsed: &Parsed<'_, '_>, source_vectors: SourceVectors) -> String {
     parsed
+        .parser
         .context
         .get_source_vectors(source_vectors)
         .iter()

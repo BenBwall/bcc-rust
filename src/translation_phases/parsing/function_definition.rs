@@ -34,7 +34,6 @@ use super::{
 };
 use crate::{
     translation_phases::{
-        Context,
         SourceVectors,
         TranslationError,
         preprocessing::{
@@ -101,8 +100,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -190,7 +188,6 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     if has_parameter_type_list && !self.diagnosed_prototype_declaration_list {
                         self.diagnosed_prototype_declaration_list = true;
                         parser.report(
-                            context,
                             ParserErrorType::DeclarationListAfterParameterTypeList,
                             token,
                         );
@@ -203,7 +200,6 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     )))
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedFunctionBody(token.map(|token| token.kind)),
                         token,
                     );
@@ -220,7 +216,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                         && let Some(declarator) = self.head.head_declarator()
                     {
                         self.suggested_missing_semicolon = true;
-                        parser.suggest_semicolon_after(context, declarator.source_vectors);
+                        parser.suggest_semicolon_after(declarator.source_vectors);
                     }
                     // A declaration-list without a body after a head that is
                     // not a function declarator, or that already needed
@@ -232,7 +228,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     let head_is_doubtful = !self.declaration_list.is_empty()
                         && (!head_is_function || self.head.recovered);
                     if token.is_none() || head_is_doubtful {
-                        let body_source = parser.missing_syntax_source(context);
+                        let body_source = parser.missing_syntax_source();
                         let body = parser.alloc_syntax(Statement {
                             kind:           StatementType::Compound {
                                 items: ArenaList::empty(),
@@ -260,10 +256,9 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     panic!("old-style declaration returned an unexpected value: {returned:?}");
                 };
                 let source = declaration.source_vectors;
-                self.source_vectors = Some(
-                    self.source_vectors
-                        .map_or(source, |existing| context.merge_vectors(existing, source)),
-                );
+                self.source_vectors = Some(self.source_vectors.map_or(source, |existing| {
+                    parser.context.merge_vectors(existing, source)
+                }));
                 self.declaration_list.push(declaration);
                 // A head that is not a function declarator only became a
                 // definition because this declaration followed it. When the
@@ -274,14 +269,14 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                 if declaration.recovered
                     && !self.suggested_missing_semicolon
                     && matches!(
-                        context.pending_errors.back(),
+                        parser.context.pending_errors.back(),
                         Some(TranslationError::Parsing(error)) if error.insertion_point.is_none()
                     )
                     && let Some(declarator) = self.head.head_declarator()
                     && declarator.function_suffix().is_none()
                 {
                     self.suggested_missing_semicolon = true;
-                    parser.suggest_semicolon_after(context, declarator.source_vectors);
+                    parser.suggest_semicolon_after(declarator.source_vectors);
                 }
                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                 ParseAction::Reprocess
@@ -291,10 +286,9 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     panic!("function body returned an unexpected value: {returned:?}");
                 };
                 let source = body.source_vectors;
-                self.source_vectors = Some(
-                    self.source_vectors
-                        .map_or(source, |existing| context.merge_vectors(existing, source)),
-                );
+                self.source_vectors = Some(self.source_vectors.map_or(source, |existing| {
+                    parser.context.merge_vectors(existing, source)
+                }));
                 self.body = Some(body);
                 self.phase = FunctionDefinitionPhase::Finish;
                 ParseAction::Reprocess

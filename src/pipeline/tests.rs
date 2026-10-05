@@ -69,10 +69,7 @@ fn with_preprocessed<R>(
     with_preprocessed_with(source, CompilerConfiguration::default(), inspect)
 }
 
-fn with_parser<R>(
-    source: &str,
-    inspect: impl FnOnce(&mut LanguageParser<'_, '_>, &mut Context<'_>) -> R,
-) -> R {
+fn with_parser<R>(source: &str, inspect: impl FnOnce(&mut LanguageParser<'_, '_, '_>) -> R) -> R {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
     let preprocess_arena = Bump::new();
@@ -85,10 +82,11 @@ fn with_parser<R>(
         SharedVec::default(),
         SharedVec::default(),
     );
-    inspect(
-        &mut LanguageParser::new(preprocessor, &mut context, &parse_arena),
+    inspect(&mut LanguageParser::new(
+        preprocessor,
         &mut context,
-    )
+        &parse_arena,
+    ))
 }
 
 #[test]
@@ -235,10 +233,10 @@ fn adjacent_string_lookahead_keeps_deferred_eof_diagnostic_provenance() {
 
 #[test]
 fn parser_yields_declarations_whose_debug_view_shows_their_syntax() {
-    with_parser("int value;\n", |parser, context| {
-        let root = parser.next_item(context).unwrap();
+    with_parser("int value;\n", |parser| {
+        let root = parser.next_item().unwrap();
         assert!(matches!(root, ExternalDeclaration::Declaration(_)));
-        assert!(parser.next_item(context).is_none());
+        assert!(parser.next_item().is_none());
         assert!(
             format!("{root:#?}").contains("init_declarators"),
             "the debug view should show the syntax the root refers to"
@@ -248,13 +246,13 @@ fn parser_yields_declarations_whose_debug_view_shows_their_syntax() {
 
 #[test]
 fn parser_yields_a_parsed_initialized_declaration() {
-    with_parser("int value = 1;\n", |parser, context| {
+    with_parser("int value = 1;\n", |parser| {
         assert!(matches!(
-            parser.next_item(context).unwrap(),
+            parser.next_item().unwrap(),
             ExternalDeclaration::Declaration(_)
         ));
-        assert!(parser.next_item(context).is_none());
-        assert!(context.take_pending_errors().is_empty());
+        assert!(parser.next_item().is_none());
+        assert!(parser.context().take_pending_errors().is_empty());
     });
 }
 
@@ -273,8 +271,8 @@ fn complete_translation_unit_owns_ordered_roots_and_typed_syntax() {
         SharedVec::default(),
     );
 
-    let unit = LanguageParser::new(preprocessor, &mut context, &parse_arena)
-        .parse_translation_unit(&mut context);
+    let unit =
+        LanguageParser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
 
     assert_eq!(unit.external_declarations().len(), 2);
     let ExternalDeclaration::Declaration(first) = unit.external_declarations()[0] else {
@@ -301,8 +299,8 @@ fn cli_parser_details_render_recovery_ranges_and_notes() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let _unit = LanguageParser::new(preprocessor, &mut context, &parse_arena)
-        .parse_translation_unit(&mut context);
+    let _unit =
+        LanguageParser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
     let errors = context.take_pending_errors();
     let diagnostic = errors
         .iter()
@@ -355,8 +353,8 @@ fn sibling_consumer_can_traverse_parameter_and_member_syntax() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = LanguageParser::new(preprocessor, &mut context, &parse_arena)
-        .parse_translation_unit(&mut context);
+    let unit =
+        LanguageParser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
 
     let ExternalDeclaration::Declaration(struct_root) = unit.external_declarations()[0] else {
         panic!("expected struct declaration")

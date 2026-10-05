@@ -43,7 +43,6 @@ use super::{
 };
 use crate::{
     translation_phases::{
-        Context,
         SourceVectors,
         preprocessing::{
             KeywordTokenType,
@@ -149,8 +148,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -161,19 +159,14 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     "this frame phase cannot receive a child value"
                 );
                 let Some(token) = token else {
-                    parser.report(
-                        context,
-                        ParserErrorType::ExpectedStructOrUnionKeyword(None),
-                        None,
-                    );
-                    return self.finish(parser, context);
+                    parser.report(ParserErrorType::ExpectedStructOrUnionKeyword(None), None);
+                    return self.finish(parser);
                 };
                 self.kind = match token.kind {
                     | TokenType::Keyword(KeywordTokenType::Struct) => Some(StructOrUnion::Struct),
                     | TokenType::Keyword(KeywordTokenType::Union) => Some(StructOrUnion::Union),
                     | _ => {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedStructOrUnionKeyword(Some(token.kind)),
                             Some(token),
                         );
@@ -207,13 +200,12 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::StructOrUnionSpecifierWithoutNameAndBody(
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    self.finish(parser, context)
+                    self.finish(parser)
                 }
             },
             | StructOrUnionPhase::AfterName => {
@@ -228,7 +220,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Consume
                 } else {
-                    self.finish(parser, context)
+                    self.finish(parser)
                 }
             },
             | StructOrUnionPhase::MemberStart => {
@@ -242,7 +234,6 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     let token = token.expect("closing-curly-brace token exists");
                     if self.declarations.is_empty() {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedStructDeclarationBeforeClosingCurlyBrace,
                             Some(token),
                         );
@@ -252,7 +243,6 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     ParseAction::Consume
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList(None),
                         None,
                     );
@@ -277,15 +267,15 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 // deliberately bypasses the named declarator child.
                 if is_operator(token, OperatorTokenType::Colon) {
                     let token = token.expect("colon token exists");
-                    parser.merge_source(context, &mut self.member_source, token);
-                    parser.merge_source(context, &mut self.current_member_declarator_source, token);
+                    parser.merge_source(&mut self.member_source, token);
+                    parser.merge_source(&mut self.current_member_declarator_source, token);
                     self.member_declarator = None;
                     self.phase = StructOrUnionPhase::PushBitFieldWidth;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon) {
-                    parser.report(context, ParserErrorType::EmptyStructDeclarator, token);
+                    parser.report(ParserErrorType::EmptyStructDeclarator, token);
                     let token = token.expect("semicolon token exists");
-                    parser.merge_source(context, &mut self.member_source, token);
+                    parser.merge_source(&mut self.member_source, token);
                     self.finish_member(parser);
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Consume
@@ -301,8 +291,8 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 );
                 if is_operator(token, OperatorTokenType::Colon) {
                     let token = token.expect("colon token exists");
-                    parser.merge_source(context, &mut self.member_source, token);
-                    parser.merge_source(context, &mut self.current_member_declarator_source, token);
+                    parser.merge_source(&mut self.member_source, token);
+                    parser.merge_source(&mut self.current_member_declarator_source, token);
                     self.member_declarator = None;
                     self.phase = StructOrUnionPhase::PushBitFieldWidth;
                     ParseAction::Consume
@@ -323,7 +313,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 {
                     self.member_source =
                         Some(self.member_source.map_or(source_vectors, |existing| {
-                            context.merge_vectors(existing, source_vectors)
+                            parser.context.merge_vectors(existing, source_vectors)
                         }));
                     self.current_member_declarator_source = Some(source_vectors);
                 }
@@ -340,8 +330,8 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 // the separator that follows.
                 if is_operator(token, OperatorTokenType::Colon) {
                     let token = token.expect("colon token exists");
-                    parser.merge_source(context, &mut self.member_source, token);
-                    parser.merge_source(context, &mut self.current_member_declarator_source, token);
+                    parser.merge_source(&mut self.member_source, token);
+                    parser.merge_source(&mut self.current_member_declarator_source, token);
                     self.phase = StructOrUnionPhase::PushBitFieldWidth;
                     ParseAction::Consume
                 } else {
@@ -382,12 +372,12 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 self.width_recovered = recovered;
                 let source_vectors = index.expression().source_vectors;
                 self.member_source = Some(self.member_source.map_or(source_vectors, |existing| {
-                    context.merge_vectors(existing, source_vectors)
+                    parser.context.merge_vectors(existing, source_vectors)
                 }));
                 self.current_member_declarator_source = Some(
                     self.current_member_declarator_source
                         .map_or(source_vectors, |existing| {
-                            context.merge_vectors(existing, source_vectors)
+                            parser.context.merge_vectors(existing, source_vectors)
                         }),
                 );
                 let source_vectors = self
@@ -415,19 +405,18 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 let width_recovered = std::mem::take(&mut self.width_recovered);
                 if is_operator(token, OperatorTokenType::Comma) {
                     let token = token.expect("comma token exists");
-                    parser.merge_source(context, &mut self.member_source, token);
+                    parser.merge_source(&mut self.member_source, token);
                     self.phase = StructOrUnionPhase::PushMemberDeclarator;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon) {
                     let token = token.expect("semicolon token exists");
-                    parser.merge_source(context, &mut self.member_source, token);
+                    parser.merge_source(&mut self.member_source, token);
                     self.finish_member(parser);
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
                     if !resuming_after_recovery {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList,
                             token,
                         );
@@ -441,7 +430,6 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                         // follows, so the member continues after it.
                         if !(resuming_after_recovery || width_recovered) {
                             parser.report(
-                                context,
                                 ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(
                                     token.map(|token| token.kind),
                                 ),
@@ -449,14 +437,13 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                             );
                         }
                         let token = token.expect("closing-parenthesis token exists");
-                        parser.merge_source(context, &mut self.member_source, token);
+                        parser.merge_source(&mut self.member_source, token);
                         // The malformed terminator is diagnosed, so a `}` or
                         // following member that ends this one is not.
                         self.resuming_after_member_recovery = true;
                         return ParseAction::Consume;
                     }
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList(
                             token.map(|token| token.kind),
                         ),
@@ -468,7 +455,6 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
                     if !resuming_after_recovery {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(
                                 token.map(|token| token.kind),
                             ),
@@ -480,7 +466,6 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(None),
                         None,
                     );
@@ -489,7 +474,6 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(
                             token.map(|token| token.kind),
                         ),
@@ -507,7 +491,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                self.finish(parser, context)
+                self.finish(parser)
             },
         }
     }
@@ -522,7 +506,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     /// `int f(struct S { int x ) int after;`, the `)` closes that
     /// parenthesis and the body's `}` is missing. The scan is bounded so
     /// repeated errors stay linear.
-    fn member_list_continues(parser: &mut Parser<'tu, 'p>) -> bool {
+    fn member_list_continues(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
         const SCAN_LIMIT: usize = 64;
         // Parentheses and brackets, which never contain `;`.
         let mut groups = 0_u32;
@@ -607,7 +591,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
         false
     }
 
-    fn finish_member(&mut self, parser: &mut Parser<'tu, 'p>) {
+    fn finish_member(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
         // Commit all declarators for this shared specifier-qualifier-list as a
         // single member declaration with one stable arena slice.
         let start = parser.alloc_syntax_list(&mut self.member_declarators);
@@ -625,19 +609,16 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
         self.source_vectors.push(source_vectors);
     }
 
-    fn finish(
-        &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-    ) -> ParseAction<'tu, 'p> {
+    fn finish(&mut self, parser: &mut Parser<'_, 'tu, 'p>) -> ParseAction<'tu, 'p> {
         let declaration_list = self
             .body_started
             .then(|| parser.alloc_syntax_list(&mut self.declarations));
+        let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
         let index = parser.alloc_syntax(StructOrUnionSpecifier {
-            struct_or_union:         self.kind.unwrap_or(StructOrUnion::Struct),
-            identifier:              self.identifier,
+            struct_or_union: self.kind.unwrap_or(StructOrUnion::Struct),
+            identifier: self.identifier,
             struct_declaration_list: declaration_list,
-            source_vectors:          context.merge_vector_list(&self.source_vectors),
+            source_vectors,
         });
         ParseAction::Reduce(ParseValue::StructOrUnionSpecifier(index))
     }

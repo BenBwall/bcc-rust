@@ -24,7 +24,6 @@ use super::{
     },
 };
 use crate::translation_phases::{
-    Context,
     SourceVectors,
     preprocessing::{
         KeywordTokenType,
@@ -115,8 +114,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -135,12 +133,12 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                 // that follows the child.
                 self.specifiers
                     .type_specifiers
-                    .make_struct_or_union(parser, context, index, token);
+                    .make_struct_or_union(parser, index, token);
                 {
                     let source_vectors = index.source_vectors;
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            context.merge_vectors(existing, source_vectors)
+                            parser.context.merge_vectors(existing, source_vectors)
                         }));
                 }
                 self.consumed = true;
@@ -164,12 +162,12 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                 // belonging to this specifier sequence.
                 self.specifiers
                     .type_specifiers
-                    .make_enum(parser, context, index, token);
+                    .make_enum(parser, index, token);
                 {
                     let source_vectors = index.source_vectors;
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            context.merge_vectors(existing, source_vectors)
+                            parser.context.merge_vectors(existing, source_vectors)
                         }));
                 }
                 self.consumed = true;
@@ -194,20 +192,15 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         let Some(token) = token else {
             if !self.consumed {
                 parser.report(
-                    context,
                     ParserErrorType::UnexpectedEndBeforeDeclarationSpecifier,
                     None,
                 );
             } else if self.specifiers.type_specifiers == TypeSpecifiers::Empty
                 && !self.invalid_type_seen
             {
-                parser.report(
-                    context,
-                    ParserErrorType::UnexpectedEndBeforeTypeSpecifier,
-                    None,
-                );
+                parser.report(ParserErrorType::UnexpectedEndBeforeTypeSpecifier, None);
             }
-            self.report_incomplete_complex(parser, context);
+            self.report_incomplete_complex(parser);
             self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
             return ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers));
         };
@@ -237,17 +230,15 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         if let Some(storage_class) = storage_class(token.kind) {
             if self.mode != SpecifierMode::Declaration {
                 parser.report(
-                    context,
                     ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                     Some(token),
                 );
-                parser.merge_source(context, &mut self.source_vectors, token);
+                parser.merge_source(&mut self.source_vectors, token);
                 self.consumed = true;
                 return ParseAction::Consume;
             }
             if self.storage_seen {
                 parser.report(
-                    context,
                     ParserErrorType::StorageClassRedefinition(
                         self.specifiers
                             .storage_class
@@ -259,7 +250,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             }
             self.specifiers.storage_class = Some(storage_class);
             self.storage_seen = true;
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -267,10 +258,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         if let TokenType::Keyword(keyword) = token.kind
             && let Some(specifier) = primitive_type_specifier(keyword)
         {
-            let reported_before = context.pending_errors.len();
-            self.apply_type_specifier(parser, context, token, specifier);
-            self.type_conflict_seen |= context.pending_errors.len() != reported_before;
-            parser.merge_source(context, &mut self.source_vectors, token);
+            let reported_before = parser.context.pending_errors.len();
+            self.apply_type_specifier(parser, token, specifier);
+            self.type_conflict_seen |= parser.context.pending_errors.len() != reported_before;
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -279,10 +270,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             if self.mode != SpecifierMode::TypeName
                 && self.specifiers.type_qualifiers.contains(qualifier)
             {
-                report_duplicate_type_qualifier(parser, context, token, qualifier);
+                report_duplicate_type_qualifier(parser, token, qualifier);
             }
             self.specifiers.type_qualifiers.insert(qualifier);
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -290,19 +281,18 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         if token.kind == TokenType::Keyword(KeywordTokenType::Inline) {
             if self.mode != SpecifierMode::Declaration {
                 parser.report(
-                    context,
                     ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                     Some(token),
                 );
-                parser.merge_source(context, &mut self.source_vectors, token);
+                parser.merge_source(&mut self.source_vectors, token);
                 self.consumed = true;
                 return ParseAction::Consume;
             }
             if self.specifiers.function_specifiers.is_inline {
-                parser.report(context, ParserErrorType::InlineSpecifiedTwice, Some(token));
+                parser.report(ParserErrorType::InlineSpecifiedTwice, Some(token));
             }
             self.specifiers.function_specifiers.is_inline = true;
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -319,11 +309,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             // proves another declarator follows.
             self.specifiers.type_specifiers.make_typedef_name(
                 parser,
-                context,
                 Identifier::from_token(token),
                 token,
             );
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -345,9 +334,9 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     || parser.declaration_starter(following)
             })
         {
-            parser.report(context, ParserErrorType::UnknownTypeName, Some(token));
+            parser.report(ParserErrorType::UnknownTypeName, Some(token));
             self.invalid_type_seen = true;
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -359,7 +348,6 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         // means no declaration started here at all.
         if !self.consumed && token.kind != TokenType::Identifier {
             parser.report(
-                context,
                 ParserErrorType::EmptyDeclarationSpecifiers(token.kind),
                 Some(token),
             );
@@ -367,12 +355,11 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             && !self.invalid_type_seen
         {
             parser.report(
-                context,
                 ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(token.kind),
                 Some(token),
             );
         }
-        self.report_incomplete_complex(parser, context);
+        self.report_incomplete_complex(parser);
         self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
         ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers))
     }
@@ -382,7 +369,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
     ///
     /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112 lists only
     /// `float _Complex`, `double _Complex`, and `long double _Complex`.
-    fn report_incomplete_complex(&self, parser: &mut Parser<'tu, 'p>, context: &mut Context<'_>) {
+    fn report_incomplete_complex(&self, parser: &mut Parser<'_, 'tu, 'p>) {
         if !self.invalid_type_seen
             && !self.type_conflict_seen
             && matches!(
@@ -391,7 +378,6 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             )
         {
             parser.report(
-                context,
                 ParserErrorType::IncompleteComplexTypeSpecifier,
                 self.complex_token,
             );
@@ -400,8 +386,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
 
     fn apply_type_specifier(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Token,
         specifier: PrimitiveTypeSpecifier,
     ) {
@@ -412,12 +397,11 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             ($is_duplicate:ident, $apply:ident) => {
                 if type_specifiers.$is_duplicate() {
                     parser.report(
-                        context,
                         ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         Some(token),
                     );
                 } else {
-                    type_specifiers.$apply(parser, context, token);
+                    type_specifiers.$apply(parser, token);
                 }
             };
         }
@@ -428,35 +412,26 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             | PrimitiveTypeSpecifier::Int => apply_once!(is_int, make_int),
             | PrimitiveTypeSpecifier::Short => apply_once!(is_short, make_short),
             | PrimitiveTypeSpecifier::Long if type_specifiers.is_long_double() => {
-                parser.report(
-                    context,
-                    ParserErrorType::LongLongDoubleSpecified,
-                    Some(token),
-                );
+                parser.report(ParserErrorType::LongLongDoubleSpecified, Some(token));
             },
             | PrimitiveTypeSpecifier::Long
                 if type_specifiers.is_long() && type_specifiers.is_long_long() =>
             {
-                parser.report(context, ParserErrorType::LongSpecifiedThrice, Some(token));
+                parser.report(ParserErrorType::LongSpecifiedThrice, Some(token));
             },
-            | PrimitiveTypeSpecifier::Long => type_specifiers.make_long(parser, context, token),
+            | PrimitiveTypeSpecifier::Long => type_specifiers.make_long(parser, token),
             | PrimitiveTypeSpecifier::Char => apply_once!(is_char, make_char),
             | PrimitiveTypeSpecifier::Float => apply_once!(is_float, make_float),
             | PrimitiveTypeSpecifier::Double if type_specifiers.is_double() => {
                 parser.report(
-                    context,
                     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                     Some(token),
                 );
             },
             | PrimitiveTypeSpecifier::Double if type_specifiers.is_long_long() => {
-                parser.report(
-                    context,
-                    ParserErrorType::LongLongDoubleSpecified,
-                    Some(token),
-                );
+                parser.report(ParserErrorType::LongLongDoubleSpecified, Some(token));
             },
-            | PrimitiveTypeSpecifier::Double => type_specifiers.make_double(parser, context, token),
+            | PrimitiveTypeSpecifier::Double => type_specifiers.make_double(parser, token),
             | PrimitiveTypeSpecifier::Void => apply_once!(is_void, make_void),
             | PrimitiveTypeSpecifier::Bool => apply_once!(is_bool, make_bool),
             | PrimitiveTypeSpecifier::Complex => {
@@ -468,7 +443,6 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             | PrimitiveTypeSpecifier::Imaginary => {
                 self.invalid_type_seen = true;
                 parser.report(
-                    context,
                     ParserErrorType::UnsupportedImaginaryTypeSpecifier,
                     Some(token),
                 );
@@ -504,8 +478,7 @@ pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
 }
 
 pub(super) fn report_duplicate_type_qualifier(
-    parser: &mut Parser<'_, '_>,
-    context: &mut Context<'_>,
+    parser: &mut Parser<'_, '_, '_>,
     token: Token,
     qualifier: TypeQualifiers,
 ) {
@@ -515,7 +488,7 @@ pub(super) fn report_duplicate_type_qualifier(
         | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
         | _ => unreachable!("one type qualifier is handled at a time"),
     };
-    parser.report(context, error_type, Some(token));
+    parser.report(error_type, Some(token));
 }
 
 /// Primitive keyword recognized while accumulating a C type-specifier set.

@@ -83,8 +83,8 @@ fn empty_translation_unit_emits_one_dedicated_diagnostic() {
             parser_errors(parsed).collect::<Vec<_>>(),
             [&ParserErrorType::EmptyTranslationUnit]
         );
-        assert_eq!(parsed.parser.next_item(parsed.context), None);
-        assert!(parsed.context.pop_pending_error().is_none());
+        assert_eq!(parsed.parser.next_item(), None);
+        assert!(parsed.parser.context.pop_pending_error().is_none());
     });
 }
 
@@ -113,6 +113,7 @@ fn ordinary_pointer_and_typedef_declarations_are_reachable() {
             assert_eq!(
                 identifier.name,
                 parsed
+                    .parser
                     .context
                     .string_cache
                     .get_id_from_string("T")
@@ -151,6 +152,7 @@ fn name_classification_is_published_after_each_declarator() {
         .iter::<DirectDeclarator<'_>>()
         .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.len() == 1)));
             let t = parsed
+                .parser
                 .context
                 .string_cache
                 .get_id_from_string("T")
@@ -176,6 +178,7 @@ fn duplicate_storage_class_keeps_the_last_class_for_typedef_publication() {
                 .any(|error| matches!(error, ParserErrorType::StorageClassRedefinition(..)))
         );
         let t = parsed
+            .parser
             .context
             .string_cache
             .get_id_from_string("T")
@@ -318,6 +321,7 @@ fn parenthesized_identifier_lists_preserve_typedef_shadowing() {
             ExternalDeclaration::RecoveredDeclaration(_)
         ));
         let typedef_name = parsed
+            .parser
             .context
             .string_cache
             .get_id_from_string("T")
@@ -404,7 +408,7 @@ fn union_kind_and_enum_arena_slice_are_correct() {
             assert_eq!(enumeration_list.len(), 2);
             let names = enumeration_list
                 .iter()
-                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .map(|enumerator| parsed.parser.context.string_cache.at(enumerator.name.name))
                 .collect::<Vec<_>>();
             assert_eq!(names, ["A", "B"]);
             assert!(
@@ -484,6 +488,7 @@ fn specifier_combinations_and_conflicts_keep_legacy_diagnostics() {
             };
             assert!(TypeSpecifiers::Enum(&enumeration).is_enum());
             let duplicate = parsed
+                .parser
                 .context
                 .string_cache
                 .get_id_from_string("duplicate")

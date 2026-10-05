@@ -40,7 +40,6 @@ use super::{
 };
 use crate::{
     translation_phases::{
-        Context,
         SourceVectors,
         preprocessing::{
             OperatorTokenType,
@@ -158,7 +157,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
     /// `(size_t n, int m)`, a bounded scan of the rest of the list looks for
     /// declaration syntax; without it, `(a b, c)` stays an identifier list with
     /// an omitted comma.
-    fn unknown_type_name_starts_prototype(parser: &mut Parser<'tu, 'p>) -> bool {
+    fn unknown_type_name_starts_prototype(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
         /// Tokens examined after two adjacent identifiers before the list is
         /// assumed to be an identifier list.
         const SCAN_LIMIT: usize = 64;
@@ -200,8 +199,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -238,7 +236,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 );
                 let Some(token) = token else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
                             None,
                         ),
@@ -255,7 +252,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 if parser.declaration_starter(token) {
                     if !self.diagnosed_mixed_parameter {
                         parser.report(
-                            context,
                             ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator,
                             Some(token),
                         );
@@ -279,7 +275,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 // Typedef names are declaration starters, handled above.
                 if token.kind != TokenType::Identifier {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
                             Some(token.kind),
                         ),
@@ -344,7 +339,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -354,7 +348,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
                     None,
                 ),
@@ -369,7 +362,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     // next parameter name:
                     // diagnose, then reprocess it as an item.
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -379,7 +371,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -466,7 +457,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 }
                 let parameter_source = match (self.pending_source.take(), declarator_source) {
                     | (Some(specifiers), Some(declarator)) =>
-                        context.merge_vectors(specifiers, declarator),
+                        parser.context.merge_vectors(specifiers, declarator),
                     | (Some(specifiers), None) => specifiers,
                     | (None, Some(declarator)) => declarator,
                     | (None, None) => SourceVectors::default(),
@@ -503,7 +494,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -513,7 +503,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
                     None,
                 ),
@@ -526,7 +515,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     // omitted comma instead
                     // of consuming it during recovery.
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -536,7 +524,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -567,7 +554,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let token = token.expect("closing-parenthesis token exists");
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(
                             Some(token.kind),
                         ),
@@ -581,7 +567,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     || token.is_none()
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(
                             token.map(|token| token.kind),
                         ),
@@ -612,7 +597,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 {
                     let token = token.expect("unwind token exists");
                     parser.report(
-                context,
                 ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                     token.kind,
                 ),
@@ -625,7 +609,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     && parser.declaration_starter(token)
                 {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                     token.kind,
                 ),
@@ -635,7 +618,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::UnexpectedEndOfVariadicFunctionDeclaratorParameterList,
                         None,
                     );
@@ -643,7 +625,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else if let Some(token) = token {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                     token.kind,
                 ),
@@ -678,7 +659,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 let start = parser.alloc_syntax_list(&mut self.identifiers);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {
                     direct_declarator: DirectDeclarator::KAndRStyleFunction { parameters: start },
-                    source_vectors:    context.merge_vector_list(&self.source_vectors),
+                    source_vectors:    parser.context.merge_vector_list(&self.source_vectors),
                 }))
             },
             | ParameterListPhase::FinishPrototype => {
@@ -708,7 +689,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                         parameter_list: start,
                         is_variadic:    self.is_variadic,
                     },
-                    source_vectors:    context.merge_vector_list(&self.source_vectors),
+                    source_vectors:    parser.context.merge_vector_list(&self.source_vectors),
                 }))
             },
         }

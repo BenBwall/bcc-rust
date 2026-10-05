@@ -218,8 +218,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -240,7 +239,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     ));
                 }
                 if is_operator(token, OperatorTokenType::Semicolon) {
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     self.phase = StatementPhase::Finish(StatementType::Null);
                     return ParseAction::Consume;
                 }
@@ -252,7 +251,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     if let Some(labels) = parser.label_scopes.innermost_mut() {
                         _ = labels.definitions.insert(identifier.name);
                     }
-                    self.merge_token(parser, context, token);
+                    self.merge_token(parser, token);
                     self.phase = StatementPhase::IdentifierLabelColon(identifier);
                     return ParseAction::Consume;
                 }
@@ -261,27 +260,27 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 {
                     match keyword {
                         | KeywordTokenType::Return => {
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::ReturnStart;
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::Break => {
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::SimpleJumpSemicolon(SimpleJump::Break);
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::Continue => {
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::SimpleJumpSemicolon(SimpleJump::Continue);
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::Goto => {
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::GotoIdentifier;
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::Case => {
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::CaseExpression;
                             return ParseAction::Consume;
                         },
@@ -294,21 +293,17 @@ impl<'tu, 'p> StatementFrame<'tu> {
                                 .last()
                                 .is_some_and(|switch| switch.has_default)
                             {
-                                parser.report(
-                                    context,
-                                    ParserErrorType::DuplicateDefaultLabel,
-                                    Some(token),
-                                );
+                                parser.report(ParserErrorType::DuplicateDefaultLabel, Some(token));
                             } else if let Some(switch) = parser.switch_scopes.last_mut() {
                                 switch.has_default = true;
                             }
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::DefaultColon;
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::If => {
                             Self::enter_construct_scope(parser, ScopeKind::ImplicitSelection);
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::HeaderOpening(HeaderKind::If);
                             return ParseAction::Consume;
                         },
@@ -316,32 +311,31 @@ impl<'tu, 'p> StatementFrame<'tu> {
                             Self::enter_construct_scope(parser, ScopeKind::ImplicitSelection);
                             parser.switch_scopes.push(SwitchScope::default());
                             self.owns_switch_scope = true;
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::HeaderOpening(HeaderKind::Switch);
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::While => {
                             Self::enter_construct_scope(parser, ScopeKind::ImplicitIteration);
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::HeaderOpening(HeaderKind::While);
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::Do => {
                             Self::enter_construct_scope(parser, ScopeKind::ImplicitIteration);
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::DoPushBody;
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::For => {
                             Self::enter_construct_scope(parser, ScopeKind::ImplicitIteration);
-                            self.merge_token(parser, context, token);
+                            self.merge_token(parser, token);
                             self.phase = StatementPhase::ForOpening;
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::Sizeof => {},
                         | _ if parser.declaration_starter(token) => {
                             parser.report(
-                                context,
                                 ParserErrorType::ExpectedStatement(Some(token.kind)),
                                 Some(token),
                             );
@@ -364,7 +358,6 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     && parser.declaration_recovery_starts_here(token)
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatement(Some(token.kind)),
                         Some(token),
                     );
@@ -388,11 +381,10 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     )
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatement(Some(token.kind)),
                         Some(token),
                     );
-                    self.merge_token(parser, context, token);
+                    self.merge_token(parser, token);
                     self.phase = StatementPhase::Finish(StatementType::Null);
                     return ParseAction::Consume;
                 }
@@ -403,16 +395,15 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     || stray_else
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatement(token.map(|token| token.kind)),
                         token,
                     );
                     if stray_else && !self.leave_else_unconsumed {
-                        self.merge_token(parser, context, token.expect("else token exists"));
+                        self.merge_token(parser, token.expect("else token exists"));
                         self.phase = StatementPhase::Finish(StatementType::Null);
                         return ParseAction::Consume;
                     }
-                    return self.finish(parser, context, StatementType::Null);
+                    return self.finish(parser, StatementType::Null);
                 }
                 self.phase = StatementPhase::AwaitExpression;
                 ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
@@ -426,18 +417,18 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::CompoundStatement(statement)) = returned else {
                     panic!("compound statement returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(context, statement);
+                self.merge_statement(parser.context, statement);
                 self.finish_existing(parser, statement)
             },
             | StatementPhase::AwaitExpression => {
                 let slot = Self::parsed_slot(returned);
-                self.merge_slot(context, slot);
+                self.merge_slot(parser.context, slot);
                 self.phase = StatementPhase::ExpressionSemicolon(slot);
                 ParseAction::Continue
             },
             | StatementPhase::ExpressionSemicolon(slot) => {
                 debug_assert!(returned.is_none());
-                self.own_semicolon_or_report(parser, context, token, "expression statement");
+                self.own_semicolon_or_report(parser, token, "expression statement");
                 self.phase = StatementPhase::Finish(StatementType::Expression(slot));
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     ParseAction::Consume
@@ -454,7 +445,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                             || is_postfix_starter(following.kind)
                     });
                 if is_operator(token, OperatorTokenType::Semicolon) {
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     self.phase = StatementPhase::Finish(StatementType::Return(None));
                     ParseAction::Consume
                 } else if Self::at_expression_boundary(token, ExpressionTerminator::Semicolon)
@@ -479,13 +470,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitReturnExpression => {
                 let slot = Self::parsed_slot(returned);
-                self.merge_slot(context, slot);
+                self.merge_slot(parser.context, slot);
                 self.phase = StatementPhase::ReturnSemicolon(Some(slot));
                 ParseAction::Reprocess
             },
             | StatementPhase::ReturnSemicolon(expression) => {
                 debug_assert!(returned.is_none());
-                self.own_semicolon_or_report(parser, context, token, "return statement");
+                self.own_semicolon_or_report(parser, token, "return statement");
                 self.phase = StatementPhase::Finish(StatementType::Return(expression));
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     ParseAction::Consume
@@ -495,7 +486,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::SimpleJumpSemicolon(jump) => {
                 debug_assert!(returned.is_none());
-                self.own_semicolon_or_report(parser, context, token, "jump statement");
+                self.own_semicolon_or_report(parser, token, "jump statement");
                 self.phase = StatementPhase::Finish(match jump {
                     | SimpleJump::Break => StatementType::Break,
                     | SimpleJump::Continue => StatementType::Continue,
@@ -515,18 +506,17 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     if let Some(labels) = parser.label_scopes.innermost_mut() {
                         _ = labels.references.insert(identifier.name);
                     }
-                    self.merge_token(parser, context, token);
+                    self.merge_token(parser, token);
                     self.phase = StatementPhase::GotoSemicolon(identifier);
                     return ParseAction::Consume;
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedGotoLabel(token.map(|token| token.kind)),
                         token,
                     );
                     Identifier::new(
-                        context.string_cache.intern("<missing-label>"),
-                        parser.missing_syntax_source(context),
+                        parser.context.string_cache.intern("<missing-label>"),
+                        parser.missing_syntax_source(),
                     )
                 };
                 self.phase = StatementPhase::GotoSemicolon(identifier);
@@ -534,7 +524,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::GotoSemicolon(identifier) => {
                 debug_assert!(returned.is_none());
-                self.own_semicolon_or_report(parser, context, token, "goto statement");
+                self.own_semicolon_or_report(parser, token, "goto statement");
                 self.phase = StatementPhase::Finish(StatementType::Goto(identifier));
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     ParseAction::Consume
@@ -544,7 +534,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::IdentifierLabelColon(identifier) => {
                 debug_assert!(returned.is_none());
-                self.own_colon_or_report(parser, context, token, "identifier label");
+                self.own_colon_or_report(parser, token, "identifier label");
                 self.phase = StatementPhase::PushLabeled(LabelPrefix::Identifier(identifier));
                 if is_operator(token, OperatorTokenType::Colon) {
                     ParseAction::Consume
@@ -556,15 +546,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 debug_assert!(returned.is_none());
                 if Self::at_expression_boundary(token, ExpressionTerminator::Colon) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatementExpression(
                             "case label",
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    self.phase =
-                        StatementPhase::CaseColon(Self::missing_constant_slot(parser, context));
+                    self.phase = StatementPhase::CaseColon(Self::missing_constant_slot(parser));
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::AwaitCaseExpression;
@@ -578,7 +566,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitCaseExpression => {
                 let slot = Self::parsed_constant_slot(returned);
-                self.merge_constant_slot(context, slot);
+                self.merge_constant_slot(parser.context, slot);
                 self.phase = StatementPhase::CaseColon(slot);
                 ParseAction::Reprocess
             },
@@ -587,8 +575,8 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 if is_operator(token, OperatorTokenType::Semicolon)
                     && is_operator(parser.cursor.following(), OperatorTokenType::Colon)
                 {
-                    self.own_colon_or_report(parser, context, token, "case label");
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.own_colon_or_report(parser, token, "case label");
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     return ParseAction::Consume;
                 }
                 // A leftover run such as the `, 3` of `case 2, 3:` is skipped
@@ -602,7 +590,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     )
                     .is_some()
                 {
-                    self.own_colon_or_report(parser, context, token, "case label");
+                    self.own_colon_or_report(parser, token, "case label");
                     return ParseAction::Recover(SynchronizationSet {
                         kind:   SynchronizationKind::StatementExpression(
                             ExpressionTerminator::Colon,
@@ -610,7 +598,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                         target: ParseFrameKind::Statement,
                     });
                 }
-                self.own_colon_or_report(parser, context, token, "case label");
+                self.own_colon_or_report(parser, token, "case label");
                 self.phase = StatementPhase::PushLabeled(LabelPrefix::Case(expression));
                 if is_operator(token, OperatorTokenType::Colon) {
                     ParseAction::Consume
@@ -620,7 +608,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::DefaultColon => {
                 debug_assert!(returned.is_none());
-                self.own_colon_or_report(parser, context, token, "default label");
+                self.own_colon_or_report(parser, token, "default label");
                 self.phase = StatementPhase::PushLabeled(LabelPrefix::Default);
                 if is_operator(token, OperatorTokenType::Colon) {
                     ParseAction::Consume
@@ -641,10 +629,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(statement)) = returned else {
                     panic!("labeled child returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(context, statement);
+                self.merge_statement(parser.context, statement);
                 self.finish(
                     parser,
-                    context,
                     match prefix {
                         | LabelPrefix::Identifier(identifier) =>
                             StatementType::Label(identifier, statement),
@@ -657,12 +644,11 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::HeaderOpening(kind) => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::OpeningParenthesis) {
-                    self.merge_token(parser, context, token.expect("opening parenthesis exists"));
+                    self.merge_token(parser, token.expect("opening parenthesis exists"));
                     self.phase = StatementPhase::HeaderExpression(kind);
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedOpeningParenthesisInStatement(
                             kind.name(),
                             token.map(|token| token.kind),
@@ -677,15 +663,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 debug_assert!(returned.is_none());
                 if Self::at_expression_boundary(token, ExpressionTerminator::ClosingParenthesis) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatementExpression(
                             kind.name(),
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    self.phase =
-                        StatementPhase::HeaderClosing(kind, Self::missing_slot(parser, context));
+                    self.phase = StatementPhase::HeaderClosing(kind, Self::missing_slot(parser));
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::AwaitHeaderExpression(kind);
@@ -699,14 +683,14 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitHeaderExpression(kind) => {
                 let slot = Self::parsed_slot(returned);
-                self.merge_slot(context, slot);
+                self.merge_slot(parser.context, slot);
                 self.phase = StatementPhase::HeaderClosing(kind, slot);
                 ParseAction::Continue
             },
             | StatementPhase::HeaderClosing(kind, expression) => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    self.merge_token(parser, context, token.expect("closing parenthesis exists"));
+                    self.merge_token(parser, token.expect("closing parenthesis exists"));
                     self.phase = StatementPhase::PushHeaderBody(kind, expression);
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon)
@@ -716,18 +700,16 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     )
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             kind.name(),
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             kind.name(),
                             token.map(|token| token.kind),
@@ -756,7 +738,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(body)) = returned else {
                     panic!("selection/iteration body returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(context, body);
+                self.merge_statement(parser.context, body);
                 match kind {
                     | HeaderKind::If => {
                         self.phase = StatementPhase::IfAfterThen(expression, body);
@@ -764,7 +746,6 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     },
                     | HeaderKind::Switch => self.finish(
                         parser,
-                        context,
                         StatementType::Switch {
                             condition_expression: expression,
                             body_statement:       body,
@@ -772,7 +753,6 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     ),
                     | HeaderKind::While => self.finish(
                         parser,
-                        context,
                         StatementType::While {
                             condition_expression: expression,
                             body_statement:       body,
@@ -785,13 +765,12 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 if token
                     .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Else))
                 {
-                    self.merge_token(parser, context, token.expect("else token exists"));
+                    self.merge_token(parser, token.expect("else token exists"));
                     self.phase = StatementPhase::PushElse(expression, then_statement);
                     ParseAction::Consume
                 } else {
                     self.finish(
                         parser,
-                        context,
                         StatementType::If {
                             condition_expression: expression,
                             then_statement,
@@ -813,10 +792,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(else_statement)) = returned else {
                     panic!("else child returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(context, else_statement);
+                self.merge_statement(parser.context, else_statement);
                 self.finish(
                     parser,
-                    context,
                     StatementType::If {
                         condition_expression: expression,
                         then_statement,
@@ -837,7 +815,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(body)) = returned else {
                     panic!("do body returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(context, body);
+                self.merge_statement(parser.context, body);
                 self.phase = StatementPhase::DoWhileKeyword(body);
                 ParseAction::Reprocess
             },
@@ -846,12 +824,11 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 if token
                     .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::While))
                 {
-                    self.merge_token(parser, context, token.expect("while token exists"));
+                    self.merge_token(parser, token.expect("while token exists"));
                     self.phase = StatementPhase::DoOpening(body);
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedWhileAfterDoBody(token.map(|token| token.kind)),
                         token,
                     );
@@ -863,10 +840,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     // Without `while (` the following tokens belong to the
                     // next statement, not to a condition that was never
                     // written, so finish here without consuming them.
-                    let condition_expression = Self::missing_slot(parser, context);
+                    let condition_expression = Self::missing_slot(parser);
                     self.finish(
                         parser,
-                        context,
                         StatementType::DoWhile {
                             condition_expression,
                             body_statement: body,
@@ -877,12 +853,11 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::DoOpening(body) => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::OpeningParenthesis) {
-                    self.merge_token(parser, context, token.expect("opening parenthesis exists"));
+                    self.merge_token(parser, token.expect("opening parenthesis exists"));
                     self.phase = StatementPhase::DoExpression(body);
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedOpeningParenthesisInStatement(
                             "do-while statement",
                             token.map(|token| token.kind),
@@ -897,15 +872,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 debug_assert!(returned.is_none());
                 if Self::at_expression_boundary(token, ExpressionTerminator::ClosingParenthesis) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatementExpression(
                             "do-while statement",
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    self.phase =
-                        StatementPhase::DoClosing(body, Self::missing_slot(parser, context));
+                    self.phase = StatementPhase::DoClosing(body, Self::missing_slot(parser));
                     ParseAction::Reprocess
                 } else {
                     self.phase = StatementPhase::DoAwaitExpression(body);
@@ -919,14 +892,14 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::DoAwaitExpression(body) => {
                 let expression = Self::parsed_slot(returned);
-                self.merge_slot(context, expression);
+                self.merge_slot(parser.context, expression);
                 self.phase = StatementPhase::DoClosing(body, expression);
                 ParseAction::Reprocess
             },
             | StatementPhase::DoClosing(body, expression) => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    self.merge_token(parser, context, token.expect("closing parenthesis exists"));
+                    self.merge_token(parser, token.expect("closing parenthesis exists"));
                     self.phase = StatementPhase::DoSemicolon(body, expression);
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon)
@@ -936,18 +909,16 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     )
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             "do-while statement",
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             "do-while statement",
                             token.map(|token| token.kind),
@@ -960,7 +931,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::DoSemicolon(body, expression) => {
                 debug_assert!(returned.is_none());
-                self.own_semicolon_or_report(parser, context, token, "do-while statement");
+                self.own_semicolon_or_report(parser, token, "do-while statement");
                 self.phase = StatementPhase::Finish(StatementType::DoWhile {
                     condition_expression: expression,
                     body_statement:       body,
@@ -974,12 +945,11 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::ForOpening => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::OpeningParenthesis) {
-                    self.merge_token(parser, context, token.expect("opening parenthesis exists"));
+                    self.merge_token(parser, token.expect("opening parenthesis exists"));
                     self.phase = StatementPhase::ForInitializer;
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedOpeningParenthesisInStatement(
                             "for statement",
                             token.map(|token| token.kind),
@@ -993,13 +963,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::ForInitializer => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::Semicolon) {
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     self.phase = StatementPhase::ForCondition(None);
                     ParseAction::Consume
                 } else if token.is_none()
                     || is_operator(token, OperatorTokenType::ClosingParenthesis)
                 {
-                    self.own_semicolon_or_report(parser, context, token, "for initializer");
+                    self.own_semicolon_or_report(parser, token, "for initializer");
                     self.phase = StatementPhase::ForCondition(None);
                     ParseAction::Reprocess
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
@@ -1021,7 +991,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitForInitializerExpression => {
                 let expression = Self::parsed_slot(returned);
-                self.merge_slot(context, expression);
+                self.merge_slot(parser.context, expression);
                 self.phase = StatementPhase::ForInitializerSemicolon(expression);
                 ParseAction::Reprocess
             },
@@ -1030,17 +1000,16 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     panic!("for declaration returned an unexpected value: {returned:?}");
                 };
                 let source = declaration.source_vectors;
-                self.source_vectors = Some(
-                    self.source_vectors
-                        .map_or(source, |existing| context.merge_vectors(existing, source)),
-                );
+                self.source_vectors = Some(self.source_vectors.map_or(source, |existing| {
+                    parser.context.merge_vectors(existing, source)
+                }));
                 // A for-initializer declaration ends at the header's `)`
                 // without reporting when its own `;` is missing; that `;`
                 // belongs to the initializer, not to the condition.
                 if is_operator(token, OperatorTokenType::ClosingParenthesis)
                     && !is_operator(parser.cursor.previous, OperatorTokenType::Semicolon)
                 {
-                    self.own_semicolon_or_report(parser, context, token, "for initializer");
+                    self.own_semicolon_or_report(parser, token, "for initializer");
                 }
                 self.phase =
                     StatementPhase::ForCondition(Some(ForInitializer::Declaration(declaration)));
@@ -1048,7 +1017,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::ForInitializerSemicolon(expression) => {
                 debug_assert!(returned.is_none());
-                self.own_semicolon_or_report(parser, context, token, "for initializer");
+                self.own_semicolon_or_report(parser, token, "for initializer");
                 self.phase =
                     StatementPhase::ForCondition(Some(ForInitializer::Expression(expression)));
                 if is_operator(token, OperatorTokenType::Semicolon) {
@@ -1060,9 +1029,8 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::ForCondition(initializer) => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
-                    self.own_semicolon_or_report(parser, context, token, "for condition");
+                    self.own_semicolon_or_report(parser, token, "for condition");
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             "for statement",
                             token.map(|token| token.kind),
@@ -1072,13 +1040,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     self.phase = StatementPhase::ForPushBody(initializer, None, None);
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::Semicolon) {
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     self.phase = StatementPhase::ForIteration(initializer, None);
                     ParseAction::Consume
                 } else if token.is_none()
                     || is_operator(token, OperatorTokenType::ClosingParenthesis)
                 {
-                    self.own_semicolon_or_report(parser, context, token, "for condition");
+                    self.own_semicolon_or_report(parser, token, "for condition");
                     self.phase = StatementPhase::ForIteration(initializer, None);
                     ParseAction::Reprocess
                 } else {
@@ -1093,13 +1061,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitForCondition(initializer) => {
                 let expression = Self::parsed_slot(returned);
-                self.merge_slot(context, expression);
+                self.merge_slot(parser.context, expression);
                 self.phase = StatementPhase::ForConditionSemicolon(initializer, expression);
                 ParseAction::Reprocess
             },
             | StatementPhase::ForConditionSemicolon(initializer, condition) => {
                 debug_assert!(returned.is_none());
-                self.own_semicolon_or_report(parser, context, token, "for condition");
+                self.own_semicolon_or_report(parser, token, "for condition");
                 self.phase = StatementPhase::ForIteration(initializer, Some(condition));
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     ParseAction::Consume
@@ -1110,7 +1078,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::ForIteration(initializer, condition) => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    self.merge_token(parser, context, token.expect("closing parenthesis exists"));
+                    self.merge_token(parser, token.expect("closing parenthesis exists"));
                     self.phase = StatementPhase::ForPushBody(initializer, condition, None);
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon)
@@ -1120,14 +1088,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     )
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             "for statement",
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     ParseAction::Consume
                 } else if token.is_none() {
                     self.phase = StatementPhase::ForClosing(initializer, condition, None);
@@ -1144,14 +1111,14 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitForIteration(initializer, condition) => {
                 let expression = Self::parsed_slot(returned);
-                self.merge_slot(context, expression);
+                self.merge_slot(parser.context, expression);
                 self.phase = StatementPhase::ForClosing(initializer, condition, Some(expression));
                 ParseAction::Reprocess
             },
             | StatementPhase::ForClosing(initializer, condition, iteration) => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    self.merge_token(parser, context, token.expect("closing parenthesis exists"));
+                    self.merge_token(parser, token.expect("closing parenthesis exists"));
                     self.phase = StatementPhase::ForPushBody(initializer, condition, iteration);
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon)
@@ -1161,18 +1128,16 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     )
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             "for statement",
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             "for statement",
                             token.map(|token| token.kind),
@@ -1204,7 +1169,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     self.phase = StatementPhase::ForPushBody(initializer, condition, iteration);
                     return ParseAction::Reprocess;
                 };
-                self.merge_token(parser, context, token);
+                self.merge_token(parser, token);
                 self.phase = if remaining == 0 {
                     debug_assert!(is_operator(
                         Some(token),
@@ -1229,33 +1194,33 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Statement(body)) = returned else {
                     panic!("for body returned an unexpected value: {returned:?}");
                 };
-                self.merge_statement(context, body);
+                self.merge_statement(parser.context, body);
                 let clauses = parser.alloc_syntax_part(ForStatement {
                     initializer,
                     condition_expression: condition,
                     iteration_expression: iteration,
                     body_statement: body,
                 });
-                self.finish(parser, context, StatementType::For(clauses))
+                self.finish(parser, StatementType::For(clauses))
             },
             | StatementPhase::Recovered => {
                 debug_assert!(returned.is_none());
                 if is_operator(token, OperatorTokenType::Semicolon) {
-                    self.merge_token(parser, context, token.expect("semicolon exists"));
+                    self.merge_token(parser, token.expect("semicolon exists"));
                     self.phase = StatementPhase::Finish(StatementType::Null);
                     ParseAction::Consume
                 } else {
-                    self.finish(parser, context, StatementType::Null)
+                    self.finish(parser, StatementType::Null)
                 }
             },
             | StatementPhase::Finish(kind) => {
                 debug_assert!(returned.is_none());
-                self.finish(parser, context, kind)
+                self.finish(parser, kind)
             },
         }
     }
 
-    fn enter_construct_scope(parser: &mut Parser<'tu, 'p>, kind: ScopeKind) {
+    fn enter_construct_scope(parser: &mut Parser<'_, 'tu, 'p>, kind: ScopeKind) {
         parser.scopes.enter_scope(kind);
     }
 
@@ -1273,7 +1238,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
     /// following statement (a brace, a statement keyword, or a declaration
     /// starter outside parentheses), at the end of input, or after
     /// [`HEADER_RECOVERY_LOOKAHEAD`] tokens.
-    fn for_header_closer_distance(parser: &mut Parser<'tu, 'p>) -> Option<u16> {
+    fn for_header_closer_distance(parser: &mut Parser<'_, 'tu, 'p>) -> Option<u16> {
         let mut depth = 0_usize;
         let mut token = parser.cursor.current();
         for distance in 0..HEADER_RECOVERY_LOOKAHEAD {
@@ -1299,22 +1264,16 @@ impl<'tu, 'p> StatementFrame<'tu> {
         None
     }
 
-    fn missing_slot(
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-    ) -> ExpressionSlot<'tu> {
-        ExpressionSlot::Missing(parser.missing_syntax_source(context))
+    fn missing_slot(parser: &mut Parser<'_, 'tu, 'p>) -> ExpressionSlot<'tu> {
+        ExpressionSlot::Missing(parser.missing_syntax_source())
     }
 
-    fn missing_constant_slot(
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
-    ) -> ConstantExpressionSlot<'tu> {
-        ConstantExpressionSlot::Missing(parser.missing_syntax_source(context))
+    fn missing_constant_slot(parser: &mut Parser<'_, 'tu, 'p>) -> ConstantExpressionSlot<'tu> {
+        ConstantExpressionSlot::Missing(parser.missing_syntax_source())
     }
 
-    fn merge_token(&mut self, parser: &Parser<'tu, 'p>, context: &mut Context<'_>, token: Token) {
-        parser.merge_source(context, &mut self.source_vectors, token);
+    fn merge_token(&mut self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) {
+        parser.merge_source(&mut self.source_vectors, token);
     }
 
     fn merge_statement(&mut self, context: &mut Context<'_>, statement: &'tu Statement<'tu>) {
@@ -1381,16 +1340,14 @@ impl<'tu, 'p> StatementFrame<'tu> {
 
     fn own_semicolon_or_report(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         position: &'static str,
     ) {
         if is_operator(token, OperatorTokenType::Semicolon) {
-            self.merge_token(parser, context, token.expect("semicolon exists"));
+            self.merge_token(parser, token.expect("semicolon exists"));
         } else {
             parser.report(
-                context,
                 ParserErrorType::ExpectedSemicolonInStatement(
                     position,
                     token.map(|token| token.kind),
@@ -1402,16 +1359,14 @@ impl<'tu, 'p> StatementFrame<'tu> {
 
     fn own_colon_or_report(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         position: &'static str,
     ) {
         if is_operator(token, OperatorTokenType::Colon) {
-            self.merge_token(parser, context, token.expect("colon exists"));
+            self.merge_token(parser, token.expect("colon exists"));
         } else {
             parser.report(
-                context,
                 ParserErrorType::ExpectedColonInLabel(position, token.map(|token| token.kind)),
                 token,
             );
@@ -1420,7 +1375,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
 
     fn finish_existing(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         statement: &'tu Statement<'tu>,
     ) -> ParseAction<'tu, 'p> {
         self.restore_scopes(parser);
@@ -1429,13 +1384,12 @@ impl<'tu, 'p> StatementFrame<'tu> {
 
     fn finish(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         kind: StatementType<'tu>,
     ) -> ParseAction<'tu, 'p> {
         let source_vectors = self
             .source_vectors
-            .unwrap_or_else(|| parser.missing_syntax_source(context));
+            .unwrap_or_else(|| parser.missing_syntax_source());
         let index = parser.alloc_syntax(Statement {
             kind,
             source_vectors,
@@ -1445,7 +1399,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
         ParseAction::Reduce(ParseValue::Statement(index))
     }
 
-    fn restore_scopes(&mut self, parser: &mut Parser<'tu, 'p>) {
+    fn restore_scopes(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
         if self.owns_switch_scope {
             let _switch_scope = parser
                 .switch_scopes

@@ -117,7 +117,9 @@ type FrameTrace = Vec<FrameTraceEvent>;
 /// C99: translation units and external declarations are specified by §6.9,
 /// p. 140; PDF p. 152: a translation unit “consists of a sequence of external
 /// declarations.” The diagnostic obligation is §5.1.1.3, p. 11; PDF p. 23.
-pub(crate) struct Parser<'tu, 'p> {
+pub(crate) struct Parser<'c, 'tu, 'p> {
+    /// The translation context, borrowed for the whole parse.
+    pub(super) context: &'c mut Context<'tu>,
     /// The parse arena, which holds the parser's working memory until
     /// parsing ends.
     arena: &'p Bump,
@@ -271,19 +273,19 @@ impl Debug for CompactRoot<'_, '_> {
     }
 }
 
-impl GetPosition for Parser<'_, '_> {
+impl GetPosition for Parser<'_, '_, '_> {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.cursor.upstream.position(context)
     }
 }
 
-impl GetSourceFileIndex for Parser<'_, '_> {
+impl GetSourceFileIndex for Parser<'_, '_, '_> {
     fn source_file_index(&self) -> u32 {
         self.cursor.upstream.source_file_index()
     }
 }
 
-impl<'tu> Parser<'tu, '_> {
+impl<'tu> Parser<'_, 'tu, '_> {
     /// Streaming adapter: drives the machine until one external declaration
     /// reduces, and returns it.
     #[cfg_attr(
@@ -293,12 +295,16 @@ impl<'tu> Parser<'tu, '_> {
             reason = "Tests stream roots; the pipeline parses whole translation units."
         )
     )]
-    pub(crate) fn next_item(
-        &mut self,
-        context: &mut Context<'_>,
-    ) -> Option<ExternalDeclaration<'tu>> {
-        let root = self.drive(context)?;
+    pub(crate) fn next_item(&mut self) -> Option<ExternalDeclaration<'tu>> {
+        let root = self.drive()?;
         self.emitted_roots.push(root);
         Some(root)
+    }
+
+    /// The translation context this parser borrows, for tests outside the
+    /// parser.
+    #[cfg(test)]
+    pub(crate) fn context(&mut self) -> &mut Context<'tu> {
+        self.context
     }
 }

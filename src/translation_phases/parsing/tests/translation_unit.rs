@@ -43,8 +43,7 @@ fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
         SharedVec::default(),
     );
 
-    let unit =
-        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
 
     assert_eq!(unit.external_declarations().len(), 3);
     assert!(
@@ -76,10 +75,10 @@ fn complete_translation_unit_retains_roots_already_streamed() {
     let mut parser = Parser::new(preprocessor, &mut context, &parse_arena);
 
     assert!(matches!(
-        parser.next_item(&mut context),
+        parser.next_item(),
         Some(ExternalDeclaration::Declaration(_))
     ));
-    let unit = parser.parse_translation_unit(&mut context);
+    let unit = parser.parse_translation_unit();
 
     assert_eq!(unit.external_declarations().len(), 2);
     let names = unit
@@ -122,8 +121,7 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
         vec![include_directory.clone()].into(),
         SharedVec::default(),
     );
-    let unit =
-        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
 
     assert!(context.take_pending_errors().is_empty());
     assert_eq!(unit.external_declarations().len(), 2);
@@ -205,8 +203,7 @@ fn deterministic_inspection_uses_spellings_and_marks_recovery() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit =
-        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
     let first = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
     let second = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
 
@@ -236,8 +233,7 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit =
-        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
     let output = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
 
     for expected in [
@@ -266,8 +262,8 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let multi = Parser::new(preprocessor, &mut multi_context, &parse_arena)
-        .parse_translation_unit(&mut multi_context);
+    let multi =
+        Parser::new(preprocessor, &mut multi_context, &parse_arena).parse_translation_unit();
     let multi = multi.inspect(
         multi_context.tu_arena(),
         &multi_context,
@@ -401,7 +397,7 @@ proptest! {
             prop_assert!(parsed.parser.label_scopes.is_empty());
             prop_assert!(parsed.parser.switch_scopes.is_empty());
             for error in &parsed.errors {
-                let vectors = error.source_vectors(parsed.context);
+                let vectors = error.source_vectors(parsed.parser.context);
                 prop_assert!(vectors.length > 0 || source.is_empty());
             }
             Ok(())
@@ -419,7 +415,7 @@ fn pending_preprocessing_diagnostics_survive_arena_compaction() {
                 | TranslationError::Preprocessing(error) => Some(error.source_vectors),
                 | _ => None,
             })
-            .flat_map(|source| parsed.context.get_source_vectors(source).to_vec())
+            .flat_map(|source| parsed.parser.context.get_source_vectors(source).to_vec())
             .collect()
     }
 
@@ -432,9 +428,9 @@ fn pending_preprocessing_diagnostics_survive_arena_compaction() {
             assert_ne!(short_vectors, []);
             assert_eq!(short_vectors, preprocessing_vectors(long));
             assert!(
-                long.context.source_vectors.0.len() < 16,
+                long.parser.context.source_vectors.0.len() < 16,
                 "the parser left {} vectors in the preprocessor arena",
-                long.context.source_vectors.0.len()
+                long.parser.context.source_vectors.0.len()
             );
         },
     );

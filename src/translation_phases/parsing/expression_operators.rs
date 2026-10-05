@@ -195,7 +195,10 @@ pub(super) fn is_postfix_starter(token: TokenType) -> bool {
     )
 }
 
-pub(super) fn is_array_pointer_marker(parser: &mut Parser<'_, '_>, token: Option<Token>) -> bool {
+pub(super) fn is_array_pointer_marker(
+    parser: &mut Parser<'_, '_, '_>,
+    token: Option<Token>,
+) -> bool {
     is_operator(token, OperatorTokenType::Asterisk)
         && is_operator(
             parser.cursor.following(),

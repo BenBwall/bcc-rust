@@ -23,13 +23,10 @@ use super::{
         ParseValue,
     },
 };
-use crate::translation_phases::{
-    Context,
-    preprocessing::{
-        OperatorTokenType,
-        Token,
-        TokenType,
-    },
+use crate::translation_phases::preprocessing::{
+    OperatorTokenType,
+    Token,
+    TokenType,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -62,8 +59,7 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -105,7 +101,7 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
                     .expect("type name cannot finish without specifiers");
                 let source_vectors =
                     declarator.map_or(declaration_specifiers.source_vectors, |declarator| {
-                        context.merge_vectors(
+                        parser.context.merge_vectors(
                             declaration_specifiers.source_vectors,
                             declarator.source_vectors,
                         )

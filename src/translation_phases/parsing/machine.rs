@@ -449,14 +449,13 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// repeating [`ParseAction::Continue`] transitions in place.
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         let mut returned = returned;
         loop {
-            let action = self.step_once(parser, context, token, returned.take());
+            let action = self.step_once(parser, token, returned.take());
             if !matches!(action, ParseAction::Continue) {
                 return action;
             }
@@ -467,25 +466,24 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// kind cannot change during a step, so the driver reads it beforehand.
     fn step_once(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self {
-            | Self::ExternalDeclaration(frame) => frame.step(parser, context, token, returned),
-            | Self::Declaration(frame) => frame.step(parser, context, token, returned),
-            | Self::DeclarationSpecifiers(frame) => frame.step(parser, context, token, returned),
-            | Self::Declarator(frame) => frame.step(parser, context, token, returned),
-            | Self::ParameterList(frame) => frame.step(parser, context, token, returned),
-            | Self::StructOrUnionSpecifier(frame) => frame.step(parser, context, token, returned),
-            | Self::EnumSpecifier(frame) => frame.step(parser, context, token, returned),
-            | Self::TypeName(frame) => frame.step(parser, context, token, returned),
-            | Self::Expression(frame) => frame.step(parser, context, token, returned),
-            | Self::Initializer(frame) => frame.step(parser, context, token, returned),
-            | Self::FunctionDefinition(frame) => frame.step(parser, context, token, returned),
-            | Self::CompoundStatement(frame) => frame.step(parser, context, token, returned),
-            | Self::Statement(frame) => frame.step(parser, context, token, returned),
+            | Self::ExternalDeclaration(frame) => frame.step(parser, token, returned),
+            | Self::Declaration(frame) => frame.step(parser, token, returned),
+            | Self::DeclarationSpecifiers(frame) => frame.step(parser, token, returned),
+            | Self::Declarator(frame) => frame.step(parser, token, returned),
+            | Self::ParameterList(frame) => frame.step(parser, token, returned),
+            | Self::StructOrUnionSpecifier(frame) => frame.step(parser, token, returned),
+            | Self::EnumSpecifier(frame) => frame.step(parser, token, returned),
+            | Self::TypeName(frame) => frame.step(parser, token, returned),
+            | Self::Expression(frame) => frame.step(parser, token, returned),
+            | Self::Initializer(frame) => frame.step(parser, token, returned),
+            | Self::FunctionDefinition(frame) => frame.step(parser, token, returned),
+            | Self::CompoundStatement(frame) => frame.step(parser, token, returned),
+            | Self::Statement(frame) => frame.step(parser, token, returned),
         }
     }
 }

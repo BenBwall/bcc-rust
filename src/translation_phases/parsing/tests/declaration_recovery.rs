@@ -194,7 +194,7 @@ fn omitted_enumerator_comma_reprocesses_the_next_identifier() {
                 .parser
                 .syntax
                 .iter::<Enumerator<'_>>()
-                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .map(|enumerator| parsed.parser.context.string_cache.at(enumerator.name.name))
                 .collect::<Vec<_>>(),
             ["A", "B", "C"]
         );
@@ -224,7 +224,10 @@ fn named_parameter_declarators_retain_nested_k_and_r_identifier_lists() {
             })
             .expect("callback retains a K&R identifier-list suffix");
         assert_eq!(parameters.len(), 1);
-        assert_eq!(parsed.context.string_cache.at(parameters[0].name), "arg");
+        assert_eq!(
+            parsed.parser.context.string_cache.at(parameters[0].name),
+            "arg"
+        );
     });
 }
 
@@ -278,7 +281,7 @@ fn nested_recovery_stops_before_grammar_starters() {
                 .parser
                 .syntax
                 .iter::<Enumerator<'_>>()
-                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .map(|enumerator| parsed.parser.context.string_cache.at(enumerator.name.name))
                 .collect::<Vec<_>>(),
             ["A", "B", "C"]
         );
@@ -290,7 +293,7 @@ fn nested_recovery_stops_before_grammar_starters() {
                 .parser
                 .syntax
                 .iter::<Identifier>()
-                .map(|identifier| parsed.context.string_cache.at(identifier.name))
+                .map(|identifier| parsed.parser.context.string_cache.at(identifier.name))
                 .collect::<Vec<_>>(),
             ["a", "b", "c"]
         );
@@ -314,7 +317,7 @@ fn nested_recovery_stops_before_grammar_starters() {
                 .parser
                 .syntax
                 .iter::<Enumerator<'_>>()
-                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .map(|enumerator| parsed.parser.context.string_cache.at(enumerator.name.name))
                 .collect::<Vec<_>>(),
             ["A", "B"]
         );
@@ -326,7 +329,7 @@ fn nested_recovery_stops_before_grammar_starters() {
                 .parser
                 .syntax
                 .iter::<Enumerator<'_>>()
-                .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                .map(|enumerator| parsed.parser.context.string_cache.at(enumerator.name.name))
                 .collect::<Vec<_>>(),
             ["A", "B"]
         );
@@ -434,7 +437,7 @@ fn omitted_k_and_r_comma_reprocesses_the_next_identifier() {
                 .parser
                 .syntax
                 .iter::<Identifier>()
-                .map(|identifier| parsed.context.string_cache.at(identifier.name))
+                .map(|identifier| parsed.parser.context.string_cache.at(identifier.name))
                 .collect::<Vec<_>>(),
             ["a", "b", "c"]
         );
@@ -584,7 +587,7 @@ fn expression_recovery_keeps_semicolons_inside_nested_braces() {
                     .parser
                     .syntax
                     .iter::<Enumerator<'_>>()
-                    .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
+                    .map(|enumerator| parsed.parser.context.string_cache.at(enumerator.name.name))
                     .collect::<Vec<_>>(),
                 ["A", "B"]
             );
@@ -1026,6 +1029,7 @@ fn prototype_enumerators_stop_hiding_file_scope_typedefs_at_the_closing_parenthe
             parsed.errors
         );
         let a = parsed
+            .parser
             .context
             .string_cache
             .get_id_from_string("A")

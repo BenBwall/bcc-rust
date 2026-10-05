@@ -77,15 +77,17 @@ fn adjacent_strings_merge_across_macro_expansion_and_preserve_width() {
             };
             assert_eq!(
                 parsed
+                    .parser
                     .context
-                    .literal_text_in(parsed.context.tu_arena(), ordinary, false)
+                    .literal_text_in(parsed.parser.context.tu_arena(), ordinary, false)
                     .unwrap(),
                 "ab"
             );
             assert_eq!(
                 parsed
+                    .parser
                     .context
-                    .literal_text_in(parsed.context.tu_arena(), wide, true)
+                    .literal_text_in(parsed.parser.context.tu_arena(), wide, true)
                     .unwrap(),
                 "xy"
             );
@@ -359,7 +361,11 @@ fn missing_operand_error_is_anchored_at_the_current_boundary_token() {
             .iter::<Expression<'_>>()
             .find(|expression| matches!(expression.kind, ExpressionType::Error))
             .expect("missing operand must produce an error expression");
-        let [anchor] = parsed.context.get_source_vectors(error.source_vectors) else {
+        let [anchor] = parsed
+            .parser
+            .context
+            .get_source_vectors(error.source_vectors)
+        else {
             panic!("error expression must have one source anchor")
         };
 
@@ -849,7 +855,7 @@ fn phase_05_syntax_facts_preserve_absence_and_identifier_provenance() {
                 assert!(identifier.source_vectors.length > 0, "{identifier:?}");
                 assert_eq!(
                     sourced_text(parsed, identifier.source_vectors),
-                    parsed.context.string_cache.at(identifier.name)
+                    parsed.parser.context.string_cache.at(identifier.name)
                 );
             }
         },

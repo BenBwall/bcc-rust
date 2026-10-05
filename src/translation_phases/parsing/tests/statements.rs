@@ -1646,11 +1646,15 @@ fn premature_eof_unwinds_every_phase_03_frame_family() {
             }));
             let definition = function_definition(parsed, 0);
             assert_ne!(
-                parsed.context.get_source_vectors(definition.source_vectors),
+                parsed
+                    .parser
+                    .context
+                    .get_source_vectors(definition.source_vectors),
                 []
             );
             assert_ne!(
                 parsed
+                    .parser
                     .context
                     .get_source_vectors(definition.body.source_vectors),
                 []
@@ -1674,6 +1678,7 @@ fn synthesized_missing_statements_are_anchored_at_the_recovery_point() {
                 panic!("expected an if statement for {source:?}")
             };
             let [missing_source] = parsed
+                .parser
                 .context
                 .get_source_vectors(then_statement.source_vectors)
             else {
@@ -1695,7 +1700,11 @@ fn missing_function_body_at_eof_retains_a_zero_width_source_location() {
     with_parse(source, |parsed| {
         let definition = function_definition(parsed, 0);
         let body = definition.body;
-        let [body_source] = parsed.context.get_source_vectors(body.source_vectors) else {
+        let [body_source] = parsed
+            .parser
+            .context
+            .get_source_vectors(body.source_vectors)
+        else {
             panic!("expected one source vector for the recovered function body")
         };
 

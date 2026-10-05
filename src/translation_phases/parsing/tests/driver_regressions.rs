@@ -31,8 +31,7 @@ fn located_tree(source: &str) -> String {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit =
-        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
     unit.inspect(
         context.tu_arena(),
         &context,
@@ -98,8 +97,7 @@ fn source_segments_after_parsing(source: &str) -> usize {
         SharedVec::default(),
         SharedVec::default(),
     );
-    let _unit =
-        Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit(&mut context);
+    let _unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
     context.source_segment_count()
 }
 
@@ -205,8 +203,7 @@ fn missing_semicolon_help_uses_macro_invocations_after_full_batch_preprocessing(
             SharedVec::default(),
             SharedVec::default(),
         );
-        let _unit = Parser::new(preprocessor, &mut context, &parse_arena)
-            .parse_translation_unit(&mut context);
+        let _unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
         let insertions: Vec<_> = context
             .take_pending_errors()
             .into_iter()

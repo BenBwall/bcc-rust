@@ -86,8 +86,7 @@ pub(crate) fn parse_with_arena<'tu>(
     context: &mut Context<'tu>,
     parse: &Bump,
 ) -> ParsedTranslationUnit<'tu> {
-    Parser::from_preprocessed(preprocessed, context.tu_arena(), parse)
-        .parse_translation_unit(context)
+    Parser::from_preprocessed(preprocessed, context, parse).parse_translation_unit()
 }
 
 /// Runs translation phases 4 through 6 over the whole translation unit and

@@ -840,7 +840,7 @@ fn scalar_list_and_designated_initializers_have_stable_arena_children() {
                 [Designator {
                     kind: DesignatorType::Field(identifier),
                     ..
-                }] if parsed.context.string_cache.at(identifier.name) == "field"
+                }] if parsed.parser.context.string_cache.at(identifier.name) == "field"
             ));
             assert_eq!(
                 sourced_text(parsed, field_designators[0].operator_source_vectors),
@@ -956,7 +956,7 @@ fn chained_designators_retain_their_order_and_initializer() {
                         kind: DesignatorType::Array(second),
                         ..
                     }
-                ] if parsed.context.string_cache.at(identifier.name) == "member"
+                ] if parsed.parser.context.string_cache.at(identifier.name) == "member"
                     && constant_expression_text(parsed, *first) == "0"
                     && constant_expression_text(parsed, *second) == "1"
             ));

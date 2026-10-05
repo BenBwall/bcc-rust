@@ -49,7 +49,6 @@ use super::{
 };
 use crate::{
     translation_phases::{
-        Context,
         SourceVectors,
         preprocessing::{
             KeywordTokenType,
@@ -199,8 +198,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -212,7 +210,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 );
                 if is_operator(token, OperatorTokenType::Asterisk) {
                     let token = token.expect("asterisk token exists");
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.has_pointer_level = true;
                     self.current_qualifiers = TypeQualifiers::empty();
                     self.phase = DeclaratorPhase::PointerQualifiers;
@@ -233,10 +231,10 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     if self.mode != DeclaratorMode::Abstract
                         && self.current_qualifiers.contains(qualifier)
                     {
-                        report_duplicate_type_qualifier(parser, context, token, qualifier);
+                        report_duplicate_type_qualifier(parser, token, qualifier);
                     }
                     self.current_qualifiers.insert(qualifier);
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     return ParseAction::Consume;
                 }
                 // Each `*` owns the qualifiers immediately following
@@ -247,7 +245,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     self.pointer_qualifiers.push(self.current_qualifiers);
                     self.current_qualifiers = TypeQualifiers::empty();
                     let token = token.expect("asterisk token exists");
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     ParseAction::Consume
                 } else {
                     self.pointer_qualifiers.push(self.current_qualifiers);
@@ -265,7 +263,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     && token.kind == TokenType::Identifier
                     && self.mode != DeclaratorMode::Abstract
                 {
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.direct_declarators
                         .push(DirectDeclarator::Identifier(Identifier::from_token(token)));
                     self.has_direct_declarator = true;
@@ -283,7 +281,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if is_operator(token, OperatorTokenType::OpeningParenthesis) {
                     let token = token.expect("opening-parenthesis token exists");
                     self.nested_open = Some(token.source_vectors);
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.phase = if self.mode == DeclaratorMode::Named {
                         DeclaratorPhase::PushNested
                     } else {
@@ -299,7 +297,6 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 }
                 if self.mode == DeclaratorMode::Named {
                     parser.report(
-                context,
                 ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
                     token.map(|token| token.kind),
                 ),
@@ -333,7 +330,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                             parameters: ArenaList::empty(),
                         });
                     self.has_direct_declarator = true;
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
@@ -350,7 +347,6 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 };
                 let Some(declarator) = declarator else {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(
                     token.map(|token| token.kind),
                 ),
@@ -362,7 +358,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 let source_vectors = declarator.source_vectors;
                 self.source_vectors =
                     Some(self.source_vectors.map_or(source_vectors, |existing| {
-                        context.merge_vectors(existing, source_vectors)
+                        parser.context.merge_vectors(existing, source_vectors)
                     }));
                 self.nested = Some(ParenthesizedDeclarator {
                     declarator,
@@ -381,7 +377,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                self.close_nested(parser, context, token)
+                self.close_nested(parser, token)
             },
             | DeclaratorPhase::Suffix => {
                 debug_assert!(
@@ -394,7 +390,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 // binding order in the arena slice.
                 if is_operator(token, OperatorTokenType::OpeningSquareBracket) {
                     let token = token.expect("opening-square-bracket token exists");
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.array_qualifiers = TypeQualifiers::empty();
                     self.array_qualifiers_before_static = false;
                     self.array_is_static = false;
@@ -404,7 +400,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::OpeningParenthesis) {
                     let token = token.expect("opening-parenthesis token exists");
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::FunctionStart;
                     ParseAction::Consume
                 } else {
@@ -428,11 +424,10 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     if self.mode != DeclaratorMode::Abstract
                         && self.array_qualifiers.contains(qualifier)
                     {
-                        report_duplicate_type_qualifier(parser, context, token, qualifier);
+                        report_duplicate_type_qualifier(parser, token, qualifier);
                     }
                     if self.array_is_static && self.array_qualifiers_before_static {
                         parser.report(
-                    context,
                     ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
                     Some(token),
                 );
@@ -441,7 +436,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                         self.array_qualifiers_before_static = true;
                     }
                     self.array_qualifiers.insert(qualifier);
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     return ParseAction::Consume;
                 }
                 if token
@@ -449,10 +444,10 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 {
                     let token = token.expect("static token exists");
                     if self.array_is_static {
-                        parser.report(context, ParserErrorType::StaticSpecifiedTwice, Some(token));
+                        parser.report(ParserErrorType::StaticSpecifiedTwice, Some(token));
                     }
                     self.array_is_static = true;
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     return ParseAction::Consume;
                 }
                 if is_array_pointer_marker(parser, token) {
@@ -464,20 +459,18 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                         && !self.array_qualifiers.is_empty()
                     {
                         parser.report(
-                    context,
                     ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator,
                     Some(token),
                 );
                     }
                     if self.array_is_static {
                         parser.report(
-                            context,
                             ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator,
                             Some(token),
                         );
                     }
                     self.array_is_pointer = true;
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::ArrayExpectClose;
                     return ParseAction::Consume;
                 }
@@ -485,19 +478,17 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     let token = token.expect("closing-square-bracket token exists");
                     if self.array_is_static {
                         parser.report(
-                    context,
                     ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator,
                     Some(token),
                 );
                     }
                     self.push_array();
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     return ParseAction::Consume;
                 }
                 if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(None),
                         None,
                     );
@@ -526,17 +517,16 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if is_operator(token, OperatorTokenType::ClosingSquareBracket) {
                     let token = token.expect("closing-square-bracket token exists");
                     self.push_array();
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Asterisk) {
                     let token = token.expect("asterisk token exists");
-                    parser.report(context, ParserErrorType::PointerSpecifiedTwice, Some(token));
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.report(ParserErrorType::PointerSpecifiedTwice, Some(token));
+                    parser.merge_source(&mut self.source_vectors, token);
                     ParseAction::Consume
                 } else if let Some(token) = token {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(
                     token.kind,
                 ),
@@ -549,7 +539,6 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     })
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::UnexpectedEndOfArrayDeclaratorAfterPointer,
                         None,
                     );
@@ -576,13 +565,13 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     self.array_assignment_expression = Some(index);
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            context.merge_vectors(existing, source_vectors)
+                            parser.context.merge_vectors(existing, source_vectors)
                         }));
                 }
                 if is_operator(token, OperatorTokenType::ClosingSquareBracket) {
                     let token = token.expect("closing-square-bracket token exists");
                     self.push_array();
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Comma)
@@ -597,7 +586,6 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     // boundary instead of consuming it here.
                     if !self.array_is_pointer {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
                                 token.map(|token| token.kind),
                             ),
@@ -610,7 +598,6 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 } else if token.is_none() {
                     if !self.array_is_pointer {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
                                 None,
                             ),
@@ -622,7 +609,6 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     ParseAction::Reprocess
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingSquareBracketInArrayDirectDeclarator(
                             token.map(|token| token.kind),
                         ),
@@ -658,12 +644,11 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     self.direct_declarators.push(direct);
                     self.has_direct_declarator = true;
                     let token = token.expect("closing-parenthesis token exists");
-                    parser.merge_source(context, &mut self.source_vectors, token);
+                    parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::UnexpectedEndOfFunctionDeclaratorParameterList,
                         None,
                     );
@@ -684,7 +669,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 };
                 self.source_vectors =
                     Some(self.source_vectors.map_or(source_vectors, |existing| {
-                        context.merge_vectors(existing, source_vectors)
+                        parser.context.merge_vectors(existing, source_vectors)
                     }));
                 self.direct_declarators.push(direct_declarator);
                 self.has_direct_declarator = true;
@@ -704,11 +689,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     return ParseAction::Reduce(ParseValue::Declarator(None));
                 }
                 if self.mode == DeclaratorMode::Named && !self.has_direct_declarator {
-                    parser.report(
-                        context,
-                        ParserErrorType::TypeQualifiersWithoutDeclarator,
-                        token,
-                    );
+                    parser.report(ParserErrorType::TypeQualifiersWithoutDeclarator, token);
                     return ParseAction::Reduce(ParseValue::Declarator(None));
                 }
 
@@ -745,7 +726,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
 
     /// Pushes a parameter-list child in a pooled box.
     fn push_parameter_list(
-        parser: &mut Parser<'tu, 'p>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         allow_k_and_r: bool,
     ) -> ParseAction<'tu, 'p> {
         let frame = ParameterListFrame::new(parser.arena, allow_k_and_r);
@@ -763,8 +744,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
     /// C99: parenthesized direct-declarator is §6.7.5, p. 114; PDF p. 126.
     fn close_nested(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
     ) -> ParseAction<'tu, 'p> {
         self.phase = DeclaratorPhase::Suffix;
@@ -775,17 +755,18 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         let closing =
             token.filter(|token| is_operator(Some(*token), OperatorTokenType::ClosingParenthesis));
         if let Some(token) = closing {
-            nested.delimiters = context.merge_vectors(nested.delimiters, token.source_vectors);
+            nested.delimiters = parser
+                .context
+                .merge_vectors(nested.delimiters, token.source_vectors);
         }
         let parenthesized = parser.alloc_syntax(nested);
         self.direct_declarators
             .push(DirectDeclarator::Parenthesized(parenthesized));
         if let Some(token) = closing {
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             ParseAction::Consume
         } else {
             parser.report(
-                context,
                 ParserErrorType::ExpectedClosingParenthesisAfterParenthesizedDeclarator(
                     token.map(|token| token.kind),
                 ),
@@ -795,7 +776,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         }
     }
 
-    fn nested_frame(&mut self, parser: &mut Parser<'tu, 'p>) -> Self {
+    fn nested_frame(&mut self, parser: &mut Parser<'_, 'tu, 'p>) -> Self {
         let mut nested = Self::new(parser.arena, self.mode);
         if self.mode != DeclaratorMode::Abstract {
             let chain_named = *self.chain_named.get_or_insert_with(|| {

@@ -23,7 +23,6 @@ use super::{
     syntax::ExternalDeclaration,
 };
 use crate::translation_phases::{
-    Context,
     ErrorSeverity,
     TranslationError,
     preprocessing::{
@@ -72,8 +71,7 @@ impl<'tu, 'p> ExternalDeclarationFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -116,12 +114,12 @@ impl<'tu, 'p> ExternalDeclarationFrame {
                             declaration_source
                         };
                         let related = token.map(|token| {
-                            context.diagnostic_slice(&[RelatedParserDiagnostic {
+                            parser.context.diagnostic_slice(&[RelatedParserDiagnostic {
                                 message:        "parsing resumes here",
                                 source_vectors: token.source_vectors,
                             }])
                         });
-                        if let Some(TranslationError::Parsing(error)) = context
+                        if let Some(TranslationError::Parsing(error)) = parser.context
                             .pending_errors
                             .iter_mut()
                             .skip(self.starting_diagnostic_count)

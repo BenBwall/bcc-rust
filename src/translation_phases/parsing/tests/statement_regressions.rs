@@ -31,7 +31,7 @@ fn error_offsets(parsed: &Parsed<'_, '_>) -> Vec<usize> {
         .errors
         .iter()
         .filter_map(|error| match error {
-            | TranslationError::Parsing(error) => Some(error.position(parsed.context).index),
+            | TranslationError::Parsing(error) => Some(error.position(parsed.parser.context).index),
             | _ => None,
         })
         .collect()
@@ -271,7 +271,7 @@ fn duplicate_default_points_at_the_second_keyword() {
             .find_map(|error| match error {
                 | TranslationError::Parsing(error)
                     if matches!(error.error_type, ParserErrorType::DuplicateDefaultLabel) =>
-                    Some(error.position(parsed.context).index),
+                    Some(error.position(parsed.parser.context).index),
                 | _ => None,
             })
             .expect("duplicate default is diagnosed");

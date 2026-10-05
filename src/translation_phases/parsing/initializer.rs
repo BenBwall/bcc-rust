@@ -188,8 +188,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -238,7 +237,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 {
                     if self.elements.is_empty() {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedStatementExpression(
                                 "nonempty initializer list",
                                 Some(close.kind),
@@ -253,7 +251,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 }
                 if self.is_unowned_closing_delimiter(token) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatementExpression(
                             "initializer element",
                             token.map(|token| token.kind),
@@ -268,7 +265,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     | ListBoundary::None => {},
                     | ListBoundary::MissingClose => {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
                                 token.map(|token| token.kind),
                             ),
@@ -281,7 +277,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         // C99 §6.7.8p1: an initializer is an
                         // assignment-expression or a braced list.
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedStatementExpression(
                                 "initializer element",
                                 token.map(|token| token.kind),
@@ -303,7 +298,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 if let Some(designator) = token
                     && designator.kind == TokenType::Operator(OperatorTokenType::Period)
                 {
-                    self.merge_designation_source(context, designator.source_vectors);
+                    self.merge_designation_source(parser.context, designator.source_vectors);
                     self.designation_state().current_designator_source =
                         Some(designator.source_vectors);
                     self.phase = InitializerPhase::FieldDesignator;
@@ -313,7 +308,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     && designator.kind
                         == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
                 {
-                    self.merge_designation_source(context, designator.source_vectors);
+                    self.merge_designation_source(parser.context, designator.source_vectors);
                     self.designation_state().current_designator_source =
                         Some(designator.source_vectors);
                     self.phase = InitializerPhase::PushArrayDesignator;
@@ -336,7 +331,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 else {
                     // C99 §6.7.8p1: designator `. identifier`.
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedMemberIdentifier(token.map(|token| token.kind)),
                         token,
                     );
@@ -358,14 +352,15 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
                 };
-                self.merge_designation_source(context, identifier.source_vectors);
+                self.merge_designation_source(parser.context, identifier.source_vectors);
                 let operator_source_vectors = self
                     .designation_state()
                     .current_designator_source
                     .take()
                     .unwrap_or_default();
-                let source_vectors =
-                    context.merge_vectors(operator_source_vectors, identifier.source_vectors);
+                let source_vectors = parser
+                    .context
+                    .merge_vectors(operator_source_vectors, identifier.source_vectors);
                 self.designation_state()
                     .current_designators
                     .push(Designator {
@@ -409,14 +404,17 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     .designation_state()
                     .current_designator_source
                     .unwrap_or_default();
-                let mut source_vectors =
-                    context.merge_vectors(operator_source_vectors, expression_source);
-                self.merge_designation_source(context, expression_source);
+                let mut source_vectors = parser
+                    .context
+                    .merge_vectors(operator_source_vectors, expression_source);
+                self.merge_designation_source(parser.context, expression_source);
                 if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
                 {
-                    source_vectors = context.merge_vectors(source_vectors, close.source_vectors);
-                    self.merge_designation_source(context, close.source_vectors);
+                    source_vectors = parser
+                        .context
+                        .merge_vectors(source_vectors, close.source_vectors);
+                    self.merge_designation_source(parser.context, close.source_vectors);
                     self.push_array_designator(
                         expression,
                         source_vectors,
@@ -427,7 +425,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingSquareBracketInArrayDesignator(
                             token.map(|token| token.kind),
                         ),
@@ -464,8 +461,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 if let Some(token) = token
                     && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
                 {
-                    source_vectors = context.merge_vectors(source_vectors, token.source_vectors);
-                    self.merge_designation_source(context, token.source_vectors);
+                    source_vectors = parser
+                        .context
+                        .merge_vectors(source_vectors, token.source_vectors);
+                    self.merge_designation_source(parser.context, token.source_vectors);
                     if depth.brackets == 0 {
                         self.push_array_designator(
                             expression,
@@ -529,8 +528,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     },
                     | _ => {},
                 }
-                source_vectors = context.merge_vectors(source_vectors, token.source_vectors);
-                self.merge_designation_source(context, token.source_vectors);
+                source_vectors = parser
+                    .context
+                    .merge_vectors(source_vectors, token.source_vectors);
+                self.merge_designation_source(parser.context, token.source_vectors);
                 self.designation_state().synchronized_designator = Some(SynchronizedDesignator {
                     expression,
                     source_vectors,
@@ -547,11 +548,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 {
                     self.designation_state().designation_equals_source_vectors =
                         Some(equals.source_vectors);
-                    self.merge_designation_source(context, equals.source_vectors);
+                    self.merge_designation_source(parser.context, equals.source_vectors);
                     true
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedEqualsAfterInitializerDesignation(
                             token.map(|token| token.kind),
                         ),
@@ -580,7 +580,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 else {
                     panic!("initializer element returned an unexpected value: {returned:?}");
                 };
-                self.push_element(context, index);
+                self.push_element(parser.context, index);
                 self.phase = InitializerPhase::Separator;
                 ParseAction::Continue
             },
@@ -598,8 +598,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     | _ => false,
                 });
                 if stops {
-                    let source_vectors =
-                        source.unwrap_or_else(|| parser.missing_syntax_source(context));
+                    let source_vectors = source.unwrap_or_else(|| parser.missing_syntax_source());
                     let expression =
                         parser.store_expression(ExpressionType::Error, source_vectors, None, true);
                     let index = parser.alloc_syntax(Initializer {
@@ -607,7 +606,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         source_vectors,
                         recovered: true,
                     });
-                    self.push_element(context, index);
+                    self.push_element(parser.context, index);
                     self.phase = InitializerPhase::Separator;
                     return ParseAction::Reprocess;
                 }
@@ -626,7 +625,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     | _ => {},
                 }
                 source = Some(source.map_or(token.source_vectors, |existing| {
-                    context.merge_vectors(existing, token.source_vectors)
+                    parser.context.merge_vectors(existing, token.source_vectors)
                 }));
                 self.phase = InitializerPhase::SkipMalformedElement(nesting, source);
                 ParseAction::Consume
@@ -654,7 +653,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 }
                 if self.is_unowned_closing_delimiter(token) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
                             token.map(|token| token.kind),
                         ),
@@ -668,7 +666,6 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 }
                 let boundary = self.list_boundary(parser, token);
                 parser.report(
-                    context,
                     ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
                         token.map(|token| token.kind),
                     ),
@@ -687,7 +684,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             | InitializerPhase::FinishList => {
                 debug_assert!(returned.is_none());
                 let list = self.store_braced_list(parser);
-                let source_vectors = context.merge_vector_list(&self.source_vectors);
+                let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
                 let index = self.store_initializer(
                     parser,
                     InitializerType::InitializerList(list),
@@ -721,7 +718,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     }
 
     /// An unstarted child frame for one element of this list.
-    fn element_frame(&self, parser: &Parser<'tu, 'p>) -> ParseFrame<'tu, 'p> {
+    fn element_frame(&self, parser: &Parser<'_, 'tu, 'p>) -> ParseFrame<'tu, 'p> {
         ParseFrame::Initializer(InitializerFrame::new(
             parser.arena,
             parser.hard_error_count,
@@ -779,7 +776,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
 
     fn at_array_designator_sync_boundary(
         &self,
-        parser: &mut Parser<'tu, 'p>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         depth: DelimiterDepth,
         closing_bracket_follows: bool,
@@ -820,7 +817,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     /// still closes it, e.g. `[1, 2] = 3`. Without that `]`, as in
     /// `{ [1 = 2 }`, the `,` or `=` is where the bracket went missing. The
     /// scan is bounded so repeated errors in one long list stay linear.
-    fn closing_bracket_follows(parser: &mut Parser<'tu, 'p>, token: Option<Token>) -> bool {
+    fn closing_bracket_follows(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>) -> bool {
         const SCAN_LIMIT: usize = 32;
         let mut depth = DelimiterDepth {
             parentheses: 0,
@@ -875,7 +872,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         false
     }
 
-    fn finish_designation(&mut self, parser: &mut Parser<'tu, 'p>) {
+    fn finish_designation(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
         let designation = self.designation_state();
         let recovered = designation.current_designation_recovered
             || designation
@@ -914,7 +911,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         })
     }
 
-    fn list_boundary(&self, parser: &mut Parser<'tu, 'p>, token: Option<Token>) -> ListBoundary {
+    fn list_boundary(
+        &self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+    ) -> ListBoundary {
         if self.at_caller_boundary(token) {
             return ListBoundary::MissingClose;
         }
@@ -959,7 +960,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     /// otherwise start a following declaration or statement is a malformed
     /// element when the list's own `}` comes first, as in `{ 1, int 0 }`.
     /// The scan is bounded so repeated errors in one long list stay linear.
-    fn closing_brace_follows(parser: &mut Parser<'tu, 'p>) -> bool {
+    fn closing_brace_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {
@@ -998,7 +999,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     /// vector for reuse.
     fn store_braced_list(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
+        parser: &mut Parser<'_, 'tu, 'p>,
     ) -> &'tu BracedInitializerList<'tu> {
         let elements = parser.alloc_syntax_list(&mut self.elements);
         parser.alloc_syntax_part(BracedInitializerList {
@@ -1010,7 +1011,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
 
     fn store_initializer(
         &self,
-        parser: &mut Parser<'tu, 'p>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         kind: InitializerType<'tu>,
         source_vectors: SourceVectors,
     ) -> &'tu Initializer<'tu> {

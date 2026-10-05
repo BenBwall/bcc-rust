@@ -22,7 +22,6 @@ use super::{
 };
 use crate::{
     translation_phases::{
-        Context,
         SourceVectors,
         preprocessing::Token,
     },
@@ -285,13 +284,12 @@ macro_rules! map_fn {
 
         pub(super) fn $make_fn_name(
             &mut self,
-            parser: &mut Parser<'_, '_>,
-            context: &mut Context<'_>,
+            parser: &mut Parser<'_, 'tu, '_>,
             token: Token,
         ) {
             match self.$map_fn_name() {
                 | Some(mapped) => *self = mapped,
-                | None => self.report_conflict(parser, context, token.contents, token),
+                | None => self.report_conflict(parser, token.contents, token),
             }
         }
     }
@@ -507,14 +505,13 @@ impl<'tu> TypeSpecifiers<'tu> {
 
     pub(super) fn make_struct_or_union(
         &mut self,
-        parser: &mut Parser<'_, '_>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, '_>,
         index: &'tu StructOrUnionSpecifier<'tu>,
         token: Token,
     ) {
         match self {
             | TypeSpecifiers::Empty => *self = TypeSpecifiers::StructOrUnion(index),
-            | _ => self.report_conflict(parser, context, token.contents, token),
+            | _ => self.report_conflict(parser, token.contents, token),
         }
     }
 
@@ -531,14 +528,13 @@ impl<'tu> TypeSpecifiers<'tu> {
 
     pub(super) fn make_enum(
         &mut self,
-        parser: &mut Parser<'_, '_>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, '_>,
         index: &'tu EnumSpecifier<'tu>,
         token: Token,
     ) {
         match self {
             | TypeSpecifiers::Empty => *self = TypeSpecifiers::Enum(index),
-            | _ => self.report_conflict(parser, context, token.contents, token),
+            | _ => self.report_conflict(parser, token.contents, token),
         }
     }
 
@@ -555,33 +551,33 @@ impl<'tu> TypeSpecifiers<'tu> {
 
     pub(super) fn make_typedef_name(
         &mut self,
-        parser: &mut Parser<'_, '_>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, '_>,
         name: Identifier,
         token: Token,
     ) {
         match self {
             | TypeSpecifiers::Empty => *self = TypeSpecifiers::TypedefName(name),
-            | _ => self.report_conflict(parser, context, name.name, token),
+            | _ => self.report_conflict(parser, name.name, token),
         }
     }
 
     /// Reports `conflicting` against the accumulated specifiers using
     /// source spellings, so rendered diagnostics never expose syntax nodes.
-    fn report_conflict<'c>(
+    fn report_conflict(
         self,
-        parser: &mut Parser<'_, '_>,
-        context: &mut Context<'c>,
+        parser: &mut Parser<'_, 'tu, '_>,
         conflicting: StringCacheId,
         token: Token,
     ) {
-        let tagged = |keyword: &str, tag: Option<Identifier>| -> &'c str {
+        let tagged = |keyword: &str, tag: Option<Identifier>| -> &'tu str {
             match tag {
-                | Some(tag) => context.diagnostic_format(format_args!(
+                | Some(tag) => parser.context.diagnostic_format(format_args!(
                     "{keyword} {}",
-                    context.string_cache.at(tag.name)
+                    parser.context.string_cache.at(tag.name)
                 )),
-                | None => context.diagnostic_format(format_args!("{keyword} {{...}}")),
+                | None => parser
+                    .context
+                    .diagnostic_format(format_args!("{keyword} {{...}}")),
             }
         };
         let existing = match self {
@@ -594,15 +590,20 @@ impl<'tu> TypeSpecifiers<'tu> {
                 tagged(keyword, specifier.identifier)
             },
             | TypeSpecifiers::Enum(index) => tagged("enum", index.name),
-            | TypeSpecifiers::TypedefName(name) =>
-                context.diagnostic_text(context.string_cache.at(name.name)),
-            | type_specifiers => context.diagnostic_format(format_args!("{type_specifiers}")),
+            | TypeSpecifiers::TypedefName(name) => parser
+                .context
+                .diagnostic_text(parser.context.string_cache.at(name.name)),
+            | type_specifiers => parser
+                .context
+                .diagnostic_format(format_args!("{type_specifiers}")),
         };
         let error_type = ParserErrorType::ConflictingTypeSpecifiers {
             existing,
-            conflicting: context.diagnostic_text(context.string_cache.at(conflicting)),
+            conflicting: parser
+                .context
+                .diagnostic_text(parser.context.string_cache.at(conflicting)),
         };
-        parser.report(context, error_type, Some(token));
+        parser.report(error_type, Some(token));
     }
 }
 

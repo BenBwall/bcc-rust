@@ -28,7 +28,6 @@ use super::{
 };
 use crate::{
     translation_phases::{
-        Context,
         SourceVectors,
         preprocessing::{
             OperatorTokenType,
@@ -80,8 +79,7 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser<'tu, 'p>,
-        context: &mut Context<'_>,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
@@ -96,14 +94,13 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                     if self.function_body {
                         let name = *parser
                             .func_name
-                            .get_or_insert_with(|| context.string_cache.intern("__func__"));
+                            .get_or_insert_with(|| parser.context.string_cache.intern("__func__"));
                         parser.scopes.publish(name, NameClass::Ordinary);
                     }
                     self.phase = CompoundStatementPhase::ItemOrClose;
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedOpeningCurlyBraceInCompoundStatement(
                             token.map(|token| token.kind),
                         ),
@@ -122,7 +119,6 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                     ParseAction::Consume
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None),
                         None,
                     );
@@ -170,10 +166,11 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
             | CompoundStatementPhase::Finish => {
                 debug_assert!(returned.is_none());
                 let item_start = parser.alloc_syntax_list(&mut self.items);
+                let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
                 let index = parser.alloc_syntax(Statement {
-                    kind:           StatementType::Compound { items: item_start },
-                    source_vectors: context.merge_vector_list(&self.source_vectors),
-                    recovered:      parser.hard_error_count > self.starting_error_count,
+                    kind: StatementType::Compound { items: item_start },
+                    source_vectors,
+                    recovered: parser.hard_error_count > self.starting_error_count,
                 });
                 parser.scopes.restore_depth(
                     self.entry_scope_depth

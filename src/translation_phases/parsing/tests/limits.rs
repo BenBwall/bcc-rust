@@ -69,7 +69,7 @@ fn parenthesized_declarators_meet_the_c99_floor_and_stress_the_heap_stack() {
                 "grammar depth must be represented by heap-backed frames"
             );
             assert!(
-                parsed.context.source_segment_count() <= depth * 8 + 32,
+                parsed.parser.context.source_segment_count() <= depth * 8 + 32,
                 "source provenance must grow linearly with grammar depth"
             );
         });
@@ -92,9 +92,9 @@ fn long_statement_lists_keep_source_storage_linear() {
                 parsed.errors
             );
             assert!(
-                parsed.context.source_segment_count() < count * 64,
+                parsed.parser.context.source_segment_count() < count * 64,
                 "block provenance copied each growing prefix: {} segments",
-                parsed.context.source_segment_count()
+                parsed.parser.context.source_segment_count()
             );
         },
     );
@@ -156,7 +156,7 @@ fn source_storage_exhaustion_stops_preprocessing_the_remaining_input() {
         &parse_arena,
     );
     let mut items = 0;
-    while parser.next_item(&mut context).is_some() {
+    while parser.next_item().is_some() {
         items += 1;
     }
     assert!(items < 2, "{items} declarations parsed after the limit");
@@ -200,9 +200,9 @@ fn macro_expansion_stops_at_the_source_segment_limit() {
         },
         |parsed| {
             assert!(
-                parsed.context.source_segment_count() < 256,
+                parsed.parser.context.source_segment_count() < 256,
                 "{} source segments retained",
-                parsed.context.source_segment_count()
+                parsed.parser.context.source_segment_count()
             );
             assert_eq!(
                 parser_errors(parsed)
@@ -240,9 +240,9 @@ fn adjacent_strings_stop_at_the_source_segment_limit() {
         },
         |parsed| {
             assert!(
-                parsed.context.source_segment_count() < 1_200,
+                parsed.parser.context.source_segment_count() < 1_200,
                 "{} source segments retained",
-                parsed.context.source_segment_count()
+                parsed.parser.context.source_segment_count()
             );
             assert!(parser_errors(parsed).any(|error| matches!(
                 error,
@@ -282,9 +282,9 @@ fn long_declaration_lists_keep_source_storage_linear() {
                 parsed.errors
             );
             assert!(
-                parsed.context.source_segment_count() < count * 64,
+                parsed.parser.context.source_segment_count() < count * 64,
                 "list provenance copied each growing prefix: {} segments",
-                parsed.context.source_segment_count()
+                parsed.parser.context.source_segment_count()
             );
         });
     }
@@ -309,7 +309,7 @@ fn source_storage_is_linear_in_token_count() {
                 "{:#?}",
                 parsed.errors
             );
-            parsed.context.source_segment_count()
+            parsed.parser.context.source_segment_count()
         })
     };
     let small = source_segments(256);
@@ -656,7 +656,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             last_block_init
                 .declarator
                 .identifier()
-                .map(|identifier| block.context.string_cache.at(identifier.name)),
+                .map(|identifier| block.parser.context.string_cache.at(identifier.name)),
             Some("b510")
         );
     });
@@ -678,7 +678,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             last_external_init
                 .declarator
                 .identifier()
-                .map(|identifier| external.context.string_cache.at(identifier.name)),
+                .map(|identifier| external.parser.context.string_cache.at(identifier.name)),
             Some("e4094")
         );
     });
@@ -721,7 +721,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
             last_member_declarator
                 .declarator
                 .and_then(Declarator::identifier)
-                .map(|identifier| structure.context.string_cache.at(identifier.name)),
+                .map(|identifier| structure.parser.context.string_cache.at(identifier.name)),
             Some("m1022")
         );
     });
@@ -743,6 +743,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
         let last_enumerator = enumeration_list.last().expect("nonempty syntax list");
         assert_eq!(
             enumeration
+                .parser
                 .context
                 .string_cache
                 .at(last_enumerator.name.name),
@@ -768,7 +769,7 @@ fn remaining_c99_parser_translation_floors_are_supported() {
                 .iter::<StructOrUnionSpecifier<'_>>()
                 .last()
                 .and_then(|specifier| specifier.identifier)
-                .map(|identifier| nested.context.string_cache.at(identifier.name)),
+                .map(|identifier| nested.parser.context.string_cache.at(identifier.name)),
             Some("Outer")
         );
     });
@@ -783,9 +784,9 @@ fn completed_roots_release_macro_hint_metadata() {
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         assert_eq!(parsed.items.len(), 5_000);
         assert!(
-            parsed.context.macro_hint_entries() < 16,
+            parsed.parser.context.macro_hint_entries() < 16,
             "completed roots kept {} macro hints",
-            parsed.context.macro_hint_entries()
+            parsed.parser.context.macro_hint_entries()
         );
     });
 }
