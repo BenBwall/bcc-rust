@@ -10,6 +10,24 @@
 //! comes from: [`tests::report_allocation_sites`] then prints the call sites
 //! with their counts for the golden diagnostic fixtures and for every file
 //! listed, one path per line, in the file named by `BCC_ALLOCATION_INPUTS`.
+//!
+//! With `--features benchmarking-internals`, the `measurements` tests also
+//! assert that compiling a translation unit allocates nothing from the
+//! global allocator: every phase takes its memory from the virtual-memory
+//! arenas of `util::bump`, `util::region_vec`, and `util::region_bit_set`.
+//! Each counted interval is one call of the benchmark API, which runs
+//! translation phases 1 through 7 under the batch pipeline for one
+//! translation unit and then drops all of its arenas. The inputs are the
+//! generated benchmark inputs that are C, a source written to reach the
+//! rarer paths of every phase, and a main file with headers read from disk.
+//! Every input must produce no diagnostics; reporting them is covered by
+//! `reporting_golden_diagnostics_makes_no_global_allocations` above. Not
+//! covered: `__DATE__` and `__TIME__` (which read the environment and the
+//! clock), include directories from the command line, and the CLI's
+//! argument parsing. One exception is allowed, only for files read from
+//! disk: the standard library's `File::open` and `Path::is_file` convert
+//! each path to the operating system's encoding in a buffer of their own,
+//! which the compiler cannot supply.
 #![expect(
     unused_crate_dependencies,
     reason = "This test binary uses only the measurement API."
@@ -36,6 +54,10 @@ mod counting {
         collections::BTreeMap,
     };
 
+    /// Full call stacks kept by [`count_keeping`]; later allocations are
+    /// only counted.
+    pub(crate) const KEPT_STACKS: usize = 16;
+
     /// Calls and requested bytes.
     pub(crate) type Totals = (usize, usize);
 
@@ -48,6 +70,8 @@ mod counting {
         static CALLS: Cell<usize> = const { Cell::new(0) };
         static BYTES: Cell<usize> = const { Cell::new(0) };
         static SITES: RefCell<BTreeMap<String, Totals>> = const { RefCell::new(BTreeMap::new()) };
+        static KEEP: Cell<bool> = const { Cell::new(false) };
+        static STACKS: RefCell<Vec<(usize, Backtrace)>> = const { RefCell::new(Vec::new()) };
     }
 
     pub(crate) struct Counting;
@@ -97,6 +121,15 @@ mod counting {
                 let totals = sites.entry(call_stack).or_default();
                 totals.0 += 1;
                 totals.1 += size;
+            });
+            RECORDING.set(false);
+        }
+        if KEEP.get() {
+            RECORDING.set(true);
+            STACKS.with_borrow_mut(|stacks| {
+                if stacks.len() < KEPT_STACKS {
+                    stacks.push((size, Backtrace::force_capture()));
+                }
             });
             RECORDING.set(false);
         }
@@ -171,6 +204,17 @@ mod counting {
         ACTIVE.set(false);
         CAPTURE.set(false);
         (CALLS.get(), BYTES.get())
+    }
+
+    /// Like [`count`], also returning the full call stacks of the first
+    /// [`KEPT_STACKS`] allocations.
+    #[cfg(feature = "benchmarking-internals")]
+    pub(crate) fn count_keeping(body: impl FnOnce()) -> (Totals, Vec<(usize, Backtrace)>) {
+        STACKS.with_borrow_mut(Vec::clear);
+        KEEP.set(true);
+        let totals = count(false, body);
+        KEEP.set(false);
+        (totals, STACKS.take())
     }
 
     /// Takes the sites recorded on this thread so far.
@@ -318,9 +362,21 @@ mod tests {
 #[cfg(test)]
 #[cfg(feature = "benchmarking-internals")]
 mod measurements {
-    use bcc_rust::BenchmarkInput;
+    use std::{
+        backtrace::Backtrace,
+        fmt::Write as _,
+    };
 
-    use crate::counting::count;
+    use bcc_rust::{
+        BenchmarkInput,
+        ParseBenchmarkSummary,
+    };
+
+    use crate::counting::{
+        KEPT_STACKS,
+        count,
+        count_keeping,
+    };
 
     #[test]
     fn report_parser_mix_global_allocations() {
@@ -330,8 +386,166 @@ mod measurements {
         let mut result = None;
         let (calls, bytes) = count(false, || result = Some(bcc_rust::parse(input)));
         println!(
-            "parser mix: result={result:?}, global allocation calls={calls}, requested \
-             bytes={bytes}"
+            "parser mix: result={result:?}, global allocation calls={calls}, requested              bytes={bytes}"
         );
+    }
+
+    /// The global allocations `compile` made on this thread.
+    struct Allocations {
+        calls:  usize,
+        bytes:  usize,
+        stacks: Vec<(usize, Backtrace)>,
+    }
+
+    fn count_compile(
+        compile: impl FnOnce() -> ParseBenchmarkSummary,
+    ) -> (ParseBenchmarkSummary, Allocations) {
+        let mut summary = None;
+        let ((calls, bytes), stacks) = count_keeping(|| summary = Some(compile()));
+        let summary = summary.expect("the measured compilation ran");
+        (
+            summary,
+            Allocations {
+                calls,
+                bytes,
+                stacks,
+            },
+        )
+    }
+
+    fn assert_no_allocations(
+        name: &str,
+        summary: ParseBenchmarkSummary,
+        allocations: &Allocations,
+    ) {
+        assert_eq!(
+            summary.diagnostics, 0,
+            "{name}: the input must compile without diagnostics"
+        );
+        if allocations.calls == 0 {
+            return;
+        }
+        let mut message = format!(
+            "{name}: {} global allocations ({} bytes) outside the arenas; the first stacks:\n",
+            allocations.calls, allocations.bytes
+        );
+        for (size, stack) in &allocations.stacks {
+            _ = writeln!(message, "--- {size} bytes\n{stack}");
+        }
+        panic!("{message}");
+    }
+
+    #[test]
+    fn compiling_benchmark_inputs_allocates_only_from_arenas() {
+        // The preprocessor stress inputs are not C that parses: each of their
+        // lines draws a parser diagnostic.
+        for input in BenchmarkInput::ALL
+            .into_iter()
+            .chain(BenchmarkInput::PARSER_STRESS)
+        {
+            // Generate the source outside the measured interval.
+            _ = input.bytes();
+            let (summary, allocations) = count_compile(|| bcc_rust::parse(input));
+            assert!(summary.external_declarations > 0, "{}", input.name());
+            assert_no_allocations(input.name(), summary, &allocations);
+        }
+    }
+
+    /// Reaches the paths the generated inputs leave out.
+    const FEATURE_SOURCE: &str = concat!(
+        "#define STR(x) #x\r\n",
+        "#define XSTR(x) STR(x)\r\n",
+        "#define CAT(a, b) a ## b\r\n",
+        "#define LONG_MACRO(a, b, \\\n         c) ((a) + (b) + (c))\n",
+        "#if defined(STR) && (1 + 2 * 3 == 7) && 'a' == 97\n",
+        "static const char *file = __FILE__;\n",
+        "static int line = __LINE__;\n",
+        "#else\n",
+        "#error not reached\n",
+        "#endif\n",
+        "_Pragma(\"STDC FP_CONTRACT ON\")\n",
+        "#pragma STDC FENV_ACCESS OFF\n",
+        "#line 100 \"renamed.c\"\n",
+        "static const char *renamed = __FILE__ \"-\" XSTR(__LINE__);\n",
+        "static const char *joined = \"a\" \"b\" L\"c\" \"\\x41\\101\\n\";\n",
+        "static const char *quoted = STR(\"q\\\"\" 'c' a  +  b);\n",
+        "static int trigraph??(2??) = ??< 1, 2 ??>;\n",
+        "static int \\u00e9t\\u00E9 = 3;\n",
+        "static int CAT(pas, ted) = LONG_MACRO(1, 2, 3);\n",
+        "static int wide = L'x' + '\\n' + '\\377' + 'ab';\n",
+        "typedef struct { int x; enum { RED, GREEN } color; } pair;\n",
+        "int old_style(a, b) int a; char *b; { return a + *b; }\n",
+        "int body(pair p, enum { ONE = 1 } e) {\n",
+        "    int total = 0;\n",
+        "    switch (p.color) { case RED: total = 1; break; default: total = e; }\n",
+        "    for (int i = 0; i < 3; i++) { if (i == 2) goto done; total += i; }\n",
+        "done:\n",
+        "    return total + (int)sizeof(pair) + ONE + GREEN;\n",
+        "}\n",
+    );
+
+    #[test]
+    fn compiling_rare_features_allocates_only_from_arenas() {
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_source(FEATURE_SOURCE));
+        assert!(summary.external_declarations > 0);
+        assert_no_allocations("feature source", summary, &allocations);
+    }
+
+    /// A translation unit split over files on disk: a header found beside
+    /// the main file, one in a subdirectory, and a `#pragma once` header
+    /// included twice.
+    const DISK_FILES: [(&str, &str); 4] = [
+        (
+            "main.c",
+            "#include \"local.h\"\n#include \"nested/deep.h\"\n#include \"once.h\"\n#include \
+             \"once.h\"\nint main(void) { return local + deep + once; }\n",
+        ),
+        ("local.h", "static int local = 1;\n"),
+        (
+            "nested/deep.h",
+            "#include \"sibling.h\"\nstatic int deep = sibling;\n",
+        ),
+        ("nested/sibling.h", "enum { sibling = 2 };\n"),
+    ];
+    const ONCE_HEADER: (&str, &str) = ("once.h", "#pragma once\nstatic int once = 3;\n");
+
+    /// Whether an allocation happened inside the standard library's
+    /// file-system calls, judged by the frames of its stack.
+    fn in_std_file_system(stack: &Backtrace) -> bool {
+        stack.to_string().lines().any(|line| {
+            let frame = line.trim_start();
+            frame.split_once(": ").is_some_and(|(number, function)| {
+                number.parse::<usize>().is_ok()
+                    && (function.starts_with("<std::fs::File>::open")
+                        || function.starts_with("<std::path::Path>::is_file"))
+            })
+        })
+    }
+
+    #[test]
+    fn compiling_files_with_includes_allocates_only_from_arenas_and_std_file_system() {
+        let directory =
+            std::env::temp_dir().join(format!("bcc-allocation-count-{}", std::process::id()));
+        for (name, text) in DISK_FILES.into_iter().chain([ONCE_HEADER]) {
+            let path = directory.join(name);
+            std::fs::create_dir_all(path.parent().expect("files have a directory"))
+                .expect("the temporary directory is writable");
+            std::fs::write(&path, text).expect("the temporary file is writable");
+        }
+        let main = directory.join(DISK_FILES[0].0);
+        let (summary, mut allocations) =
+            count_compile(|| bcc_rust::parse_file(&main).expect("the main file is readable"));
+        drop(std::fs::remove_dir_all(&directory));
+        // Only kept stacks can be classified, so every allocation must have
+        // been kept to excuse any of them.
+        if allocations.calls <= KEPT_STACKS {
+            allocations
+                .stacks
+                .retain(|(_, stack)| !in_std_file_system(stack));
+            allocations.calls = allocations.stacks.len();
+            allocations.bytes = allocations.stacks.iter().map(|(size, _)| size).sum();
+        }
+        assert_eq!(summary.external_declarations, 5);
+        assert_no_allocations(&main.display().to_string(), summary, &allocations);
     }
 }

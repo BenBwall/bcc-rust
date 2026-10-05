@@ -322,14 +322,36 @@ pub struct ParseBenchmarkSummary {
 #[must_use]
 pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
     let tu = Bump::new();
-    let mut context = Context::new(&tu);
-    let unit = crate::pipeline::parse_translation_unit(
-        &mut context,
-        Path::new("<input>"),
-        input.source(),
-        &[],
-        &[],
-    );
+    summarize_parse(&tu, Path::new("<input>"), input.source())
+}
+
+/// Runs translation phases 1 through 7 over `source`, copied into the
+/// translation-unit arena as the CLI's `--input` is, and summarizes the
+/// parse.
+#[doc(hidden)]
+#[must_use]
+pub fn parse_source(source: &str) -> ParseBenchmarkSummary {
+    let tu = Bump::new();
+    let source = tu.alloc_str(source);
+    summarize_parse(&tu, Path::new("<input>"), source)
+}
+
+/// Reads `path` and runs translation phases 1 through 7 over it as the CLI
+/// does, with no include directories, and summarizes the parse.
+///
+/// # Errors
+///
+/// When `path` cannot be read.
+#[doc(hidden)]
+pub fn parse_file(path: &Path) -> std::io::Result<ParseBenchmarkSummary> {
+    let tu = Bump::new();
+    let source = tu.read_to_str_lossy(path)?;
+    Ok(summarize_parse(&tu, path, source))
+}
+
+fn summarize_parse<'tu>(tu: &'tu Bump, path: &Path, source: &'tu str) -> ParseBenchmarkSummary {
+    let mut context = Context::new(tu);
+    let unit = crate::pipeline::parse_translation_unit(&mut context, path, source, &[], &[]);
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
         diagnostics:           context.pending_error_count(),

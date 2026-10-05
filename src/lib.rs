@@ -32,6 +32,8 @@ pub use benchmarking::{
     arena_usage,
     lex,
     parse,
+    parse_file,
+    parse_source,
     preprocess,
     preprocess_one_million,
     with_prepared_parse,
