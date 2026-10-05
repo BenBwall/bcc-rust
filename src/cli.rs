@@ -222,13 +222,42 @@ fn print_preprocessor_output<'tu>(
     quote_include: &[&Path],
     system_include: &[&Path],
 ) {
-    let reporter_arena = Bump::new();
-    let mut reporter = DiagnosticReporter::new(
-        &reporter_arena,
-        context.tu_arena(),
-        RenderColor::for_stderr(),
+    let mut reporter_arena = Bump::new();
+    let mut stderr = io::stderr();
+    print_preprocessor_output_in(
+        context,
+        source_filename,
+        input_string,
+        quote_include,
+        system_include,
+        TokenOutput {
+            out:            &mut stderr,
+            reporter_arena: &mut reporter_arena,
+            color:          RenderColor::for_stderr(),
+        },
     );
-    let stderr = &mut io::stderr();
+}
+
+struct TokenOutput<'a> {
+    out:            &'a mut dyn Write,
+    reporter_arena: &'a mut Bump,
+    color:          RenderColor,
+}
+
+/// Keeps only the diagnostic counts between token batches. Each batch's
+/// folding state and copied locations are discarded before the next token.
+fn print_preprocessor_output_in<'tu>(
+    context: &mut Context<'tu>,
+    source_filename: &Path,
+    input_string: &'tu str,
+    quote_include: &[&Path],
+    system_include: &[&Path],
+    TokenOutput {
+        out,
+        reporter_arena,
+        color,
+    }: TokenOutput<'_>,
+) {
     let mut scratch = Bump::new();
     let items = with_preprocessor(
         context,
@@ -238,17 +267,41 @@ fn print_preprocessor_output<'tu>(
         system_include,
         |preprocessor, context, _pp| preprocess_with_diagnostics(preprocessor, context),
     );
-    for item in items {
-        match item {
-            | Ok(token) => {
-                expect_stderr(reporter.flush(context, stderr));
+    let mut items = items.into_iter();
+    let (mut errors, mut warnings) = (0, 0);
+    loop {
+        let mut reporter = DiagnosticReporter::new(reporter_arena, context.tu_arena(), color);
+        reporter.errors = errors;
+        reporter.warnings = warnings;
+        let token = loop {
+            match items.next() {
+                | Some(Err(error)) => reporter.report(&error, context),
+                | Some(Ok(token)) => {
+                    expect_stderr(reporter.flush(context, out));
+                    break Some(token);
+                },
+                | None => {
+                    expect_stderr(reporter.finish(context, out));
+                    break None;
+                },
+            }
+        };
+        errors = reporter.errors;
+        warnings = reporter.warnings;
+        drop(reporter);
+        reporter_arena.reset();
+        match token {
+            | Some(token) => {
                 scratch.reset();
-                eprintln!("{}", describe_token(token, context, &scratch));
+                expect_stderr(writeln!(
+                    out,
+                    "{}",
+                    describe_token(token, context, &scratch)
+                ));
             },
-            | Err(error) => reporter.report(&error, context),
+            | None => break,
         }
     }
-    expect_stderr(reporter.finish(context, stderr));
 }
 
 /// Fails like `eprint!` when stderr cannot be written.
@@ -460,7 +513,8 @@ fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
 ///
 /// Pending diagnostics are built in the translation-unit arena (`'tu`). The
 /// pending list, the folding map, and the locations live in the reporter's
-/// own arena (`'r`), created with the reporter for the whole compilation.
+/// own arena (`'r`). Parser mode keeps it for the whole compilation; token
+/// mode resets it between flushed batches.
 struct DiagnosticReporter<'r, 'tu> {
     arena:        &'r Bump,
     diagnostics:  &'tu Bump,
@@ -641,5 +695,58 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             | (0, _) => writeln!(out, "{warnings} generated."),
             | _ => writeln!(out, "{errors} and {warnings} generated."),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct CountDiagnostics(usize);
+
+    impl Write for CountDiagnostics {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if buf.starts_with(b"error: #error bad") {
+                self.0 += 1;
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn token_reporter_high_water(repetitions: usize) -> usize {
+        let tu = Bump::new();
+        let mut source = ArenaString::new_in(&tu);
+        for number in 0..repetitions {
+            _ = write!(source, "#error bad\nint x{number};\n");
+        }
+        let source = source.into_str();
+        let mut context = Context::new(&tu);
+        let mut reporter_arena = Bump::new();
+        let mut out = CountDiagnostics(0);
+        print_preprocessor_output_in(
+            &mut context,
+            Path::new("<input>"),
+            source,
+            &[],
+            &[],
+            TokenOutput {
+                out:            &mut out,
+                reporter_arena: &mut reporter_arena,
+                color:          RenderColor::Plain,
+            },
+        );
+        assert_eq!(out.0, repetitions);
+        reporter_arena.high_water()
+    }
+
+    #[test]
+    fn token_reporter_arena_stays_bounded_across_diagnostic_batches() {
+        let once = token_reporter_high_water(1_000);
+        let twice = token_reporter_high_water(2_000);
+        assert_eq!(once, twice);
     }
 }
