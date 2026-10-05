@@ -964,7 +964,7 @@ impl<'x> Expander<'_, '_, 'x> {
         let Ok(header_string) = context.read_source_file(header_source_index).map_err(|e| {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderFileInaccessible(
-                    context.diagnostic_text(&e.to_string()),
+                    context.diagnostic_format(format_args!("{e}")),
                 ),
                 source_vectors: directive.source_vectors,
             });
