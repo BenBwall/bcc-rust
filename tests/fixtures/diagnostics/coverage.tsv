@@ -213,6 +213,7 @@ pp	WrongNumberOfArgumentsInFunctionLikeMacroInvocation	pp-wrong-number-of-argume
 pp	HeaderNotFound	tokenizer-angle-header-eof.c	rendered
 pp	HeaderNotFound	tokenizer-angle-header-newline.c	rendered
 pp	UnterminatedHeaderName	tokenizer-angle-header-eof.c	rendered
+pp	UnexpectedEndOfInput	tokenizer-angle-header-eof.c	rendered
 parser	EmptyTranslationUnit	tokenizer-angle-header-eof.c	rendered
 pp	UnterminatedHeaderName	tokenizer-angle-header-newline.c	rendered
 pp	UnterminatedHeaderName	tokenizer-newline-in-include-string.c	rendered

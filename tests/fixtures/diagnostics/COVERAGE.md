@@ -32,7 +32,8 @@ issue, not evidence that the diagnostic is wrong. Use the repository's
 ### Remaining output issues
 
 The following observations were checked against the tracked `.stderr` snapshots
-on 3 October 2026 while consolidating the earlier diagnostic review. They are
+on 3 October 2026 while consolidating the earlier diagnostic review; the
+include-directive row was rechecked on 5 October 2026. They are
 output improvements to revisit, not claims that the golden tests currently
 fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 
@@ -46,7 +47,7 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | [Invalid macro replacement list](pp-cannot-use-hash-hash-after-function-like-macro-call.stderr) | Diagnose `##` at the start of the definition's replacement list, rather than describing pasting onto an invocation. Check fresh definitions as well as redefinitions. |
 | [Left shift](pp-left-shift-overflow.stderr), [right shift](pp-right-shift-overflow.stderr) | Describe an invalid shift count separately from an overflowing result. |
 | [Preprocessor arithmetic](pp-binary-minus-overflow.stderr) | Correct the N1256 replacement/arithmetic citation from §6.10.1p3 to §6.10.1p4 across the evaluator's notes. |
-| [Angle-header newline](tokenizer-angle-header-newline.stderr), [quoted-header EOF](tokenizer-quoted-header-eof.stderr) | The missing closing delimiter is diagnosed, but the lookup of the partial name still reports a missing header; review whether that lookup should run. |
+| [Angle-header newline](tokenizer-angle-header-newline.stderr), [angle-header EOF](tokenizer-angle-header-eof.stderr), [quoted-header EOF](tokenizer-quoted-header-eof.stderr) | The missing closing `>` or `"` is diagnosed at the absent delimiter, but the lookup of the partial name still reports a missing header; review whether that lookup should run. Angle EOF also reports an unexpected end of file in the directive, which quoted EOF no longer does; review whether it is redundant beside the missing `>`. |
 | [Unicode identifier recovery](parser-unicode-identifier.stderr) | Review the missing-type and continuation diagnostics for a single malformed declaration together. |
 | [Macro keyword](parser-macro-expanded-keyword.stderr), [macro operand](parser-expected-statement-expression-macro.stderr) | Add useful macro invocation context alongside spelling or recovery locations. |
 | [Conflicting storage classes](parser-storage-class-redefinition.stderr) | Label the earlier `static` as well as the new `extern`. |
@@ -77,7 +78,7 @@ The mapping below comes from checking the emitter/dispatch paths and their CLI o
 | `NewlineInCharacter` | rendered | [tokenizer-newline-in-character.c](tokenizer-newline-in-character.c) |
 | `NewlineInString` | rendered | [tokenizer-newline-in-string.c](tokenizer-newline-in-string.c), [tokenizer-newline-in-include-string.c](tokenizer-newline-in-include-string.c), [tokenizer-quoted-header-eof.c](tokenizer-quoted-header-eof.c) |
 
-The lexer no longer forms header names: an `#include` operand is ordinary preprocessing tokens, so an unterminated `"…"` operand draws the string-literal error, and the `#include` handler adds its own header-name diagnostics.
+The lexer no longer forms header names: an `#include` operand is ordinary preprocessing tokens, so an unterminated `"…"` operand draws the lexer's string-literal error, and the `#include` handler adds a missing closing `"` or `>` error at the delimiter position. For a written quoted name whose final `"` follows a backslash, the default `ExtensionPolicy::Allow` (and Warn) reads the backslash as a path character, closes the name at that quote, and withdraws the lexer's error for that one token; Deny keeps the lexer and missing-quote errors.
 
 ### PreprocessorErrorType
 
@@ -166,11 +167,11 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `UndefinedIdentifierInPreprocessorExpression` | rendered | [pp-undefined-identifier-in-preprocessor-expression.c](pp-undefined-identifier-in-preprocessor-expression.c) |
 | `ExpectedIncludeStringOrAngleBracketString` | rendered | [pp-expected-include-string-or-angle-bracket-string.c](pp-expected-include-string-or-angle-bracket-string.c) |
 | `InvalidCharacterInHeaderName` | rendered | [pp-invalid-character-in-header-name.c](pp-invalid-character-in-header-name.c) |
-| `UnterminatedHeaderName` | rendered | [pp-unterminated-header-name.c](pp-unterminated-header-name.c), [pp-unterminated-header-name-quoted.c](pp-unterminated-header-name-quoted.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c), [tokenizer-angle-header-newline.c](tokenizer-angle-header-newline.c), [tokenizer-newline-in-include-string.c](tokenizer-newline-in-include-string.c), [tokenizer-quoted-header-eof.c](tokenizer-quoted-header-eof.c) |
-| `BackslashInQuotedHeaderName` | unavailable in default CLI | A backslash in a `"…"` header name is an extension that the default ExtensionPolicy::Allow accepts silently, as [pp-header-not-found-backslash.c](pp-header-not-found-backslash.c) shows. Warn and Deny are covered by unit tests in `preprocessing/tests/header_name_regressions.rs`. |
-| `UnexpectedEndOfInput` | rendered | [pp-unexpected-end-of-input.c](pp-unexpected-end-of-input.c) |
+| `UnterminatedHeaderName` | rendered | [pp-unterminated-header-name.c](pp-unterminated-header-name.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c), [tokenizer-angle-header-newline.c](tokenizer-angle-header-newline.c), [tokenizer-newline-in-include-string.c](tokenizer-newline-in-include-string.c), [tokenizer-quoted-header-eof.c](tokenizer-quoted-header-eof.c). Labelled zero-width where the delimiter is missing. Quoted EOF keeps the lexer's string error and the missing-`"` error without an unexpected-EOF error; angle EOF keeps the unexpected-EOF error and the parser's separate empty-translation-unit error. Despite its name, [pp-unterminated-header-name-quoted.c](pp-unterminated-header-name-quoted.c) (`"dir\"`) is now a closed name under the default policy; see `BackslashInQuotedHeaderName`. |
+| `BackslashInQuotedHeaderName` | unavailable in default CLI | A backslash in a `"…"` header name is an extension that the default ExtensionPolicy::Allow accepts silently, as [pp-header-not-found-backslash.c](pp-header-not-found-backslash.c) shows. Allow and Warn also treat `#include "dir\"` as the name `dir\` and withdraw only that token's unterminated-string error, as [pp-unterminated-header-name-quoted.c](pp-unterminated-header-name-quoted.c) shows; Deny keeps that error, reports the missing `"`, and skips the lookup. Warn and Deny are covered by unit tests in `preprocessing/tests/header_name_regressions.rs`. |
+| `UnexpectedEndOfInput` | rendered | [pp-unexpected-end-of-input.c](pp-unexpected-end-of-input.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c) |
 | `WrongNumberOfArgumentsInFunctionLikeMacroInvocation` | rendered | [pp-wrong-number-of-arguments-in-function-like-macro-invocation.c](pp-wrong-number-of-arguments-in-function-like-macro-invocation.c) |
-| `HeaderNotFound` | rendered | [pp-header-not-found-system.c](pp-header-not-found-system.c), [pp-header-not-found.c](pp-header-not-found.c), [pp-header-not-found-backslash.c](pp-header-not-found-backslash.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c), [tokenizer-angle-header-newline.c](tokenizer-angle-header-newline.c) |
+| `HeaderNotFound` | rendered | [pp-header-not-found-system.c](pp-header-not-found-system.c), [pp-header-not-found.c](pp-header-not-found.c), [pp-header-not-found-backslash.c](pp-header-not-found-backslash.c), [pp-unterminated-header-name-quoted.c](pp-unterminated-header-name-quoted.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c), [tokenizer-angle-header-newline.c](tokenizer-angle-header-newline.c) |
 | `HeaderFileInaccessible` | environment-dependent; not covered | Requires a discovered header whose subsequent read fails, such as a permissions/sharing violation or filesystem race. A normal checked-in C/header pair cannot establish that condition portably; the OS error wording is also host-dependent. |
 | `HashHashUsedOutsideOfMacro` | rendered | [pp-hash-hash-used-outside-of-macro.c](pp-hash-hash-used-outside-of-macro.c) |
 | `CannotUseHashHashAfterFunctionLikeMacroCall` | rendered | [pp-cannot-use-hash-hash-after-function-like-macro-call.c](pp-cannot-use-hash-hash-after-function-like-macro-call.c) |
@@ -209,7 +210,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `UnknownPragmaSTDCArgument` | rendered | [pp-unknown-pragma-s-t-d-c-argument.c](pp-unknown-pragma-s-t-d-c-argument.c) |
 | `ExtraTokensAfterPragmaOnce` | rendered | [pp-extra-tokens-after-pragma-once.c](pp-extra-tokens-after-pragma-once.c) |
 | `ExtraTokensAfterPragmaOperator` | rendered | [pp-extra-tokens-after-pragma-operator.c](pp-extra-tokens-after-pragma-operator.c) |
-| `ExtraTokensAfterIncludeDirective` | rendered | [pp-extra-tokens-after-include-directive.c](pp-extra-tokens-after-include-directive.c) |
+| `ExtraTokensAfterIncludeDirective` | rendered | [pp-extra-tokens-after-include-directive.c](pp-extra-tokens-after-include-directive.c). A written angle name followed immediately by `>` or `=` (which ordinary lexing reads as `>>` or `>=`) warns at the first character after the closing `>`. While the quoted-backslash extension is accepted, non-whitespace text after the first closing quote also warns at its first character; whitespace alone does not. Both cases are covered by `preprocessing/tests/header_name_regressions.rs`. |
 | `ExtraTokensAfterIfdefDirective` | rendered | [pp-extra-tokens-after-ifdef-directive.c](pp-extra-tokens-after-ifdef-directive.c) |
 | `ExtraTokensAfterIfndefDirective` | rendered | [pp-extra-tokens-after-ifndef-directive.c](pp-extra-tokens-after-ifndef-directive.c) |
 | `STDCPragmaDirectiveWithoutArgument` | rendered | [pp-s-t-d-c-pragma-directive-without-argument.c](pp-s-t-d-c-pragma-directive-without-argument.c) |
@@ -222,7 +223,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 
 | Variant | Status | Fixture or reason |
 | --- | --- | --- |
-| `EmptyTranslationUnit` | rendered | [parser-empty-translation-unit.c](parser-empty-translation-unit.c) |
+| `EmptyTranslationUnit` | rendered | [parser-empty-translation-unit.c](parser-empty-translation-unit.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c) |
 | `ResourceLimitExceeded` | reachable; not covered | The CLI uses the default memory/frame budgets and does not expose smaller budgets. Reaching them needs a deliberately large input, contrary to the small-fixture scope. Existing unit tests lower the budgets; no tiny C-only default-CLI fixture is claimed. |
 | `ParserFrameConsumedAtEndOfInput` | internal invariant; not covered | Reports a parser-machine bug rather than a malformed C production. No reproducer was found, and it should not be manufactured by changing parser state. |
 | `ExpectedFunctionBody` | rendered | [parser-expected-function-body.c](parser-expected-function-body.c) |
