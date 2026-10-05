@@ -747,6 +747,13 @@ impl<T> Extend<T> for ArenaQueue<'_, T> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests {
     use std::{
         alloc::Layout,

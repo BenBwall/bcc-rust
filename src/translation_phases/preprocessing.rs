@@ -9,11 +9,22 @@ mod errors;
 mod expression;
 mod macro_expansion;
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests;
 mod token;
 mod token_conversion;
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "Test-only constructor arguments, compiled only under `cfg(test)`."
+)]
 use std::path::PathBuf;
 use std::{
     fmt::Debug,
@@ -250,6 +261,10 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
     }
 
     #[cfg(test)]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Test-only constructor arguments, compiled only under `cfg(test)`."
+    )]
     pub(crate) fn new(
         pp: &'pp Bump,
         context: &mut Context<'tu>,

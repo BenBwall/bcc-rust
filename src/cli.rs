@@ -1,6 +1,11 @@
 //! Command-line interface: argument parsing, token and syntax-tree output,
 //! and diagnostic reporting.
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`."
+)]
+use std::path::PathBuf;
 use std::{
     env::{
         split_paths,
@@ -11,10 +16,7 @@ use std::{
         self,
         Write,
     },
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::Path,
 };
 
 use clap::{
@@ -67,6 +69,10 @@ use crate::{
 
 #[derive(Parser)]
 #[command(author, version, about, long_about, color = ColorChoice::Always)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "clap's derived parser owns the repeated include directories as `Vec<PathBuf>`."
+)]
 struct Cli {
     #[command(flatten)]
     input: CliInput,
@@ -107,6 +113,10 @@ struct ParserOutput {
 
 #[derive(Args)]
 #[group(required = true, multiple = false)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "clap's derived parser owns the input string and the input file path."
+)]
 struct CliInput {
     /// Input string to be parsed.
     #[clap(short, long, conflicts_with = "input_file")]
@@ -118,6 +128,10 @@ struct CliInput {
 
 #[doc(hidden)]
 #[derive(Debug, Error)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "Carries the input path out of `run`, past its arenas, for `main`'s message."
+)]
 pub enum MainError {
     #[error("error: cannot read `{}`: {source}", path.display())]
     OpenInputFileError { path: PathBuf, source: io::Error },
@@ -130,6 +144,12 @@ pub enum MainError {
 /// Elements use the platform separator (`;` on Windows, `:` elsewhere). As
 /// in GCC and Clang, an empty element names the working directory, while an
 /// unset or empty variable contributes nothing.
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "Startup reads CPATH-style variables beside clap's arguments; `run` borrows the \
+              paths as `&Path`."
+)]
 fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
     match var_os(env_var) {
         | Some(value) if !value.is_empty() => split_paths(&value)
@@ -406,6 +426,11 @@ const RAW_SYNTAX_STACK_BYTES: usize = 1 << 30;
 
 /// Prints the whole syntax tree in Rust debug form to stderr, rendered in
 /// an arena on a thread with a stack deep enough for deeply nested syntax.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "std's thread builder takes the name as a `String`; spawning the deep-stack thread \
+              allocates in std anyway."
+)]
 fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
     std::thread::scope(|scope| {
         std::thread::Builder::new()

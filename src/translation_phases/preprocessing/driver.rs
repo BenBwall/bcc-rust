@@ -116,6 +116,11 @@ pub(super) struct TranslationTimestamp<'pp> {
 impl<'pp> TranslationTimestamp<'pp> {
     /// Honors `SOURCE_DATE_EPOCH` (reproducible-builds.org, also used by GCC
     /// and Clang) so builds can pin the expansion; otherwise uses local time.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "std returns `SOURCE_DATE_EPOCH` as an owned `String`; it is read at most once \
+                  per translation unit, at the first `__DATE__` or `__TIME__`."
+    )]
     fn now(pp: &'pp Bump) -> Self {
         let pinned = std::env::var("SOURCE_DATE_EPOCH")
             .ok()

@@ -45,6 +45,10 @@ pub(super) trait TreeNode<'tu>: Sized + 'tu {
 /// syntax abandoned during recovery).
 #[cfg(test)]
 #[derive(Debug, Default)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "A test-only log of every allocated node, compiled only under `cfg(test)`."
+)]
 pub(super) struct SyntaxLog<'tu> {
     nodes:                usize,
     expressions:          Vec<&'tu Expression<'tu>>,

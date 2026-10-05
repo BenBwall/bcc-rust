@@ -4,19 +4,34 @@
 )]
 
 #[cfg(feature = "benchmarking-internals")]
-use std::io::{
-    BufWriter,
-    Write,
-};
+use std::io::Write;
 use std::{
     env::var,
     sync::LazyLock,
 };
 
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "The build script's output directory, read once on the host at build time."
+)]
 static OUT_DIR: LazyLock<String> = LazyLock::new(|| var("OUT_DIR").unwrap());
 
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Build-time host tooling that builds LLVM; never part of the compiler."
+)]
 #[path = "build_support/llvm.rs"]
 mod llvm;
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Build-time host tooling that runs LLVM tools and bindgen; never part of the \
+              compiler."
+)]
 #[path = "build_support/native.rs"]
 mod native;
 
@@ -44,9 +59,15 @@ const MACRO_MIX_UNITS: usize = 20_000;
 /// mostly produced by nested function-like macros, token pasting,
 /// stringification, and conditional groups, so phase 4 dominates.
 #[cfg(feature = "benchmarking-internals")]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Generates a benchmark input on the host at build time."
+)]
 fn gen_macro_mix() {
     let out_dir = &*OUT_DIR;
-    let mut f = BufWriter::new(std::fs::File::create(format!("{out_dir}/macro-mix.c")).unwrap());
+    let mut f =
+        std::io::BufWriter::new(std::fs::File::create(format!("{out_dir}/macro-mix.c")).unwrap());
     writeln!(
         f,
         "#define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -89,9 +110,15 @@ const PARSER_MIX_UNITS: usize = 20_000;
 /// declarations, aggregates, enums, initializers, function definitions,
 /// statements, and expressions of varying precedence.
 #[cfg(feature = "benchmarking-internals")]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Generates a benchmark input on the host at build time."
+)]
 fn gen_parser_mix() {
     let out_dir = &*OUT_DIR;
-    let mut f = BufWriter::new(std::fs::File::create(format!("{out_dir}/parser-mix.c")).unwrap());
+    let mut f =
+        std::io::BufWriter::new(std::fs::File::create(format!("{out_dir}/parser-mix.c")).unwrap());
     for i in 0..PARSER_MIX_UNITS {
         writeln!(
             f,
@@ -129,10 +156,16 @@ static int compute{i}(size{i}_t count, const int *restrict values, struct node{i
 }
 
 #[cfg(feature = "benchmarking-internals")]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Generates a benchmark input on the host at build time."
+)]
 fn gen_one_million() {
     let out_dir = &*OUT_DIR;
-    let mut f =
-        BufWriter::new(std::fs::File::create(format!("{out_dir}/one-million-lines.c")).unwrap());
+    let mut f = std::io::BufWriter::new(
+        std::fs::File::create(format!("{out_dir}/one-million-lines.c")).unwrap(),
+    );
     for i in 0..1_000_000 {
         writeln!(f, "int i{i} = {i};").unwrap();
     }

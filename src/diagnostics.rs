@@ -230,6 +230,10 @@ impl<'d> Explanation<'d> {
 
     /// The explanation with owned text, for tests to inspect.
     #[cfg(test)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Test-only owned copies, compiled only under `cfg(test)`."
+    )]
     pub(crate) fn to_owned_explanation(&self) -> OwnedExplanation {
         OwnedExplanation {
             message: self.message.to_owned(),
@@ -242,7 +246,11 @@ impl<'d> Explanation<'d> {
 
 /// An [`Explanation`] with owned text, for tests.
 #[cfg(test)]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "Test-only owned copies, compiled only under `cfg(test)`."
+)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct OwnedExplanation {
     pub(crate) message: String,
     pub(crate) label:   Option<String>,
@@ -252,7 +260,11 @@ pub(crate) struct OwnedExplanation {
 
 /// A [`Diagnostic`] with owned text, for tests.
 #[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "Test-only owned copies, compiled only under `cfg(test)`."
+)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OwnedDiagnostic {
     pub(crate) severity: ErrorSeverity,
     pub(crate) message:  String,
@@ -262,7 +274,11 @@ pub(crate) struct OwnedDiagnostic {
 }
 
 #[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "Test-only owned copies, compiled only under `cfg(test)`."
+)]
+#[derive(Debug, Clone, PartialEq)]
 enum OwnedLabelSource {
     Range(SourceVectors),
     Segments(Vec<SourceVector>),
@@ -270,6 +286,10 @@ enum OwnedLabelSource {
 
 #[cfg(test)]
 impl Diagnostic<'_> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Test-only owned copies, compiled only under `cfg(test)`."
+    )]
     pub(crate) fn to_owned_diagnostic(&self) -> OwnedDiagnostic {
         OwnedDiagnostic {
             severity: self.severity,
@@ -295,6 +315,10 @@ impl Diagnostic<'_> {
 #[cfg(test)]
 impl OwnedDiagnostic {
     /// The diagnostic, borrowing this one's text, with its lists in `arena`.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Test-only owned copies, compiled only under `cfg(test)`."
+    )]
     fn borrowed<'d>(&'d self, arena: &'d Bump) -> Diagnostic<'d> {
         let mut labels = ArenaVec::new_in(arena);
         labels.extend(self.labels.iter().map(|(source, message, primary)| Label {
@@ -439,6 +463,11 @@ pub(crate) enum ColorChoice {
 impl ColorChoice {
     /// Colors output only for a terminal, honoring `NO_COLOR`
     /// (<https://no-color.org>) and `CLICOLOR_FORCE`.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Reads `NO_COLOR` and `CLICOLOR_FORCE` once while the CLI sets up its renderer; \
+                  std returns environment values owned."
+    )]
     pub(crate) fn for_stderr() -> Self {
         use std::io::IsTerminal as _;
         let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
@@ -602,6 +631,11 @@ impl Renderer {
 
     /// Renders a diagnostic with owned text, for tests.
     #[cfg(test)]
+    #[expect(
+        clippy::disallowed_types,
+        clippy::disallowed_methods,
+        reason = "Test-only owned copies, compiled only under `cfg(test)`."
+    )]
     pub(crate) fn render(&mut self, diagnostic: &OwnedDiagnostic, context: &Context<'_>) -> String {
         self.scratch.reset();
         let diagnostic = diagnostic.borrowed(&self.scratch);
@@ -911,6 +945,13 @@ fn display_width(text: &str) -> usize {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests {
     use std::path::Path;
 

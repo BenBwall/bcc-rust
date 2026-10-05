@@ -102,6 +102,13 @@ fn sample(input: BenchmarkInput, phases: &str) -> std::io::Result<PeakMemory> {
     peak_memory()
 }
 
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "The driver parses its arguments and reads sample processes' output; the compiler it \
+              measures runs in those processes."
+)]
 fn main() -> ExitCode {
     let args: Vec<_> = env::args().collect();
     if args.len() == 4 && args[1] == "--sample" {

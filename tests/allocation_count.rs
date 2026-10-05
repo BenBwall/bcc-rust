@@ -39,6 +39,13 @@
     reason = "Every thread-local initializer here is `const`; the lint misreads the macro in this \
               test crate."
 )]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod counting {
     use std::{
         alloc::{
@@ -224,6 +231,13 @@ mod counting {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests {
     use std::{
         fs,
@@ -361,6 +375,13 @@ mod tests {
 
 #[cfg(test)]
 #[cfg(feature = "benchmarking-internals")]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod measurements {
     use std::{
         backtrace::Backtrace,

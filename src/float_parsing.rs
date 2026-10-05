@@ -237,6 +237,12 @@ pub(crate) fn string_to_float(s: &str) -> Result<f32, ParseFloatError> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests {
     use std::hint::black_box;
 

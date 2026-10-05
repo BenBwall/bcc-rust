@@ -60,6 +60,11 @@ impl<T: Copy + Display> Display for Packed<T> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests {
     use super::Packed;
 

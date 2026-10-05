@@ -1,1 +1,56 @@
 too-many-lines-threshold = 500
+
+# Compilation allocates only from arenas (`util::bump`), which the
+# `allocation_count` test checks at run time. These lists are the static
+# guard: they name the global-allocator types, and the macros and methods that
+# allocate without naming a type. Uses that must stay carry a narrow
+# `#[expect(clippy::disallowed_*, reason = "...")]`.
+disallowed-types = [
+    { path = "std::boxed::Box", reason = "allocates from the global allocator; use an arena reference" },
+    { path = "std::rc::Rc", reason = "allocates from the global allocator; share an arena reference" },
+    { path = "std::rc::Weak", reason = "allocates from the global allocator; share an arena reference" },
+    { path = "std::sync::Arc", reason = "allocates from the global allocator; share an arena reference" },
+    { path = "std::sync::Weak", reason = "allocates from the global allocator; share an arena reference" },
+    { path = "std::string::String", reason = "allocates from the global allocator; use `ArenaString` or `&'a str`" },
+    { path = "std::vec::Vec", reason = "allocates from the global allocator; use `ArenaVec`, `RegionVec`, or `TailVec`" },
+    { path = "std::collections::HashMap", reason = "allocates from the global allocator; use `ArenaMap`" },
+    { path = "std::collections::HashSet", reason = "allocates from the global allocator; use `ArenaSet`" },
+    { path = "std::collections::VecDeque", reason = "allocates from the global allocator; use `ArenaQueue`" },
+    { path = "std::collections::BTreeMap", reason = "allocates from the global allocator; use `ArenaMap`" },
+    { path = "std::collections::BTreeSet", reason = "allocates from the global allocator; use `ArenaSet`" },
+    { path = "std::collections::BinaryHeap", reason = "allocates from the global allocator" },
+    { path = "std::collections::LinkedList", reason = "allocates from the global allocator" },
+    { path = "std::path::PathBuf", reason = "allocates from the global allocator; use `&'tu Path`" },
+    { path = "std::ffi::OsString", reason = "allocates from the global allocator; use `&'tu OsStr`" },
+    { path = "std::ffi::CString", reason = "allocates from the global allocator" },
+    { path = "std::io::BufReader", reason = "allocates its buffer from the global allocator" },
+    { path = "std::io::BufWriter", reason = "allocates its buffer from the global allocator" },
+    { path = "std::io::LineWriter", reason = "allocates its buffer from the global allocator" },
+    { path = "allocator_api2::alloc::Global", reason = "the global allocator; pass an arena (`&Bump`) instead" },
+]
+
+disallowed-macros = [
+    { path = "std::format", reason = "allocates a `String`; `write!` into an `ArenaString` or return `fmt::from_fn`" },
+    { path = "std::vec", reason = "allocates a global `Vec`; use an arena vector" },
+    { path = "allocator_api2::vec", reason = "allocates from the global allocator; use `ArenaVec::new_in`" },
+]
+
+disallowed-methods = [
+    { path = "std::string::ToString::to_string", reason = "allocates a `String`; write into an `ArenaString` or use `Display`" },
+    { path = "std::borrow::ToOwned::to_owned", reason = "allocates from the global allocator; copy into an arena" },
+    { path = "std::path::Path::to_path_buf", reason = "allocates a `PathBuf`; copy into the translation-unit arena" },
+    { path = "std::path::Path::join", reason = "allocates a `PathBuf`; join into an arena buffer" },
+    { path = "std::ffi::OsStr::to_os_string", reason = "allocates an `OsString`; copy into an arena" },
+    { path = "std::fs::read", reason = "allocates a `Vec`; use `Bump::read_to_str_lossy`" },
+    { path = "std::fs::read_to_string", reason = "allocates a `String`; use `Bump::read_to_str_lossy`" },
+    { path = "std::env::var", reason = "returns an owned `String`" },
+    { path = "std::env::var_os", reason = "returns an owned `OsString`" },
+    { path = "std::env::args", reason = "yields owned `String`s" },
+    { path = "allocator_api2::vec::Vec::new", reason = "uses the global allocator; use `ArenaVec::new_in`" },
+    { path = "allocator_api2::vec::Vec::with_capacity", reason = "uses the global allocator; use `ArenaVec::with_capacity_in`" },
+    { path = "allocator_api2::boxed::Box::new", reason = "uses the global allocator; allocate in an arena" },
+    { path = "hashbrown::HashMap::with_hasher", reason = "uses the global allocator; use `ArenaMap::with_hasher_in`" },
+    { path = "hashbrown::HashMap::with_capacity_and_hasher", reason = "uses the global allocator; use `ArenaMap::with_capacity_and_hasher_in`" },
+    { path = "hashbrown::HashSet::with_hasher", reason = "uses the global allocator; use `ArenaSet::with_hasher_in`" },
+    { path = "hashbrown::HashSet::with_capacity_and_hasher", reason = "uses the global allocator; use `ArenaSet::with_capacity_and_hasher_in`" },
+]

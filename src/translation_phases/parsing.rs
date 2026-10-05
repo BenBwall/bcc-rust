@@ -47,6 +47,13 @@ mod struct_or_union;
 mod syntax;
 mod syntax_log;
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests;
 mod token_cursor;
 mod type_name;
@@ -95,6 +102,14 @@ use crate::{
         string_cache::StringCacheId,
     },
 };
+
+/// Driver actions, recorded only by test builds.
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "A test-only trace, compiled only under `cfg(test)`."
+)]
+type FrameTrace = Vec<FrameTraceEvent>;
 
 /// Owns parser input, control frames, the syntax node count, scopes, and
 /// diagnostics.
@@ -162,7 +177,7 @@ pub(crate) struct Parser<'tu, 'p> {
     resource_limit_reported: bool,
     #[cfg(test)]
     /// Driver actions retained only for machine and recovery regressions.
-    trace: Vec<FrameTraceEvent>,
+    trace: FrameTrace,
     #[cfg(test)]
     /// Optional hard stop used by malformed-input tests to turn nonprogress
     /// into a deterministic failure instead of an external test timeout.

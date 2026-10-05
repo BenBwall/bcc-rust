@@ -107,11 +107,19 @@ pub(super) struct ScopeStack<'p> {
     /// Bindings referenced by `retained_prototypes`.
     retained_names:           ArenaVec<'p, (StringCacheId, NameClass)>,
     #[cfg(test)]
-    pub(super) trace:         Vec<ScopeTraceEvent>,
+    pub(super) trace:         ScopeTrace,
     /// Hash-map probes made by name lookups, for complexity regression tests.
     #[cfg(test)]
     pub(super) lookup_probes: std::cell::Cell<usize>,
 }
+
+/// Scope entries and exits, recorded only by test builds.
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "A test-only trace, compiled only under `cfg(test)`."
+)]
+pub(super) type ScopeTrace = Vec<ScopeTraceEvent>;
 
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -131,7 +139,7 @@ impl<'p> ScopeStack<'p> {
             retained_prototypes:        ArenaVec::new_in(arena),
             retained_names:             ArenaVec::new_in(arena),
             #[cfg(test)]
-            trace:                      Vec::new(),
+            trace:                      ScopeTrace::new(),
             #[cfg(test)]
             lookup_probes:              std::cell::Cell::new(0),
         }

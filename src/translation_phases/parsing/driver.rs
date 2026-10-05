@@ -1,7 +1,10 @@
 //! The parser driver loop and helpers shared by every grammar frame.
 
 #[cfg(test)]
-use super::machine::FrameTraceEvent;
+use super::{
+    FrameTrace,
+    machine::FrameTraceEvent,
+};
 use super::{
     ParsedTranslationUnit,
     Parser,
@@ -165,7 +168,7 @@ impl<'tu, 'p> Parser<'tu, 'p> {
             limits: ParserLimits::default(),
             resource_limit_reported: false,
             #[cfg(test)]
-            trace: Vec::new(),
+            trace: FrameTrace::new(),
             #[cfg(test)]
             action_budget: None,
         }

@@ -925,6 +925,10 @@ impl<'tu> Context<'tu> {
     }
 
     #[cfg(test)]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Test-only owned list of the pending errors, compiled only under `cfg(test)`."
+    )]
     pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError<'tu>> {
         self.relocated_errors = 0;
         std::iter::from_fn(|| self.pending_errors.pop_front()).collect()
@@ -1110,6 +1114,12 @@ impl MergeAnchors {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests {
     use super::{
         Context,

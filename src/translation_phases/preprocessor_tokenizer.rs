@@ -1,6 +1,13 @@
 mod batch;
 mod replay;
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests;
 mod token_source;
 pub(crate) mod ucn;

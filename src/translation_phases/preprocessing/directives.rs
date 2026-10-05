@@ -165,6 +165,12 @@ fn expanded_header_sequence_source(
 /// every ordinary include lookup joins. Other forms, such as a Windows `path`
 /// with a drive or root, or a verbatim or bare-drive `directory`, follow
 /// `PathBuf::push`'s platform rules, so they are joined by std and copied.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Windows drive- or root-relative names and verbatim or bare-drive directories follow \
+              std's `PathBuf::push` rules, so this rare fallback joins with std and copies the \
+              result into the arena."
+)]
 fn join_path<'b>(buffer: &'b mut ArenaVec<'_, u8>, directory: &Path, path: &Path) -> &'b Path {
     let plain_path = matches!(
         path.components().next(),

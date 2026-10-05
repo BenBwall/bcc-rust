@@ -101,6 +101,12 @@ impl BenchmarkInput {
         clippy::large_include_file,
         reason = "The generated benchmark inputs are intentionally large."
     )]
+    #[expect(
+        clippy::disallowed_types,
+        clippy::disallowed_macros,
+        reason = "Builds a benchmark input once, outside any measured interval, and keeps it for \
+                  the process."
+    )]
     fn source(self) -> &'static str {
         match self {
             | Self::OneMillionLines =>
@@ -138,6 +144,11 @@ impl BenchmarkInput {
 
 /// `count` functions whose statements nest expressions of every precedence
 /// level.
+#[expect(
+    clippy::disallowed_types,
+    reason = "Builds a benchmark input once, outside any measured interval, and keeps it for the \
+              process."
+)]
 fn expression_heavy_source(count: usize) -> String {
     let mut source = String::from(
         "typedef struct point { int x, y; } point;
@@ -165,6 +176,11 @@ fn expression_heavy_source(count: usize) -> String {
 
 /// `count` groups of file-scope declarations with nested declarators,
 /// aggregates, and initializers.
+#[expect(
+    clippy::disallowed_types,
+    reason = "Builds a benchmark input once, outside any measured interval, and keeps it for the \
+              process."
+)]
 fn declaration_heavy_source(count: usize) -> String {
     let mut source = String::new();
     for index in 0..count {
