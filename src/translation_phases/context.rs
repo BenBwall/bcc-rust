@@ -3,10 +3,7 @@
 
 use std::{
     ffi::OsStr,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::Path,
 };
 
 use rustc_hash::FxBuildHasher;
@@ -1026,7 +1023,7 @@ impl<'tu> Context<'tu> {
         self.source_files[index]
     }
 
-    pub(crate) fn set_include_directories(&mut self, quote: &[PathBuf], system: &[PathBuf]) {
+    pub(crate) fn set_include_directories(&mut self, quote: &[&Path], system: &[&Path]) {
         self.quote_include_directories = self
             .tu
             .alloc_slice_fill_iter(quote.iter().map(|path| Self::alloc_path(self.tu, path)));

@@ -147,19 +147,17 @@ fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
 pub fn run() -> Result<(), MainError> {
     let mut args = Cli::try_parse()?;
     let tu = Bump::new();
-    let input_argument = args.input.input.take();
-    let (input_string, source_filename): (&str, PathBuf) =
-        match (input_argument.as_deref(), args.input.input_file.take()) {
-            | (Some(input), None) => (tu.alloc_str(input), PathBuf::from("<input>")),
-            | (None, Some(input_file)) => (
-                tu.read_to_str_lossy(&input_file).map_err(|source| {
-                    MainError::OpenInputFileError {
+    let (input_string, source_filename): (&str, &Path) =
+        match (&args.input.input, &args.input.input_file) {
+            | (Some(input), None) => (tu.alloc_str(input), Path::new("<input>")),
+            | (None, Some(input_file)) => match tu.read_to_str_lossy(input_file) {
+                | Ok(text) => (text, input_file),
+                | Err(source) =>
+                    return Err(MainError::OpenInputFileError {
                         path: input_file.clone(),
                         source,
-                    }
-                })?,
-                input_file,
-            ),
+                    }),
+            },
             | _ => unreachable!("clap requires exactly one input source"),
         };
     // GCC searches `CPATH` like `-I` (before `-isystem`) and
@@ -167,24 +165,25 @@ pub fn run() -> Result<(), MainError> {
     let mut system_include = include_path_from_env("CPATH");
     system_include.append(&mut args.system_include);
     system_include.extend(include_path_from_env("C_INCLUDE_PATH"));
-    args.system_include = system_include;
+    let quote_include = tu.alloc_slice_fill_iter(args.quote_include.iter().map(Path::new));
+    let system_include = tu.alloc_slice_fill_iter(system_include.iter().map(Path::new));
     let mut context = Context::new(&tu);
 
     if args.output.tokens {
         print_preprocessor_output(
             &mut context,
-            &source_filename,
+            source_filename,
             input_string,
-            &args.quote_include,
-            &args.system_include,
+            quote_include,
+            system_include,
         );
     } else {
         print_parser_output(
             &mut context,
-            &source_filename,
+            source_filename,
             input_string,
-            &args.quote_include,
-            &args.system_include,
+            quote_include,
+            system_include,
             &args.output.parser,
             !args.no_repeated_specifier_warnings,
         );
@@ -198,8 +197,8 @@ fn print_preprocessor_output<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
-    quote_include: &[PathBuf],
-    system_include: &[PathBuf],
+    quote_include: &[&Path],
+    system_include: &[&Path],
 ) {
     let reporter_arena = Bump::new();
     let mut reporter = DiagnosticReporter::new(
@@ -295,8 +294,8 @@ fn print_parser_output<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
-    quote_include: &[PathBuf],
-    system_include: &[PathBuf],
+    quote_include: &[&Path],
+    system_include: &[&Path],
     output: &ParserOutput,
     repeated_specifier_warnings: bool,
 ) {

@@ -2,10 +2,7 @@
 //! source file is lexed completely when it is opened, the whole unit is
 //! preprocessed, and only then is it parsed.
 
-use std::path::{
-    Path,
-    PathBuf,
-};
+use std::path::Path;
 
 #[cfg(test)]
 mod tests;
@@ -36,8 +33,8 @@ pub(crate) fn parse_translation_unit<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     source: &'tu str,
-    quote_include: &[PathBuf],
-    system_include: &[PathBuf],
+    quote_include: &[&Path],
+    system_include: &[&Path],
 ) -> ParsedTranslationUnit<'tu> {
     let preprocessed = with_preprocessor(
         context,
@@ -57,8 +54,8 @@ pub(crate) fn with_preprocessor<'tu, R>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     source: &'tu str,
-    quote_include: &[PathBuf],
-    system_include: &[PathBuf],
+    quote_include: &[&Path],
+    system_include: &[&Path],
     run: impl for<'pp> FnOnce(Preprocessor<'tu, 'pp>, &mut Context<'tu>, &'pp Bump) -> R,
 ) -> R {
     let pp = Bump::new();

@@ -13,13 +13,12 @@ mod tests;
 mod token;
 mod token_conversion;
 
+#[cfg(test)]
+use std::path::PathBuf;
 use std::{
     fmt::Debug,
     ops::ControlFlow,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::Path,
 };
 
 use conditional::ConditionalGroup;
@@ -259,18 +258,22 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         quote_include_directories: SharedVec<PathBuf>,
         system_include_directories: SharedVec<PathBuf>,
     ) -> Self {
-        let source_name = source_name.into_path_buf();
-        let preprocessor = Self::new_inner(
-            pp,
-            context,
-            &source_name,
-            source,
-            None,
-            &quote_include_directories,
-            &system_include_directories,
-        );
-        drop(quote_include_directories);
-        drop(system_include_directories);
+        let quote: Vec<&Path> = quote_include_directories
+            .iter()
+            .map(PathBuf::as_path)
+            .collect();
+        let system: Vec<&Path> = system_include_directories
+            .iter()
+            .map(PathBuf::as_path)
+            .collect();
+        let preprocessor =
+            Self::new_inner(pp, context, &source_name, source, None, &quote, &system);
+        drop((quote, system));
+        drop((
+            source_name,
+            quote_include_directories,
+            system_include_directories,
+        ));
         preprocessor
     }
 
@@ -279,8 +282,8 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         context: &mut Context<'tu>,
         source_name: &Path,
         source: &'tu str,
-        quote_include_directories: &[PathBuf],
-        system_include_directories: &[PathBuf],
+        quote_include_directories: &[&Path],
+        system_include_directories: &[&Path],
     ) -> Self {
         Self::new_inner(
             pp,
@@ -299,8 +302,8 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         source_name: &Path,
         source: &str,
         arena_source: Option<&'tu str>,
-        quote_include_directories: &[PathBuf],
-        system_include_directories: &[PathBuf],
+        quote_include_directories: &[&Path],
+        system_include_directories: &[&Path],
     ) -> Self {
         context.set_include_directories(quote_include_directories, system_include_directories);
         let mut macro_definitions = ArenaMap::with_hasher_in(FxBuildHasher, pp);
