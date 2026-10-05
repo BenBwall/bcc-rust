@@ -136,12 +136,7 @@ pub(crate) enum StatementType<'tu> {
         condition_expression: ExpressionSlot<'tu>,
         body_statement:       &'tu Statement<'tu>,
     },
-    For {
-        initializer:          Option<ForInitializer<'tu>>,
-        condition_expression: Option<ExpressionSlot<'tu>>,
-        iteration_expression: Option<ExpressionSlot<'tu>>,
-        body_statement:       &'tu Statement<'tu>,
-    },
+    For(&'tu ForStatement<'tu>),
     Return(Option<ExpressionSlot<'tu>>),
     Break,
     Continue,
@@ -150,6 +145,19 @@ pub(crate) enum StatementType<'tu> {
     Case(ConstantExpressionSlot<'tu>, &'tu Statement<'tu>),
     Default(&'tu Statement<'tu>),
     Null,
+}
+
+/// The three header clauses and body of a `for` statement. They are kept
+/// apart from [`StatementType`] so the other statement forms do not pay
+/// for the widest one.
+///
+/// C99: iteration-statement is §6.8.5, p. 135; PDF p. 147.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct ForStatement<'tu> {
+    pub(crate) initializer:          Option<ForInitializer<'tu>>,
+    pub(crate) condition_expression: Option<ExpressionSlot<'tu>>,
+    pub(crate) iteration_expression: Option<ExpressionSlot<'tu>>,
+    pub(crate) body_statement:       &'tu Statement<'tu>,
 }
 
 /// First clause of a `for` statement, which is syntactically either an
@@ -179,6 +187,10 @@ pub(crate) struct Expression<'tu> {
 
 /// C expression grammar forms represented through child references.
 ///
+/// Forms whose children would not fit beside the operator in 24 bytes keep
+/// them in a separate arena record, so the common binary, unary, and leaf
+/// forms do not pay for the rare wide ones.
+///
 /// C99: primary through comma expressions are §6.5.1-§6.5.17,
 /// pp. 69-94; PDF pp. 81-106.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -186,11 +198,7 @@ pub(crate) enum ExpressionType<'tu> {
     Parenthesized {
         expression: &'tu Expression<'tu>,
     },
-    Conditional {
-        condition_expression: &'tu Expression<'tu>,
-        then_expression:      &'tu Expression<'tu>,
-        else_expression:      &'tu Expression<'tu>,
-    },
+    Conditional(&'tu ConditionalExpression<'tu>),
     Binary {
         operator:         BinaryOperator,
         left_expression:  &'tu Expression<'tu>,
@@ -200,10 +208,7 @@ pub(crate) enum ExpressionType<'tu> {
         operator:           UnaryOperator,
         operand_expression: &'tu Expression<'tu>,
     },
-    Call {
-        function_expression: &'tu Expression<'tu>,
-        arguments:           &'tu [&'tu Expression<'tu>],
-    },
+    Call(&'tu CallExpression<'tu>),
     DirectMember {
         base_expression: &'tu Expression<'tu>,
         member:          Identifier,
@@ -226,6 +231,29 @@ pub(crate) enum ExpressionType<'tu> {
         operand_expression: &'tu Expression<'tu>,
     },
     Error,
+}
+
+/// The operands of a conditional expression `condition ? then : else`.
+///
+/// C99: the conditional operator is §6.5.15.
+#[derive(Debug, PartialEq, Clone, Copy)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "The operands keep the names every other expression form gives its operands."
+)]
+pub(crate) struct ConditionalExpression<'tu> {
+    pub(crate) condition_expression: &'tu Expression<'tu>,
+    pub(crate) then_expression:      &'tu Expression<'tu>,
+    pub(crate) else_expression:      &'tu Expression<'tu>,
+}
+
+/// The callee and arguments of a function call.
+///
+/// C99: function calls are §6.5.2.2.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct CallExpression<'tu> {
+    pub(crate) function_expression: &'tu Expression<'tu>,
+    pub(crate) arguments:           &'tu [&'tu Expression<'tu>],
 }
 
 /// Typed literal value accepted by a primary expression.

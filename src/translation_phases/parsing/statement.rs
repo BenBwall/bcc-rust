@@ -40,6 +40,7 @@ use super::{
         ConstantExpressionSlot,
         ExpressionSlot,
         ForInitializer,
+        ForStatement,
         Identifier,
         Statement,
         StatementType,
@@ -1230,16 +1231,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     panic!("for body returned an unexpected value: {returned:?}");
                 };
                 self.merge_statement(context, body);
-                self.finish(
-                    parser,
-                    context,
-                    StatementType::For {
-                        initializer,
-                        condition_expression: condition,
-                        iteration_expression: iteration,
-                        body_statement: body,
-                    },
-                )
+                let clauses = parser.alloc_syntax_part(ForStatement {
+                    initializer,
+                    condition_expression: condition,
+                    iteration_expression: iteration,
+                    body_statement: body,
+                });
+                self.finish(parser, context, StatementType::For(clauses))
             },
             | StatementPhase::Recovered => {
                 debug_assert!(returned.is_none());

@@ -33,6 +33,8 @@ use super::{
     statement::is_statement_keyword,
     syntax::{
         BinaryOperator,
+        CallExpression,
+        ConditionalExpression,
         Constant,
         ConstantExpression,
         Expression,
@@ -1042,12 +1044,13 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 let source =
                     colon_source.map_or(source, |colon| context.merge_vectors(source, colon));
                 let source = context.merge_vectors(source, final_expression.source_vectors);
+                let operands = parser.alloc_syntax_part(ConditionalExpression {
+                    condition_expression: condition,
+                    then_expression:      middle,
+                    else_expression:      final_expression,
+                });
                 let index = parser.store_expression(
-                    ExpressionType::Conditional {
-                        condition_expression: condition,
-                        then_expression:      middle,
-                        else_expression:      final_expression,
-                    },
+                    ExpressionType::Conditional(operands),
                     source,
                     Some(colon_source.map_or(question_source, |colon| {
                         context.merge_vectors(question_source, colon)
@@ -1588,11 +1591,12 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     ) {
         let call = self.call.as_mut().expect("a call is being finished");
         let arguments = parser.alloc_syntax_list(&mut call.arguments);
+        let call_expression = parser.alloc_syntax_part(CallExpression {
+            function_expression: base,
+            arguments,
+        });
         let index = parser.store_expression(
-            ExpressionType::Call {
-                function_expression: base,
-                arguments,
-            },
+            ExpressionType::Call(call_expression),
             context.merge_vector_list(&call.source_vectors),
             Some(context.merge_vector_list(&call.operator_sources)),
             parser.hard_error_count > self.starting_error_count,

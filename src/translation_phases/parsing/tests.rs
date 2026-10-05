@@ -10,6 +10,7 @@ mod expression_recovery;
 mod expression_regressions;
 mod expressions;
 mod limits;
+mod node_sizes;
 mod parameter_regressions;
 mod statement_regressions;
 mod statements;

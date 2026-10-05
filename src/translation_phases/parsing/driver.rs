@@ -40,6 +40,8 @@ use super::{
     },
     statement::is_statement_keyword,
     syntax::{
+        CallExpression,
+        ConditionalExpression,
         Expression,
         ExpressionType,
         ExternalDeclaration,
@@ -417,6 +419,13 @@ impl<'tu, 'p> Parser<'tu, 'p> {
         #[cfg(test)]
         self.syntax.record(node);
         node
+    }
+
+    /// Stores the out-of-line part of a node, such as a conditional's three
+    /// operands, in the translation-unit arena. It belongs to its node, so
+    /// it is not counted as a node of its own.
+    pub(super) fn alloc_syntax_part<T: Copy>(&self, part: T) -> &'tu T {
+        self.tree.alloc(part)
     }
 
     /// Copies frame-retained nodes into one list in the translation-unit
@@ -1046,11 +1055,11 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                 ..
             }
             | ExpressionType::SizeofExpr(expression) => expression_recovered(expression),
-            | ExpressionType::Conditional {
+            | ExpressionType::Conditional(ConditionalExpression {
                 condition_expression,
                 then_expression,
                 else_expression,
-            } =>
+            }) =>
                 expression_recovered(condition_expression)
                     || expression_recovered(then_expression)
                     || expression_recovered(else_expression),
@@ -1059,10 +1068,10 @@ impl<'tu, 'p> Parser<'tu, 'p> {
                 right_expression,
                 ..
             } => expression_recovered(left_expression) || expression_recovered(right_expression),
-            | ExpressionType::Call {
+            | ExpressionType::Call(CallExpression {
                 function_expression,
                 arguments,
-            } =>
+            }) =>
                 expression_recovered(function_expression)
                     || arguments
                         .iter()

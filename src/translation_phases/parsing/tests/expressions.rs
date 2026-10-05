@@ -25,11 +25,14 @@ use crate::translation_phases::{
         syntax::{
             BinaryOperator,
             BlockItem,
+            CallExpression,
+            ConditionalExpression,
             Constant,
             Expression,
             ExpressionSlot,
             ExpressionType,
             ExternalDeclaration,
+            ForStatement,
             Statement,
             StatementType,
             UnaryOperator,
@@ -112,12 +115,12 @@ fn function_arguments_keep_postfix_calls_and_increments() {
                 panic!("expected one return statement")
             };
             let root = return_expression(statement);
-            let ExpressionType::Call { arguments, .. } = root.kind else {
+            let ExpressionType::Call(&CallExpression { arguments, .. }) = root.kind else {
                 panic!("expected an outer call")
             };
 
             assert_eq!(arguments.len(), 2);
-            assert!(matches!(arguments[0].kind, ExpressionType::Call { .. }));
+            assert!(matches!(arguments[0].kind, ExpressionType::Call(_)));
             assert!(matches!(
                 arguments[1].kind,
                 ExpressionType::Unary {
@@ -145,7 +148,7 @@ fn function_arguments_keep_binary_operators_inside_each_argument() {
                 panic!("expected one return statement")
             };
             let root = return_expression(statement);
-            let ExpressionType::Call { arguments, .. } = root.kind else {
+            let ExpressionType::Call(&CallExpression { arguments, .. }) = root.kind else {
                 panic!("expected a function call")
             };
 
@@ -178,7 +181,7 @@ fn return_expression_keeps_a_typedef_spelled_call() {
             };
             let root = return_expression(statement);
 
-            assert!(matches!(root.kind, ExpressionType::Call { .. }));
+            assert!(matches!(root.kind, ExpressionType::Call(_)));
             assert_eq!(expression_text(parsed, root), "T(*p)");
             assert!(
                 parser_errors(parsed).next().is_none(),
@@ -398,7 +401,8 @@ fn cast_and_sizeof_classification_tracks_typedef_shadowing() {
             let BlockItem::Statement(for_statement) = iteration[0] else {
                 panic!("expected for statement")
             };
-            let StatementType::For { body_statement, .. } = for_statement.kind else {
+            let StatementType::For(&ForStatement { body_statement, .. }) = for_statement.kind
+            else {
                 panic!("expected for statement syntax")
             };
             assert!(matches!(
@@ -478,16 +482,16 @@ fn precedence_conditional_assignment_and_comma_contexts_are_distinct() {
             ));
             assert!(matches!(
                 roots[1].kind,
-                ExpressionType::Conditional { else_expression, .. }
+                ExpressionType::Conditional(&ConditionalExpression { else_expression, .. })
                     if matches!(
                         else_expression.kind,
-                        ExpressionType::Conditional { .. }
+                        ExpressionType::Conditional(_)
                     )
             ));
             let argument_lengths = roots[2..]
                 .iter()
                 .map(|root| match root.kind {
-                    | ExpressionType::Call { arguments, .. } => arguments.len(),
+                    | ExpressionType::Call(&CallExpression { arguments, .. }) => arguments.len(),
                     | _ => panic!("expected call expression"),
                 })
                 .collect::<Vec<_>>();
@@ -505,11 +509,11 @@ fn conditional_middle_accepts_an_unparenthesized_comma_expression() {
             panic!("expected a return statement")
         };
         let root = return_expression(statement);
-        let ExpressionType::Conditional {
+        let ExpressionType::Conditional(&ConditionalExpression {
             then_expression,
             else_expression,
             ..
-        } = root.kind
+        }) = root.kind
         else {
             panic!("expected a conditional expression")
         };
@@ -543,7 +547,7 @@ fn missing_call_argument_comma_preserves_later_arguments() {
         let StatementType::Expression(ExpressionSlot::Parsed(root)) = statement.kind else {
             panic!("expected parsed expression")
         };
-        let ExpressionType::Call { arguments, .. } = root.kind else {
+        let ExpressionType::Call(&CallExpression { arguments, .. }) = root.kind else {
             panic!("expected call expression")
         };
         assert_eq!(
@@ -599,10 +603,10 @@ fn equal_precedence_chains_nested_conditionals_and_casts_keep_their_associativit
             ));
             assert!(matches!(
                 roots[1].kind,
-                ExpressionType::Conditional { then_expression, .. }
+                ExpressionType::Conditional(&ConditionalExpression { then_expression, .. })
                     if matches!(
                         then_expression.kind,
-                        ExpressionType::Conditional { .. }
+                        ExpressionType::Conditional(_)
                     )
             ));
             assert!(matches!(
@@ -1003,7 +1007,7 @@ fn array_designators_accept_conditional_and_parenthesized_comma_expressions() {
 
             assert!(matches!(
                 expressions[0].kind,
-                ExpressionType::Conditional { .. }
+                ExpressionType::Conditional(_)
             ));
             assert!(matches!(
                 expressions[1].kind,
@@ -1113,10 +1117,7 @@ fn every_c99_expression_operator_is_represented_by_the_syntax_model() {
                     .parser
                     .syntax
                     .iter::<Expression<'_>>()
-                    .any(|expression| matches!(
-                        expression.kind,
-                        ExpressionType::Conditional { .. }
-                    ))
+                    .any(|expression| matches!(expression.kind, ExpressionType::Conditional(_)))
             );
             assert!(
                 parsed
@@ -1245,7 +1246,7 @@ fn call_argument_and_initializer_nesting_translation_floors_are_heap_backed() {
                 .iter::<Expression<'_>>()
                 .any(|expression| matches!(
                     expression.kind,
-                    ExpressionType::Call { arguments, .. } if arguments.len() == 127
+                    ExpressionType::Call(&CallExpression { arguments, .. }) if arguments.len() == 127
                 ))
         );
         assert!(

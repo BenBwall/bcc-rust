@@ -27,6 +27,7 @@ use crate::translation_phases::{
             ExpressionSlot,
             ExternalDeclaration,
             ForInitializer,
+            ForStatement,
             StatementType,
         },
     },
@@ -134,7 +135,7 @@ fn compound_blocks_preserve_mixed_items_and_every_statement_family() {
             assert_eq!(
                 kinds
                     .iter()
-                    .filter(|kind| matches!(kind, StatementType::For { .. }))
+                    .filter(|kind| matches!(kind, StatementType::For(_)))
                     .count(),
                 3
             );
@@ -578,12 +579,12 @@ fn for_slots_distinguish_absent_expressions_and_declarations() {
                     let BlockItem::Statement(index) = item else {
                         panic!("expected for statement")
                     };
-                    let StatementType::For {
+                    let StatementType::For(&ForStatement {
                         initializer,
                         condition_expression,
                         iteration_expression,
                         ..
-                    } = index.kind
+                    }) = index.kind
                     else {
                         panic!("expected for syntax")
                     };
@@ -626,12 +627,12 @@ fn missing_expressions_remain_distinct_from_present_children() {
                 panic!("expected four recovered statements: {items:#?}")
             };
 
-            let StatementType::For {
+            let StatementType::For(&ForStatement {
                 initializer,
                 condition_expression,
                 iteration_expression,
                 ..
-            } = for_statement.kind
+            }) = for_statement.kind
             else {
                 panic!("expected a for statement")
             };
@@ -1353,12 +1354,12 @@ fn malformed_for_declaration_recovery_preserves_the_header_close() {
         let BlockItem::Statement(for_statement) = items[0] else {
             panic!("expected a for statement")
         };
-        let StatementType::For {
+        let StatementType::For(&ForStatement {
             initializer: Some(ForInitializer::Declaration(_)),
             condition_expression: None,
             iteration_expression: None,
             body_statement,
-        } = for_statement.kind
+        }) = for_statement.kind
         else {
             panic!("expected a recovered declaration-form for statement")
         };
@@ -1379,11 +1380,11 @@ fn malformed_for_declaration_preserves_a_statement_body() {
         let BlockItem::Statement(for_statement) = items[0] else {
             panic!("expected a for statement")
         };
-        let StatementType::For {
+        let StatementType::For(&ForStatement {
             initializer: Some(ForInitializer::Declaration(_)),
             body_statement,
             ..
-        } = for_statement.kind
+        }) = for_statement.kind
         else {
             panic!("expected a recovered declaration-form for statement")
         };
@@ -1408,12 +1409,12 @@ fn malformed_for_initializer_recovery_preserves_the_header_close() {
             let BlockItem::Statement(for_statement) = items[0] else {
                 panic!("expected a for statement")
             };
-            let StatementType::For {
+            let StatementType::For(&ForStatement {
                 initializer: Some(ForInitializer::Declaration(declaration)),
                 condition_expression: None,
                 iteration_expression: None,
                 body_statement,
-            } = for_statement.kind
+            }) = for_statement.kind
             else {
                 panic!("expected a recovered declaration-form for statement")
             };
@@ -1440,7 +1441,8 @@ fn malformed_for_declaration_preserves_a_compound_body() {
             let BlockItem::Statement(for_statement) = items[0] else {
                 panic!("expected a for statement")
             };
-            let StatementType::For { body_statement, .. } = for_statement.kind else {
+            let StatementType::For(&ForStatement { body_statement, .. }) = for_statement.kind
+            else {
                 panic!("expected a recovered for statement")
             };
             assert!(matches!(

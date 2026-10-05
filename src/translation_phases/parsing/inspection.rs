@@ -36,6 +36,8 @@ use super::{
     syntax::{
         BinaryOperator,
         BlockItem,
+        CallExpression,
+        ConditionalExpression,
         Constant,
         ConstantExpressionSlot,
         Expression,
@@ -43,6 +45,7 @@ use super::{
         ExpressionType,
         ExternalDeclaration,
         ForInitializer,
+        ForStatement,
         FunctionDefinition,
         Identifier,
         Statement,
@@ -867,12 +870,12 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 Self::push_slot(work, condition_expression, indent, "condition");
                 work.push(Work::Statement(body_statement, indent, "body"));
             },
-            | StatementType::For {
+            | StatementType::For(&ForStatement {
                 initializer,
                 condition_expression,
                 iteration_expression,
                 body_statement,
-            } => {
+            }) => {
                 work.push(Work::Statement(body_statement, indent, "body"));
                 if let Some(slot) = iteration_expression {
                     Self::push_slot(work, slot, indent, "iteration");
@@ -933,7 +936,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 | StatementType::Switch { .. } => "switch",
                 | StatementType::While { .. } => "while",
                 | StatementType::DoWhile { .. } => "do-while",
-                | StatementType::For { .. } => "for",
+                | StatementType::For(_) => "for",
                 | StatementType::Continue => "continue",
                 | StatementType::Break => "break",
                 | StatementType::Return(..) => "return",
@@ -1020,11 +1023,11 @@ impl<'tu> ParsedTranslationUnit<'tu> {
             | ExpressionType::SizeofExpr(expression) => {
                 work.push(Work::Expression(expression, indent, "operand"));
             },
-            | ExpressionType::Conditional {
+            | ExpressionType::Conditional(ConditionalExpression {
                 condition_expression,
                 then_expression,
                 else_expression,
-            } => {
+            }) => {
                 work.push(Work::Expression(else_expression, indent, "else"));
                 work.push(Work::Expression(then_expression, indent, "then"));
                 work.push(Work::Expression(condition_expression, indent, "condition"));
@@ -1037,10 +1040,10 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 work.push(Work::Expression(right_expression, indent, "rhs"));
                 work.push(Work::Expression(left_expression, indent, "lhs"));
             },
-            | ExpressionType::Call {
+            | ExpressionType::Call(CallExpression {
                 function_expression,
                 arguments,
-            } => {
+            }) => {
                 for argument in arguments.iter().rev() {
                     work.push(Work::Expression(argument, indent, "argument"));
                 }

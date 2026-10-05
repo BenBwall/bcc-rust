@@ -18,6 +18,7 @@ use crate::translation_phases::{
             BlockItem,
             ExpressionSlot,
             ForInitializer,
+            ForStatement,
             Statement,
             StatementType,
         },
@@ -135,7 +136,9 @@ fn extra_clause_in_for_header_keeps_the_body_attached() {
         assert_errors_only_at(parsed, source.find("; x)").unwrap());
         let items = body_items(parsed);
         assert_eq!(items.len(), 1, "{items:?}");
-        let StatementType::For { body_statement, .. } = (statement_item(items, 0)).kind else {
+        let StatementType::For(&ForStatement { body_statement, .. }) =
+            (statement_item(items, 0)).kind
+        else {
             panic!("expected a for statement");
         };
         assert_eq!(expression_statement_text(parsed, body_statement), "x--");
@@ -149,7 +152,9 @@ fn stray_operand_in_for_iteration_keeps_the_body_attached() {
         assert_errors_only_at(parsed, source.find(" y(").unwrap() + 1);
         let items = body_items(parsed);
         assert_eq!(items.len(), 1, "{items:?}");
-        let StatementType::For { body_statement, .. } = (statement_item(items, 0)).kind else {
+        let StatementType::For(&ForStatement { body_statement, .. }) =
+            (statement_item(items, 0)).kind
+        else {
             panic!("expected a for statement");
         };
         assert_eq!(expression_statement_text(parsed, body_statement), "x--");
@@ -301,10 +306,10 @@ fn for_declaration_without_semicolon_names_the_initializer() {
             let items = body_items(parsed);
             assert!(matches!(
                 (statement_item(items, 0)).kind,
-                StatementType::For {
+                StatementType::For(&ForStatement {
                     initializer: Some(ForInitializer::Declaration(_)),
                     ..
-                }
+                })
             ));
         });
     }
@@ -381,7 +386,9 @@ fn several_extra_for_clauses_with_nested_parentheses_are_skipped_together() {
     let source = "void f(int x) {\n  for (x; x; x; g(x, (x)); x) x--;\n  x = 1;\n}\n";
     with_parse(source, |parsed| {
         let items = body_items(parsed);
-        let StatementType::For { body_statement, .. } = (statement_item(items, 0)).kind else {
+        let StatementType::For(&ForStatement { body_statement, .. }) =
+            (statement_item(items, 0)).kind
+        else {
             panic!("expected a for statement");
         };
         assert_ne!(

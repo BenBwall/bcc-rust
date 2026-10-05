@@ -172,7 +172,7 @@ fn sizeof_owns_the_complete_compound_literal_postfix_operand() {
                 .parser
                 .syntax
                 .iter::<Expression<'_>>()
-                .filter(|expression| matches!(expression.kind, ExpressionType::Call { .. }))
+                .filter(|expression| matches!(expression.kind, ExpressionType::Call(_)))
                 .all(|expression| expression.recovered)
         );
     });
@@ -571,7 +571,7 @@ fn array_designator_recovery_preserves_a_for_header_parenthesis() {
             let BlockItem::Statement(for_statement) = items[0] else {
                 panic!("expected recovered for statement")
             };
-            assert!(matches!(for_statement.kind, StatementType::For { .. }));
+            assert!(matches!(for_statement.kind, StatementType::For(_)));
             assert!(matches!(items[1], BlockItem::Statement(index) if matches!(
                 index.kind,
                 StatementType::Return(None)
@@ -669,7 +669,7 @@ fn recovered_expression_children_mark_every_composite_parent() {
             .parser
             .syntax
             .iter::<Expression<'_>>()
-            .find(|expression| matches!(expression.kind, ExpressionType::Call { .. }))
+            .find(|expression| matches!(expression.kind, ExpressionType::Call(_)))
             .expect("expected the recovered call expression");
         assert!(call.recovered);
         assert!(
@@ -737,7 +737,7 @@ fn composite_expressions_retain_exact_operator_provenance() {
                 .parser
                 .syntax
                 .iter::<Expression<'_>>()
-                .find(|expression| matches!(expression.kind, ExpressionType::Conditional { .. }))
+                .find(|expression| matches!(expression.kind, ExpressionType::Conditional(_)))
                 .expect("expected conditional expression");
             assert_eq!(
                 sourced_text(
