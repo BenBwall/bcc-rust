@@ -243,17 +243,9 @@ impl Bump {
             inner.tail.is_none(),
             "an arena has one tail vector at a time"
         );
-        // An unreserved region will start page-aligned at offset zero, so it
-        // is aligned for any element. If aligning overflows, the start lies
-        // past the reservation and every commit fails.
-        let start = inner.region.as_ref().map_or(Some(0), |region| {
-            aligned_start(
-                region.as_ptr().as_ptr() as usize,
-                inner.used,
-                align_of::<T>(),
-            )
-        });
-        let start = start.unwrap_or(usize::MAX);
+        // The region may not exist yet. Align against its actual base during
+        // the first fallible commit, after reservation succeeds.
+        let start = inner.used;
         inner.tail = Some(start);
         inner.last = None;
         TailVec {
@@ -529,11 +521,16 @@ impl<'a, T: Copy> TailVec<'a, T> {
 
     #[cold]
     fn commit_for(&mut self, elements: usize) -> Result<(), AllocError> {
+        let mut inner = self.arena.inner.borrow_mut();
+        if self.committed == 0 {
+            let base = inner.region()?.as_ptr().as_ptr() as usize;
+            self.start = aligned_start(base, self.restore, align_of::<T>()).ok_or(AllocError)?;
+            inner.tail = Some(self.start);
+        }
         let end = elements
             .checked_mul(size_of::<T>())
             .and_then(|bytes| bytes.checked_add(self.start))
             .ok_or(AllocError)?;
-        let mut inner = self.arena.inner.borrow_mut();
         let region = inner.region()?;
         region.ensure_committed(end).map_err(|_| AllocError)?;
         self.committed = (region.committed() - self.start) / size_of::<T>();
@@ -1111,6 +1108,26 @@ mod tests {
         assert_eq!(next as usize, before as usize + 40_004);
         assert_eq!(arena.tail_vec::<u64>().into_slice(), [0_u64; 0]);
         assert_eq!(arena.used(), 40_005);
+    }
+
+    #[test]
+    fn first_tail_vector_aligns_to_the_reserved_region() {
+        #[derive(Clone, Copy)]
+        #[cfg_attr(miri, repr(align(1048576)))]
+        #[cfg_attr(not(miri), repr(align(8192)))]
+        struct OverAligned(u8);
+
+        // A local rather than a promoted constant: the windows-gnu linker does
+        // not reliably keep read-only data this strictly aligned, which would
+        // misalign the copy's source rather than the tail.
+        let source = [OverAligned(7)];
+        let arena = Bump::new();
+        let mut values = arena.tail_vec::<OverAligned>();
+        assert_eq!(arena.committed(), 0);
+        values.try_extend_from_slice(&source).unwrap();
+        let values = values.into_slice();
+        assert_eq!((values.as_ptr() as usize) % align_of::<OverAligned>(), 0);
+        assert_eq!(values[0].0, 7);
     }
 
     #[cfg_attr(miri, ignore = "writes megabytes an element at a time")]
