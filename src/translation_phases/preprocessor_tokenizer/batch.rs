@@ -14,10 +14,7 @@
 //! line splice is reported once each time the end of input is read after a
 //! real character.
 
-use std::{
-    borrow::Cow,
-    ops::Range,
-};
+use std::ops::Range;
 
 use super::{
     super::initial_processing::terminal_splice_length,
@@ -34,6 +31,8 @@ use crate::{
     },
     util::{
         bump::{
+            ArenaString,
+            ArenaVec,
             Bump,
             TailVec,
         },
@@ -97,10 +96,15 @@ pub(crate) struct LogicalCharacter {
 
 /// The characters that `source[range]` spells once trigraphs are replaced
 /// and line splices deleted (C99 §5.1.1.2p1, phases 1 and 2). The range must
-/// not end inside a trigraph or a line splice; token spans never do.
-pub(crate) fn logical_characters(source: &str, range: Range<usize>) -> Vec<LogicalCharacter> {
+/// not end inside a trigraph or a line splice; token spans never do. The
+/// characters are collected in `arena`.
+pub(crate) fn logical_characters<'a>(
+    arena: &'a Bump,
+    source: &str,
+    range: Range<usize>,
+) -> ArenaVec<'a, LogicalCharacter> {
     let bytes = &source.as_bytes()[..range.end];
-    let mut characters = Vec::new();
+    let mut characters = ArenaVec::new_in(arena);
     let mut index = range.start;
     while index < range.end {
         let rest = &bytes[index..];
@@ -158,15 +162,17 @@ pub(crate) fn position_after(source: &str, from: SourcePosition, to: usize) -> S
 /// Applies translation phases 1 and 2 to a whole buffer: trigraphs are
 /// replaced, line endings become `'\n'`, and line splices are deleted. The
 /// returned remaps record every place where spliced and original offsets stop
-/// advancing together.
-fn splice(source: &str) -> (Cow<'_, str>, Vec<Remap>) {
+/// advancing together. A buffer that needs changes is copied into `scratch`.
+fn splice<'a>(source: &'a str, scratch: &'a Bump) -> (&'a str, &'a [Remap]) {
     let bytes = source.as_bytes();
     let mut special = byte_scan::find_phase2_special(bytes);
     if special == bytes.len() {
-        return (Cow::Borrowed(source), Vec::new());
+        return (source, &[]);
     }
-    let mut text = String::with_capacity(bytes.len());
-    let mut remaps = Vec::new();
+    // Phases 1 and 2 only shorten the text, so its buffer never grows; the
+    // remaps after it are the arena's latest block and grow in place.
+    let mut text = ArenaString::with_capacity_in(bytes.len(), scratch);
+    let mut remaps = ArenaVec::new_in(scratch);
     let mut copied = 0;
     while special < bytes.len() {
         // Every special byte is ASCII, so these are character boundaries.
@@ -227,7 +233,7 @@ fn splice(source: &str) -> (Cow<'_, str>, Vec<Remap>) {
         special += byte_scan::find_phase2_special(&bytes[special..]);
     }
     text.push_str(&source[copied..]);
-    (Cow::Owned(text), remaps)
+    (text.into_str(), remaps.leak())
 }
 
 /// Maps monotonically increasing offsets in spliced text back to original
@@ -339,7 +345,7 @@ impl<'a> PositionTracker<'a> {
 }
 
 /// A diagnostic raised while lexing, replayed whenever its token is read.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum LexDiagnostic {
     Tokenizer {
         error_type: PreprocessorTokenizerErrorType,
@@ -432,22 +438,23 @@ pub(super) struct LexedFile<'a> {
     end_readers: &'a [u32],
 }
 
-/// A [`LexedFile`] while its entries are being lexed.
-struct LexingFile<'arena> {
+/// A [`LexedFile`] while its entries are being lexed. Its side tables grow
+/// in the lexing scratch arena until they are copied after the entries.
+struct LexingFile<'arena, 's> {
     /// The rest of the arena's reservation while lexing, committed as
     /// entries are written, so it never moves or overcommits.
     entries:               TailVec<'arena, Entry>,
     end_of_tokens:         SourcePosition,
     eof:                   SourcePosition,
-    diagnostics:           Vec<(u32, LexDiagnostic)>,
-    other_locations:       Vec<(u32, SourceVector)>,
+    diagnostics:           ArenaVec<'s, (u32, LexDiagnostic)>,
+    other_locations:       ArenaVec<'s, (u32, SourceVector)>,
     final_newline_entry:   Option<usize>,
-    final_newline_readers: Vec<u32>,
+    final_newline_readers: ArenaVec<'s, u32>,
     lacks_final_newline:   bool,
-    end_readers:           Vec<u32>,
+    end_readers:           ArenaVec<'s, u32>,
 }
 
-impl<'arena> LexingFile<'arena> {
+impl<'arena> LexingFile<'arena, '_> {
     /// Keeps exactly the entries written, returning the rest of the
     /// reservation to `arena`, and stores the side tables after them.
     fn finish(
@@ -473,7 +480,7 @@ impl<'arena> LexingFile<'arena> {
             entries: entries.into_slice(),
             end_of_tokens,
             eof,
-            diagnostics: arena.alloc_slice_fill_iter(diagnostics),
+            diagnostics: arena.alloc_slice_copy(&diagnostics),
             other_locations: arena.alloc_slice_fill_iter(other_locations),
             final_newline_entry,
             final_newline_readers: arena.alloc_slice_copy(&final_newline_readers),
@@ -486,16 +493,20 @@ impl<'arena> LexingFile<'arena> {
 
 impl<'a> LexedFile<'a> {
     /// Runs translation phases 1 through 3 over all of `source`, keeping the
-    /// result in `arena`.
+    /// result in `arena`. Lexing's temporary storage comes from `scratch`,
+    /// which is reset first, so the largest file lexed bounds it.
     pub(super) fn lex(
         context: &mut Context<'_>,
         arena: &'a Bump,
+        scratch: &mut Bump,
         source_file_index: u32,
         source: &str,
     ) -> Self {
-        let (text, remaps) = splice(source);
+        scratch.reset();
+        let scratch = &*scratch;
+        let (text, remaps) = splice(source, scratch);
         let terminal_splice = terminal_splice_length(source);
-        let file = Lexer::new(context, arena, &text, &remaps, source.is_empty())
+        let file = Lexer::new(context, arena, scratch, text, remaps, source.is_empty())
             .with_terminal_splice(terminal_splice.is_some())
             .run();
         let escaped_final_newline = terminal_splice.map(|length| {
@@ -521,7 +532,7 @@ impl<'a> LexedFile<'a> {
             entries:               arena.alloc_slice_copy(self.entries),
             end_of_tokens:         self.end_of_tokens,
             eof:                   self.eof,
-            diagnostics:           arena.alloc_slice_fill_iter(self.diagnostics.iter().cloned()),
+            diagnostics:           arena.alloc_slice_copy(self.diagnostics),
             other_locations:       arena
                 .alloc_slice_fill_iter(self.other_locations.iter().cloned()),
             final_newline_entry:   self.final_newline_entry,
@@ -729,7 +740,7 @@ struct Lexed {
     clippy::struct_excessive_bools,
     reason = "Each flag is one piece of the end-of-input reading state."
 )]
-struct Lexer<'a, 'tu, 'arena> {
+struct Lexer<'a, 'tu, 'arena, 's> {
     context:             &'a mut Context<'tu>,
     text:                &'a str,
     bytes:               &'a [u8],
@@ -752,16 +763,18 @@ struct Lexer<'a, 'tu, 'arena> {
     read_end:            bool,
     /// Whether the token being lexed read the supplied final newline.
     read_final_newline:  bool,
+    /// Lexing's temporary storage.
+    scratch:             &'s Bump,
     /// Diagnostics raised while lexing the current token, in order.
-    pending:             Vec<LexDiagnostic>,
-    scratch:             String,
-    file:                LexingFile<'arena>,
+    pending:             ArenaVec<'s, LexDiagnostic>,
+    file:                LexingFile<'arena, 's>,
 }
 
-impl<'a, 'tu, 'arena> Lexer<'a, 'tu, 'arena> {
+impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
     fn new(
         context: &'a mut Context<'tu>,
         arena: &'arena Bump,
+        scratch: &'s Bump,
         text: &'a str,
         remaps: &'a [Remap],
         physically_empty: bool,
@@ -781,18 +794,18 @@ impl<'a, 'tu, 'arena> Lexer<'a, 'tu, 'arena> {
             splice_armed: true,
             read_end: false,
             read_final_newline: false,
-            pending: Vec::new(),
-            scratch: String::new(),
+            scratch,
+            pending: ArenaVec::new_in(scratch),
             file: LexingFile {
                 entries: arena.tail_vec(),
                 end_of_tokens: SourcePosition::default(),
                 eof: SourcePosition::default(),
-                diagnostics: Vec::new(),
-                other_locations: Vec::new(),
+                diagnostics: ArenaVec::new_in(scratch),
+                other_locations: ArenaVec::new_in(scratch),
                 final_newline_entry: None,
-                final_newline_readers: Vec::new(),
+                final_newline_readers: ArenaVec::new_in(scratch),
                 lacks_final_newline,
-                end_readers: Vec::new(),
+                end_readers: ArenaVec::new_in(scratch),
             },
         }
     }
@@ -864,7 +877,7 @@ impl<'a, 'tu, 'arena> Lexer<'a, 'tu, 'arena> {
         tracker.advance_past_deletions(self.bytes.len())
     }
 
-    fn run(mut self) -> LexingFile<'arena> {
+    fn run(mut self) -> LexingFile<'arena, 's> {
         loop {
             let start = self.pos;
             let position = self.tracker.advance(start);
@@ -1099,7 +1112,8 @@ impl<'a, 'tu, 'arena> Lexer<'a, 'tu, 'arena> {
         };
         let mut token = self.spelled(start, end, kind);
         if universal {
-            let (kind, contents) = super::ucn::identifier(self.context, token.contents);
+            let (kind, contents) =
+                super::ucn::identifier(self.context, self.scratch, token.contents);
             token.kind = Some(kind);
             token.contents = contents;
         }
@@ -1133,13 +1147,14 @@ impl<'a, 'tu, 'arena> Lexer<'a, 'tu, 'arena> {
         }
         // Number spellings carry the trailing NUL that numeric conversion
         // expects.
-        let mut spelling = std::mem::take(&mut self.scratch);
-        spelling.clear();
-        spelling.push_str(&self.text[start..end]);
-        spelling.push('\0');
-        let lexed = self.respelled(end, PreprocessorTokenType::Number, &spelling);
-        self.scratch = spelling;
-        lexed
+        self.pos = end;
+        Lexed {
+            kind:     Some(PreprocessorTokenType::Number),
+            contents: self
+                .context
+                .string_cache
+                .intern_concat(&[&self.text[start..end], "\0"]),
+        }
     }
 
     /// Continues a whitespace token from `end`; comments join it.
@@ -1249,13 +1264,16 @@ impl<'a, 'tu, 'arena> Lexer<'a, 'tu, 'arena> {
                         character:  None,
                     });
                     // Close the literal for recovery.
-                    let mut spelling = std::mem::take(&mut self.scratch);
-                    spelling.clear();
-                    spelling.push_str(&self.text[start..end]);
-                    spelling.push(char::from(quote));
-                    let lexed = self.respelled(end, kind, &spelling);
-                    self.scratch = spelling;
-                    return lexed;
+                    let quote = [quote];
+                    let quote = std::str::from_utf8(&quote).expect("quotes are ASCII");
+                    self.pos = end;
+                    return Lexed {
+                        kind:     Some(kind),
+                        contents: self
+                            .context
+                            .string_cache
+                            .intern_concat(&[&self.text[start..end], quote]),
+                    };
                 },
                 | Some(byte) if byte == quote => return self.spelled(start, end + 1, kind),
                 | Some(_) => end += 1,

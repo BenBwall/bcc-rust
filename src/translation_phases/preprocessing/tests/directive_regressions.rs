@@ -139,11 +139,12 @@ fn pragma_destringizing_preserves_non_special_escapes() {
             SharedVec::default(),
         );
         let literal = context.string_cache.intern(literal);
-        let prepared = preprocessor.run(&mut context, |preprocessor, context| {
+        let prepared = preprocessor.run(&mut context, |_, context| {
             std::ops::ControlFlow::Break(
-                preprocessor
-                    .prepare_pragma_operator_string(context, literal)
-                    .to_string(),
+                crate::translation_phases::preprocessing::Expander::prepare_pragma_operator_string(
+                    context, literal,
+                )
+                .to_string(),
             )
         });
         assert_eq!(prepared, expected);

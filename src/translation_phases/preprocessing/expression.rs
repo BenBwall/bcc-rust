@@ -362,6 +362,8 @@ pub(super) struct PreprocessorExpressionOperandStack<'pp> {
     pending_evaluated_comma:   bool,
     pending_arithmetic_faults: Option<NonZeroU32>,
     arithmetic_faults:         ArenaVec<'pp, ArithmeticFaultNode>,
+    /// Fault nodes waiting to be reported, kept for the next report.
+    fault_scan:                ArenaVec<'pp, NonZeroU32>,
 }
 
 impl<'pp> PreprocessorExpressionOperandStack<'pp> {
@@ -372,6 +374,7 @@ impl<'pp> PreprocessorExpressionOperandStack<'pp> {
             pending_evaluated_comma:   false,
             pending_arithmetic_faults: None,
             arithmetic_faults:         ArenaVec::new_in(pp),
+            fault_scan:                ArenaVec::new_in(pp),
         }
     }
 
@@ -460,11 +463,12 @@ impl<'pp> PreprocessorExpressionOperandStack<'pp> {
         self.retain_faults(Some(root));
     }
 
-    fn emit_faults(&self, context: &mut Context<'_>, root: Option<NonZeroU32>) {
+    fn emit_faults(&mut self, context: &mut Context<'_>, root: Option<NonZeroU32>) {
         let Some(root) = root else {
             return;
         };
-        let mut pending = vec![root];
+        let pending = &mut self.fault_scan;
+        pending.push(root);
         while let Some(index) = pending.pop() {
             match self.arithmetic_faults[index.get() as usize - 1] {
                 | ArithmeticFaultNode::Fault {
@@ -1599,7 +1603,7 @@ impl Expander<'_, '_, '_> {
                         },
                     ),
                     (PreprocessorTokenType::Character, UNARY) => {
-                        let value = i64::from(Self::parse_character(context, token));
+                        let value = i64::from(self.parse_character(context, token));
                         self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(value));
                         self.expression_parser.state = BINARY;
                     },

@@ -48,6 +48,7 @@ pub(crate) use token::{
     Token,
     TokenType,
 };
+use token_conversion::LiteralScratch;
 
 #[cfg(test)]
 use crate::util::shared::SharedVec;
@@ -119,6 +120,8 @@ struct PreprocessorState<'pp> {
     open_conditionals:     ArenaVec<'pp, ConditionalGroup<'pp>>,
     /// Fixed on first use so every `__DATE__` and `__TIME__` agrees.
     translation_timestamp: Option<TranslationTimestamp<'pp>>,
+    /// Storage that string-literal conversion reuses.
+    literal_scratch:       LiteralScratch<'pp>,
 }
 
 impl Debug for PreprocessorState<'_> {
@@ -330,6 +333,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     file_frames,
                     open_conditionals: ArenaVec::new_in(pp),
                     translation_timestamp: None,
+                    literal_scratch: LiteralScratch::new(pp),
                 },
                 tokenizer,
                 last_was_newline: true,

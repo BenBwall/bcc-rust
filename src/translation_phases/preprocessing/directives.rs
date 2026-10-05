@@ -1,10 +1,11 @@
 //! Directive dispatch and the non-conditional directives.
 
 use std::{
+    ffi::OsStr,
     ops::ControlFlow,
     path::{
+        Component,
         Path,
-        PathBuf,
     },
 };
 
@@ -46,8 +47,11 @@ use crate::{
         },
     },
     util::{
-        bump::ArenaString,
-        shared::SharedString,
+        bump::{
+            ArenaString,
+            ArenaVec,
+            Bump,
+        },
         string_cache::StringCacheId,
     },
 };
@@ -89,8 +93,8 @@ enum IncludeOperand {
 }
 
 /// The header name of an `#include` directive.
-struct HeaderName {
-    name:              String,
+struct HeaderName<'x> {
+    name:              &'x str,
     is_system_header:  bool,
     /// The whole operand.
     source_vectors:    SourceVectors,
@@ -155,28 +159,67 @@ fn expanded_header_sequence_source(
     context.create_source_vectors(position, vector.source_file_index, sequence.len())
 }
 
+/// `directory.join(path)`, spelled in `buffer` instead of a `PathBuf`.
+///
+/// A plain relative `path` joins a directory by a separator, which is how
+/// every ordinary include lookup joins. Other forms, such as a Windows `path`
+/// with a drive or root, or a verbatim or bare-drive `directory`, follow
+/// `PathBuf::push`'s platform rules, so they are joined by std and copied.
+fn join_path<'b>(buffer: &'b mut ArenaVec<'_, u8>, directory: &Path, path: &Path) -> &'b Path {
+    let plain_path = matches!(
+        path.components().next(),
+        Some(Component::Normal(_) | Component::CurDir | Component::ParentDir)
+    );
+    let mut directory_components = directory.components();
+    let plain_directory = match directory_components.next() {
+        | Some(Component::Prefix(prefix)) =>
+            !prefix.kind().is_verbatim() && directory_components.next().is_some(),
+        | _ => true,
+    };
+    buffer.clear();
+    if plain_path && plain_directory {
+        let directory = directory.as_os_str().as_encoded_bytes();
+        buffer.extend_from_slice(directory);
+        if directory
+            .last()
+            .is_some_and(|&byte| !std::path::is_separator(char::from(byte)))
+        {
+            buffer.extend_from_slice(std::path::MAIN_SEPARATOR_STR.as_bytes());
+        }
+        buffer.extend_from_slice(path.as_os_str().as_encoded_bytes());
+    } else {
+        buffer.extend_from_slice(directory.join(path).as_os_str().as_encoded_bytes());
+    }
+    // SAFETY: the buffer holds encoded bytes of `OsStr`s from this process,
+    // possibly joined by an ASCII separator, which is a mixture of UTF-8 and
+    // encoded bytes split only at UTF-8 boundaries.
+    Path::new(unsafe { OsStr::from_encoded_bytes_unchecked(buffer) })
+}
+
 /// A header name read from source text, with the locations of its
 /// questionable characters as positions and source byte lengths.
-struct WrittenHeaderName {
-    name:      String,
+struct WrittenHeaderName<'a> {
+    name:      &'a str,
     /// The first sequence C99 §6.4.7p3 does not allow.
     invalid:   Option<(&'static str, SourcePosition, usize)>,
     /// The first backslash of a `"…"` name.
     backslash: Option<(SourcePosition, usize)>,
 }
 
-/// The header name that `characters` of `source` spell. `anchor` is a known
-/// position at or before the characters.
-fn header_name_from_source(
+/// The header name that `characters` of `source` spell, spelled in
+/// `arena`. `anchor` is a known position at or before the characters.
+fn header_name_from_source<'a>(
+    arena: &'a Bump,
     source: &str,
     anchor: SourcePosition,
     characters: &[LogicalCharacter],
     angle: bool,
-) -> WrittenHeaderName {
-    let name: String = characters
-        .iter()
-        .map(|character| character.character)
-        .collect();
+) -> WrittenHeaderName<'a> {
+    let mut name = ArenaString::new_in(arena);
+    for character in characters {
+        name.push(character.character);
+    }
+    let name = name.into_str();
     // Locates `length` characters starting at byte `offset` of the name.
     let locate = |offset: usize, length: usize| {
         let first = name[..offset].chars().count();
@@ -188,7 +231,7 @@ fn header_name_from_source(
         )
     };
     // Every sequence is ASCII, so its length counts its characters.
-    let invalid = invalid_header_sequence(&name, angle).map(|(offset, sequence)| {
+    let invalid = invalid_header_sequence(name, angle).map(|(offset, sequence)| {
         let (start, length) = locate(offset, sequence.len());
         (sequence, start, length)
     });
@@ -216,7 +259,7 @@ fn header_name_from_source(
     clippy::while_let_loop,
     reason = "The macro-parameter loop has multiple semantic exit conditions."
 )]
-impl Expander<'_, '_, '_> {
+impl<'x> Expander<'_, '_, 'x> {
     pub(super) fn parse_directive(&mut self, context: &mut Context<'_>, token: PreprocessorToken) {
         if !self.last_was_newline {
             context.preprocessor_error(PreprocessorError {
@@ -277,14 +320,31 @@ impl Expander<'_, '_, '_> {
         }
     }
 
-    pub(super) fn prepare_pragma_operator_string(
-        &self,
-        context: &Context<'_>,
+    /// The source text a `_Pragma` string literal stands for (C99 §6.10.9p1),
+    /// with a final newline, in the translation-unit arena, where diagnostics
+    /// can still quote it.
+    pub(super) fn prepare_pragma_operator_string<'c>(
+        context: &Context<'c>,
         string: StringCacheId,
-    ) -> SharedString {
-        _ = self;
+    ) -> &'c str {
         let string = context.string_cache.at(string);
-        let mut ret = String::new();
+        // Nothing else is allocated in the arena while the text is written.
+        let mut text = context.tu_arena().tail_vec::<u8>();
+        // A quote is written only once another character follows it, so the
+        // literal's closing quote is never written.
+        let mut quote_pending = false;
+        let mut write = |c: char| {
+            if std::mem::take(&mut quote_pending) {
+                text.push(b'"');
+            }
+            if c == '"' {
+                quote_pending = true;
+            } else {
+                for &byte in c.encode_utf8(&mut [0; 4]).as_bytes() {
+                    text.push(byte);
+                }
+            }
+        };
         // Skip the leading quote.
         let mut index = 1;
         if string.char_at(0) == Some('L') {
@@ -294,32 +354,31 @@ impl Expander<'_, '_, '_> {
             match c {
                 | '\\' => match string.char_at(index + 1) {
                     | Some('"') => {
-                        ret.push('"');
+                        write('"');
                         index += 2;
                     },
                     | Some('\\') => {
-                        ret.push('\\');
+                        write('\\');
                         index += 2;
                     },
                     | _ => {
                         // Only escaped quotes and backslashes are removed by
                         // C99 §6.10.9p1. Preserve other escapes and progress.
-                        ret.push('\\');
+                        write('\\');
                         index += 1;
                     },
                 },
                 | _ => {
-                    ret.push(c);
+                    write(c);
                     index += c.len_utf8();
                 },
             }
         }
-        // Pop the trailing quote.
-        if ret.ends_with('"') {
-            _ = ret.pop();
-        }
-        ret.push('\n');
-        SharedString::from(ret)
+        // A final pending quote is the trailing quote, which is dropped.
+        text.push(b'\n');
+        let text = text.into_slice();
+        // SAFETY: only complete UTF-8 encodings of characters were written.
+        unsafe { std::str::from_utf8_unchecked(text) }
     }
 
     /// Resolves an include name the way GCC and Clang do (C99 §6.10.2p2-3
@@ -344,55 +403,48 @@ impl Expander<'_, '_, '_> {
         path: &Path,
         is_system_header: bool,
     ) -> Option<u32> {
-        let mut searched = Vec::new();
-        let header = if path.is_absolute() {
-            path.is_file().then(|| path.to_owned())
+        let source_file_index = if path.is_absolute() {
+            path.is_file().then(|| context.intern_source_file(path))
         } else {
-            let mut candidates = Vec::new();
-            if !is_system_header {
-                let including_file = context.get_source_file(including_file);
-                candidates.push(
-                    including_file
-                        .parent()
-                        .map(Path::to_path_buf)
-                        .unwrap_or_default(),
-                );
-                candidates.extend(
-                    context
-                        .quote_include_directories()
-                        .iter()
-                        .map(|path| path.to_path_buf()),
-                );
-            }
-            candidates.extend(
-                context
-                    .system_include_directories()
-                    .iter()
-                    .map(|path| path.to_path_buf()),
-            );
+            // The including file's directory and the quote directories come
+            // first for `"…"` names.
+            let directories = context.include_search_directories(including_file, is_system_header);
             let mut found = None;
-            for directory in candidates {
-                let candidate = directory.join(path);
+            for directory in directories.clone() {
+                // Each candidate is spelled in the expansion arena and taken
+                // back before the next one, so a lookup leaves nothing there.
+                let mut buffer = ArenaVec::new_in(self.scratch);
+                let candidate = join_path(&mut buffer, directory, path);
                 if candidate.is_file() {
-                    found = Some(candidate);
+                    found = Some(context.intern_source_file(candidate));
                     break;
                 }
-                searched.push(directory);
+            }
+            if found.is_none() {
+                let searched = context.tu_arena().alloc_slice_fill_iter(directories);
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::HeaderNotFound {
+                        name: context.diagnostic_text(&path.to_string_lossy()),
+                        is_system_header,
+                        searched,
+                    },
+                    source_vectors: operand,
+                });
+                return None;
             }
             found
         };
-        let Some(header) = header else {
+        let Some(source_file_index) = source_file_index else {
             context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderNotFound {
                     name: context.diagnostic_text(&path.to_string_lossy()),
                     is_system_header,
-                    searched: context.diagnostic_paths(&searched),
+                    searched: &[],
                 },
                 source_vectors: operand,
             });
             return None;
         };
-        let source_file_index = context.intern_source_file(&header);
         if self.state.once_set.contains(&source_file_index) {
             None
         } else {
@@ -436,7 +488,7 @@ impl Expander<'_, '_, '_> {
         &mut self,
         context: &mut Context<'_>,
         directive: PreprocessorToken,
-    ) -> HeaderName {
+    ) -> HeaderName<'x> {
         let open = Self::next_ignore_whitespace(&mut self.tokenizer, context)
             .expect("the operand was peeked");
         let open_vector = context.first_source_vector(open.source_vectors).clone();
@@ -467,7 +519,7 @@ impl Expander<'_, '_, '_> {
                 let source = context
                     .source_text(physical)
                     .expect("source files record their text");
-                let characters = logical_characters(source, vector.range());
+                let characters = logical_characters(self.scratch, source, vector.range());
                 closing = characters
                     .iter()
                     .position(|character| character.character == '>')
@@ -492,12 +544,13 @@ impl Expander<'_, '_, '_> {
             let source = context
                 .source_text(physical)
                 .expect("source files record their text");
-            let open_index = logical_characters(source, open_vector.range())
+            let open_index = logical_characters(self.scratch, source, open_vector.range())
                 .first()
                 .expect("the operand starts with `<`")
                 .index;
-            let characters = logical_characters(source, open_index + 1..closing.unwrap_or(end));
-            let written = header_name_from_source(source, anchor, &characters, true);
+            let characters =
+                logical_characters(self.scratch, source, open_index + 1..closing.unwrap_or(end));
+            let written = header_name_from_source(self.scratch, source, anchor, &characters, true);
             let unclosed_at = closing
                 .is_none()
                 .then(|| position_after(source, anchor, end));
@@ -538,7 +591,7 @@ impl Expander<'_, '_, '_> {
 
     /// Reads a `"…"` operand as written: one string literal, whose source
     /// text between its quotes is the name.
-    fn read_written_quoted_header(&mut self, context: &mut Context<'_>) -> HeaderName {
+    fn read_written_quoted_header(&mut self, context: &mut Context<'_>) -> HeaderName<'x> {
         let token = Self::next_ignore_whitespace(&mut self.tokenizer, context)
             .expect("the operand was peeked");
         let vector = context.first_source_vector(token.source_vectors).clone();
@@ -555,7 +608,7 @@ impl Expander<'_, '_, '_> {
             let source = context
                 .source_text(physical)
                 .expect("source files record their text");
-            let characters = logical_characters(source, vector.range());
+            let characters = logical_characters(self.scratch, source, vector.range());
             // The first character is the opening quote. With the backslash
             // extension, a backslash is ordinary header-name text, so the
             // first following quote closes the header even if phase 3 lexed
@@ -576,8 +629,13 @@ impl Expander<'_, '_, '_> {
                     | _ => index += 1,
                 }
             }
-            let written =
-                header_name_from_source(source, anchor, &characters[1.min(close)..close], false);
+            let written = header_name_from_source(
+                self.scratch,
+                source,
+                anchor,
+                &characters[1.min(close)..close],
+                false,
+            );
             // Under Deny, a trailing backslash escapes the quote during
             // lexing and leaves the header name unterminated too.
             let unclosed_at =
@@ -644,7 +702,7 @@ impl Expander<'_, '_, '_> {
         &mut self,
         context: &mut Context<'_>,
         directive: PreprocessorToken,
-    ) -> Option<HeaderName> {
+    ) -> Option<HeaderName<'x>> {
         let include_string =
             self.expect_token_without_rewind::<true>(
                 context,
@@ -667,8 +725,10 @@ impl Expander<'_, '_, '_> {
         if include_string.kind == PreprocessorTokenType::String {
             let spelling = context.string_cache.at(include_string.contents);
             let name = spelling.strip_prefix('"').unwrap_or(spelling);
-            let name = name.strip_suffix('"').unwrap_or(name).to_owned();
-            let invalid = invalid_header_sequence(&name, false).map(|(offset, sequence)| {
+            let name = &*self
+                .scratch
+                .alloc_str(name.strip_suffix('"').unwrap_or(name));
+            let invalid = invalid_header_sequence(name, false).map(|(offset, sequence)| {
                 (
                     sequence,
                     expanded_header_sequence_source(
@@ -694,7 +754,8 @@ impl Expander<'_, '_, '_> {
         contents.push_str(&context.string_cache.at(include_string.contents)[1..]);
         // Each name byte belongs to a token; keep that token's provenance so
         // an invalid sequence does not share the whole operand's location.
-        let mut token_spans = vec![(0..contents.len(), include_string.source_vectors, 1)];
+        let mut token_spans = ArenaVec::new_in(self.scratch);
+        token_spans.push((0..contents.len(), include_string.source_vectors, 1));
         let start_index = Context::duplicate_source_vectors(
             &mut context.source_vectors.0,
             include_string.source_vectors,
@@ -734,8 +795,8 @@ impl Expander<'_, '_, '_> {
             }
         }
         let source_vectors = SourceVectors::new(start_index, context.source_vectors.0.len() as u32);
-        let name = contents.as_str().to_owned();
-        let invalid = invalid_header_sequence(&name, true).map(|(offset, sequence)| {
+        let name = contents.into_str();
+        let invalid = invalid_header_sequence(name, true).map(|(offset, sequence)| {
             let (range, token_source, token_offset) = token_spans
                 .iter()
                 .find(|(range, ..)| range.contains(&offset))
@@ -848,7 +909,7 @@ impl Expander<'_, '_, '_> {
                 context,
                 including_file,
                 header.source_vectors,
-                Path::new(&header.name),
+                Path::new(header.name),
                 header.is_system_header,
             )
         } else {
@@ -1012,7 +1073,8 @@ impl Expander<'_, '_, '_> {
                     source_vectors: name.source_vectors,
                 });
             }
-            let mut argument_names = Vec::new();
+            // Collected in the expansion arena; the definition keeps a copy.
+            let mut argument_names = ArenaVec::new_in(self.scratch);
             let mut is_variadic = false;
             loop {
                 let Some(name_or_ellipsis) = self.expect_token_from_previous_phase::<true>(
@@ -1324,9 +1386,8 @@ impl Expander<'_, '_, '_> {
                     TokenType::String(StringTokenType::WideString(_))
                 );
                 filename = context
-                    .literal_text(contents, wide)
-                    .filter(|text| !text.contains('\0'))
-                    .map(|text| PathBuf::from(text).into_boxed_path());
+                    .literal_text_in(self.scratch, contents, wide)
+                    .filter(|text| !text.contains('\0'));
                 if filename.is_none() {
                     context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::InvalidLineFilename,
@@ -1360,13 +1421,13 @@ impl Expander<'_, '_, '_> {
             self.set_line(context, value);
         }
         if let Some(filename) = filename {
-            let source_file_index = context.intern_source_file(&filename);
+            let source_file_index = context.intern_source_file(Path::new(filename));
             self.set_source_file_index(context, source_file_index);
         }
     }
 
     fn parse_error_directive(&mut self, context: &mut Context<'_>, directive: PreprocessorToken) {
-        let mut contents = String::new();
+        let mut contents = ArenaString::new_in(self.scratch);
         // A directive ending at end of file is complete; the missing final
         // newline is diagnosed on its own.
         while let Some(token) = self.tokenizer.next_item(context) {

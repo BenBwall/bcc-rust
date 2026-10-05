@@ -34,6 +34,7 @@ use crate::{
     },
     translation_phases::{
         Context,
+        SourceVectors,
         StrExt,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -41,10 +42,70 @@ use crate::{
             PreprocessorTokenizerError,
         },
     },
-    util::packed::Packed,
+    util::{
+        bump::{
+            ArenaString,
+            ArenaVec,
+            Bump,
+        },
+        packed::Packed,
+    },
 };
 
-impl<'tu> Expander<'tu, '_, '_> {
+/// Storage that string-literal conversion reuses, kept with the
+/// preprocessor's long-lived state so that converting a literal leaves
+/// nothing behind.
+pub(super) struct LiteralScratch<'pp> {
+    arena:   &'pp Bump,
+    /// The units of the literal being decoded.
+    units:   ArenaVec<'pp, LiteralUnit>,
+    /// A spare builder for adjacent-literal concatenation.
+    builder: Option<LiteralBuilder<'pp>>,
+}
+
+/// One concatenation of adjacent string literals in progress.
+pub(super) struct LiteralBuilder<'pp> {
+    units:    ArenaVec<'pp, LiteralUnit>,
+    sources:  ArenaVec<'pp, SourceVectors>,
+    spelling: ArenaString<'pp>,
+}
+
+impl<'pp> LiteralScratch<'pp> {
+    pub(super) fn new(arena: &'pp Bump) -> Self {
+        Self {
+            arena,
+            units: ArenaVec::new_in(arena),
+            builder: None,
+        }
+    }
+
+    /// The empty unit storage, which a nested conversion would not share.
+    fn take_units(&mut self) -> ArenaVec<'pp, LiteralUnit> {
+        std::mem::replace(&mut self.units, ArenaVec::new_in(self.arena))
+    }
+
+    fn return_units(&mut self, mut units: ArenaVec<'pp, LiteralUnit>) {
+        units.clear();
+        self.units = units;
+    }
+
+    fn take_builder(&mut self) -> LiteralBuilder<'pp> {
+        self.builder.take().unwrap_or_else(|| LiteralBuilder {
+            units:    ArenaVec::new_in(self.arena),
+            sources:  ArenaVec::new_in(self.arena),
+            spelling: ArenaString::new_in(self.arena),
+        })
+    }
+
+    fn return_builder(&mut self, mut builder: LiteralBuilder<'pp>) {
+        builder.units.clear();
+        builder.sources.clear();
+        builder.spelling.clear();
+        self.builder = Some(builder);
+    }
+}
+
+impl<'tu, 'pp> Expander<'tu, 'pp, '_> {
     pub(super) fn concatenate_adjacent_strings(
         &mut self,
         context: &mut Context<'tu>,
@@ -57,38 +118,34 @@ impl<'tu> Expander<'tu, '_, '_> {
         let first_contents = match first_kind {
             | StringTokenType::String(contents) | StringTokenType::WideString(contents) => contents,
         };
-        // Most literals stand alone: allocate builders only after adjacency.
-        let mut builder: Option<(
-            Vec<LiteralUnit>,
-            Vec<crate::translation_phases::SourceVectors>,
-            String,
-        )> = None;
+        // Most literals stand alone: fill the reused builders only after
+        // adjacency.
+        let mut builder: Option<LiteralBuilder<'pp>> = None;
 
         loop {
-            let existing_errors = context.take_pending_errors();
+            // Diagnostics reported while reading the next token stay after
+            // the ones already pending.
+            let existing_errors = context.pending_error_count();
             let next = self.next_parser_token(context);
-            let generated_errors = context.take_pending_errors();
 
             if context.source_segment_count() > self.source_segment_limit {
-                context.append_pending_errors(existing_errors);
                 self.pending_parser_token = next;
-                self.pending_parser_errors.extend(generated_errors);
+                self.pending_parser_errors
+                    .extend(context.split_off_pending_errors(existing_errors));
                 break;
             }
 
             let Some(next) = next else {
-                context.append_pending_errors(existing_errors);
-                self.pending_parser_errors.extend(generated_errors);
+                self.pending_parser_errors
+                    .extend(context.split_off_pending_errors(existing_errors));
                 break;
             };
             let TokenType::String(next_kind) = next.kind else {
-                context.append_pending_errors(existing_errors);
                 self.pending_parser_token = Some(next);
-                self.pending_parser_errors.extend(generated_errors);
+                self.pending_parser_errors
+                    .extend(context.split_off_pending_errors(existing_errors));
                 break;
             };
-            context.append_pending_errors(existing_errors);
-            context.append_pending_errors(generated_errors);
             let next_contents = match next_kind {
                 | StringTokenType::String(contents) => contents,
                 | StringTokenType::WideString(contents) => {
@@ -96,32 +153,42 @@ impl<'tu> Expander<'tu, '_, '_> {
                     contents
                 },
             };
-            let (units, sources, spelling) = builder.get_or_insert_with(|| {
-                (
-                    context.literal_units(first_contents).to_vec(),
-                    vec![first.source_vectors],
-                    context.string_cache.at(first.contents).to_owned(),
-                )
+            let builder = builder.get_or_insert_with(|| {
+                let mut builder = self.state.literal_scratch.take_builder();
+                builder
+                    .units
+                    .extend_from_slice(context.literal_units(first_contents));
+                builder.sources.push(first.source_vectors);
+                builder
+                    .spelling
+                    .push_str(context.string_cache.at(first.contents));
+                builder
             });
-            units.extend_from_slice(context.literal_units(next_contents));
-            sources.push(next.source_vectors);
-            spelling.push(' ');
-            spelling.push_str(context.string_cache.at(next.contents));
+            builder
+                .units
+                .extend_from_slice(context.literal_units(next_contents));
+            builder.sources.push(next.source_vectors);
+            builder.spelling.push(' ');
+            builder
+                .spelling
+                .push_str(context.string_cache.at(next.contents));
         }
 
-        let Some((units, sources, spelling)) = builder else {
+        let Some(builder) = builder else {
             return first;
         };
-        let contents = context.intern_literal(&units);
-        Token {
+        let contents = context.intern_literal(&builder.units);
+        let token = Token {
             kind:           if wide {
                 TokenType::String(StringTokenType::WideString(contents))
             } else {
                 TokenType::String(StringTokenType::String(contents))
             },
-            contents:       context.string_cache.intern(&spelling),
-            source_vectors: context.merge_vector_list(&sources),
-        }
+            contents:       context.string_cache.intern(&*builder.spelling),
+            source_vectors: context.merge_vector_list(&builder.sources),
+        };
+        self.state.literal_scratch.return_builder(builder);
+        token
     }
 
     #[inline(always)]
@@ -458,10 +525,13 @@ impl<'tu> Expander<'tu, '_, '_> {
         )
     }
 
+    /// Appends the units `token` spells to `units`, which start empty, and
+    /// returns whether an escape sequence was invalid.
     fn eval_escape_sequences(
         context: &mut Context<'_>,
         token: PreprocessorToken,
-    ) -> (Vec<LiteralUnit>, bool) {
+        units: &mut ArenaVec<'_, LiteralUnit>,
+    ) -> bool {
         let string = context.string_cache.at(token.contents);
         let wide = string.starts_with('L');
         let mut index = usize::from(wide) + 1;
@@ -471,7 +541,6 @@ impl<'tu> Expander<'tu, '_, '_> {
         } else {
             string.len()
         };
-        let mut units = Vec::new();
         let mut failed = false;
         while index < end {
             let c = string[index..].chars().next().unwrap();
@@ -583,7 +652,7 @@ impl<'tu> Expander<'tu, '_, '_> {
                 );
             }
         }
-        (units, failed)
+        failed
     }
 
     fn build_token(token: PreprocessorToken, kind: TokenType) -> Token {
@@ -624,9 +693,15 @@ impl<'tu> Expander<'tu, '_, '_> {
         }
     }
 
-    fn parse_string(context: &mut Context<'_>, token: PreprocessorToken) -> StringTokenType {
-        let (contents, _) = Self::eval_escape_sequences(context, token);
-        let cached_contents = context.intern_literal(&contents);
+    fn parse_string(
+        &mut self,
+        context: &mut Context<'_>,
+        token: PreprocessorToken,
+    ) -> StringTokenType {
+        let mut units = self.state.literal_scratch.take_units();
+        _ = Self::eval_escape_sequences(context, token, &mut units);
+        let cached_contents = context.intern_literal(&units);
+        self.state.literal_scratch.return_units(units);
         if context.string_cache.at(token.contents).starts_with('L') {
             StringTokenType::WideString(cached_contents)
         } else {
@@ -635,26 +710,55 @@ impl<'tu> Expander<'tu, '_, '_> {
     }
 
     pub(super) fn parse_character(
+        &mut self,
         context: &mut Context<'_>,
         token: PreprocessorToken,
     ) -> CharacterTokenType {
-        let (units, had_escape_error) = Self::eval_escape_sequences(context, token);
+        let mut units = self.state.literal_scratch.take_units();
+        let had_escape_error = Self::eval_escape_sequences(context, token, &mut units);
         let wide = context.string_cache.at(token.contents).starts_with('L');
-        let contents = context.intern_literal(&units);
+        _ = context.intern_literal(&units);
+        let character = Self::character_value(context, token, &units, wide, had_escape_error);
+        self.state.literal_scratch.return_units(units);
+        character
+    }
+
+    /// The value of a character constant whose units are `units`.
+    fn character_value(
+        context: &mut Context<'_>,
+        token: PreprocessorToken,
+        units: &[LiteralUnit],
+        wide: bool,
+        had_escape_error: bool,
+    ) -> CharacterTokenType {
         if wide {
-            let units = context.literal_wide_units(contents);
             if units.len() != 1 && (!units.is_empty() || !had_escape_error) {
                 context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::MultiCharacterLiteralsUnsupported,
                     source_vectors: token.source_vectors,
                 });
             }
-            CharacterTokenType::WideChar(units.first().copied().unwrap_or(0))
+            CharacterTokenType::WideChar(units.first().map_or(0, |unit| match *unit {
+                | LiteralUnit::Character(c) => u32::from(c),
+                | LiteralUnit::Numeric(code) => code,
+            }))
         } else {
-            let bytes = context.literal_bytes(contents);
-            match bytes.as_slice() {
-                | [byte] => CharacterTokenType::Char(char::from(*byte)),
-                | [] => {
+            let bytes = units.iter().flat_map(|unit| {
+                let mut encoded = [0; 4];
+                let length = match *unit {
+                    | LiteralUnit::Character(c) => c.encode_utf8(&mut encoded).len(),
+                    | LiteralUnit::Numeric(code) => {
+                        encoded[0] =
+                            u8::try_from(code).expect("narrow escape checked during decoding");
+                        1
+                    },
+                };
+                encoded.into_iter().take(length)
+            });
+            let mut first_two = bytes.clone();
+            match (first_two.next(), first_two.next()) {
+                | (Some(byte), None) => CharacterTokenType::Char(char::from(byte)),
+                | (None, _) => {
                     if !had_escape_error {
                         context.preprocessor_error(PreprocessorError {
                             error_type:
@@ -664,9 +768,9 @@ impl<'tu> Expander<'tu, '_, '_> {
                     }
                     CharacterTokenType::Char('\0')
                 },
-                | _ => CharacterTokenType::MultiChar(bytes.iter().fold(0_i32, |value, byte| {
-                    value.wrapping_shl(8) | i32::from(*byte)
-                })),
+                | _ => CharacterTokenType::MultiChar(
+                    bytes.fold(0_i32, |value, byte| value.wrapping_shl(8) | i32::from(byte)),
+                ),
             }
         }
     }
@@ -709,8 +813,10 @@ impl<'tu> Expander<'tu, '_, '_> {
             | PreprocessorTokenType::WideGeneratedString => {
                 let wide = token.kind == PreprocessorTokenType::WideGeneratedString;
                 let text = &context.string_cache.at(token.contents)[usize::from(wide)..];
-                let units: Vec<_> = text.chars().map(LiteralUnit::Character).collect();
+                let mut units = self.state.literal_scratch.take_units();
+                units.extend(text.chars().map(LiteralUnit::Character));
                 let id = context.intern_literal(&units);
+                self.state.literal_scratch.return_units(units);
                 Token {
                     kind: TokenType::String(if wide {
                         StringTokenType::WideString(id)
@@ -721,12 +827,12 @@ impl<'tu> Expander<'tu, '_, '_> {
                 }
             },
             | PreprocessorTokenType::String => Token {
-                kind:           TokenType::String(Self::parse_string(context, token)),
+                kind:           TokenType::String(self.parse_string(context, token)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             },
             | PreprocessorTokenType::Character => Token {
-                kind:           TokenType::Character(Self::parse_character(context, token)),
+                kind:           TokenType::Character(self.parse_character(context, token)),
                 contents:       token.contents,
                 source_vectors: token.source_vectors,
             },

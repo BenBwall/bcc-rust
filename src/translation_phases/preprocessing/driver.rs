@@ -132,24 +132,42 @@ impl<'pp> TranslationTimestamp<'pp> {
 }
 
 /// Spells `value` as a narrow C string literal whose evaluated contents are
-/// exactly `value`.
-pub(super) fn string_literal_spelling(value: &str) -> String {
-    let mut spelling = String::with_capacity(value.len() + 2);
-    spelling.push('"');
+/// exactly `value`, passing the spelling to `write` one character at a time.
+pub(super) fn spell_string_literal(value: &str, mut write: impl FnMut(char)) {
+    write('"');
     for c in value.chars() {
         match c {
             | '\\' | '"' => {
-                spelling.push('\\');
-                spelling.push(c);
+                write('\\');
+                write(c);
             },
-            | '\n' => spelling.push_str("\\n"),
-            | _ => spelling.push(c),
+            | '\n' => {
+                write('\\');
+                write('n');
+            },
+            | _ => write(c),
         }
     }
-    spelling.push('"');
-    spelling
+    write('"');
 }
 
+/// Interns the string literal that [`spell_string_literal`] spells for
+/// `value`, building it in `scratch`, which it leaves as it was when nothing
+/// else allocated there meanwhile.
+fn intern_string_literal(context: &mut Context<'_>, scratch: &Bump, value: &str) -> StringCacheId {
+    let mut spelling = ArenaString::new_in(scratch);
+    spell_string_literal(value, |c| spelling.push(c));
+    context.string_cache.intern(&*spelling)
+}
+
+/// Interns the spelling of the number `line`, building it in `scratch`, which
+/// it leaves as it was when nothing else allocated there meanwhile. Number
+/// spellings carry the trailing NUL that numeric conversion expects.
+fn intern_line_number(context: &mut Context<'_>, scratch: &Bump, line: u32) -> StringCacheId {
+    let mut spelling = ArenaString::new_in(scratch);
+    write!(spelling, "{line}\0").expect("arena formatting cannot fail");
+    context.string_cache.intern(&*spelling)
+}
 #[expect(
     clippy::needless_continue,
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
@@ -816,24 +834,25 @@ impl<'x> Expander<'_, '_, 'x> {
                         // token spelled as C source, located at the invocation.
                         | "__FILE__" => {
                             let invocation = self.invocation_location(context, token);
-                            let spelling = string_literal_spelling(
-                                &context.source_files[invocation.source_file_index]
-                                    .to_string_lossy(),
+                            let file: &Path = context.source_files[invocation.source_file_index];
+                            let contents = intern_string_literal(
+                                context,
+                                self.scratch,
+                                &file.to_string_lossy(),
                             );
                             break 'base Some(PreprocessorToken {
-                                kind:           PreprocessorTokenType::String,
-                                contents:       context.string_cache.intern(&spelling),
+                                kind: PreprocessorTokenType::String,
+                                contents,
                                 source_vectors: context.push_source_vectors(&[invocation]),
                             });
                         },
                         | "__LINE__" => {
-                            // Number spellings carry the trailing NUL that
-                            // numeric conversion expects.
                             let invocation = self.invocation_location(context, token);
-                            let spelling = format!("{}\0", invocation.line);
+                            let contents =
+                                intern_line_number(context, self.scratch, invocation.line);
                             break 'base Some(PreprocessorToken {
-                                kind:           PreprocessorTokenType::Number,
-                                contents:       context.string_cache.intern(&spelling),
+                                kind: PreprocessorTokenType::Number,
+                                contents,
                                 source_vectors: context.push_source_vectors(&[invocation]),
                             });
                         },
@@ -865,14 +884,18 @@ impl<'x> Expander<'_, '_, 'x> {
                                 .state
                                 .translation_timestamp
                                 .get_or_insert_with(|| TranslationTimestamp::now(self.state.arena));
-                            let spelling = string_literal_spelling(if is_date {
-                                &timestamp.date
-                            } else {
-                                &timestamp.time
-                            });
+                            let contents = intern_string_literal(
+                                context,
+                                self.scratch,
+                                if is_date {
+                                    &timestamp.date
+                                } else {
+                                    &timestamp.time
+                                },
+                            );
                             break 'base Some(PreprocessorToken {
-                                kind:           PreprocessorTokenType::String,
-                                contents:       context.string_cache.intern(&spelling),
+                                kind: PreprocessorTokenType::String,
+                                contents,
                                 source_vectors: token.source_vectors,
                             });
                         },
@@ -903,17 +926,24 @@ impl<'x> Expander<'_, '_, 'x> {
                                 continue 'base;
                             };
 
-                            let input =
-                                self.prepare_pragma_operator_string(context, string_token.contents);
+                            let input = Self::prepare_pragma_operator_string(
+                                context,
+                                string_token.contents,
+                            );
 
                             let tokenizer = take(&mut self.tokenizer);
                             // Each operator gets its own identity: diagnostics
                             // rendered later must quote this payload, not the
                             // most recent one.
                             let pragma_string = context
-                                .add_synthetic_source_file(Path::new("<pragma string>"), &input);
-                            self.tokenizer =
-                                TokenSource::new(context, self.scratch, pragma_string, &input);
+                                .add_synthetic_source_file(Path::new("<pragma string>"), input);
+                            self.tokenizer = TokenSource::new(
+                                context,
+                                self.scratch,
+                                self.state.lexed_files.scratch(),
+                                pragma_string,
+                                input,
+                            );
                             self.pushed_frames += 1;
                             _ = self.parse_pragma_directive(context, string_token);
                             if self.tokenizer.next_item(context).is_some() {

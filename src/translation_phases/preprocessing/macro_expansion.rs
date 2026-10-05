@@ -18,7 +18,7 @@ use super::{
     driver::{
         TokenizerFrame,
         TokenizerFrameType,
-        string_literal_spelling,
+        spell_string_literal,
     },
     errors::{
         PreprocessorError,
@@ -42,6 +42,7 @@ use crate::{
         bump::{
             ArenaString,
             ArenaVec,
+            Bump,
         },
         string_cache::StringCacheId,
     },
@@ -198,7 +199,7 @@ impl<'x> MacroCallCursor<'x> {
                     })
                 {
                     let raw = preprocessor.read_argument(context, argument, false);
-                    token.contents = Expander::stringify(context, &raw);
+                    token.contents = Expander::stringify(context, preprocessor.scratch, &raw);
                     token.kind = PreprocessorTokenType::String;
                     token.source_vectors =
                         context.merge_vectors(token.source_vectors, operand.source_vectors);
@@ -699,8 +700,13 @@ impl<'x> Expander<'_, '_, 'x> {
 
     /// Spells replaced operand tokens as `#` does (C99 §6.10.3.2p2), with
     /// each run of whitespace as one space.
-    fn stringify(context: &mut Context<'_>, tokens: &[PreprocessorToken]) -> StringCacheId {
-        let mut spelling = String::from("\"");
+    fn stringify(
+        context: &mut Context<'_>,
+        scratch: &Bump,
+        tokens: &[PreprocessorToken],
+    ) -> StringCacheId {
+        let mut spelling = ArenaString::new_in(scratch);
+        spelling.push('"');
         let mut space = false;
         for token in tokens {
             match token.kind {
@@ -717,45 +723,34 @@ impl<'x> Expander<'_, '_, 'x> {
             Self::append_stringified_token(context, &mut spelling, *token);
         }
         spelling.push('"');
-        context.string_cache.intern(&spelling)
+        context.string_cache.intern(&*spelling)
     }
 
     /// C99 6.10.3.2p2: escape quotes/backslashes only inside literal tokens.
     /// A backslash that was an Other token participates in phase-5 escapes.
     fn append_stringified_token(
         context: &Context<'_>,
-        spelling: &mut String,
+        spelling: &mut ArenaString<'_>,
         token: PreprocessorToken,
     ) {
         let contents = context.string_cache.at(token.contents);
-        let generated;
-        let contents = match token.kind {
-            | PreprocessorTokenType::Number => contents.strip_suffix('\0').unwrap_or(contents),
-            | PreprocessorTokenType::GeneratedString => {
-                generated = string_literal_spelling(contents);
-                &generated
-            },
-            | PreprocessorTokenType::WideGeneratedString => {
-                generated = format!("L{}", string_literal_spelling(&contents[1..]));
-                &generated
-            },
-            | _ => contents,
-        };
-        if matches!(
-            token.kind,
-            PreprocessorTokenType::String
-                | PreprocessorTokenType::Character
-                | PreprocessorTokenType::GeneratedString
-                | PreprocessorTokenType::WideGeneratedString
-        ) {
-            for c in contents.chars() {
-                if matches!(c, '\\' | '"') {
-                    spelling.push('\\');
-                }
-                spelling.push(c);
+        let mut escaped = |c: char| {
+            if matches!(c, '\\' | '"') {
+                spelling.push('\\');
             }
-        } else {
-            spelling.push_str(contents);
+            spelling.push(c);
+        };
+        match token.kind {
+            | PreprocessorTokenType::Number =>
+                spelling.push_str(contents.strip_suffix('\0').unwrap_or(contents)),
+            | PreprocessorTokenType::GeneratedString => spell_string_literal(contents, escaped),
+            | PreprocessorTokenType::WideGeneratedString => {
+                escaped('L');
+                spell_string_literal(&contents[1..], escaped);
+            },
+            | PreprocessorTokenType::String | PreprocessorTokenType::Character =>
+                contents.chars().for_each(escaped),
+            | _ => spelling.push_str(contents),
         }
     }
 
@@ -847,14 +842,15 @@ impl<'x> Expander<'_, '_, 'x> {
             let tokens = self.replace_operand_argument(context, argument);
             return PreprocessorToken {
                 kind:           PreprocessorTokenType::String,
-                contents:       Self::stringify(context, &tokens),
+                contents:       Self::stringify(context, self.scratch, &tokens),
                 source_vectors: token.source_vectors,
             };
         }
         let argument_id = argument.name;
         let mut token_tokenizer = argument.tokenizer.clone();
         let mut last_was_whitespace = true;
-        let mut synthetic_contents = String::from("\"");
+        let mut synthetic_contents = ArenaString::new_in(self.scratch);
+        synthetic_contents.push('"');
         let mut pending_space = false;
         let mut paren_depth = 1;
         'base: loop {
@@ -889,7 +885,7 @@ impl<'x> Expander<'_, '_, 'x> {
         synthetic_contents.push('"');
         PreprocessorToken {
             kind:           PreprocessorTokenType::String,
-            contents:       context.string_cache.intern(&synthetic_contents),
+            contents:       context.string_cache.intern(&*synthetic_contents),
             source_vectors: token.source_vectors,
         }
     }
@@ -998,6 +994,7 @@ impl<'x> Expander<'_, '_, 'x> {
             (token.kind, token.contents) =
                 crate::translation_phases::preprocessor_tokenizer::ucn::identifier(
                     context,
+                    self.scratch,
                     token.contents,
                 );
         }

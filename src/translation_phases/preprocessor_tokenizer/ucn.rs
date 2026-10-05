@@ -4,6 +4,10 @@ use super::{
     PreprocessorTokenType,
     StringCacheId,
 };
+use crate::util::bump::{
+    ArenaString,
+    Bump,
+};
 
 pub(super) fn decode(text: &str, first: bool) -> Option<(char, usize)> {
     let digits = match text.as_bytes() {
@@ -275,12 +279,15 @@ pub(super) fn decode(text: &str, first: bool) -> Option<(char, usize)> {
     Some((char::from_u32(code)?, 2 + digits))
 }
 
+/// Records the canonical spelling of the identifier spelled `raw`, built in
+/// `scratch`.
 pub(crate) fn identifier(
     context: &mut Context<'_>,
+    scratch: &Bump,
     raw: StringCacheId,
 ) -> (PreprocessorTokenType, StringCacheId) {
     let text = context.string_cache.at(raw);
-    let mut canonical = String::with_capacity(text.len());
+    let mut canonical = ArenaString::with_capacity_in(text.len(), scratch);
     let mut index = 0;
     while index < text.len() {
         if let Some((c, length)) = decode(&text[index..], index == 0) {
@@ -292,7 +299,7 @@ pub(crate) fn identifier(
             index += c.len_utf8();
         }
     }
-    let id = context.string_cache.intern(canonical);
+    let id = context.string_cache.intern(&*canonical);
     let _ = context.canonical_identifiers.insert(raw, id);
     (PreprocessorTokenType::UniversalIdentifier, raw)
 }

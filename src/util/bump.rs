@@ -589,8 +589,20 @@ impl<'a> ArenaString<'a> {
         }
     }
 
+    /// An empty string with room for `capacity` bytes.
+    pub(crate) fn with_capacity_in(capacity: usize, arena: &'a Bump) -> Self {
+        Self {
+            bytes: ArenaVec::with_capacity_in(capacity, arena),
+        }
+    }
+
     pub(crate) fn push_str(&mut self, value: &str) {
         self.bytes.extend_from_slice(value.as_bytes());
+    }
+
+    /// Removes the contents, keeping the capacity for reuse.
+    pub(crate) fn clear(&mut self) {
+        self.bytes.clear();
     }
 
     pub(crate) fn push(&mut self, value: char) {
@@ -708,6 +720,14 @@ impl<'a, T> ArenaQueue<'a, T> {
 
     pub(crate) fn back_mut(&mut self) -> Option<&mut T> {
         self.data[self.read..].last_mut().and_then(Option::as_mut)
+    }
+
+    /// Removes and yields the items after the first `keep`, in order.
+    pub(crate) fn split_off(&mut self, keep: usize) -> impl Iterator<Item = T> + '_ {
+        let start = self.data.len().min(self.read + keep);
+        self.data
+            .drain(start..)
+            .map(|item| item.expect("unread queue item"))
     }
 
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {

@@ -186,6 +186,42 @@ impl<'tu> StringCache<'tu> {
         inner(self, s.as_ref())
     }
 
+    /// Interns the concatenation of `parts` without building it elsewhere
+    /// first: the parts are written at the end of the cache's buffer, and
+    /// taken back when an equal string is already interned.
+    pub(crate) fn intern_concat(&mut self, parts: &[&str]) -> StringCacheId {
+        let start = self.data.len();
+        for part in parts {
+            self.data.extend_from_slice(part.as_bytes());
+        }
+        let data = Self::bytes_str(&self.data);
+        let candidate = &data[start..];
+        let hash = FxBuildHasher.hash_one(candidate);
+        let ends = &self.ends;
+        let existing = self
+            .dedup
+            .find(hash, |id| candidate == Self::at_impl(data, ends, *id))
+            .copied();
+        if let Some(id) = existing {
+            self.data.truncate(start);
+            return id;
+        }
+        let end = u32::try_from(self.data.len())
+            .ok()
+            .filter(|&end| end < u32::MAX)
+            .expect("StringCache: string cache cannot store more than 4GB.");
+        self.ends.push(end);
+        let id = StringCacheId::from_u32(
+            u32::try_from(self.ends.len() - 1).expect("string cache index overflow"),
+        );
+        let data = Self::bytes_str(&self.data);
+        let ends = &self.ends;
+        _ = self.dedup.insert_unique(hash, id, |id| {
+            FxBuildHasher.hash_one(Self::at_impl(data, ends, *id))
+        });
+        id
+    }
+
     #[cfg_attr(
         not(test),
         expect(

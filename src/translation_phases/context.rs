@@ -38,6 +38,7 @@ use crate::{
         bump::{
             ArenaMap,
             ArenaQueue,
+            ArenaString,
             ArenaVec,
             Bump,
         },
@@ -323,13 +324,15 @@ impl<'tu> Context<'tu> {
         self.tu.alloc_str(text)
     }
 
-    pub(crate) fn diagnostic_slice<T: Copy>(&self, values: &[T]) -> &'tu mut [T] {
-        self.tu.alloc_slice_copy(values)
+    /// Formats diagnostic text straight into the translation-unit arena.
+    pub(crate) fn diagnostic_format(&self, arguments: std::fmt::Arguments<'_>) -> &'tu str {
+        let mut text = ArenaString::new_in(self.tu);
+        std::fmt::Write::write_fmt(&mut text, arguments).expect("arena formatting cannot fail");
+        text.into_str()
     }
 
-    pub(crate) fn diagnostic_paths(&self, paths: &[PathBuf]) -> &'tu [&'tu Path] {
-        self.tu
-            .alloc_slice_fill_iter(paths.iter().map(|path| Self::alloc_path(self.tu, path)))
+    pub(crate) fn diagnostic_slice<T: Copy>(&self, values: &[T]) -> &'tu mut [T] {
+        self.tu.alloc_slice_copy(values)
     }
 
     pub(crate) fn new(tu: &'tu Bump) -> Self {
@@ -466,6 +469,28 @@ impl<'tu> Context<'tu> {
         } else {
             String::from_utf8(self.literal_bytes(id)).ok()
         }
+    }
+
+    /// Like [`Self::literal_text`], spelled in `arena`.
+    pub(crate) fn literal_text_in<'a>(
+        &self,
+        arena: &'a Bump,
+        id: LiteralId,
+        wide: bool,
+    ) -> Option<&'a str> {
+        let mut text = ArenaVec::new_in(arena);
+        for unit in self.literal_units(id) {
+            let character = match *unit {
+                | LiteralUnit::Character(c) => c,
+                | LiteralUnit::Numeric(code) if wide => char::from_u32(code)?,
+                | LiteralUnit::Numeric(code) => {
+                    text.push(u8::try_from(code).expect("narrow escape checked during decoding"));
+                    continue;
+                },
+            };
+            text.extend_from_slice(character.encode_utf8(&mut [0; 4]).as_bytes());
+        }
+        std::str::from_utf8(text.leak()).ok()
     }
 
     pub(crate) fn literal_spelling(&self, id: LiteralId, wide: bool) -> String {
@@ -848,9 +873,20 @@ impl<'tu> Context<'tu> {
         self.pending_errors.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError<'tu>> {
         self.relocated_errors = 0;
         std::iter::from_fn(|| self.pending_errors.pop_front()).collect()
+    }
+
+    /// Removes and yields the pending errors after the first `keep`, in
+    /// order.
+    pub(crate) fn split_off_pending_errors(
+        &mut self,
+        keep: usize,
+    ) -> impl Iterator<Item = TranslationError<'tu>> + '_ {
+        self.relocated_errors = self.relocated_errors.min(keep);
+        self.pending_errors.split_off(keep)
     }
 
     pub(crate) fn append_pending_errors(
@@ -883,11 +919,11 @@ impl<'tu> Context<'tu> {
     /// Registers synthetic source text under a fresh identity, even when
     /// `path` names an earlier input, so diagnostics retained from each
     /// input keep quoting their own text.
-    pub(crate) fn add_synthetic_source_file(&mut self, path: &Path, text: &str) -> u32 {
+    pub(crate) fn add_synthetic_source_file(&mut self, path: &Path, text: &'tu str) -> u32 {
         let index = self
             .source_files
             .push_unindexed(Self::alloc_path(self.tu, path));
-        self.record_source_text(index, text);
+        self.record_arena_source_text(index, text);
         index
     }
 
@@ -904,12 +940,25 @@ impl<'tu> Context<'tu> {
             .alloc_slice_fill_iter(system.iter().map(|path| Self::alloc_path(self.tu, path)));
     }
 
-    pub(crate) fn quote_include_directories(&self) -> &[&Path] {
-        self.quote_include_directories
-    }
-
-    pub(crate) fn system_include_directories(&self) -> &[&Path] {
-        self.system_include_directories
+    /// The directories searched for a header named in a file, in order: for
+    /// a `"…"` name the including file's directory and the quote
+    /// directories, then for both forms the system directories.
+    pub(crate) fn include_search_directories(
+        &self,
+        including_file: u32,
+        is_system_header: bool,
+    ) -> impl Iterator<Item = &'tu Path> + Clone + use<'tu> {
+        let including_file: &'tu Path = self.source_files[including_file];
+        let quote_directories: &'tu [&'tu Path] = self.quote_include_directories;
+        let system_directories: &'tu [&'tu Path] = self.system_include_directories;
+        let quote = (!is_system_header).then(|| {
+            let directory = including_file.parent().unwrap_or_else(|| Path::new(""));
+            std::iter::once(directory).chain(quote_directories.iter().copied())
+        });
+        quote
+            .into_iter()
+            .flatten()
+            .chain(system_directories.iter().copied())
     }
 
     fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {

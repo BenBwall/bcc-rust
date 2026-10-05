@@ -567,9 +567,11 @@ impl<'tu> TypeSpecifiers<'tu> {
     ) {
         let tagged = |keyword: &str, tag: Option<Identifier>| -> &'c str {
             match tag {
-                | Some(tag) => context
-                    .diagnostic_text(&format!("{keyword} {}", context.string_cache.at(tag.name))),
-                | None => context.diagnostic_text(&format!("{keyword} {{...}}")),
+                | Some(tag) => context.diagnostic_format(format_args!(
+                    "{keyword} {}",
+                    context.string_cache.at(tag.name)
+                )),
+                | None => context.diagnostic_format(format_args!("{keyword} {{...}}")),
             }
         };
         let existing = match self {
@@ -584,7 +586,7 @@ impl<'tu> TypeSpecifiers<'tu> {
             | TypeSpecifiers::Enum(index) => tagged("enum", index.name),
             | TypeSpecifiers::TypedefName(name) =>
                 context.diagnostic_text(context.string_cache.at(name.name)),
-            | type_specifiers => context.diagnostic_text(&type_specifiers.to_string()),
+            | type_specifiers => context.diagnostic_format(format_args!("{type_specifiers}")),
         };
         let error_type = ParserErrorType::ConflictingTypeSpecifiers {
             existing,

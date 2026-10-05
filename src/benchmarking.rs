@@ -196,7 +196,8 @@ pub fn lex(input: BenchmarkInput) -> usize {
     let mut context = Context::new(&tu);
     let file = context.intern_source_file(Path::new("<input>"));
     let pp = Bump::new();
-    let mut tokens = TokenSource::new(&mut context, &pp, file, input.source());
+    let mut scratch = Bump::new();
+    let mut tokens = TokenSource::new(&mut context, &pp, &mut scratch, file, input.source());
     let mut count = 0;
     while tokens.next_item(&mut context).is_some() {
         count += 1;
@@ -331,7 +332,7 @@ pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
     );
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
-        diagnostics:           context.take_pending_errors().len(),
+        diagnostics:           context.pending_error_count(),
     }
 }
 
@@ -389,7 +390,7 @@ impl PreparedParse<'_, '_, '_> {
         let unit = parse_with_arena(self.preprocessed, self.context, self.parse);
         ParseBenchmarkSummary {
             external_declarations: unit.external_declarations().len(),
-            diagnostics:           self.context.take_pending_errors().len(),
+            diagnostics:           self.context.pending_error_count(),
         }
     }
 }

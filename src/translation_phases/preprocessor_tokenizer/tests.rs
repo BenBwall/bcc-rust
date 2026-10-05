@@ -74,7 +74,13 @@ fn walk(source: &str, steps: &[Step]) -> Vec<String> {
     // Lexing takes the rest of its arena, so it gets one of its own, as in
     // the preprocessor.
     let pp = crate::util::bump::Bump::new();
-    let mut tokens = TokenSource::new(&mut context, &pp, file, &source);
+    let mut tokens = TokenSource::new(
+        &mut context,
+        &pp,
+        &mut crate::util::bump::Bump::new(),
+        file,
+        &source,
+    );
     let mut saved: Vec<SourcePosition> = Vec::new();
     let mut events = Vec::new();
     let read =
@@ -510,7 +516,13 @@ fn physically_empty_source_has_no_missing_final_newline() {
     let source = SharedString::from(String::new());
     context.record_source_text(file, &source);
     let pp = crate::util::bump::Bump::new();
-    let mut tokens = TokenSource::new(&mut context, &pp, file, &source);
+    let mut tokens = TokenSource::new(
+        &mut context,
+        &pp,
+        &mut crate::util::bump::Bump::new(),
+        file,
+        &source,
+    );
     assert!(tokens.next_item(&mut context).is_none(), "");
     assert!(context.take_pending_errors().is_empty(), "");
     snapshot.walk("", &[]);
@@ -553,7 +565,13 @@ fn unterminated_block_comments_report_the_actual_opener() {
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
         let pp = crate::util::bump::Bump::new();
-        let mut tokens = TokenSource::new(&mut context, &pp, file, &text);
+        let mut tokens = TokenSource::new(
+            &mut context,
+            &pp,
+            &mut crate::util::bump::Bump::new(),
+            file,
+            &text,
+        );
         let mut spellings = Vec::new();
         while let Some(token) = tokens.next_item(&mut context) {
             spellings.push(context.string_cache.at(token.contents).to_owned());
@@ -608,7 +626,13 @@ fn terminal_spliced_newlines_report_the_actual_last_splice() {
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
         let pp = crate::util::bump::Bump::new();
-        let mut tokens = TokenSource::new(&mut context, &pp, file, &text);
+        let mut tokens = TokenSource::new(
+            &mut context,
+            &pp,
+            &mut crate::util::bump::Bump::new(),
+            file,
+            &text,
+        );
         while tokens.next_item(&mut context).is_some() {}
         let errors = context.take_pending_errors();
         assert_eq!(errors.len(), 1, "{source:?}: {errors:#?}");
@@ -659,7 +683,13 @@ fn terminal_splice_warning_is_deferred_until_the_tail_is_read() {
     let text = SharedString::from("\n\\\n".to_owned());
     context.record_source_text(file, &text);
     let pp = crate::util::bump::Bump::new();
-    let mut tokens = TokenSource::new(&mut context, &pp, file, &text);
+    let mut tokens = TokenSource::new(
+        &mut context,
+        &pp,
+        &mut crate::util::bump::Bump::new(),
+        file,
+        &text,
+    );
     assert!(context.take_pending_errors().is_empty());
     let first = tokens.next_item(&mut context).unwrap();
     assert_eq!(context.string_cache.at(first.contents), "\n");
@@ -678,7 +708,13 @@ fn cloned_terminal_splice_cursors_keep_independent_warning_state() {
         let text = SharedString::from(source.to_owned());
         context.record_source_text(file, &text);
         let pp = crate::util::bump::Bump::new();
-        let mut original = TokenSource::new(&mut context, &pp, file, &text);
+        let mut original = TokenSource::new(
+            &mut context,
+            &pp,
+            &mut crate::util::bump::Bump::new(),
+            file,
+            &text,
+        );
         let mut cloned = original.clone();
         while original.next_item(&mut context).is_some() {}
         assert_eq!(context.take_pending_errors().len(), 1);
@@ -714,7 +750,13 @@ fn persisted_sources_resume_where_their_cursor_stood() {
 
     // A file lexed elsewhere is copied with its reading state.
     let scratch = crate::util::bump::Bump::new();
-    let mut temporary = TokenSource::new(&mut context, &scratch, file, text);
+    let mut temporary = TokenSource::new(
+        &mut context,
+        &scratch,
+        &mut crate::util::bump::Bump::new(),
+        file,
+        text,
+    );
     assert!(temporary.next_item(&mut context).is_some());
     let mut persisted = files.persist(&temporary);
     assert_ne!(persisted, temporary);
@@ -732,7 +774,13 @@ fn lexed_files_grow_in_place_and_keep_exact_storage() {
     // One entry per byte, three times the up-front estimate.
     let text = "a+b;\n".repeat(4096);
     let pp = crate::util::bump::Bump::new();
-    let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
+    let lexed = super::batch::LexedFile::lex(
+        &mut context,
+        &pp,
+        &mut crate::util::bump::Bump::new(),
+        file,
+        &text,
+    );
     assert_eq!(lexed.len(), text.len());
     // Exactly the 17-byte packed entries: growing left no copies behind,
     // and the unused capacity went back to the arena.
@@ -749,7 +797,13 @@ fn lexing_commits_the_entries_written_not_a_capacity() {
     // Over five mebibytes of entries, far past any one commit step.
     let text = "a+b;\n".repeat(64 * 1024);
     let pp = crate::util::bump::Bump::new();
-    let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
+    let lexed = super::batch::LexedFile::lex(
+        &mut context,
+        &pp,
+        &mut crate::util::bump::Bump::new(),
+        file,
+        &text,
+    );
     assert_eq!(lexed.len(), text.len());
     assert_eq!(pp.used(), 17 * text.len());
     assert_eq!(pp.high_water(), pp.used());
