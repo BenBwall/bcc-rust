@@ -229,6 +229,51 @@ mod tests {
         totals
     }
 
+    /// The counter sees an allocation made through the global allocator, so a
+    /// count of zero means none was made.
+    #[test]
+    fn counting_sees_global_allocations() {
+        let (calls, bytes) = count(false, || drop(std::hint::black_box(Box::new(7_u64))));
+        assert_eq!((calls, bytes), (1, 8));
+    }
+
+    /// Building, folding, ordering, and rendering every golden diagnostic,
+    /// as the CLI reports them, allocates only in arenas.
+    #[test]
+    fn reporting_golden_diagnostics_makes_no_global_allocations() {
+        let mut failures = Vec::new();
+        for fixture in golden_fixtures() {
+            // Room for the whole report, so writing it does not allocate.
+            let mut stderr = Vec::with_capacity(1 << 20);
+            let mut totals = (0, 0);
+            bcc_rust::compile_file_measured(&fixture, &mut stderr, |step, run| {
+                if step == CompileStep::Report {
+                    totals = count(sites_requested(), run);
+                } else {
+                    run();
+                }
+            })
+            .unwrap_or_else(|error| panic!("{}: {error}", fixture.display()));
+            assert!(!stderr.is_empty(), "{} reported nothing", fixture.display());
+            let (calls, bytes) = totals;
+            if calls != 0 {
+                failures.push(format!(
+                    "{}: {calls} global allocations, {bytes} bytes",
+                    fixture.display()
+                ));
+            }
+        }
+        for (site, (calls, _)) in take_sites() {
+            println!("{calls:>6}  {site}");
+        }
+        assert!(
+            failures.is_empty(),
+            "reporting diagnostics allocated outside the arenas; rerun with \
+             BCC_ALLOCATION_SITES=1 and --nocapture to print their sites:\n{}",
+            failures.join("\n")
+        );
+    }
+
     /// Prints where global allocations come from, per compile step, when
     /// `BCC_ALLOCATION_SITES=1`; otherwise does nothing.
     #[test]
