@@ -68,6 +68,9 @@ This is not yet a production-ready or conforming C99 compiler.
   the C helper. For MSVC, the Visual Studio C headers and SDK are required.
 - On Linux, the target's static C runtime development libraries.
 - Nightly Rustfmt for the repository's unstable formatting options.
+- A 64-bit host and target. Every arena and growable compiler buffer
+  reserves 100 GiB of address space, which costs no memory until it is
+  written, so 32-bit targets are not supported.
 
 ## Source submodules
 
@@ -112,9 +115,15 @@ Run checks from the repository root:
 ```sh
 cargo build
 cargo test --all-targets
+cargo test --features benchmarking-internals --test allocation_count
 cargo +nightly fmt --check
 cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --features benchmarking-internals -- -D warnings
 ```
+
+With `benchmarking-internals`, the `allocation_count` test asserts that
+compiling a translation unit allocates nothing from the global allocator;
+[its module documentation](tests/allocation_count.rs) lists what it covers.
 
 Cargo explicitly targets the host so build scripts and proc macros do not
 receive the executable's LTO flags. Artifacts are consequently under
@@ -224,13 +233,34 @@ between the string literal's quotes. It reports `'`, `//` and `/*` in either
 form, and `\` or `"` in the `<…>` form, which C99 §6.4.7p3 leaves undefined,
 as well as a missing closing delimiter. A `\` in a `"…"` name is accepted as a
 path character, an extension that the configured extension policy can turn
-into a warning or an error.
+into a warning or an error. While the extension is accepted, a quoted name
+ends at its first `"`: `#include "dir\"` names `dir\`, and the lexer's
+unterminated-string error for that operand is withdrawn.
+
+Compilation takes its memory from arenas built directly on the operating
+system's virtual memory, each dropped when its lifetime ends. The
+translation-unit arena keeps source text, interned strings, diagnostics, and
+the syntax tree; the preprocessing arena keeps lexed files and macros until
+preprocessing ends; an expansion arena is reset between top-level macro
+expansions; and the parse arena keeps the parser's frames and scopes until
+parsing ends. The token array, source provenance, string cache, parsed roots,
+and file-scope typedef set each grow in place in a region of their own.
+Every region reserves its address space when first used and commits memory
+only as far as it is written. Compiler code allocates from nothing else:
+the `disallowed-types`, `disallowed-macros`, and `disallowed-methods` lists
+in [`.clippy.toml`](.clippy.toml) reject global-allocator types and calls,
+and the `allocation_count` test checks it at run time. The
+[glossary](GLOSSARY.md#storage-and-lifetimes) defines each lifetime.
 
 The lexer's byte-class scans use `std::simd` when the nightly-only
 `portable-simd` feature is enabled and scalar loops otherwise. Criterion
 benchmarks measure the lexer, the preprocessor, and the full pipeline over
-generated plain, mixed, and macro-heavy inputs, and a second harness reports
-peak heap use.
+generated plain, mixed, and macro-heavy inputs. The `memory` harness runs
+each input and phase range (1-3, 1-6, 1-7) in a fresh process and reports
+the operating system's peak commit and peak working set (peak resident
+memory on Unix, where peak commit is unavailable). It then reports each
+arena's high-water mark and the peak region count, reserved address space,
+and arena commit.
 
 The `Parser only` group measures phase 7 with preprocessing in untimed setup.
 It also includes expression-heavy and declaration-heavy inputs to exercise
@@ -248,15 +278,16 @@ cargo +nightly bench --features benchmarking-internals,portable-simd --bench mem
 Record the commit, toolchain, input, and feature set for each baseline. On a noisy shared machine, compare at least seven interleaved
 runs and report their minimum alongside Criterion estimates. Separate full
 pipeline time from `Parser only` time; preprocessing changes can otherwise look
-like parser improvements. Track peak heap use, source-vector growth, and driver
-steps per token when changing provenance or frame scheduling.
+like parser improvements. Track peak commit and peak working set from the
+`memory` harness, the arena high-water marks, source-vector growth, and driver
+steps per token when changing storage, provenance, or frame scheduling.
 
 Keep syntax trees, diagnostics, recovery, and ordered source provenance
 equivalent. Exercise macro/include locations, malformed-input continuation,
 deep nesting, and resource boundaries; never weaken limits or drop provenance
 to make a benchmark pass. Keep temporary counters out of production changes.
-Run the canonical checks plus
-`cargo clippy --lib --bench bench --features benchmarking-internals -- -D warnings`.
+Run the checks listed under [Build, test, and inspect](#build-test-and-inspect),
+including both `benchmarking-internals` commands.
 
 The binary built with `benchmarking-internals` runs a preprocessing workload
 instead of the normal CLI. Its Unix `coz` progress point measures preprocessing,
@@ -312,17 +343,20 @@ before a real cleanup; only local branches are deleted. Run its tests with
 | [`src/translation_phases/initial_processing.rs`](src/translation_phases/initial_processing.rs) | Defines the diagnostics of translation phases 1 and 2: a missing or escaped final newline. |
 | [`src/translation_phases/preprocessor_tokenizer.rs`](src/translation_phases/preprocessor_tokenizer.rs) and [`preprocessor_tokenizer/`](src/translation_phases/preprocessor_tokenizer/) | Lexes each source buffer completely when it is opened (phases 1-3: trigraphs, line splices, comments, and preprocessing tokens) and replays its tokens to preprocessing, retaining source provenance. |
 | [`src/translation_phases/preprocessing.rs`](src/translation_phases/preprocessing.rs) and [`preprocessing/`](src/translation_phases/preprocessing/) | Handles macros, directives, includes, conditional preprocessing, literals, and conversion to parser-facing tokens. It owns the preprocessor-expression evaluator and its values and diagnostics; each concern has its own submodule. |
-| [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) and [`parsing/`](src/translation_phases/parsing/) | Contains the explicit parser driver; declaration, function-definition, statement, expression, type-name, initializer, declarator, and tag frames (one submodule per frame); syntax nodes and scopes; and parser diagnostics. |
+| [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) and [`parsing/`](src/translation_phases/parsing/) | Contains the explicit parser driver; declaration, function-definition, statement, expression, type-name, initializer, declarator, and tag frames (one submodule per frame); syntax nodes, which live in the translation-unit arena; scopes; and parser diagnostics. |
 | [`src/translation_phases.rs`](src/translation_phases.rs) | Defines the shared translation-phase interface and diagnostic plumbing; [`context.rs`](src/translation_phases/context.rs) and [`provenance.rs`](src/translation_phases/provenance.rs) hold the compilation context and source provenance. |
-| [`src/util/`](src/util/) | Provides project-specific arenas, interned strings, shared storage, and vector slices. |
+| [`src/util/`](src/util/) | Provides the virtual-memory regions, the arena allocator and its vectors, strings, queues, and lists, the per-compilation region vector and bit set, interned strings, and the lexer's byte scans. |
 | [`src/diagnostics.rs`](src/diagnostics.rs) | Builds diagnostics (message, labelled source ranges, notes, help) and renders them as annotated source snippets. Each phase's error type explains itself through a `ToDiagnostic` implementation. |
-| [`src/lib.rs`](src/lib.rs), [`src/cli.rs`](src/cli.rs), and [`src/pipeline.rs`](src/pipeline.rs) | Wire the inspection CLI to the parser by default and to the token dump with `--tokens`, and report diagnostics. |
+| [`src/lib.rs`](src/lib.rs), [`src/cli.rs`](src/cli.rs), and [`src/pipeline.rs`](src/pipeline.rs) | Wire the inspection CLI to the parser by default and to the token dump with `--tokens`, create each phase's arenas in order, and report diagnostics. |
 
 ## Parser direction
 
 The language parser uses one explicit control stack of specialized, resumable
-frames. `Parser` owns the buffered cursor, frame stack, typed child result,
-syntax-node count, scope and label state, recovery state, and resource ceilings.
+frames. `Parser` borrows the translation context and owns the token cursor,
+frame stack, typed child result, syntax-node count, scope and label state,
+recovery state, and resource ceilings. Its working state lives in the parse
+arena; the syntax nodes it builds are immutable and live in the
+translation-unit arena.
 
 `ExpressionFrame` owns Double-E-style operator/operand reduction alongside
 `TypeNameFrame` and `InitializerFrame`, and all supported statement and
@@ -351,6 +385,7 @@ grammar ownership, supported behavior, and evidence.
 - [`c99-parser-compliance-checklist.md`](c99-parser-compliance-checklist.md) — C99 grammar, ownership, and regression evidence.
 - [`tests/fixtures/diagnostics/COVERAGE.md`](tests/fixtures/diagnostics/COVERAGE.md) — diagnostic golden corpus, review criteria, and remaining output issues.
 - [`.agents/AGENTS.md`](.agents/AGENTS.md) — compact operational guidance for coding agents; `.claude/CLAUDE.md` imports the same file.
+- [`scripts/agentbus/README.md`](scripts/agentbus/README.md) — agentbus, the Rust crate that lets coding agents working in this repository coordinate.
 - [The Double-E Method](https://erikeidt.github.io/The-Double-E-Method.html) — background for the expression reducer. Use the algorithm description as a conceptual reference; verify source licensing before copying any reference implementation.
 
 ## License
