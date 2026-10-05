@@ -21,6 +21,7 @@ use clap::{
     ColorChoice,
     Parser,
 };
+use rustc_hash::FxBuildHasher;
 use thiserror::Error;
 
 use crate::{
@@ -55,9 +56,10 @@ use crate::{
             TokenType,
         },
     },
-    util::{
-        HashMap,
-        bump::Bump,
+    util::bump::{
+        ArenaMap,
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -199,7 +201,12 @@ fn print_preprocessor_output<'tu>(
     quote_include: &[PathBuf],
     system_include: &[PathBuf],
 ) {
-    let mut reporter = DiagnosticReporter::new(context.tu_arena(), RenderColor::for_stderr());
+    let reporter_arena = Bump::new();
+    let mut reporter = DiagnosticReporter::new(
+        &reporter_arena,
+        context.tu_arena(),
+        RenderColor::for_stderr(),
+    );
     let stderr = &mut io::stderr();
     let items = with_preprocessor(
         context,
@@ -303,7 +310,12 @@ fn print_parser_output<'tu>(
         quote_include,
         system_include,
     );
-    let mut reporter = DiagnosticReporter::new(context.tu_arena(), RenderColor::for_stderr());
+    let reporter_arena = Bump::new();
+    let mut reporter = DiagnosticReporter::new(
+        &reporter_arena,
+        context.tu_arena(),
+        RenderColor::for_stderr(),
+    );
     let stderr = &mut io::stderr();
     expect_stderr(reporter.report_pending(context, stderr));
 
@@ -356,7 +368,8 @@ pub fn compile_file_measured(
     });
     let mut result = Ok(());
     measure(CompileStep::Report, &mut || {
-        let mut reporter = DiagnosticReporter::new(&tu, RenderColor::Plain);
+        let reporter_arena = Bump::new();
+        let mut reporter = DiagnosticReporter::new(&reporter_arena, &tu, RenderColor::Plain);
         result = reporter
             .report_pending(&mut context, out)
             .and_then(|()| reporter.finish(&context, out));
@@ -393,27 +406,34 @@ fn render_raw_syntax(unit: &ParsedTranslationUnit<'_>) -> String {
 /// them, otherwise into a lexing or preprocessing error at that place; a
 /// preprocessing error into the preprocessing error just before it. The
 /// parser and the preprocessor are considered separately.
-struct DiagnosticReporter<'tu> {
-    /// Pending diagnostics are built here and live until they are flushed.
+///
+/// Pending diagnostics are built in the translation-unit arena (`'tu`). The
+/// pending list, the folding map, and the locations live in the reporter's
+/// own arena (`'r`), created with the reporter for the whole compilation.
+struct DiagnosticReporter<'r, 'tu> {
+    arena:        &'r Bump,
     diagnostics:  &'tu Bump,
     renderer:     Renderer,
-    pending:      Vec<PendingDiagnostic<'tu>>,
+    pending:      ArenaVec<'r, PendingDiagnostic<'r, 'tu>>,
     /// The parser diagnostic reported last: where it was folded or stored,
     /// and the input the parser had consumed by then.
     last_parser:  Option<(usize, usize)>,
     /// Where the preprocessing diagnostic reported last was folded or stored.
     last_other:   Option<usize>,
     /// The latest pending preprocessing error at each location.
-    other_errors: HashMap<Vec<SourceVector>, usize>,
+    other_errors: ArenaMap<'r, &'r [SourceVector], usize>,
     errors:       usize,
     warnings:     usize,
 }
 
 /// One diagnostic awaiting rendering, with any later errors folded in.
-struct PendingDiagnostic<'tu> {
+struct PendingDiagnostic<'r, 'tu> {
     diagnostic: Diagnostic<'tu>,
-    location: Vec<SourceVector>,
+    location: &'r [SourceVector],
     ordering_location: Option<(u32, u32)>,
+    /// Its place among the pending diagnostics when it was reported, which
+    /// keeps the order of diagnostics at one location stable.
+    sequence: usize,
     /// Whether errors at the same place may be folded into this one.
     foldable: bool,
     /// An unclosed angle header and an empty translation unit remain two
@@ -421,7 +441,7 @@ struct PendingDiagnostic<'tu> {
     preserve_empty_translation_unit: bool,
 }
 
-impl PendingDiagnostic<'_> {
+impl PendingDiagnostic<'_, '_> {
     fn absorbs(&self, location: &[SourceVector]) -> bool {
         self.foldable
             && self.diagnostic.severity == ErrorSeverity::Error
@@ -429,15 +449,16 @@ impl PendingDiagnostic<'_> {
     }
 }
 
-impl<'tu> DiagnosticReporter<'tu> {
-    fn new(diagnostics: &'tu Bump, color: RenderColor) -> Self {
+impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
+    fn new(arena: &'r Bump, diagnostics: &'tu Bump, color: RenderColor) -> Self {
         Self {
+            arena,
             diagnostics,
             renderer: Renderer::new(color),
-            pending: Vec::new(),
+            pending: ArenaVec::new_in(arena),
             last_parser: None,
             last_other: None,
-            other_errors: HashMap::default(),
+            other_errors: ArenaMap::with_hasher_in(FxBuildHasher, arena),
             errors: 0,
             warnings: 0,
         }
@@ -446,7 +467,7 @@ impl<'tu> DiagnosticReporter<'tu> {
     fn report(&mut self, error: &TranslationError<'_>, context: &mut Context<'_>) {
         let source = error.source_vectors(context);
         let diagnostic = error.diagnostic_in(context, source, self.diagnostics);
-        let location = context.get_source_vectors(source).to_vec();
+        let location = context.get_source_vectors(source);
         let ordering_location = match error {
             | TranslationError::Parsing(error) => error.ordering_location,
             // Preprocessing errors may still point into a macro definition.
@@ -466,19 +487,19 @@ impl<'tu> DiagnosticReporter<'tu> {
                 if parser {
                     self.last_parser
                         .filter(|&(index, last_consumed)| {
-                            last_consumed == consumed && self.pending[index].absorbs(&location)
+                            last_consumed == consumed && self.pending[index].absorbs(location)
                         })
                         .map(|(index, _)| index)
                         .or_else(|| {
-                            self.other_errors.get(&location).copied().filter(|&index| {
-                                self.pending[index].absorbs(&location)
+                            self.other_errors.get(location).copied().filter(|&index| {
+                                self.pending[index].absorbs(location)
                                     && !(empty_translation_unit
                                         && self.pending[index].preserve_empty_translation_unit)
                             })
                         })
                 } else {
                     self.last_other
-                        .filter(|&index| self.pending[index].absorbs(&location))
+                        .filter(|&index| self.pending[index].absorbs(location))
                 }
             } else {
                 None
@@ -487,15 +508,16 @@ impl<'tu> DiagnosticReporter<'tu> {
             self.pending[index].diagnostic.absorb(diagnostic, context);
             index
         } else {
+            let location: &'r [SourceVector] =
+                self.arena.alloc_slice_fill_iter(location.iter().cloned());
             if !parser && diagnostic.severity == ErrorSeverity::Error && !location.is_empty() {
-                _ = self
-                    .other_errors
-                    .insert(location.clone(), self.pending.len());
+                _ = self.other_errors.insert(location, self.pending.len());
             }
             self.pending.push(PendingDiagnostic {
                 diagnostic,
                 location,
                 ordering_location,
+                sequence: self.pending.len(),
                 foldable,
                 preserve_empty_translation_unit: matches!(
                     error,
@@ -532,7 +554,11 @@ impl<'tu> DiagnosticReporter<'tu> {
                 && left.ordering_location.map(|(file, _)| file)
                     == right.ordering_location.map(|(file, _)| file)
         }) {
-            run.sort_by_key(|diagnostic| diagnostic.ordering_location);
+            // Diagnostics at one location keep the order they were reported
+            // in. An unstable sort with that tiebreak needs no buffer.
+            run.sort_unstable_by_key(|diagnostic| {
+                (diagnostic.ordering_location, diagnostic.sequence)
+            });
         }
         self.last_parser = None;
         self.last_other = None;
@@ -556,14 +582,13 @@ impl<'tu> DiagnosticReporter<'tu> {
 
     fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
         self.flush(context, out)?;
-        let counts: Vec<String> = [(self.errors, "error"), (self.warnings, "warning")]
-            .into_iter()
-            .filter(|&(count, _)| count > 0)
-            .map(|(count, noun)| count_of(count, noun).to_string())
-            .collect();
-        if !counts.is_empty() {
-            writeln!(out, "{} generated.", counts.join(" and "))?;
+        let errors = count_of(self.errors, "error");
+        let warnings = count_of(self.warnings, "warning");
+        match (self.errors, self.warnings) {
+            | (0, 0) => Ok(()),
+            | (_, 0) => writeln!(out, "{errors} generated."),
+            | (0, _) => writeln!(out, "{warnings} generated."),
+            | _ => writeln!(out, "{errors} and {warnings} generated."),
         }
-        Ok(())
     }
 }
