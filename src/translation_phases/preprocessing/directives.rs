@@ -1286,6 +1286,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         self.current_is_newline = true;
     }
 
+    /// Ends a macro definition; a name that is not a macro is ignored.
+    ///
+    /// C99: §6.10.3.5 paragraph 2, p. 155; PDF p. 167. `#undef` of a
+    /// predefined name, which §6.10.8 paragraph 4, p. 161; PDF p. 173
+    /// forbids, is diagnosed and leaves the name defined, as a redefinition
+    /// does.
     fn parse_undef_directive(&mut self, _directive: PreprocessorToken) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
@@ -1302,10 +1308,23 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             self.skip_until_newline();
             return;
         };
-        _ = self
-            .state
-            .macro_definitions
-            .remove(&name.identifier_id(self.context));
+        let name_id = name.identifier_id(self.context);
+        if matches!(
+            self.state.macro_definitions.get(&name_id),
+            Some(MacroDefinition::BuiltIn)
+        ) {
+            // C99 §6.10.8p4: predefined macro names cannot be undefined, so
+            // the built-in definition stays in effect.
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::UndefinitionOfBuiltInMacro(
+                    self.context
+                        .diagnostic_text(self.context.string_cache.at(name.contents)),
+                ),
+                source_vectors: name.source_vectors,
+            });
+        } else {
+            _ = self.state.macro_definitions.remove(&name_id);
+        }
         if self
             .expect_token_from_previous_phase::<true>(
                 |_, t| t.kind == PreprocessorTokenType::Newline,

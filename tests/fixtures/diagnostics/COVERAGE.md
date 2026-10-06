@@ -58,7 +58,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **225 C inputs and 225 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **130/136 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
+There are **226 C inputs and 226 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **131/137 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -164,6 +164,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `ExpectedIdentifierInIfndefDirective` | rendered | [pp-expected-identifier-in-ifndef-directive.c](pp-expected-identifier-in-ifndef-directive.c) |
 | `ExpectedIdentifierInDefineDirective` | rendered | [pp-expected-identifier-in-define-directive.c](pp-expected-identifier-in-define-directive.c) |
 | `RedefinitionOfBuiltInMacro` | rendered | [pp-redefinition-of-built-in-macro.c](pp-redefinition-of-built-in-macro.c) |
+| `UndefinitionOfBuiltInMacro` | rendered | [pp-undefinition-of-built-in-macro.c](pp-undefinition-of-built-in-macro.c) |
 | `UndefinedIdentifierInPreprocessorExpression` | rendered | [pp-undefined-identifier-in-preprocessor-expression.c](pp-undefined-identifier-in-preprocessor-expression.c) |
 | `ExpectedIncludeStringOrAngleBracketString` | rendered | [pp-expected-include-string-or-angle-bracket-string.c](pp-expected-include-string-or-angle-bracket-string.c) |
 | `InvalidCharacterInHeaderName` | rendered | [pp-invalid-character-in-header-name.c](pp-invalid-character-in-header-name.c) |

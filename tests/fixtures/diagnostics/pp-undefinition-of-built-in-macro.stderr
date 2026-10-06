@@ -1,0 +1,9 @@
+warning: cannot undefine predefined macro `__LINE__`
+ --> pp-undefinition-of-built-in-macro.c:1:8
+  |
+1 | #undef __LINE__
+  |        ^^^^^^^^ predefined by the implementation
+  |
+  = note: C99 §6.10.8p4: predefined macro names shall not be undefined
+
+1 warning generated.

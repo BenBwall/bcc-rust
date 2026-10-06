@@ -904,3 +904,38 @@ fn wide_line_file_name_is_diagnosed_and_ignored() {
         });
     }
 }
+
+#[test]
+fn undefining_a_predefined_macro_is_diagnosed_and_keeps_it() {
+    // C99 §6.10.8p4: predefined macro names cannot be undefined.
+    for name in ["__LINE__", "__FILE__", "__STDC__", "__STDC_VERSION__"] {
+        let source = format!("#undef {name}\n#ifdef {name}\nkept\n#endif\n");
+        with_directive_tokens(&source, |tokens, context| {
+            assert_eq!(
+                tokens
+                    .iter()
+                    .map(|token| context.string_cache.at(token.contents))
+                    .collect::<Vec<_>>(),
+                ["kept"],
+                "{name}"
+            );
+            let errors = context.take_pending_errors();
+            let [TranslationError::Preprocessing(error)] = errors.as_slice() else {
+                panic!("{name}: {errors:#?}");
+            };
+            assert!(
+                matches!(
+                    error.error_type,
+                    PreprocessorErrorType::UndefinitionOfBuiltInMacro(undefined)
+                        if undefined == name
+                ),
+                "{name}: {error:#?}"
+            );
+            assert_eq!(error.severity(), ErrorSeverity::Warning);
+        });
+    }
+    with_directive_tokens("#define M 1\n#undef M\nM\n", |tokens, context| {
+        assert_eq!(context.string_cache.at(tokens[0].contents), "M");
+        assert!(context.take_pending_errors().is_empty());
+    });
+}

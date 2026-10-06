@@ -222,6 +222,7 @@ impl GetSeverity for PreprocessorError<'_> {
                     | ExtensionPolicy::Deny => ErrorSeverity::Error,
                 },
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
+            | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
             | PreprocessorErrorType::FloatConstantOutOfRange { .. }
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -342,6 +343,11 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
     ExpectedIdentifierInDefineDirective(PreprocessorTokenType),
     RedefinitionOfBuiltInMacro(&'tu str),
+    /// `#undef` of a predefined macro name, which stays defined.
+    ///
+    /// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173. The rule is not a
+    /// constraint, so this is a warning, like a redefinition.
+    UndefinitionOfBuiltInMacro(&'tu str),
     UndefinedIdentifierInPreprocessorExpression(&'tu str),
     ExpectedIncludeStringOrAngleBracketString(PreprocessorTokenType),
     /// A header name containing one of the sequences C99 §6.4.7p3 leaves
@@ -786,6 +792,12 @@ impl PreprocessorErrorType<'_> {
             ))
             .label("predefined by the implementation")
             .note("C99 §6.10.8p4: predefined macro names shall not be redefined"),
+            | Self::UndefinitionOfBuiltInMacro(name) => new(format_in!(
+                arena,
+                "cannot undefine predefined macro `{name}`"
+            ))
+            .label("predefined by the implementation")
+            .note("C99 §6.10.8p4: predefined macro names shall not be undefined"),
             | Self::UndefinedIdentifierInPreprocessorExpression(name) => new(format_in!(
                 arena,
                 "`{name}` is not defined; it evaluates to 0"
