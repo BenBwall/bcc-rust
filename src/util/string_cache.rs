@@ -62,7 +62,7 @@ impl Clone for StringCache<'_> {
 impl Display for StringCache<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "StringCache:")?;
-        for i in 1u32.. {
+        for i in 1..=u32::MAX {
             if let Some(s) = self.get(i) {
                 writeln!(f, "\t{i}: {s}")?;
             } else {
@@ -135,21 +135,21 @@ impl<'tu> StringCache<'tu> {
         }
     }
 
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "We're checking that we're inbounds before casting."
-    )]
+    /// Checks both packed widths before appending bytes or an end offset.
+    fn checked_insert(data_len: usize, additional: usize, ends_len: usize) -> (u32, StringCacheId) {
+        let end = data_len
+            .checked_add(additional)
+            .expect("StringCache byte length overflows usize");
+        let end = u32::try_from(end).expect("StringCache byte length exceeds u32::MAX");
+        let id = u32::try_from(ends_len).expect("StringCache ID exceeds u32::MAX");
+        (end, StringCacheId::from_u32(id))
+    }
+
     fn intern_impl(data: &mut RegionVec<u8>, ends: &mut RegionVec<u32>, s: &str) -> StringCacheId {
-        let len = s.len();
-        let start = data.len();
+        let (end, id) = Self::checked_insert(data.len(), s.len(), ends.len());
         data.extend_from_slice(s.as_bytes());
-        let end = start + len;
-        assert!(
-            end < u32::MAX as usize,
-            "StringCache: string cache cannot store more than 4GB."
-        );
-        ends.push(end as u32);
-        StringCacheId::from_u32(ends.len() as u32 - 1)
+        ends.push(end);
+        id
     }
 
     /// Interns the given string and returns an ID representing its position in
@@ -191,6 +191,11 @@ impl<'tu> StringCache<'tu> {
     /// taken back when an equal string is already interned.
     pub(crate) fn intern_concat(&mut self, parts: &[&str]) -> StringCacheId {
         let start = self.data.len();
+        let additional = parts
+            .iter()
+            .try_fold(0usize, |length, part| length.checked_add(part.len()))
+            .expect("StringCache concatenated string length overflows usize");
+        let (end, id) = Self::checked_insert(start, additional, self.ends.len());
         for part in parts {
             self.data.extend_from_slice(part.as_bytes());
         }
@@ -208,14 +213,7 @@ impl<'tu> StringCache<'tu> {
                 id
             },
             | Entry::Vacant(entry) => {
-                let end = u32::try_from(self.data.len())
-                    .ok()
-                    .filter(|&end| end < u32::MAX)
-                    .expect("StringCache: string cache cannot store more than 4GB.");
                 self.ends.push(end);
-                let id = StringCacheId::from_u32(
-                    u32::try_from(self.ends.len() - 1).expect("string cache index overflow"),
-                );
                 _ = entry.insert(id);
                 id
             },
@@ -290,6 +288,33 @@ impl<'tu> StringCache<'tu> {
 )]
 mod tests {
     use super::StringCache;
+
+    #[test]
+    fn final_string_cache_offset_and_id_are_representable() {
+        let (end, id) = StringCache::checked_insert(u32::MAX as usize - 1, 1, u32::MAX as usize);
+        assert_eq!(end, u32::MAX);
+        assert_eq!(id.to_u32(), u32::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "StringCache byte length overflows usize")]
+    fn string_cache_rejects_usize_overflow_before_writing() {
+        _ = StringCache::checked_insert(usize::MAX, 1, 1);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "StringCache byte length exceeds u32::MAX")]
+    fn string_cache_rejects_offsets_beyond_u32() {
+        _ = StringCache::checked_insert(u32::MAX as usize, 1, 1);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "StringCache ID exceeds u32::MAX")]
+    fn string_cache_rejects_ids_beyond_u32() {
+        _ = StringCache::checked_insert(0, 0, u32::MAX as usize + 1);
+    }
 
     #[test]
     fn interning_keeps_lookup_consistent_after_growth() {

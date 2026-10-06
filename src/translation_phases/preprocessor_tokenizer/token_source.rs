@@ -390,7 +390,8 @@ impl<'pp> LexedFiles<'pp> {
     }
 
     fn register(&mut self, mut file: LexedFile<'pp>) -> &'pp LexedFile<'pp> {
-        file.registration = Some(u32::try_from(self.files.len()).expect("opened files fit in u32"));
+        file.registration =
+            Some(u32::try_from(self.files.len()).expect("opened file index exceeds u32::MAX"));
         let file = &*self.arena.alloc(file);
         self.files.push(file);
         file

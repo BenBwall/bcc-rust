@@ -489,7 +489,7 @@ impl<'a, T: Copy> TailVec<'a, T> {
     /// committed ones are full.
     pub(crate) fn try_push(&mut self, value: T) -> Result<(), AllocError> {
         if self.len == self.committed {
-            self.commit_for(self.len + 1)?;
+            self.commit_for(self.len.checked_add(1).ok_or(AllocError)?)?;
         }
         // SAFETY: `len < committed`, so the slot lies inside the committed
         // memory `ptr` was derived to reach, and it lies inside this vector.

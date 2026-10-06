@@ -6,7 +6,10 @@
 //! reading or removing a member past them is answered without touching
 //! memory, because every such member is absent.
 
-use super::region_vec::RegionVec;
+use super::{
+    region_vec::RegionVec,
+    vm::REGION_BYTES,
+};
 
 type Word = u64;
 
@@ -39,6 +42,10 @@ impl RegionBitSet {
     /// Adds `index`, first extending the words to reach it.
     pub(crate) fn insert(&mut self, index: usize) {
         let (word, bit) = Self::position(index);
+        assert!(
+            word < REGION_BYTES / size_of::<Word>(),
+            "RegionBitSet index exceeds its reserved region"
+        );
         if word >= self.words.len() {
             // The vector only hands out elements it has written, and its
             // memory need not be fresh from the OS, so the new words are
@@ -112,6 +119,13 @@ mod tests {
         set.remove(u32::MAX as usize);
         assert_eq!(set.words.len(), 1);
         assert!(set.contains(5));
+    }
+
+    #[test]
+    #[should_panic(expected = "RegionBitSet index exceeds its reserved region")]
+    fn insertion_beyond_the_region_has_a_clear_failure() {
+        let mut set = RegionBitSet::new();
+        set.insert(usize::MAX);
     }
 
     #[test]

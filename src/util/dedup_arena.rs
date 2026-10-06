@@ -65,7 +65,7 @@ impl<'a, T, H> DedupArena<'a, T, H> {
     /// Appends a value that interning never returns, giving it an identity
     /// distinct from every equal value. Indexed values stay unique.
     pub(crate) fn push_unindexed(&mut self, value: T) -> u32 {
-        let index = u32::try_from(self.data.len()).expect("DedupArena: Too many values.");
+        let index = u32::try_from(self.data.len()).expect("DedupArena index exceeds u32::MAX");
         self.data.push(value);
         index
     }
@@ -99,7 +99,8 @@ impl<'a, T, H> DedupArena<'a, T, H> {
         ) {
             | Entry::Occupied(entry) => *entry.get(),
             | Entry::Vacant(entry) => {
-                let index = u32::try_from(self.data.len()).expect("DedupArena: Too many values.");
+                let index =
+                    u32::try_from(self.data.len()).expect("DedupArena index exceeds u32::MAX");
                 self.data.push(make());
                 _ = entry.insert(index);
                 index

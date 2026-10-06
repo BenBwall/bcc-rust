@@ -85,6 +85,7 @@ impl<T> RegionVec<T> {
     }
 
     pub(crate) fn push(&mut self, value: T) {
+        self.assert_region_capacity(1);
         if self.try_push(value).is_err() {
             handle_alloc_error(Layout::new::<T>());
         }
@@ -112,9 +113,23 @@ impl<T> RegionVec<T> {
     }
 
     fn reserve(&mut self, additional: usize) {
+        self.assert_region_capacity(additional);
         if self.try_reserve(additional).is_err() {
             handle_alloc_error(Layout::new::<T>());
         }
+    }
+
+    /// The infallible API treats crossing its fixed reservation as a violated
+    /// data-structure limit; the `try_` API continues to return `AllocError`.
+    fn assert_region_capacity(&self, additional: usize) {
+        let end = self
+            .len
+            .checked_add(additional)
+            .expect("RegionVec length overflows usize");
+        assert!(
+            end <= REGION_BYTES / size_of::<T>(),
+            "RegionVec length exceeds its reserved region"
+        );
     }
 
     #[cold]

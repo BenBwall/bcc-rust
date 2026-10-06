@@ -13,7 +13,6 @@ use std::{
         RefUnwindSafe,
         UnwindSafe,
     },
-    process::abort,
     ptr::NonNull,
 };
 
@@ -61,12 +60,10 @@ where
     T: ?Sized,
 {
     fn clone(&self) -> Self {
-        if self.ref_cnt().get() == usize::MAX {
-            // Integer overflow.
-            // This can realistically only happen if someone leaks usize::MAX
-            // Shareds. If this happens, we just abort.
-            abort();
-        }
+        assert!(
+            self.ref_cnt().get() < usize::MAX,
+            "Shared reference count exceeds usize::MAX"
+        );
 
         () = self.ref_cnt().update(|count| count + 1);
 

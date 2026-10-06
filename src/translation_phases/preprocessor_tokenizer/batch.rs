@@ -247,10 +247,6 @@ struct PositionTracker<'a> {
     position:   SourcePosition,
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "Lines and columns are 32-bit like the rest of source provenance."
-)]
 impl<'a> PositionTracker<'a> {
     fn new(text: &'a [u8], remaps: &'a [Remap]) -> Self {
         Self {
@@ -276,12 +272,12 @@ impl<'a> PositionTracker<'a> {
                 | RemapKind::Trigraph => {
                     self.clean += 1;
                     self.position.index += 3;
-                    self.position.column += 3;
+                    self.add_columns(3);
                 },
                 | RemapKind::CarriageReturnLineFeed => {
                     self.clean += 1;
                     self.position.index += 2;
-                    self.position.line += 1;
+                    self.add_lines(1);
                     self.position.column = 1;
                 },
             }
@@ -320,8 +316,24 @@ impl<'a> PositionTracker<'a> {
 
     fn skip_deleted(&mut self, length: usize) {
         self.position.index += length;
-        self.position.line += 1;
+        self.add_lines(1);
         self.position.column = 1;
+    }
+
+    fn add_lines(&mut self, count: u32) {
+        self.position.line = self
+            .position
+            .line
+            .checked_add(count)
+            .expect("source line exceeds u32::MAX");
+    }
+
+    fn add_columns(&mut self, count: u32) {
+        self.position.column = self
+            .position
+            .column
+            .checked_add(count)
+            .expect("source column exceeds u32::MAX");
     }
 
     fn advance_plain(&mut self, to: usize) {
@@ -330,14 +342,22 @@ impl<'a> PositionTracker<'a> {
             return;
         }
         if byte_scan::find_line_feed(bytes) == bytes.len() {
-            self.position.column += byte_scan::count_chars(bytes) as u32;
+            let count = u32::try_from(byte_scan::count_chars(bytes))
+                .expect("source column exceeds u32::MAX");
+            self.add_columns(count);
         } else {
             let last = bytes
                 .iter()
                 .rposition(|&byte| byte == b'\n')
                 .expect("a line feed was found");
-            self.position.line += byte_scan::count_line_feeds(bytes) as u32;
-            self.position.column = 1 + byte_scan::count_chars(&bytes[last + 1..]) as u32;
+            let lines = u32::try_from(byte_scan::count_line_feeds(bytes))
+                .expect("source line exceeds u32::MAX");
+            self.add_lines(lines);
+            let columns = u32::try_from(byte_scan::count_chars(&bytes[last + 1..]))
+                .expect("source column exceeds u32::MAX");
+            self.position.column = 1_u32
+                .checked_add(columns)
+                .expect("source column exceeds u32::MAX");
         }
         self.position.index += bytes.len();
         self.clean = to;
@@ -519,7 +539,7 @@ impl<'a> LexedFile<'a> {
             SourceVector {
                 index: source_offset(index),
                 column: u32::try_from(source[line_start..index].chars().count() + 1)
-                    .unwrap_or(u32::MAX),
+                    .expect("source column exceeds u32::MAX"),
                 line: file.eof.line.saturating_sub(1),
                 source_file_index,
                 length: source_offset(length),
@@ -573,7 +593,7 @@ impl<'a> LexedFile<'a> {
     /// escaped final newline until a real character is read again.
     pub(super) fn reads_end(&self, entry: usize) -> bool {
         self.end_readers
-            .binary_search(&u32::try_from(entry).expect("entry indices fit in u32"))
+            .binary_search(&u32::try_from(entry).expect("lexed token index exceeds u32::MAX"))
             .is_ok()
     }
 
@@ -608,7 +628,7 @@ impl<'a> LexedFile<'a> {
 
     /// The actual character span, excluding any splice before an Other token.
     pub(super) fn other_location(&self, entry: usize) -> &SourceVector {
-        let entry = u32::try_from(entry).expect("entry indices fit in u32");
+        let entry = u32::try_from(entry).expect("lexed token index exceeds u32::MAX");
         let found = self
             .other_locations
             .binary_search_by_key(&entry, |&(index, _)| index)
@@ -624,7 +644,9 @@ impl<'a> LexedFile<'a> {
             || (!self.final_newline_readers.is_empty()
                 && self
                     .final_newline_readers
-                    .binary_search(&u32::try_from(entry).expect("entry indices fit in u32"))
+                    .binary_search(
+                        &u32::try_from(entry).expect("lexed token index exceeds u32::MAX"),
+                    )
                     .is_ok())
     }
 
@@ -699,7 +721,7 @@ impl<'a> LexedFile<'a> {
         source_file_index: u32,
         line_delta: u32,
     ) {
-        let entry = u32::try_from(entry).expect("entry indices fit in u32");
+        let entry = u32::try_from(entry).expect("lexed token index exceeds u32::MAX");
         let first = self
             .diagnostics
             .partition_point(|(owner, _)| *owner < entry);
@@ -909,8 +931,17 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         self.file
     }
 
+    /// Leaves room for the one-past-last entry used when reading EOF.
+    fn checked_entry_index(length: usize) -> u32 {
+        let next = length
+            .checked_add(1)
+            .and_then(|count| u32::try_from(count).ok())
+            .expect("lexed file exceeds u32::MAX entries");
+        next - 1
+    }
+
     fn push(&mut self, position: SourcePosition, lexed: Lexed) {
-        let entry = u32::try_from(self.file.entries.len()).expect("entry indices fit in u32");
+        let entry = Self::checked_entry_index(self.file.entries.len());
         if self.read_final_newline {
             self.file.final_newline_readers.push(entry);
         }
@@ -1068,7 +1099,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         } else {
             character.len_utf8()
         };
-        let entry = u32::try_from(self.file.entries.len()).expect("entry indices fit in u32");
+        let entry = Self::checked_entry_index(self.file.entries.len());
         self.file
             .other_locations
             .push((entry, SourceVector::new(position, 0, length)));

@@ -426,15 +426,15 @@ impl<'pp> PreprocessorExpressionOperandStack<'pp> {
     }
 
     fn add_fault_node(&mut self, node: ArithmeticFaultNode) -> NonZeroU32 {
-        let index = u32::try_from(self.arithmetic_faults.len())
-            .expect("expression fault arena exceeds u32");
+        let id = self
+            .arithmetic_faults
+            .len()
+            .checked_add(1)
+            .and_then(|length| u32::try_from(length).ok())
+            .and_then(NonZeroU32::new)
+            .expect("expression fault arena exceeds u32::MAX nodes");
         self.arithmetic_faults.push(node);
-        NonZeroU32::new(
-            index
-                .checked_add(1)
-                .expect("expression fault arena exceeds u32"),
-        )
-        .unwrap()
+        id
     }
 
     fn join_faults(

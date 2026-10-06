@@ -280,9 +280,10 @@ fn committed_view(base: NonNull<u8>, committed: usize) -> NonNull<u8> {
 }
 
 /// Every region's reservation: 100 GiB of address space, which costs no
-/// commit charge until written. A few dozen of them fit easily in a 64-bit
-/// address space. Miri models a reservation as one real allocation, so it
-/// gets a small one.
+/// commit charge until written. This fits the full `u32`-indexed source-vector
+/// arena (20 bytes times `u32::MAX`, just under 80 GiB), while a few dozen
+/// regions still fit easily in a 64-bit address space. Miri models a
+/// reservation as one real allocation, so it gets a small one.
 #[cfg(not(miri))]
 pub(crate) const REGION_BYTES: usize = 100 * 1024 * 1024 * 1024;
 #[cfg(miri)]
