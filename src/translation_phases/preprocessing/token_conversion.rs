@@ -66,6 +66,114 @@ use crate::{
     },
 };
 
+/// The integer representation an integer constant is typed against.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(super) enum IntegerRepresentation {
+    /// Translation phase 7 under LP64: `int` has 32 bits, and `long` and
+    /// `long long` have 64.
+    ///
+    /// C99: the widths are implementation-defined (§5.2.4.2.1 paragraph 1,
+    /// pp. 21-22; PDF pp. 33-34).
+    Lp64,
+    /// An `#if` or `#elif` expression, where every signed type acts as
+    /// `intmax_t` and every unsigned type as `uintmax_t`, here 64 bits. So
+    /// `0xFFFFFFFF` is a signed, positive `int` there although it is
+    /// `unsigned int` in phase 7.
+    ///
+    /// C99: §6.10.1 paragraph 4 and footnote 145, p. 148; PDF p. 160.
+    IntMax,
+}
+
+/// A type an integer constant can have.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum IntegerConstantType {
+    Int,
+    UnsignedInt,
+    Long,
+    UnsignedLong,
+    LongLong,
+    UnsignedLongLong,
+}
+
+impl IntegerConstantType {
+    /// The list of types an integer constant tries in order, taking the
+    /// first that can represent its value. A decimal constant without `u`
+    /// tries only signed types; an octal or hexadecimal constant also tries
+    /// the unsigned counterpart after each signed type. Binary constants, an
+    /// extension, use the octal and hexadecimal lists, as GCC and Clang do.
+    ///
+    /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+    fn candidates(suffix: Option<IntegerSuffix>, is_decimal: bool) -> &'static [Self] {
+        use IntegerConstantType::{
+            Int,
+            Long,
+            LongLong,
+            UnsignedInt,
+            UnsignedLong,
+            UnsignedLongLong,
+        };
+        match (suffix, is_decimal) {
+            | (None, true) => &[Int, Long, LongLong],
+            | (None, false) => &[
+                Int,
+                UnsignedInt,
+                Long,
+                UnsignedLong,
+                LongLong,
+                UnsignedLongLong,
+            ],
+            | (Some(IntegerSuffix::Unsigned), _) => &[UnsignedInt, UnsignedLong, UnsignedLongLong],
+            | (Some(IntegerSuffix::Long), true) => &[Long, LongLong],
+            | (Some(IntegerSuffix::Long), false) =>
+                &[Long, UnsignedLong, LongLong, UnsignedLongLong],
+            | (Some(IntegerSuffix::UnsignedLong), _) => &[UnsignedLong, UnsignedLongLong],
+            | (Some(IntegerSuffix::LongLong), true) => &[LongLong],
+            | (Some(IntegerSuffix::LongLong), false) => &[LongLong, UnsignedLongLong],
+            | (Some(IntegerSuffix::UnsignedLongLong), _) => &[UnsignedLongLong],
+        }
+    }
+
+    /// The largest value this type holds under `representation`.
+    fn max(self, representation: IntegerRepresentation) -> u64 {
+        match (self, representation) {
+            | (Self::Int, IntegerRepresentation::Lp64) => i32::MAX.unsigned_abs().into(),
+            | (Self::UnsignedInt, IntegerRepresentation::Lp64) => u32::MAX.into(),
+            | (Self::Int | Self::Long | Self::LongLong, _) => i64::MAX.unsigned_abs(),
+            | (Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong, _) => u64::MAX,
+        }
+    }
+
+    /// A token holding `value`, which this type can represent. Under
+    /// [`IntegerRepresentation::IntMax`] every type is 64 bits wide, so the
+    /// token is `long long` or `unsigned long long` by signedness.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "`max` has bounded `value` by this type's range."
+    )]
+    fn token_type(self, value: u64, representation: IntegerRepresentation) -> IntegerTokenType {
+        debug_assert!(
+            value <= self.max(representation),
+            "the type was chosen to hold the value"
+        );
+        match (self, representation) {
+            | (Self::Int, IntegerRepresentation::Lp64) => IntegerTokenType::Int(value as i32),
+            | (Self::UnsignedInt, IntegerRepresentation::Lp64) =>
+                IntegerTokenType::UnsignedInt(value as u32),
+            | (Self::Long, IntegerRepresentation::Lp64) =>
+                IntegerTokenType::Long(Packed::new(value as i64)),
+            | (Self::UnsignedLong, IntegerRepresentation::Lp64) =>
+                IntegerTokenType::UnsignedLong(Packed::new(value)),
+            | (Self::Int | Self::Long | Self::LongLong, _) =>
+                IntegerTokenType::LongLong(Packed::new(value as i64)),
+            | (Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong, _) =>
+                IntegerTokenType::UnsignedLongLong(Packed::new(value)),
+        }
+    }
+}
+
 /// Storage that string-literal conversion reuses, kept with the
 /// preprocessor's long-lived state so that converting a literal leaves
 /// nothing behind.
@@ -207,6 +315,22 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         token
     }
 
+    /// Converts an integer pp-number in `radix`, giving it the first type of
+    /// the list for its radix and suffix that holds the value under
+    /// `representation`.
+    ///
+    /// C99: §6.4.4.1 paragraphs 1-6, pp. 54-56; PDF pp. 66-68. A value beyond
+    /// 64 bits is an error, and its wrapped value is typed without further
+    /// diagnostics.
+    ///
+    /// A decimal constant without `u` that no type in its list can represent
+    /// has no type under paragraph 6, p. 56; PDF p. 68, since there are no
+    /// extended integer types here. It is given `unsigned long long`, as
+    /// Clang does, with a warning, whichever of `l` or `ll` it carries.
+    ///
+    /// The widening warnings, for a constant that leaves `int` for `long` or
+    /// `unsigned int` for `unsigned long`, flag valid code and are not
+    /// required by C99.
     #[inline(always)]
     fn parse_integer_radix(
         &mut self,
@@ -214,6 +338,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         start_index: usize,
         invalid_integer_literal_error: PreprocessorErrorType<'tu>,
         token: PreprocessorToken,
+        representation: IntegerRepresentation,
     ) -> Token {
         let mut index = start_index;
         let (result, did_overflow) = {
@@ -279,169 +404,115 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                 source_vectors: token.source_vectors,
             });
         }
-        match suffix_type {
-            | Some(IntegerSuffix::UnsignedLongLong) => Token {
-                kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(
-                    Packed::new(result),
-                )),
-                source_vectors: token.source_vectors,
-                contents:       token.contents,
-            },
-            | Some(IntegerSuffix::LongLong) if result > i64::MAX as u64 => {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
-                        from: SignedIntegerLiteralType::LongLong,
-                        to:   UnsignedIntegerLiteralType::UnsignedLongLong,
-                    },
-                    source_vectors: token.source_vectors,
-                });
-                Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(
-                        Packed::new(result),
-                    )),
-                    source_vectors: token.source_vectors,
-                    contents:       token.contents,
+        let is_decimal = radix == 10;
+        let candidates = IntegerConstantType::candidates(suffix_type, is_decimal);
+        let constant_type = match candidates
+            .iter()
+            .copied()
+            .find(|candidate| result <= candidate.max(representation))
+        {
+            | Some(constant_type) => constant_type,
+            // Only a decimal list without `u` can run out, and only once its
+            // last type, a 64-bit signed one, cannot hold the value.
+            | None => {
+                debug_assert!(
+                    is_decimal && result > i64::MAX.unsigned_abs(),
+                    "only a signed decimal list runs out of types"
+                );
+                if !did_overflow {
+                    self.context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
+                            to: UnsignedIntegerLiteralType::UnsignedLongLong,
+                        },
+                        source_vectors: token.source_vectors,
+                    });
                 }
+                IntegerConstantType::UnsignedLongLong
             },
-            | Some(IntegerSuffix::LongLong) => Token {
-                kind:           TokenType::Integer(IntegerTokenType::LongLong(Packed::new(
-                    result as _,
-                ))),
-                source_vectors: token.source_vectors,
-                contents:       token.contents,
-            },
-            | Some(IntegerSuffix::UnsignedLong) => Token {
-                kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(Packed::new(
-                    result,
-                ))),
-                source_vectors: token.source_vectors,
-                contents:       token.contents,
-            },
-            | Some(IntegerSuffix::Long) if result > i64::MAX as u64 => {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
-                        from: SignedIntegerLiteralType::Long,
-                        to:   UnsignedIntegerLiteralType::UnsignedLong,
-                    },
-                    source_vectors: token.source_vectors,
-                });
-                Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(
-                        Packed::new(result),
-                    )),
-                    source_vectors: token.source_vectors,
-                    contents:       token.contents,
-                }
-            },
-            | Some(IntegerSuffix::Long) => Token {
-                kind:           TokenType::Integer(IntegerTokenType::Long(Packed::new(
-                    result as _,
-                ))),
-                source_vectors: token.source_vectors,
-                contents:       token.contents,
-            },
-            | Some(IntegerSuffix::Unsigned) if result > u64::from(u32::MAX) => {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedUnsignedPromotion {
-                        from: UnsignedIntegerLiteralType::UnsignedInt,
-                        to:   UnsignedIntegerLiteralType::UnsignedLong,
-                    },
-                    source_vectors: token.source_vectors,
-                });
-                Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLong(
-                        Packed::new(result),
-                    )),
-                    source_vectors: token.source_vectors,
-                    contents:       token.contents,
-                }
-            },
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "At this point we know that result definitely fits into a u32."
-            )]
-            | Some(IntegerSuffix::Unsigned) => Token {
-                kind:           TokenType::Integer(IntegerTokenType::UnsignedInt(result as u32)),
-                source_vectors: token.source_vectors,
-                contents:       token.contents,
-            },
-            | None if result > i64::MAX as u64 => {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedSignedToUnsignedConversion {
-                        from: SignedIntegerLiteralType::Int,
-                        to:   UnsignedIntegerLiteralType::UnsignedLongLong,
-                    },
-                    source_vectors: token.source_vectors,
-                });
-                Token {
-                    kind:           TokenType::Integer(IntegerTokenType::UnsignedLongLong(
-                        Packed::new(result),
-                    )),
-                    source_vectors: token.source_vectors,
-                    contents:       token.contents,
-                }
-            },
-            | None if result > i32::MAX as u64 => {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::ForcedSignedPromotion {
-                        from: SignedIntegerLiteralType::Int,
-                        to:   SignedIntegerLiteralType::Long,
-                    },
-                    source_vectors: token.source_vectors,
-                });
-                Token {
-                    kind:           TokenType::Integer(IntegerTokenType::Long(Packed::new(
-                        result as i64,
-                    ))),
-                    source_vectors: token.source_vectors,
-                    contents:       token.contents,
-                }
-            },
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "We know result fits into an i32 at this point."
-            )]
-            | None => Token {
-                kind:           TokenType::Integer(IntegerTokenType::Int(result as i32)),
-                source_vectors: token.source_vectors,
-                contents:       token.contents,
-            },
+        };
+        if !did_overflow {
+            match (candidates[0], constant_type) {
+                | (IntegerConstantType::Int, IntegerConstantType::Long) =>
+                    self.context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::ForcedSignedPromotion {
+                            from: SignedIntegerLiteralType::Int,
+                            to:   SignedIntegerLiteralType::Long,
+                        },
+                        source_vectors: token.source_vectors,
+                    }),
+                | (IntegerConstantType::UnsignedInt, IntegerConstantType::UnsignedLong) =>
+                    self.context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::ForcedUnsignedPromotion {
+                            from: UnsignedIntegerLiteralType::UnsignedInt,
+                            to:   UnsignedIntegerLiteralType::UnsignedLong,
+                        },
+                        source_vectors: token.source_vectors,
+                    }),
+                | _ => {},
+            }
+        }
+        Token {
+            kind:           TokenType::Integer(constant_type.token_type(result, representation)),
+            source_vectors: token.source_vectors,
+            contents:       token.contents,
         }
     }
 
-    fn parse_hexadecimal_integer(&mut self, token: PreprocessorToken) -> Token {
+    fn parse_hexadecimal_integer(
+        &mut self,
+        token: PreprocessorToken,
+        representation: IntegerRepresentation,
+    ) -> Token {
         self.parse_integer_radix(
             16,
             2,
             PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
             token,
+            representation,
         )
     }
 
-    fn parse_binary_integer(&mut self, token: PreprocessorToken) -> Token {
+    /// `0b` and `0B` binary constants are an extension (C99 §4p6);
+    /// §6.4.4.1 has none. They are accepted without a diagnostic.
+    fn parse_binary_integer(
+        &mut self,
+        token: PreprocessorToken,
+        representation: IntegerRepresentation,
+    ) -> Token {
         self.parse_integer_radix(
             2,
             2,
             PreprocessorErrorType::InvalidBinaryIntegerLiteral,
             token,
+            representation,
         )
     }
 
-    fn parse_octal_integer(&mut self, token: PreprocessorToken) -> Token {
+    fn parse_octal_integer(
+        &mut self,
+        token: PreprocessorToken,
+        representation: IntegerRepresentation,
+    ) -> Token {
         self.parse_integer_radix(
             8,
             1,
             PreprocessorErrorType::InvalidOctalIntegerLiteral,
             token,
+            representation,
         )
     }
 
-    fn parse_decimal_integer(&mut self, token: PreprocessorToken) -> Token {
+    fn parse_decimal_integer(
+        &mut self,
+        token: PreprocessorToken,
+        representation: IntegerRepresentation,
+    ) -> Token {
         self.parse_integer_radix(
             10,
             0,
             PreprocessorErrorType::InvalidDecimalIntegerLiteral,
             token,
+            representation,
         )
     }
 
@@ -658,7 +729,21 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         Self::build_token(token, TokenType::Operator(kind))
     }
 
-    pub(super) fn parse_number(&mut self, token: PreprocessorToken) -> Token {
+    /// Converts a pp-number into an integer or floating constant, which then
+    /// acquires its type and value.
+    ///
+    /// C99: §6.4.8 paragraph 4, p. 65; PDF p. 77; the forms are those of
+    /// §6.4.4.1 paragraph 1, pp. 54-55; PDF pp. 66-67, and §6.4.4.2
+    /// paragraph 1, p. 57; PDF p. 69.
+    ///
+    /// Integer constants are typed under `representation`: phase 7 uses
+    /// [`IntegerRepresentation::Lp64`] and `#if` evaluation
+    /// [`IntegerRepresentation::IntMax`].
+    pub(super) fn parse_number(
+        &mut self,
+        token: PreprocessorToken,
+        representation: IntegerRepresentation,
+    ) -> Token {
         let contents = self.context.string_cache.at(token.contents);
         let is_hex = contents.starts_with("0x") || contents.starts_with("0X");
         let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
@@ -667,16 +752,16 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             if contents.contains(['.', 'p', 'P']) {
                 self.parse_hexadecimal_float(token)
             } else {
-                self.parse_hexadecimal_integer(token)
+                self.parse_hexadecimal_integer(token, representation)
             }
         } else if is_binary {
-            self.parse_binary_integer(token)
+            self.parse_binary_integer(token, representation)
         } else if contents.contains(['.', 'e', 'E']) {
             self.parse_decimal_float(token)
         } else if is_octal {
-            self.parse_octal_integer(token)
+            self.parse_octal_integer(token, representation)
         } else {
-            self.parse_decimal_integer(token)
+            self.parse_decimal_integer(token, representation)
         }
     }
 
@@ -800,7 +885,8 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                 );
                 return None;
             },
-            | PreprocessorTokenType::Number => self.parse_number(token),
+            | PreprocessorTokenType::Number =>
+                self.parse_number(token, IntegerRepresentation::Lp64),
             | PreprocessorTokenType::Newline => return None,
             | PreprocessorTokenType::Hash => {
                 if matches!(

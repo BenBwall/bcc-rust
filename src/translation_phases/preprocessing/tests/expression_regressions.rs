@@ -350,3 +350,50 @@ fn malformed_nested_expression_groups_preserve_following_source() {
         });
     }
 }
+
+/// C99 §6.10.1p4 and footnote 145: `#if` types constants as though `int`
+/// were `intmax_t`, so a hexadecimal or octal constant is unsigned only above
+/// `INTMAX_MAX` or with `u`, though `0xFFFFFFFF` is `unsigned int` in phase 7.
+/// Constants that need `long` in phase 7 draw no widening warning here.
+#[test]
+fn integer_constants_are_typed_as_intmax_in_controlling_expressions() {
+    for expression in [
+        "0xFFFFFFFF > -1",
+        "037777777777 > -1",
+        "0x80000000 > -1",
+        "0x7FFFFFFFFFFFFFFF > -1",
+        "0x7FFFFFFFFFFFFFFFL > -1",
+        "0x7FFFFFFFFFFFFFFFLL > -1",
+        "4294967295 > -1",
+        "2147483648 > -1",
+        "0x100000000 > -1",
+        "0xFFFFFFFFu < -1",
+        "0x100000000u < -1",
+        "0x8000000000000000 < -1",
+        "0xFFFFFFFFFFFFFFFEL < -1",
+    ] {
+        assert_true_expression(expression);
+    }
+}
+
+/// A decimal constant above `INTMAX_MAX` has no type (C99 §6.4.4.1p6); in
+/// `#if` it is still diagnosed and evaluated as `uintmax_t`.
+#[test]
+fn decimal_constants_above_intmax_warn_and_are_unsigned_in_controlling_expressions() {
+    preprocess(
+        "#if 18446744073709551615 < -1\nwrong\n#else\nselected\n#endif\nafter\n",
+        |identifiers, errors| {
+            assert_eq!(identifiers, ["selected", "after"], "{errors:#?}");
+            assert!(
+                matches!(
+                    errors,
+                    [TranslationError::Preprocessing(PreprocessorError {
+                        error_type: PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. },
+                        ..
+                    })]
+                ),
+                "{errors:#?}"
+            );
+        },
+    );
+}

@@ -288,10 +288,17 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// C99: §6.4.4.1 paragraph 6, p. 56; PDF p. 68, and §6.4.4 paragraph 2,
     /// p. 54; PDF p. 66.
     IntegerLiteralOverflow,
+    /// A decimal constant without `u` that no signed type in its list can
+    /// represent. C99 gives it no type; it is given `to` instead, an
+    /// implementation choice that matches Clang.
+    ///
+    /// C99: §6.4.4.1 paragraphs 5-6, pp. 55-56; PDF pp. 67-68.
     ForcedSignedToUnsignedConversion {
-        from: SignedIntegerLiteralType,
-        to:   UnsignedIntegerLiteralType,
+        to: UnsignedIntegerLiteralType,
     },
+    // A constant that takes a later, wider type of its list: valid C99
+    // (§6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68), warned about for
+    // portability to a narrower `long`. Neither GCC nor Clang diagnoses it.
     ForcedUnsignedPromotion {
         from: UnsignedIntegerLiteralType,
         to:   UnsignedIntegerLiteralType,
@@ -702,29 +709,18 @@ impl PreprocessorErrorType<'_> {
             | Self::IntegerLiteralOverflow => new("integer constant is too large")
                 .label("does not fit in `unsigned long long`")
                 .note("the largest integer type, `unsigned long long`, has 64 bits"),
-            | Self::ForcedSignedToUnsignedConversion { from, to } => match from {
-                | SignedIntegerLiteralType::Int =>
-                    new("integer constant is so large that it is unsigned")
-                        .label(format_in!(
-                            arena,
-                            "this constant has type `{}`",
-                            to.spelling()
-                        ))
-                        .note("C99 §6.4.4.1p5: no signed type can represent this decimal constant")
-                        .help("add a `u` suffix to make the unsigned type explicit"),
-                | SignedIntegerLiteralType::Long | SignedIntegerLiteralType::LongLong =>
-                    new(format_in!(
-                        arena,
-                        "integer constant is too large for `{}`",
-                        from.spelling()
-                    ))
+            | Self::ForcedSignedToUnsignedConversion { to } =>
+                new("integer constant is so large that it is unsigned")
                     .label(format_in!(
                         arena,
                         "this constant has type `{}`",
                         to.spelling()
                     ))
+                    .note(
+                        "C99 §6.4.4.1p5-6: no signed type in a decimal constant's list can \
+                         represent this value, so C99 gives it no type",
+                    )
                     .help("add a `u` suffix to make the unsigned type explicit"),
-            },
             | Self::ForcedUnsignedPromotion { from, to } => new(format_in!(
                 arena,
                 "integer constant does not fit in `{}`",

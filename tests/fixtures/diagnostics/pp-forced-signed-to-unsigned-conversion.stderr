@@ -4,7 +4,7 @@ warning: integer constant is so large that it is unsigned
 1 | int value = 18446744073709551615;
   |             ^^^^^^^^^^^^^^^^^^^^ this constant has type `unsigned long long`
   |
-  = note: C99 §6.4.4.1p5: no signed type can represent this decimal constant
+  = note: C99 §6.4.4.1p5-6: no signed type in a decimal constant's list can represent this value, so C99 gives it no type
   = help: add a `u` suffix to make the unsigned type explicit
 
 1 warning generated.

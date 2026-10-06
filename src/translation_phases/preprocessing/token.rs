@@ -33,11 +33,13 @@ use crate::{
     },
 };
 
+/// A signed type an integer-constant widening warning names.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum SignedIntegerLiteralType {
     Int,
     Long,
-    LongLong,
 }
 
 /// An unsigned type an integer constant can have.
@@ -503,7 +505,6 @@ impl SignedIntegerLiteralType {
         match self {
             | Self::Int => "int",
             | Self::Long => "long",
-            | Self::LongLong => "long long",
         }
     }
 }

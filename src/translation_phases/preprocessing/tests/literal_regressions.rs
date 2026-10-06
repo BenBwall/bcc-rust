@@ -158,6 +158,186 @@ fn hexadecimal_integer_prefix_requires_a_digit_before_the_suffix() {
     }
 }
 
+/// C99 §6.4.4.1p5 gives decimal constants without `u` only signed types and
+/// octal and hexadecimal constants the unsigned counterparts too. The
+/// expectations match GCC 15 and Clang 21 on LP64.
+#[test]
+fn integer_constant_types_follow_the_list_for_their_radix_and_suffix() {
+    use IntegerTokenType::{
+        Int,
+        Long,
+        LongLong,
+        UnsignedInt,
+        UnsignedLong,
+        UnsignedLongLong,
+    };
+    let int = Int;
+    let unsigned_int = UnsignedInt;
+    let long = |value| Long(Packed::new(value));
+    let unsigned_long = |value| UnsignedLong(Packed::new(value));
+    let long_long = |value| LongLong(Packed::new(value));
+    let unsigned_long_long = |value| UnsignedLongLong(Packed::new(value));
+    for (spelling, expected) in [
+        // Decimal: int, long, long long.
+        ("2147483647", int(i32::MAX)),
+        ("4294967295", long(0xFFFF_FFFF)),
+        ("9223372036854775807", long(i64::MAX)),
+        // Octal and hexadecimal: int, unsigned int, long, unsigned long, ...
+        ("0x7FFFFFFF", int(i32::MAX)),
+        ("0x80000000", unsigned_int(0x8000_0000)),
+        ("0xFFFFFFFF", unsigned_int(u32::MAX)),
+        ("0x7FFFFFFFFFFFFFFF", long(i64::MAX)),
+        ("0x8000000000000000", unsigned_long(0x8000_0000_0000_0000)),
+        ("0xFFFFFFFFFFFFFFFF", unsigned_long(u64::MAX)),
+        ("017777777777", int(i32::MAX)),
+        ("020000000000", unsigned_int(0x8000_0000)),
+        ("037777777777", unsigned_int(u32::MAX)),
+        (
+            "01000000000000000000000",
+            unsigned_long(0x8000_0000_0000_0000),
+        ),
+        // Binary constants, an extension, use the octal and hexadecimal list.
+        (
+            "0b10000000000000000000000000000000",
+            unsigned_int(0x8000_0000),
+        ),
+        // `u`: unsigned int, unsigned long, unsigned long long, any radix.
+        ("4294967295u", unsigned_int(u32::MAX)),
+        ("0xFFFFFFFFU", unsigned_int(u32::MAX)),
+        // `l`: decimal long, long long; otherwise also unsigned long.
+        ("2147483648L", long(0x8000_0000)),
+        ("0x80000000l", long(0x8000_0000)),
+        ("0x8000000000000000L", unsigned_long(0x8000_0000_0000_0000)),
+        (
+            "01000000000000000000000l",
+            unsigned_long(0x8000_0000_0000_0000),
+        ),
+        // `ul`: unsigned long, unsigned long long.
+        ("0xFFFFFFFFFFFFFFFFul", unsigned_long(u64::MAX)),
+        // `ll`: decimal long long; otherwise also unsigned long long.
+        ("9223372036854775807LL", long_long(i64::MAX)),
+        ("0x7FFFFFFFFFFFFFFFll", long_long(i64::MAX)),
+        (
+            "0x8000000000000000LL",
+            unsigned_long_long(0x8000_0000_0000_0000),
+        ),
+        (
+            "01000000000000000000000ll",
+            unsigned_long_long(0x8000_0000_0000_0000),
+        ),
+        // `ull`: unsigned long long.
+        ("18446744073709551615ULL", unsigned_long_long(u64::MAX)),
+    ] {
+        let source = format!("{spelling}; after\n");
+        let actual = observe(&source);
+        // Widening warnings have their own test.
+        assert!(
+            actual
+                .errors
+                .iter()
+                .all(|(kind, _)| kind.starts_with("ForcedSignedPromotion")),
+            "{source:?}: {actual:#?}"
+        );
+        assert_eq!(actual.integers, [expected], "{source:?}");
+    }
+}
+
+/// C99 §6.4.4.1p6 leaves a decimal constant without `u` that its signed
+/// list cannot represent with no type. It becomes `unsigned long long`, as in
+/// Clang, with a warning, while an octal or hexadecimal constant of the same
+/// value is validly unsigned.
+#[test]
+fn decimal_constants_too_large_for_every_signed_type_warn_and_become_unsigned() {
+    for suffix in ["", "l", "L", "ll", "LL"] {
+        for (digits, value) in [
+            ("9223372036854775808", 0x8000_0000_0000_0000),
+            ("18446744073709551615", u64::MAX),
+        ] {
+            let spelling = format!("{digits}{suffix}");
+            let source = format!("{spelling}; after\n");
+            let actual = observe(&source);
+            assert_eq!(
+                actual.integers,
+                [IntegerTokenType::UnsignedLongLong(Packed::new(value))],
+                "{source:?}"
+            );
+            assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+            assert_eq!(
+                actual.errors[0].0,
+                "ForcedSignedToUnsignedConversion { to: UnsignedLongLong }"
+            );
+            assert_eq!(
+                actual.errors[0].1[0].length,
+                u32::try_from(spelling.len()).unwrap()
+            );
+            assert_eq!(actual.spellings.last().unwrap(), "after");
+        }
+    }
+    for spelling in [
+        "0xFFFFFFFFFFFFFFFF",
+        "0xFFFFFFFFFFFFFFFFl",
+        "0xFFFFFFFFFFFFFFFFll",
+    ] {
+        let actual = observe(&format!("{spelling}; after\n"));
+        assert!(actual.errors.is_empty(), "{spelling}: {actual:#?}");
+    }
+}
+
+/// Moving from `int` to `long`, or `unsigned int` to `unsigned long`, is valid
+/// C99 but keeps its existing warning in every radix; reaching an unsigned
+/// type of the same width does not warn.
+#[test]
+fn integer_constant_widening_warnings_depend_on_the_selected_type() {
+    for (spelling, error) in [
+        (
+            "2147483648",
+            Some("ForcedSignedPromotion { from: Int, to: Long }"),
+        ),
+        (
+            "0x100000000",
+            Some("ForcedSignedPromotion { from: Int, to: Long }"),
+        ),
+        (
+            "040000000000",
+            Some("ForcedSignedPromotion { from: Int, to: Long }"),
+        ),
+        (
+            "0x100000000u",
+            Some("ForcedUnsignedPromotion { from: UnsignedInt, to: UnsignedLong }"),
+        ),
+        ("0x80000000", None),
+        ("0xFFFFFFFFFFFFFFFF", None),
+        ("2147483648l", None),
+    ] {
+        let source = format!("{spelling}; after\n");
+        let actual = observe(&source);
+        let errors: Vec<_> = actual
+            .errors
+            .iter()
+            .map(|(kind, _)| kind.as_str())
+            .collect();
+        assert_eq!(errors, Vec::from_iter(error), "{source:?}");
+    }
+}
+
+/// A constant beyond 64 bits reports only its overflow, not a type warning
+/// about the wrapped value.
+#[test]
+fn integer_constant_overflow_has_no_follow_on_type_warning() {
+    for spelling in [
+        // Each wraps to a value that would otherwise warn.
+        "27670116110564327424",
+        "0x10000000100000000",
+        "18446744078004518912u",
+    ] {
+        let source = format!("{spelling}; after\n");
+        let actual = observe(&source);
+        assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+        assert_eq!(actual.errors[0].0, "IntegerLiteralOverflow");
+        assert_eq!(actual.spellings.last().unwrap(), "after");
+    }
+}
+
 #[test]
 fn hexadecimal_escape_requires_at_least_one_digit() {
     for prefix in ["", "L"] {

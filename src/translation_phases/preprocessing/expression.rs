@@ -35,6 +35,7 @@ use super::{
         IntegerTokenType,
         TokenType,
     },
+    token_conversion::IntegerRepresentation,
 };
 use crate::{
     configuration::{
@@ -1411,6 +1412,16 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         stack.floor = self.expression_parser.open_parentheses.pop().unwrap_or(0);
     }
 
+    /// Reads the rest of an `#if` or `#elif` line, macro-replacing it, and
+    /// returns whether the controlling expression is nonzero.
+    ///
+    /// C99: §6.10.1 paragraphs 3-4, p. 148; PDF p. 160. Integer constants
+    /// are typed as though every signed type were `intmax_t` and every
+    /// unsigned type `uintmax_t`, so `0xFFFFFFFF` is signed here though
+    /// `unsigned int` in phase 7 (footnote 145); only a `u` suffix or a value
+    /// above `INTMAX_MAX` makes one unsigned. A character constant's value is
+    /// implementation-defined (paragraph 4): a single narrow character is
+    /// its nonnegative byte.
     pub(super) fn eval_preprocessor_expression(
         &mut self,
         on_no_expression_error: PreprocessorErrorType<'tu>,
@@ -1615,7 +1626,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         self.expression_parser.state = UNARY;
                     },
                     (PreprocessorTokenType::Number, UNARY) => {
-                        match self.parse_number(token,).kind {
+                        match self.parse_number(token, IntegerRepresentation::IntMax).kind {
                             | TokenType::Float(_) => {
                                 // C99 §6.10.1p1 admits only integer constant
                                 // expressions. Recover with a zero operand
