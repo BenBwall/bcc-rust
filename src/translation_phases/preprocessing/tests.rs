@@ -84,6 +84,46 @@ fn preprocess<R>(
 }
 
 #[test]
+fn independent_macro_expansions_keep_scratch_memory_bounded() {
+    fn run(invocations: usize) -> usize {
+        let source = format!(
+            "#define ID(x) x\n#define TWICE(x) x + x\n{}",
+            "TWICE(ID(7));\n".repeat(invocations)
+        );
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let preprocess_arena = crate::util::bump::Bump::new();
+        let mut preprocessor = Preprocessor::new(
+            &preprocess_arena,
+            &mut context,
+            PathBuf::from("<test>").into_boxed_path(),
+            &source,
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let mut output = 0;
+        preprocessor.for_each_item(&mut context, |context, token| {
+            assert_eq!(
+                context.string_cache.at(token.contents),
+                ["7\0", "+", "7\0", ";"][output % 4]
+            );
+            output += 1;
+        });
+        assert_eq!(output, invocations * 4);
+        assert_eq!(context.pending_error_count(), 0);
+        preprocessor.expansion.high_water()
+    }
+
+    let short = run(1_024);
+    let long = run(8_192);
+    assert!(
+        long <= short * 2,
+        "expansion scratch grew with independent invocations: {short} bytes for 1,024, {long} \
+         bytes for 8,192"
+    );
+}
+
+#[test]
 fn adjacent_string_lookahead_restores_diagnostics_to_the_phase_context() {
     preprocess("\"a\" 0xg\n", |_, errors| {
         assert!(errors.iter().any(|error| matches!(
