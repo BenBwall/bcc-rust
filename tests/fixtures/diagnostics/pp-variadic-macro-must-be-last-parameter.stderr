@@ -4,6 +4,6 @@ error: `...` must be the last parameter of `F`
 1 | #define F(...,a) a
   |         ^ parameter after `...`
   |
-  = note: C99 §6.10.3p12: `...` ends the parameter list
+  = note: C99 §6.10p1: the `# define` grammar puts `...` last in the parameter list
 
 1 error generated.

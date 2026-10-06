@@ -640,7 +640,7 @@ impl PreprocessorErrorType<'_> {
             ))
             .label("the result is out of range")
             .note(
-                "C99 §6.10.1p3: `#if` arithmetic uses `intmax_t` and `uintmax_t`, and §6.6p4 \
+                "C99 §6.10.1p4: `#if` arithmetic uses `intmax_t` and `uintmax_t`, and §6.6p4 \
                  requires constant expressions to stay in range",
             )
         };
@@ -863,7 +863,7 @@ impl PreprocessorErrorType<'_> {
                 new("function call in `#if` expression")
                     .label("functions cannot be called during preprocessing")
                     .note(
-                        "C99 §6.10.1p3: identifiers that are not macros evaluate to `0`, so this \
+                        "C99 §6.10.1p4: identifiers that are not macros evaluate to `0`, so this \
                          looks like a call of an undefined function-like macro",
                     )
                     .help("define the function-like macro before this directive"),
@@ -988,7 +988,7 @@ impl PreprocessorErrorType<'_> {
             ))
             .label("not a macro")
             .note(
-                "C99 §6.10.1p3: identifiers that are not macro names are replaced with `0` in \
+                "C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in \
                  `#if`",
             )
             .help(format_in!(
@@ -1180,7 +1180,7 @@ impl PreprocessorErrorType<'_> {
                 "`...` must be the last parameter of `{name}`"
             ))
             .label("parameter after `...`")
-            .note("C99 §6.10.3p12: `...` ends the parameter list"),
+            .note("C99 §6.10p1: the `# define` grammar puts `...` last in the parameter list"),
             | Self::ExpectedCommaOrClosingParenthesisInMacroDefinition(kind) => new(format_in!(
                 arena,
                 "expected `,` or `)` in macro parameter list, found {}",

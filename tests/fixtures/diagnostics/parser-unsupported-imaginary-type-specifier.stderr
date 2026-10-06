@@ -4,6 +4,6 @@ error: `_Imaginary` is not supported
 1 | _Imaginary float value;
   | ^^^^^^^^^^ imaginary types are not implemented
   |
-  = note: C99 §6.7.2 reserves `_Imaginary`; imaginary types are only defined by the optional Annex G
+  = note: C99 §6.4.1p2 reserves `_Imaginary`; imaginary types are only defined by the optional Annex G (footnote 59)
 
 1 error generated.

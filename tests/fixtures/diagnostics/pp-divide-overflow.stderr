@@ -4,6 +4,6 @@ error: division overflows in `#if` expression
 1 | #if (-9223372036854775807LL - 1) / -1
   |                                  ^ the result is out of range
   |
-  = note: C99 §6.10.1p3: `#if` arithmetic uses `intmax_t` and `uintmax_t`, and §6.6p4 requires constant expressions to stay in range
+  = note: C99 §6.10.1p4: `#if` arithmetic uses `intmax_t` and `uintmax_t`, and §6.6p4 requires constant expressions to stay in range
 
 1 error generated.

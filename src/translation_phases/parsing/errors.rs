@@ -1056,8 +1056,8 @@ impl ParserErrorType<'_> {
                     *token,
                 )
                 .note(
-                    "C99 §6.5.3: the operand of a unary operator is a unary-expression, so a cast \
-                     cannot appear there",
+                    "C99 §6.5.3p1: the operand of `++`, `--`, or `sizeof` is a unary-expression, \
+                     so a cast cannot appear there",
                 ),
             | Self::ExpectedStatementExpression(
                 "unary-expression left operand of assignment",
@@ -1117,8 +1117,8 @@ impl ParserErrorType<'_> {
             | Self::UnsupportedImaginaryTypeSpecifier => new("`_Imaginary` is not supported")
                 .label("imaginary types are not implemented")
                 .note(
-                    "C99 §6.7.2 reserves `_Imaginary`; imaginary types are only defined by the \
-                     optional Annex G",
+                    "C99 §6.4.1p2 reserves `_Imaginary`; imaginary types are only defined by the \
+                     optional Annex G (footnote 59)",
                 ),
             | Self::DuplicateDefaultLabel => new("multiple `default` labels in one `switch`")
                 .label("second `default` label")
