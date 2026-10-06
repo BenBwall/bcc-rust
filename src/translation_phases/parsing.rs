@@ -200,10 +200,15 @@ struct ParserLimits {
 impl Default for ParserLimits {
     fn default() -> Self {
         Self {
-            external_declarations: 1_000_000,
-            syntax_nodes:          8_000_000,
-            frame_depth:           1_000_000,
-            source_segments:       40_000_000,
+            // These counters and their backing collections use `usize`.
+            // There is no smaller grammar or representation limit.
+            external_declarations: usize::MAX,
+            syntax_nodes:          usize::MAX,
+            // Scope bindings store their nesting depth in a `u32`.
+            frame_depth:           u32::MAX as usize,
+            // Each source arena checks its own `u32` index space. Their
+            // combined count has no smaller representation limit than usize.
+            source_segments:       usize::MAX,
         }
     }
 }

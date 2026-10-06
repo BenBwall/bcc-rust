@@ -260,24 +260,31 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
             | Self::Declarator(frame) => frame
                 .pointer_qualifiers
                 .len()
-                .saturating_add(frame.direct_declarators.len())
-                .saturating_add(if frame.nested.is_some() { 2 } else { 0 }),
+                .checked_add(frame.direct_declarators.len())
+                .and_then(|count| count.checked_add(if frame.nested.is_some() { 2 } else { 0 }))
+                .expect("retained syntax node count overflows usize"),
             | Self::ParameterList(frame) => frame
                 .parameters
                 .len()
-                .saturating_add(frame.identifiers.len()),
+                .checked_add(frame.identifiers.len())
+                .expect("retained syntax node count overflows usize"),
             | Self::StructOrUnionSpecifier(frame) => frame
                 .declarations
                 .len()
-                .saturating_add(frame.member_declarators.len()),
+                .checked_add(frame.member_declarators.len())
+                .expect("retained syntax node count overflows usize"),
             | Self::EnumSpecifier(frame) => frame.enumerators.len(),
             | Self::Expression(frame) => frame.call.as_ref().map_or(0, |call| call.arguments.len()),
-            | Self::Initializer(frame) => frame.elements.len().saturating_add(
-                frame
-                    .designation
-                    .as_ref()
-                    .map_or(0, |designation| designation.current_designators.len()),
-            ),
+            | Self::Initializer(frame) => frame
+                .elements
+                .len()
+                .checked_add(
+                    frame
+                        .designation
+                        .as_ref()
+                        .map_or(0, |designation| designation.current_designators.len()),
+                )
+                .expect("retained syntax node count overflows usize"),
             | Self::FunctionDefinition(frame) => frame.declaration_list.len(),
             | Self::CompoundStatement(frame) => frame.items.len(),
             | Self::Declaration(frame) => frame.init_declarators.len(),

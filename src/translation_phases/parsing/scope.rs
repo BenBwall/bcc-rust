@@ -67,11 +67,6 @@ struct RetainedPrototype {
     end:   usize,
 }
 
-/// Upper bound on retained prototype records before the oldest are dropped.
-/// A function definition consumes its record immediately after its declarator,
-/// so only the few most recent records can still be needed.
-const RETAINED_PROTOTYPE_LIMIT: usize = 64;
-
 /// File, function, prototype, block, and implicit statement scopes used for
 /// typedef-sensitive grammar choices.
 ///
@@ -202,7 +197,8 @@ impl<'p> ScopeStack<'p> {
     }
 
     fn publish_nested(&mut self, name: StringCacheId, class: NameClass) -> bool {
-        let depth = u32::try_from(self.nested_scopes.len()).unwrap_or(u32::MAX);
+        let depth =
+            u32::try_from(self.nested_scopes.len()).expect("scope nesting depth exceeds u32::MAX");
         let index = self.bindings.len();
         let innermost = self.innermost.entry(name).or_insert(NO_OUTER_BINDING);
         let outer = *innermost;
@@ -278,22 +274,6 @@ impl<'p> ScopeStack<'p> {
         let Some(scope) = self.nested_scopes.last() else {
             return;
         };
-        if self.retained_prototypes.len() >= RETAINED_PROTOTYPE_LIMIT {
-            // Forget the older half in place, so the records keep using the
-            // same storage.
-            let offset = self
-                .retained_prototypes
-                .get(RETAINED_PROTOTYPE_LIMIT / 2)
-                .map_or(self.retained_names.len(), |record| record.start);
-            self.retained_prototypes
-                .drain(..RETAINED_PROTOTYPE_LIMIT / 2)
-                .for_each(drop);
-            self.retained_names.drain(..offset).for_each(drop);
-            for record in &mut self.retained_prototypes {
-                record.start -= offset;
-                record.end -= offset;
-            }
-        }
         let start = self.retained_names.len();
         self.retained_names.extend(
             self.bindings[scope.start..]
@@ -322,9 +302,15 @@ impl<'p> ScopeStack<'p> {
                 self.publish(name, class);
             }
         }
+        self.clear_retained_bindings();
+        found.is_some()
+    }
+
+    /// No parameter list from a completed external declaration can belong to
+    /// a later function definition.
+    pub(super) fn clear_retained_bindings(&mut self) {
         self.retained_names.clear();
         self.retained_prototypes.clear();
-        found.is_some()
     }
 }
 

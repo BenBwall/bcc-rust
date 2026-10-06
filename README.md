@@ -205,7 +205,8 @@ Use `--iquote <directory>` (`-q`) and `--isystem <directory>` (`-s`) to add incl
 The preprocessor permits 200 simultaneously nested included headers, excluding
 the main source file. An include beyond that limit produces a diagnostic and
 processing continues with the remaining input. This exceeds C99's required
-minimum of 15 nested includes.
+minimum of 15 nested includes; the ceiling also makes an unguarded recursive
+include terminate without exhausting the process.
 
 Preprocessing uses a freestanding execution model: `__STDC__` is `1`,
 `__STDC_VERSION__` is `199901L`, and `__STDC_HOSTED__` is `0`.
@@ -369,9 +370,14 @@ before a real cleanup; only local branches are deleted. Run its tests with
 The language parser uses one explicit control stack of specialized, resumable
 frames. `Parser` borrows the translation context and owns the token cursor,
 frame stack, typed child result, syntax-node count, scope and label state,
-recovery state, and resource ceilings. Its working state lives in the parse
-arena; the syntax nodes it builds are immutable and live in the
-translation-unit arena.
+recovery state, and representation-based resource ceilings. Production parsing
+allows as many external declarations and syntax nodes as their `usize` counters
+can represent. Frame depth follows the `u32` width of stored scope depths.
+There is no aggregate source-segment ceiling: each provenance arena checks its
+own `u32` index space. Source-vector range starts use all 32 index bits; their
+lengths use 30 bits because the top two bits identify the arena. The parser's
+working state lives in the parse arena; the syntax nodes it builds are immutable
+and live in the translation-unit arena.
 
 `ExpressionFrame` owns Double-E-style operator/operand reduction alongside
 `TypeNameFrame` and `InitializerFrame`, and all supported statement and

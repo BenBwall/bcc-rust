@@ -35,6 +35,11 @@ use crate::{
                 ParserErrorType,
                 ParserResource,
             },
+            scope::{
+                NameClass,
+                ScopeKind,
+                ScopeStack,
+            },
             syntax::{
                 ExternalDeclaration,
                 Statement,
@@ -45,6 +50,22 @@ use crate::{
     },
     util::shared::SharedVec,
 };
+
+#[test]
+fn an_early_prototype_record_survives_later_parameter_lists() {
+    let arena = crate::util::bump::Bump::new();
+    let mut scopes = ScopeStack::new_in(&arena);
+    for index in 0..100 {
+        scopes.enter_scope(ScopeKind::FunctionPrototype);
+        scopes.publish((index + 1).into(), NameClass::Typedef);
+        scopes.retain_innermost_bindings((index as usize, 1));
+        scopes.restore_depth(0);
+    }
+    scopes.enter_scope(ScopeKind::Function);
+    assert!(scopes.publish_retained_bindings((0, 1)));
+    assert!(scopes.is_typedef(1.into()));
+    assert!(!scopes.is_typedef(100.into()));
+}
 
 #[test]
 fn parenthesized_declarators_meet_the_c99_floor_and_stress_the_heap_stack() {
@@ -400,9 +421,10 @@ fn configured_node_and_frame_limits_fail_with_stable_diagnostics() {
     );
 
     let defaults = ParserLimits::default();
-    assert!(defaults.external_declarations < u32::MAX as usize);
-    assert!(defaults.syntax_nodes < u32::MAX as usize);
-    assert!(defaults.frame_depth < u32::MAX as usize);
+    assert_eq!(defaults.external_declarations, usize::MAX);
+    assert_eq!(defaults.syntax_nodes, usize::MAX);
+    assert_eq!(defaults.frame_depth, u32::MAX as usize);
+    assert_eq!(defaults.source_segments, usize::MAX);
 }
 
 fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_>) {

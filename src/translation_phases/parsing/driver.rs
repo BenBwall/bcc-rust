@@ -240,7 +240,11 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                     unreachable!("the returned value was just checked")
                 };
                 self.has_external_declaration = true;
-                self.external_declaration_count += 1;
+                self.external_declaration_count = self
+                    .external_declaration_count
+                    .checked_add(1)
+                    .expect("external declaration count overflows usize");
+                self.scopes.clear_retained_bindings();
                 self.context.discard_completed_macro_locations(
                     self.cursor.previous.map(|token| token.source_vectors),
                 );
@@ -280,7 +284,9 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             // then only a consumed token, a pushed frame (new frames retain no
             // nodes), or a reduction (which releases retained nodes) occurred.
             debug_assert!(
-                self.syntax_nodes.saturating_add(self.retained_frame_nodes)
+                self.syntax_nodes
+                    .checked_add(self.retained_frame_nodes)
+                    .expect("total syntax node count overflows usize")
                     <= self.limits.syntax_nodes,
                 "syntax-node limit holds between steps"
             );
@@ -301,7 +307,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 .retained_frame_nodes
                 .checked_sub(retained_before)
                 .expect("pending syntax count matches the frame stack")
-                .saturating_add(retained_after);
+                .checked_add(retained_after)
+                .expect("retained syntax node count overflows usize");
             if self.context.source_segment_count() > self.limits.source_segments {
                 return self
                     .resource_failure(ParserResource::SourceSegments, self.limits.source_segments);
@@ -325,7 +332,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             // translation-unit arena cannot take memory back while
             // references into it may exist. Parsing stops here, so those
             // nodes are freed with the arena.
-            if self.syntax_nodes.saturating_add(self.retained_frame_nodes)
+            if self
+                .syntax_nodes
+                .checked_add(self.retained_frame_nodes)
+                .expect("total syntax node count overflows usize")
                 > self.limits.syntax_nodes
             {
                 return self
@@ -407,7 +417,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// the node limit.
     pub(super) fn alloc_syntax<T: TreeNode<'tu>>(&mut self, node: T) -> &'tu T {
         let node = &*self.tree.alloc(node);
-        self.syntax_nodes += 1;
+        self.syntax_nodes = self
+            .syntax_nodes
+            .checked_add(1)
+            .expect("syntax node count overflows usize");
         #[cfg(test)]
         self.syntax.record(node);
         node
@@ -429,7 +442,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     ) -> ArenaList<'tu, T> {
         let list = ArenaList::copy_from_slice(self.tree, nodes);
         nodes.clear();
-        self.syntax_nodes += list.len();
+        self.syntax_nodes = self
+            .syntax_nodes
+            .checked_add(list.len())
+            .expect("syntax node count overflows usize");
         #[cfg(test)]
         for node in list {
             self.syntax.record(node);
@@ -441,7 +457,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         frame.lend_pooled(&mut self.pools);
         self.retained_frame_nodes = self
             .retained_frame_nodes
-            .saturating_add(frame.retained_node_count());
+            .checked_add(frame.retained_node_count())
+            .expect("retained syntax node count overflows usize");
         self.frames.push(frame);
     }
 
@@ -496,6 +513,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         self.returned = None;
         self.recovery.abandon();
         self.scopes.restore_depth(0);
+        self.scopes.clear_retained_bindings();
         self.label_scopes.exit_all();
         self.switch_scopes.clear();
         Some(ExternalDeclaration::Error(source_vectors))
