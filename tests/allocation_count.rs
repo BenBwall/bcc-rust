@@ -519,15 +519,15 @@ mod measurements {
     /// Recovery paths also belong to the zero-global-allocation contract.
     #[test]
     fn compiling_malformed_sources_allocates_only_from_arenas() {
-        for (name, source) in [
-            ("parser recovery", "int x = ;\nint y;\n"),
-            ("preprocessor recovery", "#if (1 + )\n#endif\nint y;\n"),
+        for (name, source, expected_declarations) in [
+            ("parser recovery", "int x = ;\nint y;\n", 2),
+            ("preprocessor recovery", "#if (1 + )\n#endif\nint y;\n", 1),
         ] {
             let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
             assert!(summary.diagnostics > 0, "{name}: expected diagnostics");
-            assert!(
-                summary.external_declarations > 0,
-                "{name}: lost the following declaration"
+            assert_eq!(
+                summary.external_declarations, expected_declarations,
+                "{name}: lost the following declaration or added a spurious one"
             );
             assert_eq!(
                 allocations.calls, 0,
