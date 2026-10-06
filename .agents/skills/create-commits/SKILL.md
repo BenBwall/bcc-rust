@@ -38,8 +38,8 @@ Validation: cargo test --all-targets and cargo clippy --all-targets -- -D warnin
 
 1. **Split.** From the conversation, `git status` and the diffs, group the changes into commits with
    one outcome each; tests, snapshots, docs and renamed callers go with their change. Leave
-   unrelated and already-staged work alone, including the root `*-report.html` research notes and
-   other untracked artifacts. Ask only when the grouping is ambiguous.
+   unrelated and already-staged work alone, including untracked artifacts. Ask only when the
+   grouping is ambiguous.
 2. **Approve.** Show each commit's files, why it stands alone, and its full message. Get one approval
    for the set unless already authorized.
 3. **Check the hook.** Confirm `git config core.hooksPath` is set and contains a `commit-msg` hook.

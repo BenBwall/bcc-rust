@@ -16,28 +16,33 @@ fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {
                      static struct switch typedef union unsigned void volatile while _Bool \
                      _Complex _Imaginary";
     let source = format!("{spellings} integer Int _bool while_ defined identifier\n");
-    super::strategies::assert_strategies_agree(&source);
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut pp = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<keywords>").into_boxed_path(),
-        source.into(),
+        &source,
         SharedVec::default(),
         SharedVec::default(),
     );
+    let mut tokens = Vec::new();
+    pp.for_each_iterator_item(&mut context, |_, token| tokens.push(token));
+    let mut tokens = tokens.into_iter();
     for spelling in spellings.split_whitespace() {
-        let token = pp.next_iterator_item(&mut context).unwrap();
+        let token = tokens.next().unwrap();
         let TokenType::Keyword(keyword) = token.kind else {
             panic!("{spelling}: {token:?}")
         };
         assert_eq!(keyword.spelling(), spelling);
     }
     for spelling in ["integer", "Int", "_bool", "while_", "defined", "identifier"] {
-        let token = pp.next_iterator_item(&mut context).unwrap();
+        let token = tokens.next().unwrap();
         assert_eq!(token.kind, TokenType::Identifier);
         assert_eq!(context.string_cache.at(token.contents), spelling);
     }
-    assert!(pp.next_iterator_item(&mut context).is_none());
+    assert!(tokens.next().is_none());
     assert!(context.take_pending_errors().is_empty());
 }
 
@@ -45,30 +50,36 @@ fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {
 fn keywords_remain_macro_names_and_paste_results_until_phase_seven() {
     let source =
         "#define int renamed\nint\n#undef int\n#define CAT(a,b) a##b\nCAT(in,t) CAT(wh,ile)\n";
-    super::strategies::assert_strategies_agree(source);
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut pp = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<keywords>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
+    let mut tokens = Vec::new();
+    pp.for_each_iterator_item(&mut context, |_, token| tokens.push(token));
+    let mut tokens = tokens.into_iter();
     for expected in [
         TokenType::Identifier,
         TokenType::Keyword(KeywordTokenType::Int),
         TokenType::Keyword(KeywordTokenType::While),
     ] {
-        assert_eq!(pp.next_iterator_item(&mut context).unwrap().kind, expected);
+        assert_eq!(tokens.next().unwrap().kind, expected);
     }
-    assert!(pp.next_iterator_item(&mut context).is_none());
+    assert!(tokens.next().is_none());
     assert!(context.take_pending_errors().is_empty());
 }
 
 #[test]
 fn keyword_ids_are_a_stable_prefix_across_contexts_and_cache_growth() {
     for _ in 0..2 {
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         for index in 0..1000 {
             _ = context.string_cache.intern(format!("name_{index}"));
         }

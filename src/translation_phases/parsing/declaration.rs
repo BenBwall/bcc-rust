@@ -38,18 +38,20 @@ use super::{
     },
     scope::NameClass,
     statement::is_statement_keyword,
-    syntax::{
-        DeclarationIndex,
-        StorageClass,
-    },
+    syntax::StorageClass,
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        SourceVectors,
+        preprocessing::{
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -59,16 +61,16 @@ use crate::translation_phases::{
 /// C99: declaration, init-declarator-list, and init-declarator are §6.7,
 /// p. 97; PDF p. 109.
 #[derive(Debug)]
-pub(super) struct DeclarationFrame {
+pub(super) struct DeclarationFrame<'tu, 'p> {
     /// Current declaration transition.
     phase: DeclarationPhase,
     /// Specifiers shared by every init-declarator in this declaration.
-    declaration_specifiers: Option<DeclarationSpecifiers>,
+    declaration_specifiers: Option<DeclarationSpecifiers<'tu>>,
     /// Init-declarators parsed so far, stored as one list when the
     /// declaration reduces.
-    pub(super) init_declarators: Vec<InitDeclarator>,
+    pub(super) init_declarators: ArenaVec<'p, InitDeclarator<'tu>>,
     /// Provenance accumulated across specifiers, declarators, and separators.
-    pub(super) source_vectors: Vec<SourceVectors>,
+    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     /// Hard-error count on entry, used to scope recovery to this declaration.
     starting_error_count: usize,
     /// Provenance of `=` retained while the initializer child runs.
@@ -111,17 +113,21 @@ pub(super) enum DeclarationPhase {
     AwaitInitializer,
     /// Push another declarator after consuming `,`.
     BeforeNextDeclarator,
-    /// Store the declaration and return its arena handle.
+    /// Store the declaration and return it.
     Finish,
 }
 
-impl DeclarationFrame {
-    pub(super) fn new(context: DeclarationContext, starting_error_count: usize) -> Self {
+impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
+    pub(super) fn new(
+        arena: &'p Bump,
+        context: DeclarationContext,
+        starting_error_count: usize,
+    ) -> Self {
         Self {
             phase: DeclarationPhase::Start,
             declaration_specifiers: None,
-            init_declarators: Vec::new(),
-            source_vectors: Vec::new(),
+            init_declarators: ArenaVec::new_in(arena),
+            source_vectors: ArenaVec::new_in(arena),
             starting_error_count,
             initializer_source: None,
             context,
@@ -163,11 +169,10 @@ impl DeclarationFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | DeclarationPhase::Start => {
                 debug_assert!(
@@ -195,7 +200,6 @@ impl DeclarationFrame {
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     if specifiers.storage_class == Some(StorageClass::Typedef) {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedDeclaratorInTypedef(
                                 token.map(|token| token.kind),
                             ),
@@ -210,6 +214,7 @@ impl DeclarationFrame {
                 } else {
                     self.phase = DeclarationPhase::AwaitDeclarator;
                     ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        parser.arena,
                         DeclaratorMode::Named,
                     )))
                 }
@@ -220,7 +225,6 @@ impl DeclarationFrame {
                 };
                 let Some(declarator) = declarator else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclaratorInDeclaration(
                             token.map(|token| token.kind),
                         ),
@@ -245,7 +249,7 @@ impl DeclarationFrame {
                 // before its initializer or a
                 // later comma-separated declarator. Publish
                 // now so typedef shadowing affects the very next token.
-                if let Some(identifier) = parser.declarator_identifier(declarator) {
+                if let Some(identifier) = declarator.identifier() {
                     let class = if self.declaration_specifiers.is_some_and(|specifiers| {
                         specifiers.storage_class == Some(StorageClass::Typedef)
                     }) {
@@ -309,14 +313,10 @@ impl DeclarationFrame {
                 {
                     self.init_declarators
                         .first()
-                        .and_then(|init| parser.function_suffix(init.declarator))
+                        .and_then(|init| init.declarator.function_suffix())
                         .and_then(|suffix| match suffix {
-                            | DirectDeclarator::KAndRStyleFunction { parameters } => Some(
-                                parser.syntax[parameters]
-                                    .iter()
-                                    .map(|parameter| parameter.name)
-                                    .collect::<Vec<_>>(),
-                            ),
+                            | DirectDeclarator::KAndRStyleFunction { parameters } =>
+                                Some(parameters),
                             | _ => None,
                         })
                 } else {
@@ -330,7 +330,7 @@ impl DeclarationFrame {
                     != self.starting_error_count
                     && token.is_some_and(|token| parser.declaration_starter(token))
                     && old_style_parameters.is_some_and(|parameters| {
-                        parser.next_declaration_declares_one_of(context, &parameters)
+                        parser.next_declaration_declares_one_of(parameters.as_slice())
                     });
                 let starts_function_definition = self.context == DeclarationContext::External
                     && has_sole_uninitialized_declarator
@@ -380,7 +380,6 @@ impl DeclarationFrame {
                     && is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -391,7 +390,6 @@ impl DeclarationFrame {
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -415,7 +413,6 @@ impl DeclarationFrame {
                         ) && is_statement_keyword(token.kind)
                 }) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -429,10 +426,9 @@ impl DeclarationFrame {
                     DeclarationContext::Block | DeclarationContext::ForInitializer
                 ) && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                     || token.is_some_and(|token| token.kind == TokenType::Identifier)
-                        && is_operator(parser.cursor.following(context), OperatorTokenType::Colon))
+                        && is_operator(parser.cursor.following(), OperatorTokenType::Colon))
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -443,7 +439,6 @@ impl DeclarationFrame {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             None,
                             self.continuation(),
@@ -454,7 +449,6 @@ impl DeclarationFrame {
                     ParseAction::Reprocess
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
                             token.map(|token| token.kind),
                             self.continuation(),
@@ -475,6 +469,7 @@ impl DeclarationFrame {
                 );
                 self.phase = DeclarationPhase::AwaitInitializer;
                 ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
+                    parser.arena,
                     parser.hard_error_count,
                     self.context == DeclarationContext::ForInitializer,
                     false,
@@ -482,24 +477,25 @@ impl DeclarationFrame {
             },
             | DeclarationPhase::AwaitInitializer => {
                 let Some(ParseValue::Initializer(InitializerResult {
-                    index: initializer_index,
+                    initializer: initializer_index,
                     recovered,
                 })) = returned
                 else {
                     panic!("initializer frame returned an unexpected value: {returned:?}");
                 };
                 let _ = recovered;
-                let source_vectors = parser.syntax[initializer_index].source_vectors;
+                let source_vectors = initializer_index.source_vectors;
                 let initializer_source = self
                     .initializer_source
                     .map_or(source_vectors, |equals_source| {
-                        context.merge_vectors(equals_source, source_vectors)
+                        parser.context.merge_vectors(equals_source, source_vectors)
                     });
                 self.source_vectors.push(source_vectors);
                 if let Some(init_declarator) = self.init_declarators.last_mut() {
                     init_declarator.initializer = Some(initializer_index);
-                    init_declarator.source_vectors =
-                        context.merge_vectors(init_declarator.source_vectors, initializer_source);
+                    init_declarator.source_vectors = parser
+                        .context
+                        .merge_vectors(init_declarator.source_vectors, initializer_source);
                 }
                 self.phase = DeclarationPhase::AfterDeclarator;
                 ParseAction::Continue
@@ -511,6 +507,7 @@ impl DeclarationFrame {
                 );
                 self.phase = DeclarationPhase::AwaitDeclarator;
                 ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                    parser.arena,
                     DeclaratorMode::Named,
                 )))
             },
@@ -520,11 +517,11 @@ impl DeclarationFrame {
                     "this frame phase cannot receive a child value"
                 );
                 // Arena insertion is the reduction boundary: all child
-                // slices and source ranges are
-                // stable before the handle is returned.
-                let source_vectors = context.merge_vector_list(&self.source_vectors);
-                let init_declarators = parser.append_syntax(&mut self.init_declarators);
-                let index = parser.push_syntax(Declaration {
+                // slices and source ranges are complete before the
+                // declaration is stored and returned.
+                let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
+                let init_declarators = parser.alloc_syntax_list(&mut self.init_declarators);
+                let declaration = parser.alloc_syntax(Declaration {
                     declaration_specifiers: self
                         .declaration_specifiers
                         .expect("a declaration cannot finish without specifiers"),
@@ -533,7 +530,7 @@ impl DeclarationFrame {
                     recovered: parser.hard_error_count > self.starting_error_count,
                     is_function_definition_head: self.is_function_definition_head,
                 });
-                ParseAction::Reduce(ParseValue::Declaration(DeclarationIndex(index)))
+                ParseAction::Reduce(ParseValue::Declaration(declaration))
             },
         }
     }

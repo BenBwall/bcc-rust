@@ -8,15 +8,23 @@ use super::{
     declaration::DeclarationFrame,
     declaration_specifiers::DeclarationSpecifiersFrame,
     declaration_syntax::{
+        Declaration,
         DeclarationSpecifiers,
         Declarator,
         DirectDeclarator,
+        EnumSpecifier,
+        Initializer,
+        StructOrUnionSpecifier,
+        TypeName,
     },
     declarator::DeclaratorFrame,
     enum_specifier::EnumSpecifierFrame,
     expression::ExpressionFrame,
     external_declaration::ExternalDeclarationFrame,
-    frame_pool::FramePools,
+    frame_pool::{
+        FramePools,
+        PoolBox,
+    },
     function_definition::FunctionDefinitionFrame,
     initializer::InitializerFrame,
     parameter_list::ParameterListFrame,
@@ -24,16 +32,11 @@ use super::{
     statement::StatementFrame,
     struct_or_union::StructOrUnionSpecifierFrame,
     syntax::{
-        ConstantExpressionIndex,
-        DeclarationIndex,
-        EnumSpecifierIndex,
-        ExpressionIndex,
+        ConstantExpression,
+        Expression,
         ExternalDeclaration,
-        FunctionDefinitionIndex,
-        InitializerIndex,
-        StatementIndex,
-        StructOrUnionSpecifierIndex,
-        TypeNameIndex,
+        FunctionDefinition,
+        Statement,
     },
     type_name::TypeNameFrame,
 };
@@ -109,13 +112,13 @@ impl ParseFrameKind {
 /// recursion and support the translation-limit requirements of §5.2.4.1,
 /// pp. 20-21; PDF pp. 32-33.
 #[derive(Debug)]
-pub(super) enum ParseAction {
+pub(super) enum ParseAction<'tu, 'p> {
     /// Consume the current token and keep the active frame.
     Consume,
     /// Suspend the active frame and push an unstarted child.
-    Push(ParseFrame),
+    Push(ParseFrame<'tu, 'p>),
     /// Complete the active frame and return a typed value to its parent.
-    Reduce(ParseValue),
+    Reduce(ParseValue<'tu>),
     /// Keep the current token and run the active frame again after a state
     /// change.
     Reprocess,
@@ -132,29 +135,29 @@ pub(super) enum ParseAction {
 /// C99: values correspond to completed nonterminals from §6.7-§6.9,
 /// pp. 97-144; PDF pp. 109-156. Typed returns are an implementation mechanism.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ParseValue {
+pub(super) enum ParseValue<'tu> {
     /// Result of a declaration-specifier child.
-    DeclarationSpecifiers(DeclarationSpecifiers),
+    DeclarationSpecifiers(DeclarationSpecifiers<'tu>),
     /// Declarator result; `None` records a recoverable missing declarator.
-    Declarator(Option<Declarator>),
+    Declarator(Option<Declarator<'tu>>),
     /// Completed function or K&R parameter-list suffix.
-    ParameterList(ParameterListResult),
-    /// Arena handle for a completed struct or union specifier.
-    StructOrUnionSpecifier(StructOrUnionSpecifierIndex),
+    ParameterList(ParameterListResult<'tu>),
+    /// Completed struct or union specifier.
+    StructOrUnionSpecifier(&'tu StructOrUnionSpecifier<'tu>),
     /// Completed enum specifier and its recovery handoff.
-    EnumSpecifier(EnumSpecifierResult),
-    /// Arena handle for a completed type name.
-    TypeName(TypeNameIndex),
-    Expression(ExpressionResult),
-    ConstantExpression(ConstantExpressionResult),
-    Initializer(InitializerResult),
-    /// Arena handle for a completed declaration.
-    Declaration(DeclarationIndex),
-    FunctionDefinition(FunctionDefinitionIndex),
-    CompoundStatement(StatementIndex),
-    Statement(StatementIndex),
+    EnumSpecifier(EnumSpecifierResult<'tu>),
+    /// Completed type name.
+    TypeName(&'tu TypeName<'tu>),
+    Expression(ExpressionResult<'tu>),
+    ConstantExpression(ConstantExpressionResult<'tu>),
+    Initializer(InitializerResult<'tu>),
+    /// Completed declaration.
+    Declaration(&'tu Declaration<'tu>),
+    FunctionDefinition(&'tu FunctionDefinition<'tu>),
+    CompoundStatement(&'tu Statement<'tu>),
+    Statement(&'tu Statement<'tu>),
     /// External item ready to be yielded by the translation-phase seam.
-    ExternalDeclaration(ExternalDeclaration),
+    ExternalDeclaration(ExternalDeclaration<'tu>),
 }
 
 /// Parameter-list child result before it is appended to a declarator frame.
@@ -163,38 +166,38 @@ pub(super) enum ParseValue {
 /// by §6.7.5, p. 114; PDF p. 126, with semantics in §6.7.5.3,
 /// pp. 118-121; PDF pp. 130-133.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ParameterListResult {
+pub(super) struct ParameterListResult<'tu> {
     /// Function suffix constructed from the parsed list.
-    pub(super) direct_declarator: DirectDeclarator,
+    pub(super) direct_declarator: DirectDeclarator<'tu>,
     /// Exact source provenance owned by the parameter-list frame.
     pub(super) source_vectors:    SourceVectors,
 }
 
 /// Enum child result before its type specifier is merged into the parent.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct EnumSpecifierResult {
-    /// Arena handle for the completed enum specifier.
-    pub(super) index: EnumSpecifierIndex,
+pub(super) struct EnumSpecifierResult<'tu> {
+    /// Completed enum specifier.
+    pub(super) index: &'tu EnumSpecifier<'tu>,
     /// Whether recovery stopped before a following declaration.
     pub(super) stopped_before_declaration: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ExpressionResult {
-    pub(super) index:     ExpressionIndex,
-    pub(super) recovered: bool,
+pub(super) struct ExpressionResult<'tu> {
+    pub(super) expression: &'tu Expression<'tu>,
+    pub(super) recovered:  bool,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ConstantExpressionResult {
-    pub(super) index:     ConstantExpressionIndex,
-    pub(super) recovered: bool,
+pub(super) struct ConstantExpressionResult<'tu> {
+    pub(super) expression: ConstantExpression<'tu>,
+    pub(super) recovered:  bool,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct InitializerResult {
-    pub(super) index:     InitializerIndex,
-    pub(super) recovered: bool,
+pub(super) struct InitializerResult<'tu> {
+    pub(super) initializer: &'tu Initializer<'tu>,
+    pub(super) recovered:   bool,
 }
 
 /// Sum type for every grammar frame currently implemented by the parser.
@@ -202,22 +205,23 @@ pub(super) struct InitializerResult {
 /// C99: the represented grammar families currently cover declarations through
 /// external definitions, §6.7-§6.9, pp. 97-144; PDF pp. 109-156.
 #[derive(Debug)]
-pub(super) enum ParseFrame {
+pub(super) enum ParseFrame<'tu, 'p> {
     ExternalDeclaration(ExternalDeclarationFrame),
-    Declaration(DeclarationFrame),
-    DeclarationSpecifiers(DeclarationSpecifiersFrame),
-    Declarator(DeclaratorFrame),
+    Declaration(DeclarationFrame<'tu, 'p>),
+    DeclarationSpecifiers(DeclarationSpecifiersFrame<'tu>),
+    Declarator(DeclaratorFrame<'tu, 'p>),
     // Parameter lists and struct/union bodies already own growing lists, so
-    // boxing them keeps every other frame push small.
-    ParameterList(Box<ParameterListFrame>),
-    StructOrUnionSpecifier(Box<StructOrUnionSpecifierFrame>),
-    EnumSpecifier(EnumSpecifierFrame),
-    TypeName(TypeNameFrame),
-    Expression(ExpressionFrame),
-    Initializer(InitializerFrame),
-    FunctionDefinition(FunctionDefinitionFrame),
-    CompoundStatement(CompoundStatementFrame),
-    Statement(StatementFrame),
+    // boxing them keeps every other frame push small. The boxes are pooled,
+    // so a popped frame's box serves the next one.
+    ParameterList(PoolBox<'p, ParameterListFrame<'tu, 'p>>),
+    StructOrUnionSpecifier(PoolBox<'p, StructOrUnionSpecifierFrame<'tu, 'p>>),
+    EnumSpecifier(EnumSpecifierFrame<'tu, 'p>),
+    TypeName(TypeNameFrame<'tu>),
+    Expression(ExpressionFrame<'tu, 'p>),
+    Initializer(InitializerFrame<'tu, 'p>),
+    FunctionDefinition(FunctionDefinitionFrame<'tu, 'p>),
+    CompoundStatement(CompoundStatementFrame<'tu, 'p>),
+    Statement(StatementFrame<'tu>),
 }
 
 #[cfg(test)]
@@ -233,7 +237,7 @@ pub(super) struct FrameTraceEvent {
     pub(super) depth:  usize,
 }
 
-impl ParseAction {
+impl ParseAction<'_, '_> {
     #[cfg(test)]
     pub(super) fn name(&self) -> &'static str {
         match self {
@@ -247,14 +251,17 @@ impl ParseAction {
     }
 }
 
-impl ParseFrame {
+impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// Counts arena entries retained by a frame before their final bulk insert.
     pub(super) fn retained_node_count(&self) -> usize {
         match self {
+            // A parenthesized declarator waiting for its `)` counts as the
+            // node it becomes and the direct-declarator entry naming it.
             | Self::Declarator(frame) => frame
                 .pointer_qualifiers
                 .len()
-                .saturating_add(frame.direct_declarators.len()),
+                .saturating_add(frame.direct_declarators.len())
+                .saturating_add(if frame.nested.is_some() { 2 } else { 0 }),
             | Self::ParameterList(frame) => frame
                 .parameters
                 .len()
@@ -282,7 +289,7 @@ impl ParseFrame {
     }
 
     /// Gives a newly pushed frame spare vectors for the lists it grows.
-    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools) {
+    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         match self {
             | Self::Declaration(frame) => {
                 pools.init_declarators.lend(&mut frame.init_declarators);
@@ -296,6 +303,12 @@ impl ParseFrame {
             | Self::Initializer(frame) => {
                 pools.initializers.lend(&mut frame.elements);
                 pools.source_vectors.lend(&mut frame.source_vectors);
+                if frame.designation.is_none() {
+                    frame.designation = Some(pools.take_designation());
+                }
+            },
+            | Self::FunctionDefinition(frame) => {
+                pools.declarations.lend(&mut frame.declaration_list);
             },
             | Self::CompoundStatement(frame) => {
                 pools.block_items.lend(&mut frame.items);
@@ -318,55 +331,50 @@ impl ParseFrame {
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
-            | Self::FunctionDefinition(_)
             | Self::Statement(_) => {},
         }
     }
 
-    /// Returns a popped frame's vectors to the pools.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools) {
+    /// Returns a popped frame's vectors, boxes, and other pooled storage to
+    /// the pools. Every popped frame comes here, so none of its arena storage
+    /// is left behind.
+    pub(super) fn reclaim_pooled(self, pools: &mut FramePools<'tu, 'p>) {
         match self {
-            | Self::Declaration(frame) => {
+            | Self::Declaration(mut frame) => {
                 pools.init_declarators.reclaim(&mut frame.init_declarators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
             },
-            | Self::Declarator(frame) => {
-                pools
-                    .pointer_qualifiers
-                    .reclaim(&mut frame.pointer_qualifiers);
-                pools
-                    .direct_declarators
-                    .reclaim(&mut frame.direct_declarators);
+            | Self::Declarator(mut frame) => frame.reclaim_pooled(pools),
+            | Self::Expression(mut frame) => frame.reclaim_pooled(pools),
+            | Self::Initializer(mut frame) => frame.reclaim_pooled(pools),
+            | Self::FunctionDefinition(mut frame) => {
+                pools.declarations.reclaim(&mut frame.declaration_list);
             },
-            | Self::Expression(frame) => frame.reclaim_pooled(pools),
-            | Self::Initializer(frame) => {
-                pools.initializers.reclaim(&mut frame.elements);
-                pools.source_vectors.reclaim(&mut frame.source_vectors);
-            },
-            | Self::CompoundStatement(frame) => {
+            | Self::CompoundStatement(mut frame) => {
                 pools.block_items.reclaim(&mut frame.items);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
             },
-            | Self::ParameterList(frame) => {
+            | Self::ParameterList(mut frame) => {
                 pools.parameters.reclaim(&mut frame.parameters);
                 pools.identifiers.reclaim(&mut frame.identifiers);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
+                pools.parameter_lists.reclaim(frame);
             },
-            | Self::StructOrUnionSpecifier(frame) => {
+            | Self::StructOrUnionSpecifier(mut frame) => {
                 pools.struct_members.reclaim(&mut frame.declarations);
                 pools
                     .struct_declarators
                     .reclaim(&mut frame.member_declarators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
+                pools.struct_or_union_specifiers.reclaim(frame);
             },
-            | Self::EnumSpecifier(frame) => {
+            | Self::EnumSpecifier(mut frame) => {
                 pools.enumerators.reclaim(&mut frame.enumerators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
             },
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
-            | Self::FunctionDefinition(_)
             | Self::Statement(_) => {},
         }
     }
@@ -393,7 +401,7 @@ impl ParseFrame {
     /// frame; frames without an owned syntax range intentionally ignore them.
     pub(super) fn merge_recovered_sources(
         &mut self,
-        context: &mut Context,
+        context: &mut Context<'_>,
         recovered: Option<SourceVectors>,
     ) {
         let Some(recovered) = recovered else {
@@ -441,14 +449,13 @@ impl ParseFrame {
     /// repeating [`ParseAction::Continue`] transitions in place.
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         let mut returned = returned;
         loop {
-            let action = self.step_once(parser, context, token, returned.take());
+            let action = self.step_once(parser, token, returned.take());
             if !matches!(action, ParseAction::Continue) {
                 return action;
             }
@@ -459,41 +466,40 @@ impl ParseFrame {
     /// kind cannot change during a step, so the driver reads it beforehand.
     fn step_once(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self {
-            | Self::ExternalDeclaration(frame) => frame.step(parser, context, token, returned),
-            | Self::Declaration(frame) => frame.step(parser, context, token, returned),
-            | Self::DeclarationSpecifiers(frame) => frame.step(parser, context, token, returned),
-            | Self::Declarator(frame) => frame.step(parser, context, token, returned),
-            | Self::ParameterList(frame) => frame.step(parser, context, token, returned),
-            | Self::StructOrUnionSpecifier(frame) => frame.step(parser, context, token, returned),
-            | Self::EnumSpecifier(frame) => frame.step(parser, context, token, returned),
-            | Self::TypeName(frame) => frame.step(parser, context, token, returned),
-            | Self::Expression(frame) => frame.step(parser, context, token, returned),
-            | Self::Initializer(frame) => frame.step(parser, context, token, returned),
-            | Self::FunctionDefinition(frame) => frame.step(parser, context, token, returned),
-            | Self::CompoundStatement(frame) => frame.step(parser, context, token, returned),
-            | Self::Statement(frame) => frame.step(parser, context, token, returned),
+            | Self::ExternalDeclaration(frame) => frame.step(parser, token, returned),
+            | Self::Declaration(frame) => frame.step(parser, token, returned),
+            | Self::DeclarationSpecifiers(frame) => frame.step(parser, token, returned),
+            | Self::Declarator(frame) => frame.step(parser, token, returned),
+            | Self::ParameterList(frame) => frame.step(parser, token, returned),
+            | Self::StructOrUnionSpecifier(frame) => frame.step(parser, token, returned),
+            | Self::EnumSpecifier(frame) => frame.step(parser, token, returned),
+            | Self::TypeName(frame) => frame.step(parser, token, returned),
+            | Self::Expression(frame) => frame.step(parser, token, returned),
+            | Self::Initializer(frame) => frame.step(parser, token, returned),
+            | Self::FunctionDefinition(frame) => frame.step(parser, token, returned),
+            | Self::CompoundStatement(frame) => frame.step(parser, token, returned),
+            | Self::Statement(frame) => frame.step(parser, token, returned),
         }
     }
 }
 
-pub(super) fn expression_value(returned: Option<ParseValue>) -> ExpressionIndex {
-    let Some(ParseValue::Expression(ExpressionResult { index, .. })) = returned else {
+pub(super) fn expression_value(returned: Option<ParseValue<'_>>) -> &Expression<'_> {
+    let Some(ParseValue::Expression(ExpressionResult { expression, .. })) = returned else {
         panic!("expression child returned an unexpected value: {returned:?}");
     };
-    index
+    expression
 }
 
-pub(super) fn any_expression_value(returned: Option<ParseValue>) -> ExpressionIndex {
+pub(super) fn any_expression_value(returned: Option<ParseValue<'_>>) -> &Expression<'_> {
     match returned {
-        | Some(ParseValue::Expression(ExpressionResult { index, .. })) => index,
-        | Some(ParseValue::ConstantExpression(ConstantExpressionResult { index, .. })) =>
-            index.into(),
+        | Some(ParseValue::Expression(ExpressionResult { expression, .. })) => expression,
+        | Some(ParseValue::ConstantExpression(ConstantExpressionResult { expression, .. })) =>
+            expression.into(),
         | returned => panic!("expression child returned an unexpected value: {returned:?}"),
     }
 }

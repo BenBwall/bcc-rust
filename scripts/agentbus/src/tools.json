@@ -1,0 +1,9 @@
+[
+  {"name":"send","description":"Send a message to another agent, or to `all` agents.","inputSchema":{"type":"object","properties":{"to":{"type":"string","description":"Recipient agent name (e.g. `codex`, `claude`) or `all`."},"body":{"type":"string","description":"Message text. Be specific and self-contained."},"subject":{"type":"string","description":"Optional short subject line."},"reply_to":{"type":"integer","description":"Message id being answered; threads the reply."}},"required":["to","body"]}},
+  {"name":"inbox","description":"List messages addressed to you that you have not acknowledged.","inputSchema":{"type":"object","properties":{"include_acked":{"type":"boolean","description":"Include acknowledged messages (recent history)."},"limit":{"type":"integer","minimum":1,"maximum":100}}}},
+  {"name":"ack","description":"Acknowledge messages you have handled so they leave your inbox.","inputSchema":{"type":"object","properties":{"ids":{"type":"array","items":{"type":"integer"},"minItems":1}},"required":["ids"]}},
+  {"name":"thread","description":"Show every message in the thread containing a message.","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}},
+  {"name":"claim","description":"Lease a resource (file path, module, or task name) so other agents avoid it. Fails if another agent holds an unexpired claim; renews your own.","inputSchema":{"type":"object","properties":{"resource":{"type":"string"},"note":{"type":"string","description":"What you are doing with it."},"ttl_minutes":{"type":"integer","minimum":1,"maximum":1440}},"required":["resource"]}},
+  {"name":"release","description":"Release a resource you claimed.","inputSchema":{"type":"object","properties":{"resource":{"type":"string"}},"required":["resource"]}},
+  {"name":"claims","description":"List active claims held by any agent.","inputSchema":{"type":"object","properties":{}}}
+]

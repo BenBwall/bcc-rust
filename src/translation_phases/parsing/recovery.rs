@@ -6,10 +6,16 @@ use super::{
     machine::ParseFrameKind,
     statement::is_statement_keyword,
 };
-use crate::translation_phases::preprocessing::{
-    KeywordTokenType,
-    OperatorTokenType,
-    TokenType,
+use crate::{
+    translation_phases::preprocessing::{
+        KeywordTokenType,
+        OperatorTokenType,
+        TokenType,
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 /// A production-specific synchronization policy and the frame allowed to
@@ -71,12 +77,15 @@ pub(super) enum SynchronizationKind {
 /// Keeping delimiter depth here makes recovery ownership inspectable and keeps
 /// the state resumable if the token source becomes asynchronous in a later
 /// phase. `active` is `None` whenever normal frame execution is in progress.
+/// A finished scan keeps its emptied stacks in `spare` for the next one, so
+/// recovery reuses the same parse-arena storage however often it runs.
 ///
 /// C99: §5.1.1.3, p. 11; PDF p. 23 requires diagnostics but leaves recovery
 /// strategy to the implementation.
-#[derive(Debug, Default)]
-pub(super) struct RecoveryState {
-    pub(super) active: Option<ActiveRecovery>,
+pub(super) struct RecoveryState<'p> {
+    pub(super) active: Option<ActiveRecovery<'p>>,
+    spare:             Option<ActiveRecovery<'p>>,
+    arena:             &'p Bump,
 }
 
 /// Delimiter depth at which a conditional question mark was consumed.
@@ -92,39 +101,68 @@ pub(super) struct DelimiterDepth {
 /// C99: delimiter ownership follows the productions of §6.5-§6.9,
 /// pp. 67-144; PDF pp. 79-156. Depth tracking is an implementation mechanism.
 #[derive(Debug)]
-pub(super) struct ActiveRecovery {
+pub(super) struct ActiveRecovery<'p> {
     pub(super) set: SynchronizationSet,
     pub(super) parentheses: usize,
     pub(super) brackets: usize,
     pub(super) braces: usize,
-    pub(super) questions: Vec<DelimiterDepth>,
+    pub(super) questions: ArenaVec<'p, DelimiterDepth>,
     pub(super) last_token: Option<TokenType>,
-    parenthesized_type_names: Vec<bool>,
-    parenthesized_sizeof_type_names: Vec<bool>,
+    parenthesized_type_names: ArenaVec<'p, bool>,
+    parenthesized_sizeof_type_names: ArenaVec<'p, bool>,
     pub(super) last_closed_parenthesis_was_type_name: bool,
     pub(super) last_closed_parenthesis_was_sizeof_type_name: bool,
 }
 
-impl RecoveryState {
+impl<'p> RecoveryState<'p> {
+    /// No active scan; scan stacks will come from `arena`.
+    pub(super) fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            active: None,
+            spare: None,
+            arena,
+        }
+    }
+
     /// Starts a scan owned by `set.target` with balanced delimiter depth.
     pub(super) fn begin(&mut self, set: SynchronizationSet) {
         debug_assert!(self.active.is_none(), "recovery scans cannot nest");
+        let (mut questions, mut parenthesized_type_names, mut parenthesized_sizeof_type_names) =
+            self.spare.take().map_or_else(
+                || {
+                    (
+                        ArenaVec::new_in(self.arena),
+                        ArenaVec::new_in(self.arena),
+                        ArenaVec::new_in(self.arena),
+                    )
+                },
+                |spare| {
+                    (
+                        spare.questions,
+                        spare.parenthesized_type_names,
+                        spare.parenthesized_sizeof_type_names,
+                    )
+                },
+            );
+        questions.clear();
+        parenthesized_type_names.clear();
+        parenthesized_sizeof_type_names.clear();
         self.active = Some(ActiveRecovery {
             set,
             parentheses: 0,
             brackets: 0,
             braces: 0,
-            questions: Vec::new(),
+            questions,
             last_token: None,
-            parenthesized_type_names: Vec::new(),
-            parenthesized_sizeof_type_names: Vec::new(),
+            parenthesized_type_names,
+            parenthesized_sizeof_type_names,
             last_closed_parenthesis_was_type_name: false,
             last_closed_parenthesis_was_sizeof_type_name: false,
         });
     }
 
     /// Returns the active scan; callers use this to decide whether to stop.
-    pub(super) fn active(&self) -> &ActiveRecovery {
+    pub(super) fn active(&self) -> &ActiveRecovery<'p> {
         self.active.as_ref().expect("a recovery scan is active")
     }
 
@@ -193,7 +231,7 @@ impl RecoveryState {
         state.last_token = Some(token);
     }
 
-    fn discard_closed_questions(state: &mut ActiveRecovery) {
+    fn discard_closed_questions(state: &mut ActiveRecovery<'_>) {
         let depth = DelimiterDepth {
             parentheses: state.parentheses,
             brackets:    state.brackets,
@@ -208,7 +246,14 @@ impl RecoveryState {
 
     /// Completes the active scan and restores normal parser execution.
     pub(super) fn finish(&mut self) {
-        drop(self.active.take().expect("a recovery scan is active"));
+        self.spare = Some(self.active.take().expect("a recovery scan is active"));
+    }
+
+    /// Abandons any active scan, as when parsing stops at a resource limit.
+    pub(super) fn abandon(&mut self) {
+        if let Some(scan) = self.active.take() {
+            self.spare = Some(scan);
+        }
     }
 }
 

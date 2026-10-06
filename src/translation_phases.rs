@@ -1,6 +1,6 @@
 //! Shared translation-phase concepts: diagnostics plumbing, provenance,
-//! the translation [`Context`], and the [`TranslationPhase`] interface
-//! implemented by each phase module.
+//! the translation [`Context`], and the [`TranslationPhase`] interface of
+//! the preprocessing-token sources.
 
 mod context;
 pub(crate) mod initial_processing;
@@ -9,11 +9,6 @@ pub(crate) mod preprocessing;
 pub(crate) mod preprocessor_tokenizer;
 mod provenance;
 
-#[cfg(feature = "benchmarking-internals")]
-use std::path::{
-    Path,
-    PathBuf,
-};
 use std::{
     convert::Infallible,
     fmt::{
@@ -27,12 +22,10 @@ use std::{
 
 pub(crate) use context::Context;
 pub(crate) use provenance::{
-    SourceFile,
     SourcePosition,
     SourceVector,
     SourceVectors,
 };
-use smallstr::SmallString;
 use thiserror::Error;
 
 use self::{
@@ -41,24 +34,27 @@ use self::{
     preprocessing::PreprocessorError,
     preprocessor_tokenizer::PreprocessorTokenizerError,
 };
-use crate::diagnostics::{
-    Diagnostic,
-    ToDiagnostic,
+use crate::{
+    diagnostics::{
+        Diagnostic,
+        ToDiagnostic,
+    },
+    util::bump::Bump,
 };
 
 #[derive(Error, Debug)]
-pub(crate) enum TranslationError {
+pub(crate) enum TranslationError<'tu> {
     #[error(transparent)]
     InitialProcessing(InitialProcessorError),
     #[error(transparent)]
     PreprocessorTokenizining(PreprocessorTokenizerError),
     #[error(transparent)]
-    Preprocessing(PreprocessorError),
+    Preprocessing(PreprocessorError<'tu>),
     #[error(transparent)]
-    Parsing(ParserError),
+    Parsing(ParserError<'tu>),
 }
 
-impl TranslationError {
+impl TranslationError<'_> {
     /// Visits every provenance range this diagnostic reads from a context
     /// arena. Owned source vectors are not visited.
     pub(crate) fn for_each_source_vectors_mut(
@@ -73,7 +69,7 @@ impl TranslationError {
     }
 }
 
-impl GetSeverity for TranslationError {
+impl GetSeverity for TranslationError<'_> {
     fn severity(&self) -> ErrorSeverity {
         match self {
             | Self::InitialProcessing(error) => error.severity(),
@@ -84,19 +80,24 @@ impl GetSeverity for TranslationError {
     }
 }
 
-impl ToDiagnostic for TranslationError {
-    fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic {
+impl ToDiagnostic for TranslationError<'_> {
+    fn diagnostic_in<'d>(
+        &self,
+        context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
         match self {
-            | Self::InitialProcessing(error) => error.to_diagnostic(context, source),
-            | Self::PreprocessorTokenizining(error) => error.to_diagnostic(context, source),
-            | Self::Preprocessing(error) => error.to_diagnostic(context, source),
-            | Self::Parsing(error) => error.to_diagnostic(context, source),
+            | Self::InitialProcessing(error) => error.diagnostic_in(context, source, arena),
+            | Self::PreprocessorTokenizining(error) => error.diagnostic_in(context, source, arena),
+            | Self::Preprocessing(error) => error.diagnostic_in(context, source, arena),
+            | Self::Parsing(error) => error.diagnostic_in(context, source, arena),
         }
     }
 }
 
-impl GetPosition for TranslationError {
-    fn position(&self, context: &Context) -> SourcePosition {
+impl GetPosition for TranslationError<'_> {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         match self {
             | Self::InitialProcessing(error) => error.position(context),
             | Self::PreprocessorTokenizining(error) => error.position(context),
@@ -106,8 +107,8 @@ impl GetPosition for TranslationError {
     }
 }
 
-impl GetSourceVectors for TranslationError {
-    fn source_vectors(&self, context: &mut Context) -> SourceVectors {
+impl GetSourceVectors for TranslationError<'_> {
+    fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors {
         match self {
             | Self::InitialProcessing(error) => error.source_vectors(context),
             | Self::PreprocessorTokenizining(error) => error.source_vectors(context),
@@ -117,21 +118,11 @@ impl GetSourceVectors for TranslationError {
     }
 }
 
-pub(crate) type TokenString = SmallString<[u8; 1024]>;
-
 trait StrExt {
     /// Returns the character at the given index,
     /// or `None` if the index is out of bounds or is in the middle of a
     /// character.
     fn char_at(&self, index: usize) -> Option<char>;
-
-    /// Returns the string cloned into a [`TokenString`].
-    fn to_token_string(&self) -> TokenString
-    where
-        for<'a> &'a Self: Into<TokenString>,
-    {
-        self.into()
-    }
 }
 
 impl StrExt for str {
@@ -190,89 +181,84 @@ pub(crate) trait GetSourceFileIndex {
 }
 
 pub(crate) trait GetPosition {
-    fn position(&self, context: &Context) -> SourcePosition;
+    fn position(&self, context: &Context<'_>) -> SourcePosition;
     #[inline(always)]
-    fn index(&self, context: &Context) -> usize {
+    fn index(&self, context: &Context<'_>) -> usize {
         self.position(context).index
     }
     #[inline(always)]
-    fn column(&self, context: &Context) -> u32 {
+    fn column(&self, context: &Context<'_>) -> u32 {
         self.position(context).column
     }
     #[inline(always)]
-    fn line(&self, context: &Context) -> u32 {
+    fn line(&self, context: &Context<'_>) -> u32 {
         self.position(context).line
     }
 }
 
 pub(crate) trait GetSourceVectors {
-    fn source_vectors(&self, context: &mut Context) -> SourceVectors;
+    fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors;
 }
 
+/// Moves a reader to a source position. The derived setters read the rest
+/// of the current position through [`GetPosition`].
 pub(crate) trait SetPosition: GetPosition {
-    fn set_position(&mut self, context: &mut Context, position: SourcePosition);
+    fn set_position(&mut self, position: SourcePosition);
     #[expect(
         dead_code,
         reason = "Position setters are retained for translation-phase implementations."
     )]
     #[inline(always)]
-    fn set_index(&mut self, context: &mut Context, index: usize) {
-        self.set_position(
-            context,
-            SourcePosition {
-                index,
-                line: self.line(context),
-                column: self.column(context),
-            },
-        );
+    fn set_index(&mut self, context: &Context<'_>, index: usize) {
+        self.set_position(SourcePosition {
+            index,
+            line: self.line(context),
+            column: self.column(context),
+        });
     }
     #[expect(
         dead_code,
         reason = "Position setters are retained for translation-phase implementations."
     )]
     #[inline(always)]
-    fn set_column(&mut self, context: &mut Context, column: u32) {
-        self.set_position(
-            context,
-            SourcePosition {
-                index: self.index(context),
-                line: self.line(context),
-                column,
-            },
-        );
+    fn set_column(&mut self, context: &Context<'_>, column: u32) {
+        self.set_position(SourcePosition {
+            index: self.index(context),
+            line: self.line(context),
+            column,
+        });
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Position setters are retained for translation-phase implementations."
+        )
+    )]
     #[inline(always)]
-    fn set_line(&mut self, context: &mut Context, line: u32) {
-        self.set_position(
-            context,
-            SourcePosition {
-                index: self.index(context),
-                line,
-                column: self.column(context),
-            },
-        );
+    fn set_line(&mut self, context: &Context<'_>, line: u32) {
+        self.set_position(SourcePosition {
+            index: self.index(context),
+            line,
+            column: self.column(context),
+        });
     }
 }
 
 pub(crate) trait SetSourceFileIndex {
-    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32);
+    fn set_source_file_index(&mut self, source_file_index: u32);
 }
 
 impl GetPosition for Infallible {
     #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
         match *self {}
     }
 }
 
-pub(crate) trait TranslationPhase:
+pub(crate) trait TranslationPhase<'tu>:
     GetPosition + SetPosition + GetSourceFileIndex + SetSourceFileIndex
 {
     type Item;
-    fn next_item(&mut self, context: &mut Context) -> Option<Self::Item>;
-}
-
-#[cfg(feature = "benchmarking-internals")]
-pub(crate) fn box_path_from_str(s: &str) -> Box<Path> {
-    PathBuf::from(s).into_boxed_path()
+    fn next_item(&mut self, context: &mut Context<'tu>) -> Option<Self::Item>;
 }

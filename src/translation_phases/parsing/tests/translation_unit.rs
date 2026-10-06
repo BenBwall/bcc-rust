@@ -6,9 +6,9 @@ use proptest::prelude::*;
 
 use super::{
     Parsed,
-    parse,
-    parse_unit,
     parser_errors,
+    with_parse,
+    with_parsed,
 };
 use crate::{
     translation_phases::{
@@ -16,7 +16,6 @@ use crate::{
         GetSourceVectors,
         SourceVector,
         TranslationError,
-        TranslationPhase,
         parsing::{
             Parser,
             declaration_syntax::DirectDeclarator,
@@ -31,18 +30,20 @@ use crate::{
 
 #[test]
 fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<empty-syntax-lists-test>").into_boxed_path(),
-        "int f(); int (*pointer)(); int g(void);\n"
-            .to_owned()
-            .into(),
+        "int f(); int (*pointer)(); int g(void);\n",
         SharedVec::default(),
         SharedVec::default(),
     );
 
-    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
 
     assert_eq!(unit.external_declarations().len(), 3);
     assert!(
@@ -51,11 +52,7 @@ fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
             .iter()
             .all(|error| { !matches!(error, TranslationError::Parsing(_)) })
     );
-    let output = unit.syntax().inspect(
-        unit.external_declarations(),
-        &context,
-        InspectionOptions::default(),
-    );
+    let output = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
     for name in ["f", "pointer", "g"] {
         assert!(output.contains(&format!("declarator {name}")), "{output}");
     }
@@ -63,21 +60,25 @@ fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
 
 #[test]
 fn complete_translation_unit_retains_roots_already_streamed() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<mixed-parser-consumption-test>").into_boxed_path(),
-        "int first; int second;\n".to_owned().into(),
+        "int first; int second;\n",
         SharedVec::default(),
         SharedVec::default(),
     );
-    let mut parser = Parser::new(preprocessor);
+    let mut parser = Parser::new(preprocessor, &mut context, &parse_arena);
 
     assert!(matches!(
-        parser.next_item(&mut context),
+        parser.next_item(),
         Some(ExternalDeclaration::Declaration(_))
     ));
-    let unit = parser.parse_translation_unit(&mut context);
+    let unit = parser.parse_translation_unit();
 
     assert_eq!(unit.external_declarations().len(), 2);
     let names = unit
@@ -87,11 +88,9 @@ fn complete_translation_unit_retains_roots_already_streamed() {
             let ExternalDeclaration::Declaration(index) = *root else {
                 panic!("expected a declaration root")
             };
-            let declaration = unit.syntax().declaration(index);
-            let declarator = declaration.init_declarators()[0].declarator;
-            let identifier = unit
-                .syntax()
-                .direct_declarators(declarator.kind)
+            let declarator = index.init_declarators[0].declarator;
+            let identifier = declarator
+                .kind
                 .iter()
                 .find_map(|direct| match direct {
                     | DirectDeclarator::Identifier(identifier) => Some(*identifier),
@@ -106,21 +105,23 @@ fn complete_translation_unit_retains_roots_already_streamed() {
 
 #[test]
 fn typed_identifier_provenance_survives_macros_and_includes() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let include_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
         .join("parser");
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<identifier-provenance-test>").into_boxed_path(),
-        "#define DECL_NAME generated\nint DECL_NAME;\n#include \"identifier-provenance.h\"\n"
-            .to_owned()
-            .into(),
+        "#define DECL_NAME generated\nint DECL_NAME;\n#include \"identifier-provenance.h\"\n",
         vec![include_directory.clone()].into(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
 
     assert!(context.take_pending_errors().is_empty());
     assert_eq!(unit.external_declarations().len(), 2);
@@ -131,9 +132,9 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
             let ExternalDeclaration::Declaration(index) = *root else {
                 panic!("expected a declaration root")
             };
-            let declarator = unit.syntax().declaration(index).init_declarators()[0].declarator;
-            unit.syntax()
-                .direct_declarators(declarator.kind)
+            let declarator = index.init_declarators[0].declarator;
+            declarator
+                .kind
                 .iter()
                 .find_map(|direct| match direct {
                     | DirectDeclarator::Identifier(identifier) => Some(*identifier),
@@ -165,8 +166,8 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
     );
     assert_eq!((include_vectors[0].line, include_vectors[0].column), (1, 5));
 
-    let inspected = unit.syntax().inspect(
-        unit.external_declarations(),
+    let inspected = unit.inspect(
+        context.tu_arena(),
         &context,
         InspectionOptions {
             show_locations: true,
@@ -189,26 +190,22 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
 
 #[test]
 fn deterministic_inspection_uses_spellings_and_marks_recovery() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let source = "int good = 1; } int after;\n";
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<inspection-test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
-    let first = unit.syntax().inspect(
-        unit.external_declarations(),
-        &context,
-        InspectionOptions::default(),
-    );
-    let second = unit.syntax().inspect(
-        unit.external_declarations(),
-        &context,
-        InspectionOptions::default(),
-    );
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
+    let first = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
+    let second = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
 
     assert_eq!(first, second);
     let good = first.find("declarator good").expect("good declaration");
@@ -223,21 +220,21 @@ fn deterministic_inspection_uses_spellings_and_marks_recovery() {
 
 #[test]
 fn inspection_traverses_declarators_tags_parameters_and_designations() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let source = "struct S { int member : 3; }; int values[2] = { [1] = 7 }; int f(int arg);\n";
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<inspection-shapes-test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
-    let unit = Parser::new(preprocessor).parse_translation_unit(&mut context);
-    let output = unit.syntax().inspect(
-        unit.external_declarations(),
-        &context,
-        InspectionOptions::default(),
-    );
+    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
+    let output = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
 
     for expected in [
         "struct S",
@@ -253,17 +250,22 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
         assert!(output.contains(expected), "missing {expected:?}:\n{output}");
     }
 
-    let mut multi_context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut multi_context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut multi_context,
         PathBuf::from("<inspection-order-test>").into_boxed_path(),
-        "int a = 1, b = 2;\n".to_owned().into(),
+        "int a = 1, b = 2;\n",
         SharedVec::default(),
         SharedVec::default(),
     );
-    let multi = Parser::new(preprocessor).parse_translation_unit(&mut multi_context);
-    let multi = multi.syntax().inspect(
-        multi.external_declarations(),
+    let multi =
+        Parser::new(preprocessor, &mut multi_context, &parse_arena).parse_translation_unit();
+    let multi = multi.inspect(
+        multi_context.tu_arena(),
         &multi_context,
         InspectionOptions::default(),
     );
@@ -276,13 +278,12 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
 
 #[test]
 fn inspection_has_a_stable_statement_expression_and_missing_slot_golden() {
-    let (unit, context) = parse_unit(
+    let output = with_parsed(
         "int f(void) { if (x) return a + 1; else return 0; if () ; switch (x) { case : ; } }\n",
-    );
-    let output = unit.syntax().inspect(
-        unit.external_declarations(),
-        &context,
-        InspectionOptions::default(),
+        |unit, context| {
+            unit.inspect(context.tu_arena(), context, InspectionOptions::default())
+                .to_owned()
+        },
     );
 
     let expected = [
@@ -329,22 +330,23 @@ fn every_representative_token_truncation_terminates_with_clean_state() {
             if !fixture.is_char_boundary(end) {
                 continue;
             }
-            let parsed = parse(&fixture[..end]);
-            assert!(parsed.parser.frames.is_empty(), "{fixture:?} at {end}");
-            assert!(parsed.parser.returned.is_none(), "{fixture:?} at {end}");
-            assert!(
-                parsed.parser.recovery.active.is_none(),
-                "{fixture:?} at {end}"
-            );
-            assert_eq!(parsed.parser.scopes.depth(), 0, "{fixture:?} at {end}");
-            assert!(
-                parsed.parser.label_scopes.is_empty(),
-                "{fixture:?} at {end}"
-            );
-            assert!(
-                parsed.parser.switch_scopes.is_empty(),
-                "{fixture:?} at {end}"
-            );
+            with_parse(&fixture[..end], |parsed| {
+                assert!(parsed.parser.frames.is_empty(), "{fixture:?} at {end}");
+                assert!(parsed.parser.returned.is_none(), "{fixture:?} at {end}");
+                assert!(
+                    parsed.parser.recovery.active.is_none(),
+                    "{fixture:?} at {end}"
+                );
+                assert_eq!(parsed.parser.scopes.depth(), 0, "{fixture:?} at {end}");
+                assert!(
+                    parsed.parser.label_scopes.is_empty(),
+                    "{fixture:?} at {end}"
+                );
+                assert!(
+                    parsed.parser.switch_scopes.is_empty(),
+                    "{fixture:?} at {end}"
+                );
+            });
         }
     }
 }
@@ -353,20 +355,21 @@ fn every_representative_token_truncation_terminates_with_clean_state() {
 fn declaration_only_specifiers_in_struct_members_make_progress() {
     for specifier in ["typedef", "extern", "inline"] {
         let source = format!("struct {{ {specifier} int member; }}; int after;");
-        let parsed = parse(&source);
-
-        assert!(parser_errors(&parsed).any(|error| matches!(
-            error,
-            ParserErrorType::DeclarationSpecifierNotAllowedHere(_)
-        )));
-        assert_eq!(parsed.items.len(), 2, "{specifier}: {:#?}", parsed.items);
-        assert!(parsed.parser.frames.is_empty());
-        assert!(parsed.parser.returned.is_none());
+        with_parse(&source, |parsed| {
+            assert!(parser_errors(parsed).any(|error| matches!(
+                error,
+                ParserErrorType::DeclarationSpecifierNotAllowedHere(_)
+            )));
+            assert_eq!(parsed.items.len(), 2, "{specifier}: {:#?}", parsed.items);
+            assert!(parsed.parser.frames.is_empty());
+            assert!(parsed.parser.returned.is_none());
+        });
     }
 
-    let truncated = parse("struct { typedef");
-    assert!(truncated.parser.frames.is_empty());
-    assert!(truncated.parser.returned.is_none());
+    with_parse("struct { typedef", |truncated| {
+        assert!(truncated.parser.frames.is_empty());
+        assert!(truncated.parser.returned.is_none());
+    });
 }
 
 proptest! {
@@ -386,23 +389,25 @@ proptest! {
         )
     ) {
         let source = pieces.join(" ");
-        let mut parsed = parse(&source);
-        prop_assert!(parsed.parser.frames.is_empty());
-        prop_assert!(parsed.parser.returned.is_none());
-        prop_assert!(parsed.parser.recovery.active.is_none());
-        prop_assert_eq!(parsed.parser.scopes.depth(), 0);
-        prop_assert!(parsed.parser.label_scopes.is_empty());
-        prop_assert!(parsed.parser.switch_scopes.is_empty());
-        for error in &parsed.errors {
-            let vectors = error.source_vectors(&mut parsed.context);
-            prop_assert!(vectors.length > 0 || source.is_empty());
-        }
+        with_parse(&source, |parsed| {
+            prop_assert!(parsed.parser.frames.is_empty());
+            prop_assert!(parsed.parser.returned.is_none());
+            prop_assert!(parsed.parser.recovery.active.is_none());
+            prop_assert_eq!(parsed.parser.scopes.depth(), 0);
+            prop_assert!(parsed.parser.label_scopes.is_empty());
+            prop_assert!(parsed.parser.switch_scopes.is_empty());
+            for error in &parsed.errors {
+                let vectors = error.source_vectors(parsed.parser.context);
+                prop_assert!(vectors.length > 0 || source.is_empty());
+            }
+            Ok(())
+        })?;
     }
 }
 
 #[test]
 fn pending_preprocessing_diagnostics_survive_arena_compaction() {
-    fn preprocessing_vectors(parsed: &Parsed) -> Vec<SourceVector> {
+    fn preprocessing_vectors(parsed: &Parsed<'_, '_>) -> Vec<SourceVector> {
         parsed
             .errors
             .iter()
@@ -410,21 +415,23 @@ fn pending_preprocessing_diagnostics_survive_arena_compaction() {
                 | TranslationError::Preprocessing(error) => Some(error.source_vectors),
                 | _ => None,
             })
-            .flat_map(|source| parsed.context.get_source_vectors(source).to_vec())
+            .flat_map(|source| parsed.parser.context.get_source_vectors(source).to_vec())
             .collect()
     }
 
-    let short = parse("#undef\nint first;\n");
-    let long = parse(&format!(
-        "#undef\nint first;\n{}",
-        "int later;\n".repeat(200)
-    ));
-
-    assert_ne!(preprocessing_vectors(&short), []);
-    assert_eq!(preprocessing_vectors(&short), preprocessing_vectors(&long));
-    assert!(
-        long.context.source_vectors.0.len() < 16,
-        "the parser left {} vectors in the preprocessor arena",
-        long.context.source_vectors.0.len()
+    let short_vectors = with_parse("#undef\nint first;\n", |parsed| {
+        preprocessing_vectors(parsed)
+    });
+    with_parse(
+        &format!("#undef\nint first;\n{}", "int later;\n".repeat(200)),
+        |long| {
+            assert_ne!(short_vectors, []);
+            assert_eq!(short_vectors, preprocessing_vectors(long));
+            assert!(
+                long.parser.context.source_vectors.0.len() < 16,
+                "the parser left {} vectors in the preprocessor arena",
+                long.parser.context.source_vectors.0.len()
+            );
+        },
     );
 }

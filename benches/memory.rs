@@ -1,76 +1,85 @@
-//! Reports the peak heap use of each preprocessing strategy, which the
-//! timing benchmarks cannot show.
+//! Reports OS peak memory use for each pipeline stage. Each sample runs in a
+//! separate process because OS peak counters cannot be reset.
 
 #![expect(
     unused_crate_dependencies,
-    reason = "We have a bunch of dependencies that are not used in our memory benchmark."
+    reason = "The memory benchmark uses only the benchmark API and OS counters."
 )]
 
+#[cfg(windows)]
+use std::mem::size_of;
 use std::{
-    alloc::{
-        GlobalAlloc,
-        Layout,
-        System,
-    },
-    sync::atomic::{
-        AtomicUsize,
-        Ordering,
+    env,
+    process::{
+        Command,
+        ExitCode,
     },
 };
 
-use bcc_rust::{
-    BenchmarkInput,
-    PreprocessingStrategy,
-};
+use bcc_rust::BenchmarkInput;
 
-/// The system allocator, counting live and peak bytes.
-struct Counting;
-
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-// SAFETY: Every method forwards to `System` unchanged and only updates
-// counters.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: The caller upholds `GlobalAlloc::alloc`'s contract.
-        let ptr = unsafe { System.alloc(layout) };
-        if !ptr.is_null() {
-            let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
-            _ = PEAK.fetch_max(live, Ordering::Relaxed);
-        }
-        ptr
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: The caller upholds `GlobalAlloc::dealloc`'s contract.
-        unsafe {
-            System.dealloc(ptr, layout);
-        }
-        _ = LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: The caller upholds `GlobalAlloc::realloc`'s contract.
-        let moved = unsafe { System.realloc(ptr, layout, new_size) };
-        if !moved.is_null() {
-            _ = LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-            let live = LIVE.fetch_add(new_size, Ordering::Relaxed) + new_size;
-            _ = PEAK.fetch_max(live, Ordering::Relaxed);
-        }
-        moved
-    }
+struct PeakMemory {
+    commit:      Option<usize>,
+    working_set: usize,
 }
 
-#[global_allocator]
-static ALLOCATOR: Counting = Counting;
+#[cfg(windows)]
+fn peak_memory() -> std::io::Result<PeakMemory> {
+    use windows_sys::Win32::System::{
+        ProcessStatus::{
+            GetProcessMemoryInfo,
+            PROCESS_MEMORY_COUNTERS,
+            PROCESS_MEMORY_COUNTERS_EX,
+        },
+        Threading::GetCurrentProcess,
+    };
 
-/// Peak bytes allocated above the current baseline while `run` executes.
-fn peak_during(run: impl FnOnce()) -> usize {
-    let baseline = LIVE.load(Ordering::Relaxed);
-    PEAK.store(baseline, Ordering::Relaxed);
-    run();
-    PEAK.load(Ordering::Relaxed) - baseline
+    let mut counters = PROCESS_MEMORY_COUNTERS_EX {
+        cb: u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS_EX>())
+            .expect("process counters fit in u32"),
+        ..Default::default()
+    };
+    // SAFETY: GetCurrentProcess returns a pseudo-handle for this process.
+    let process = unsafe { GetCurrentProcess() };
+    // SAFETY: `process` names this process, and `counters` is a live writable
+    // EX structure whose declared size matches the buffer.
+    let ok = unsafe {
+        GetProcessMemoryInfo(
+            process,
+            (&raw mut counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+            counters.cb,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(PeakMemory {
+        commit:      Some(counters.PeakPagefileUsage),
+        working_set: counters.PeakWorkingSetSize,
+    })
+}
+
+#[cfg(unix)]
+fn peak_memory() -> std::io::Result<PeakMemory> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: `usage` points to a writable rusage buffer, and RUSAGE_SELF
+    // selects this process. The buffer is initialized on success only.
+    let ok = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if ok != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: a successful getrusage initialized the entire result.
+    let usage = unsafe { usage.assume_init() };
+    let rss = usize::try_from(usage.ru_maxrss).expect("peak RSS is nonnegative");
+    #[cfg(target_os = "macos")]
+    let working_set = rss;
+    #[cfg(not(target_os = "macos"))]
+    let working_set = rss * 1024;
+    // getrusage exposes peak resident memory but no per-process peak commit.
+    Ok(PeakMemory {
+        commit: None,
+        working_set,
+    })
 }
 
 #[expect(
@@ -81,26 +90,98 @@ fn mebibytes(bytes: usize) -> f64 {
     bytes as f64 / f64::from(1 << 20)
 }
 
-fn main() {
-    let strategies = [
-        ("streaming", PreprocessingStrategy::Streaming),
-        ("batch lexing", PreprocessingStrategy::BatchLexing),
-        ("batch", PreprocessingStrategy::Batch),
-    ];
-    println!("| input | phases | strategy | peak heap (MiB) |");
-    println!("|---|---|---|---:|");
-    for input in BenchmarkInput::ALL {
-        for (name, strategy) in strategies {
-            let lexing = peak_during(|| _ = bcc_rust::lex(input, strategy));
-            let preprocessing = peak_during(|| _ = bcc_rust::preprocess(input, strategy));
-            let parsing = peak_during(|| _ = bcc_rust::parse(input, strategy));
-            for (phases, bytes) in [("1-3", lexing), ("1-6", preprocessing), ("1-7", parsing)] {
-                println!(
-                    "| {} | {phases} | {name} | {:.1} |",
-                    input.name(),
-                    mebibytes(bytes)
-                );
-            }
+fn sample(input: BenchmarkInput, phases: &str) -> std::io::Result<PeakMemory> {
+    // OS peaks include process startup and static source generation.
+    _ = input.bytes();
+    match phases {
+        | "1-3" => _ = bcc_rust::lex(input),
+        | "1-6" => _ = bcc_rust::preprocess(input),
+        | "1-7" => _ = bcc_rust::parse(input),
+        | _ => panic!("unknown benchmark phase"),
+    }
+    peak_memory()
+}
+
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "The driver parses its arguments and reads sample processes' output; the compiler it \
+              measures runs in those processes."
+)]
+fn main() -> ExitCode {
+    let args: Vec<_> = env::args().collect();
+    if args.len() == 4 && args[1] == "--sample" {
+        let index: usize = args[2].parse().expect("sample index is an integer");
+        let peak =
+            sample(BenchmarkInput::ALL[index], &args[3]).expect("OS peak memory query succeeds");
+        println!("{} {}", peak.commit.unwrap_or(0), peak.working_set);
+        return ExitCode::SUCCESS;
+    }
+    assert!(
+        args.len() == 1 || (args.len() == 2 && args[1] == "--bench"),
+        "expected no arguments, --bench, or --sample"
+    );
+    println!("| input | phases | strategy | peak commit (MiB) | peak working set (MiB) |");
+    println!("|---|---|---|---:|---:|");
+    let executable = env::current_exe().expect("benchmark executable has a path");
+    for (index, input) in BenchmarkInput::ALL.into_iter().enumerate() {
+        for phases in ["1-3", "1-6", "1-7"] {
+            let output = Command::new(&executable)
+                .args(["--sample", &index.to_string(), phases])
+                .output()
+                .expect("sample process starts");
+            assert!(
+                output.status.success(),
+                "sample failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let text = String::from_utf8(output.stdout).expect("sample output is UTF-8");
+            let mut fields = text.split_whitespace();
+            let commit: usize = fields
+                .next()
+                .expect("commit field")
+                .parse()
+                .expect("integer");
+            let working_set: usize = fields
+                .next()
+                .expect("working set field")
+                .parse()
+                .expect("integer");
+            assert!(fields.next().is_none(), "unexpected sample output");
+            let commit = if cfg!(unix) {
+                "n/a".to_owned()
+            } else {
+                format!("{:.1}", mebibytes(commit))
+            };
+            println!(
+                "| {} | {phases} | batch | {commit} | {:.1} |",
+                input.name(),
+                mebibytes(working_set)
+            );
         }
     }
+    // Arena counters are exact and need no fresh process.
+    println!();
+    println!(
+        "| input | PP arena high water (MiB) | expansion arena high water (KiB) | parse arena \
+         high water (KiB) | TU arena high water (MiB) | peak regions | peak reserved (GiB) | peak \
+         arena commit (MiB) |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|");
+    for input in BenchmarkInput::ALL {
+        let usage = bcc_rust::arena_usage(input);
+        println!(
+            "| {} | {:.1} | {:.1} | {:.1} | {:.1} | {} | {:.0} | {:.1} |",
+            input.name(),
+            mebibytes(usage.preprocessor_high_water),
+            mebibytes(usage.expansion_high_water) * 1024.0,
+            mebibytes(usage.parse_high_water) * 1024.0,
+            mebibytes(usage.tu_high_water),
+            usage.peak_regions,
+            mebibytes(usage.peak_reserved) / 1024.0,
+            mebibytes(usage.peak_committed)
+        );
+    }
+    ExitCode::SUCCESS
 }

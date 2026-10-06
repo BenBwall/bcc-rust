@@ -30,20 +30,23 @@ use super::{
     scope::NameClass,
     statement::is_statement_keyword,
     syntax::{
-        ConstantExpressionIndex,
-        EnumSpecifierIndex,
-        ExpressionIndex,
+        ConstantExpression,
         Identifier,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        KeywordTokenType,
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        SourceVectors,
+        preprocessing::{
+            KeywordTokenType,
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -53,13 +56,13 @@ use crate::translation_phases::{
 /// C99: enumeration specifiers and enumerators are §6.7.2.2,
 /// pp. 105-107; PDF pp. 117-119.
 #[derive(Debug)]
-pub(super) struct EnumSpecifierFrame {
+pub(super) struct EnumSpecifierFrame<'tu, 'p> {
     /// Current tag/enumerator transition.
     phase: EnumPhase,
     /// Optional enum tag.
     name: Option<Identifier>,
     /// Completed enumerators before arena insertion.
-    pub(super) enumerators: Vec<Enumerator>,
+    pub(super) enumerators: ArenaVec<'p, Enumerator<'tu>>,
     /// Enumerator name waiting for an optional explicit value.
     current_enumerator: Option<Identifier>,
     /// Whether `{` was consumed, distinguishing a reference from a definition.
@@ -70,7 +73,7 @@ pub(super) struct EnumSpecifierFrame {
     /// a malformed enumerator does not also report that the list is empty.
     body_starting_error_count: usize,
     /// Provenance accumulated across the complete enum specifier.
-    pub(super) source_vectors: Vec<SourceVectors>,
+    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     /// Provenance for the enumerator currently being built.
     current_enumerator_source: Option<SourceVectors>,
     /// Whether the enumerator before the current separator position already
@@ -99,21 +102,21 @@ pub(super) enum EnumPhase {
     AwaitEnumeratorValue,
     /// Require `,` or `}` after one enumerator.
     AfterEnumerator,
-    /// Store the completed body and return the enum-specifier handle.
+    /// Store the completed body and return the enum specifier.
     FinishBody,
 }
 
-impl EnumSpecifierFrame {
-    pub(super) fn new() -> Self {
+impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
+    pub(super) fn new(arena: &'p Bump) -> Self {
         Self {
             phase: EnumPhase::Start,
             name: None,
-            enumerators: Vec::new(),
+            enumerators: ArenaVec::new_in(arena),
             current_enumerator: None,
             body_started: false,
             stopped_before_declaration: false,
             body_starting_error_count: 0,
-            source_vectors: Vec::new(),
+            source_vectors: ArenaVec::new_in(arena),
             current_enumerator_source: None,
             resuming_after_error: false,
         }
@@ -121,11 +124,10 @@ impl EnumSpecifierFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | EnumPhase::Start => {
                 debug_assert!(
@@ -133,12 +135,11 @@ impl EnumSpecifierFrame {
                     "this frame phase cannot receive a child value"
                 );
                 let Some(token) = token else {
-                    parser.report(context, ParserErrorType::ExpectedEnumKeyword(None), None);
-                    return self.finish(parser, context);
+                    parser.report(ParserErrorType::ExpectedEnumKeyword(None), None);
+                    return self.finish(parser);
                 };
                 if token.kind != TokenType::Keyword(KeywordTokenType::Enum) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedEnumKeyword(Some(token.kind)),
                         Some(token),
                     );
@@ -170,13 +171,12 @@ impl EnumSpecifierFrame {
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::EnumSpecifierWithoutNameAndBody(
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    self.finish(parser, context)
+                    self.finish(parser)
                 }
             },
             | EnumPhase::AfterName => {
@@ -192,7 +192,7 @@ impl EnumSpecifierFrame {
                     self.phase = EnumPhase::EnumeratorOrClose;
                     ParseAction::Consume
                 } else {
-                    self.finish(parser, context)
+                    self.finish(parser)
                 }
             },
             | EnumPhase::EnumeratorOrClose => {
@@ -208,7 +208,6 @@ impl EnumSpecifierFrame {
                         && parser.hard_error_count == self.body_starting_error_count
                     {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedEnumeratorBeforeClosingCurlyBrace,
                             Some(token),
                         );
@@ -226,7 +225,6 @@ impl EnumSpecifierFrame {
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
                             token.map(|token| token.kind),
                         ),
@@ -236,13 +234,12 @@ impl EnumSpecifierFrame {
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
                             token.map(|token| token.kind),
                         ),
                         token,
                     );
-                    if Self::enumerator_list_continues(parser, context) {
+                    if Self::enumerator_list_continues(parser) {
                         // A stray `)` cannot end the list; its `}` follows.
                         let token = token.expect("closing-parenthesis token exists");
                         self.source_vectors.push(token.source_vectors);
@@ -252,7 +249,6 @@ impl EnumSpecifierFrame {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
                             None,
                         ),
@@ -261,14 +257,13 @@ impl EnumSpecifierFrame {
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
                 } else if let Some(misplaced) = token
-                    && Self::misplaced_enumerator(parser, context, misplaced)
+                    && Self::misplaced_enumerator(parser, misplaced)
                 {
                     // C99 §6.7.2.2p1: an enumeration constant is an
                     // identifier. A keyword or constant written in its place
                     // is one bad enumerator, not the start of a declaration
                     // that ends this body.
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
                             Some(misplaced.kind),
                         ),
@@ -279,7 +274,6 @@ impl EnumSpecifierFrame {
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
                             token.map(|token| token.kind),
                         ),
@@ -303,7 +297,7 @@ impl EnumSpecifierFrame {
                 if is_operator(token, OperatorTokenType::Equals) {
                     let token = token.expect("equals token exists");
                     self.source_vectors.push(token.source_vectors);
-                    parser.merge_source(context, &mut self.current_enumerator_source, token);
+                    parser.merge_source(&mut self.current_enumerator_source, token);
                     self.phase = EnumPhase::PushEnumeratorValue;
                     ParseAction::Consume
                 } else {
@@ -319,6 +313,7 @@ impl EnumSpecifierFrame {
                 );
                 self.phase = EnumPhase::AwaitEnumeratorValue;
                 ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
                     ExpressionMode::ConstantExpression,
                     ExpressionBoundary::Enumerator,
                     parser.hard_error_count,
@@ -326,19 +321,19 @@ impl EnumSpecifierFrame {
             },
             | EnumPhase::AwaitEnumeratorValue => {
                 let Some(ParseValue::ConstantExpression(ConstantExpressionResult {
-                    index,
+                    expression: index,
                     recovered,
                 })) = returned
                 else {
                     panic!("enumerator-value frame returned an unexpected value: {returned:?}");
                 };
                 self.resuming_after_error = recovered;
-                let source_vectors = parser.syntax[ExpressionIndex::from(index)].source_vectors;
+                let source_vectors = index.expression().source_vectors;
                 self.source_vectors.push(source_vectors);
                 self.current_enumerator_source = Some(
                     self.current_enumerator_source
                         .map_or(source_vectors, |existing| {
-                            context.merge_vectors(existing, source_vectors)
+                            parser.context.merge_vectors(existing, source_vectors)
                         }),
                 );
                 self.finish_enumerator(parser, Some(index));
@@ -365,7 +360,6 @@ impl EnumSpecifierFrame {
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
                             token.map(|token| token.kind),
                         ),
@@ -374,10 +368,9 @@ impl EnumSpecifierFrame {
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
                 } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    let stray = Self::enumerator_list_continues(parser, context);
+                    let stray = Self::enumerator_list_continues(parser);
                     if !(stray && resuming_after_error) {
                         parser.report(
-                            context,
                             ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
                                 token.map(|token| token.kind),
                             ),
@@ -395,7 +388,6 @@ impl EnumSpecifierFrame {
                     ParseAction::Reprocess
                 } else if token.is_some_and(|token| token.kind == TokenType::Identifier) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
                             token.map(|token| token.kind),
                         ),
@@ -404,13 +396,12 @@ impl EnumSpecifierFrame {
                     self.phase = EnumPhase::EnumeratorOrClose;
                     ParseAction::Reprocess
                 } else if let Some(misplaced) = token
-                    && Self::misplaced_enumerator(parser, context, misplaced)
+                    && Self::misplaced_enumerator(parser, misplaced)
                 {
                     // The `,` is missing before a keyword or constant that
                     // stands in for the next enumerator; consume it so it is
                     // not diagnosed again as an enumerator.
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(
                             misplaced.kind,
                         )),
@@ -421,7 +412,6 @@ impl EnumSpecifierFrame {
                     ParseAction::Consume
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
                             token.map(|token| token.kind),
                         ),
@@ -432,7 +422,6 @@ impl EnumSpecifierFrame {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(None),
                         None,
                     );
@@ -440,7 +429,6 @@ impl EnumSpecifierFrame {
                     ParseAction::Reprocess
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
                             token.map(|token| token.kind),
                         ),
@@ -458,7 +446,7 @@ impl EnumSpecifierFrame {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                self.finish(parser, context)
+                self.finish(parser)
             },
         }
     }
@@ -467,7 +455,7 @@ impl EnumSpecifierFrame {
     /// enumerator position: a non-identifier, non-delimiter token followed by
     /// `,`, `=`, or `}`. Anything else keeps the malformed-body recovery that
     /// stops before a following declaration.
-    fn misplaced_enumerator(parser: &mut Parser, context: &mut Context, token: Token) -> bool {
+    fn misplaced_enumerator(parser: &mut Parser<'_, 'tu, 'p>, token: Token) -> bool {
         token.kind != TokenType::Identifier
             && !matches!(
                 token.kind,
@@ -483,7 +471,7 @@ impl EnumSpecifierFrame {
                         | OperatorTokenType::Equals
                 )
             )
-            && parser.cursor.following(context).is_some_and(|following| {
+            && parser.cursor.following().is_some_and(|following| {
                 matches!(
                     following.kind,
                     TokenType::Operator(
@@ -504,11 +492,11 @@ impl EnumSpecifierFrame {
     /// `int f(enum E { A ) int after;`, the `)` closes that parenthesis and
     /// the body's `}` is missing. The scan is bounded so repeated errors stay
     /// linear.
-    fn enumerator_list_continues(parser: &mut Parser, context: &mut Context) -> bool {
+    fn enumerator_list_continues(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut nesting = 0_u32;
         for index in 0..SCAN_LIMIT {
-            let Some(token) = parser.cursor.lookahead(context, index) else {
+            let Some(token) = parser.cursor.lookahead(index) else {
                 return false;
             };
             match token.kind {
@@ -547,8 +535,8 @@ impl EnumSpecifierFrame {
 
     fn finish_enumerator(
         &mut self,
-        parser: &mut Parser,
-        expression: Option<ConstantExpressionIndex>,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        expression: Option<ConstantExpression<'tu>>,
     ) {
         let source_vectors = self.current_enumerator_source.take().unwrap_or_default();
         if let Some(name) = self.current_enumerator.take() {
@@ -563,17 +551,18 @@ impl EnumSpecifierFrame {
         }
     }
 
-    fn finish(&mut self, parser: &mut Parser, context: &mut Context) -> ParseAction {
+    fn finish(&mut self, parser: &mut Parser<'_, 'tu, 'p>) -> ParseAction<'tu, 'p> {
         let enumeration_list = self
             .body_started
-            .then(|| parser.append_syntax(&mut self.enumerators));
-        let index = parser.push_syntax(EnumSpecifier {
+            .then(|| parser.alloc_syntax_list(&mut self.enumerators));
+        let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
+        let index = parser.alloc_syntax(EnumSpecifier {
             name: self.name,
             enumeration_list,
-            source_vectors: context.merge_vector_list(&self.source_vectors),
+            source_vectors,
         });
         ParseAction::Reduce(ParseValue::EnumSpecifier(EnumSpecifierResult {
-            index: EnumSpecifierIndex(index),
+            index,
             stopped_before_declaration: self.stopped_before_declaration,
         }))
     }

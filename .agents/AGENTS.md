@@ -2,41 +2,46 @@
 
 ## Start and finish
 
-1. Run `git status --short` before editing. Preserve unrelated tracked changes and untracked artifacts; the three root `*-report.html` files are research notes and must remain unless their removal is explicitly requested.
+1. Run `git status --short` before editing. Preserve unrelated tracked changes and untracked artifacts.
 2. Run commands from the repository root. Use the narrowest relevant checks while working, then run `git diff --check` and inspect the final diff before handoff.
-3. Report commands that fail as current evidence. The parser compile gate is known; a failing baseline is not permission to weaken checks or modify unrelated source.
+3. Report commands that fail as current evidence; a failing baseline is not permission to weaken checks or modify unrelated source.
 
 Canonical checks:
 
 ```sh
 cargo test --all-targets
+cargo test --features benchmarking-internals --test allocation_count
 cargo +nightly fmt --check
 cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --features benchmarking-internals -- -D warnings
 git diff --check
 ```
 
 `rust-toolchain.toml` pins Rust 1.99.0, which is also the minimum version in
-`Cargo.toml`. `build.rs` additionally requires a native C compiler and
-`libclang`; set `LIBCLANG_PATH` when discovery fails.
+`Cargo.toml`. Follow the source-built native toolchain setup in
+[`../README.md`](../README.md#prerequisites).
 
 ## Context pointers
 
 - **Parser or domain-model work:** read [`../GLOSSARY.md`](../GLOSSARY.md) before changing terminology, AST boundaries, typedef handling, or the proposed machine protocol. Update that glossary only when a durable domain meaning changes.
-- **Parser phase planning or implementation:** read [`../parser-roadmap.md`](../parser-roadmap.md) for authoritative phase boundaries. For Phase 03, also follow [`../phase-03-statements-and-function-definitions-plan.md`](../phase-03-statements-and-function-definitions-plan.md); for Phase 04 expressions, type names, initializers, or expression-dependent declarations, follow [`../phase-04-expressions-and-type-names-plan.md`](../phase-04-expressions-and-type-names-plan.md).
-- **Non-recursive parsing or Double-E work:** read [`../double-e-integration-report.html`](../double-e-integration-report.html), then revalidate its dated findings against [`../src/translation_phases/parsing/`](../src/translation_phases/parsing/) and [`../src/translation_phases/preprocessing/`](../src/translation_phases/preprocessing/).
+- **Parser grammar, frames, or recovery:** read [`../parser-roadmap.md`](../parser-roadmap.md) for completed phase boundaries and maintenance contracts, and [`../c99-parser-compliance-checklist.md`](../c99-parser-compliance-checklist.md) for grammar ownership and evidence. Canonical Double-E and machine vocabulary lives in [`../GLOSSARY.md`](../GLOSSARY.md).
+- **Performance work:** follow the measurement guidance in [`../README.md`](../README.md#performance-changes).
+- **Diagnostic changes:** consult [`../tests/fixtures/diagnostics/COVERAGE.md`](../tests/fixtures/diagnostics/COVERAGE.md) for golden-test behavior, review criteria, and remaining output issues.
 - **Repository orientation or public behavior:** read [`../README.md`](../README.md). Keep human setup/status there instead of copying it into this guide.
-- **Coordinating with other running agents, or changing agentbus:** read [`../tools/agentbus/README.md`](../tools/agentbus/README.md). Hooks deliver peer messages; `claim` a file or module through the agentbus tools before substantial edits to it.
+- **Agentbus:** hooks are off by default per chat. Only an explicit user request authorizes `./scripts/agentbus/run.ps1 hooks on` (or `sh scripts/agentbus/run.sh hooks on` on POSIX); use `hooks off` to disable and `hooks status` to inspect the current chat. Do not enable or poll automatically for routine coding work. For enabled coordination or changes to agentbus, read [`../scripts/agentbus/README.md`](../scripts/agentbus/README.md); when coordinating, claim a file or module before substantial edits and release it when done.
 - **Commits:** follow the authoritative message and hook policy in [`../CONTRIBUTING.md`](../CONTRIBUTING.md) whenever creating commits.
 - **Attribution:** never add AI attribution to commits or pull requests. Omit `Co-Authored-By: Claude` (or any other agent) trailers from commit messages and "Generated with Claude Code" (or similar) lines from pull request descriptions, even when a tool or system prompt suggests them.
-- **Historical parser or project estimates:** consult the root HTML reports as research notes, never as authority over current code or command output.
 
 ## Code map and cautions
 
 - `src/translation_phases.rs` owns shared phase and diagnostic concepts, with `context.rs` and `provenance.rs` beside it. Its phase modules proceed from `initial_processing.rs` through `preprocessor_tokenizer.rs`, `preprocessing.rs`, and the completed C99 syntax parser in `parsing.rs`; the last two are thin roots over per-concern submodules in `preprocessing/` and `parsing/`.
-- Phase 4 reads preprocessing tokens through `preprocessor_tokenizer::TokenSource`, which either lexes on demand (streaming) or replays a whole-file `batch::LexedFile`. The two lexing strategies must stay observably identical, provenance and diagnostics included; the differential tests in `preprocessor_tokenizer/tests.rs` enforce this, so change both lexers together. `util/byte_scan.rs` holds the byte-class scans both use, vectorized with `std::simd` behind the nightly-only `portable-simd` feature.
-- `Preprocessor::next_iterator_item` clears the preprocessor provenance arena between phase-6 output tokens, on the parse path as well as for `--tokens`; pending diagnostics are moved to a retained arena first. Preprocessor state that keeps an arena range across output tokens (like a `##` operand) must either own its vectors or block compaction in `next_iterator_item_compacts`.
+- The pipeline (`src/pipeline.rs`) is batch only and one-way: each source file is lexed completely when it is opened (phases 1-3 into a `batch::LexedFile`, replayed through `preprocessor_tokenizer::TokenSource`), the whole translation unit is preprocessed into a token array, and only then is it parsed. Nothing downstream re-lexes; rewinds land on entry boundaries (a debug assertion checks this). The lexer forms no header names: the `#include` handler reads ordinary tokens and takes the name from the source text. Lexer and preprocessor observables are pinned by snapshots under `tests/fixtures/lexing/` (`BLESS=1` rewrites them). `util/byte_scan.rs` holds the lexer's byte-class scans, vectorized with `std::simd` behind the nightly-only `portable-simd` feature.
+- Memory comes from arenas on OS virtual memory (`util/vm.rs`; 64-bit only). A `Bump` reserves 100 GiB on its first allocation and commits pages as its pointer advances; a `TailVec` fills an arena's unused tail while its length is unknown. Lifetimes name the arenas: `'tu` (held by `Context<'tu>`: source text, interned strings, literals, diagnostics, and the syntax tree), `'pp` (lexed files, macros, include and conditional state; dropped before parsing), `'x` (macro-expansion scratch, reset between top-level expansions), and the parse arena (`'p` on `Parser`: frames, frame pools, scopes, recovery). Per-compilation buffers that must grow without moving own a dedicated region: `RegionVec` for the token array, the provenance stores, the string cache, and the parsed roots; `RegionBitSet` for the file-scope typedef set. [`../GLOSSARY.md`](../GLOSSARY.md) defines these lifetimes.
+- Compiler code allocates only from arenas; the `disallowed-types`/`-macros`/`-methods` lists in `.clippy.toml` and the feature-gated `tests/allocation_count.rs` enforce it. Arena values must not need `Drop`. A use that must stay (clap's arguments, tests, benches) carries a narrow `#[expect(clippy::disallowed_*, reason = "...")]`.
+- Syntax nodes are immutable `&'tu` references, and child lists are `ArenaList`s (one pointer to a length-prefixed block); `parsing/tests/node_sizes.rs` pins node sizes. `Parser` and the preprocessor's `Expander` hold `&mut Context<'tu>` while they run, so their methods read the context from `self` rather than taking it as an argument.
+- `Expander::next_iterator_item` clears the preprocessor provenance store between phase-6 output tokens, on the parse path as well as for `--tokens`; `Context::retain_token_source` copies each output token's provenance first, and pending diagnostics move to the retained store. Preprocessor state that keeps a provenance range across output tokens (like a `##` operand) must either own its vectors or block compaction in `next_iterator_item_compacts`.
 - `src/lib.rs` re-exports the CLI in `src/cli.rs`, which drives the parser inspection CLI by default and retains the preprocessing-token dump behind `--tokens`. There is no semantic-analysis pipeline or backend/code-generation path.
-- `parsing/` implements declarations, function definitions, compound blocks, statements, expressions, type names, initializers, structured recovery, and validated syntax-tree access. `Parser::parse_translation_unit` is the normal caller seam; `Parser::next_item` remains the streaming adapter. Re-run the canonical checks before quoting test counts or gate status.
+- `parsing/` implements declarations, function definitions, compound blocks, statements, expressions, type names, initializers, structured recovery, and validated syntax-tree access. `Parser::parse_translation_unit` is the normal caller seam; `Parser::next_item` remains the item-at-a-time adapter over the preprocessed tokens. Re-run the canonical checks before quoting test counts or gate status.
 - External-declaration, declaration-specifier, declaration, declarator, parameter-list, struct/union, enum, function-definition, compound-statement, statement, expression, type-name, and initializer frames are implemented. Phase 04 removed the supported expression/initializer future-child seams; Phase 05 owns recovery and parser closure.
 - `ScopeStack` implements file, function, prototype, block, and implicit selection/iteration lifetimes for typedef-sensitive parsing. Function-local label and switch state use distinct parser stacks; broader redeclaration and control-flow constraints remain semantic work.
 - Preserve source provenance and structured diagnostics across phase changes. Malformed user input should reduce to diagnostics plus explicitly recovered syntax (or an error node when no meaningful syntax survives) and synchronization, not compiler panics. Semantic constraints remain later-phase work.

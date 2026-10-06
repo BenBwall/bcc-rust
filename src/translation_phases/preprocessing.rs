@@ -9,17 +9,27 @@ mod errors;
 mod expression;
 mod macro_expansion;
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests;
 mod token;
 mod token_conversion;
 
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "Test-only constructor arguments, compiled only under `cfg(test)`."
+)]
+use std::path::PathBuf;
 use std::{
     fmt::Debug,
-    mem::take,
-    path::{
-        Path,
-        PathBuf,
-    },
+    ops::ControlFlow,
+    path::Path,
 };
 
 use conditional::ConditionalGroup;
@@ -35,6 +45,7 @@ pub(crate) use errors::{
 use expression::PreprocessorExpressionParser;
 pub(crate) use macro_expansion::HashHash;
 use macro_expansion::MacroDefinition;
+use rustc_hash::FxBuildHasher;
 pub(crate) use token::{
     CharacterTokenType,
     FloatTokenType,
@@ -47,8 +58,10 @@ pub(crate) use token::{
     Token,
     TokenType,
 };
+use token_conversion::LiteralScratch;
 
-use self::macro_expansion::FunctionLikeMacroArgument;
+#[cfg(test)]
+use crate::util::shared::SharedVec;
 use crate::{
     translation_phases::{
         Context,
@@ -58,17 +71,19 @@ use crate::{
         SetSourceFileIndex,
         SourcePosition,
         TranslationError,
-        TranslationPhase,
-        preprocessor_tokenizer::TokenSource,
+        preprocessor_tokenizer::{
+            LexedFiles,
+            TokenSource,
+        },
     },
     util::{
-        HashMap,
-        HashSet,
-        chunked_queue::ChunkedQueue,
-        shared::{
-            SharedString,
-            SharedVec,
+        bump::{
+            ArenaMap,
+            ArenaSet,
+            ArenaVec,
+            Bump,
         },
+        region_vec::RegionVec,
         string_cache::StringCacheId,
     },
 };
@@ -85,140 +100,546 @@ const PREDEFINED_MACRO_NAMES: [&str; 9] = [
     "__STDC_MB_MIGHT_NEQ_WC__",
 ];
 
+/// Frames pushed after which the expansion arena is reset, at the next point
+/// where no expansion is active. A reset copies the source-file frames, so it
+/// is not worth doing after every top-level token.
+const RESET_EXPANSIONS_AFTER_FRAMES: usize = 256;
+
 /// Parser-only diagnostics require invocation metadata; standalone token
 /// production does not retain that side information.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum OutputPurpose {
     Preprocessing,
     Parsing,
 }
 
+/// State kept from the start of preprocessing to its end.
+struct PreprocessorState<'pp> {
+    arena:                 &'pp Bump,
+    once_set:              ArenaSet<'pp, u32>,
+    macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
+    /// Every source file opened, including the main file and headers.
+    lexed_files:           LexedFiles<'pp>,
+    /// Source-file frames, outermost first, while no expansion is active.
+    /// During an expansion segment they live on the expander's stack and
+    /// this vector stays empty, keeping its capacity.
+    file_frames:           ArenaVec<'pp, FileFrame<'pp>>,
+    /// Provenance of open conditionals is owned because token iteration
+    /// compacts temporary preprocessor provenance while groups remain open.
+    open_conditionals:     ArenaVec<'pp, ConditionalGroup<'pp>>,
+    /// Fixed on first use so every `__DATE__` and `__TIME__` agrees.
+    translation_timestamp: Option<TranslationTimestamp<'pp>>,
+    /// Storage that string-literal conversion reuses.
+    literal_scratch:       LiteralScratch<'pp>,
+}
+
+impl Debug for PreprocessorState<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreprocessorState")
+            .field("once_set", &self.once_set)
+            .field("macro_definitions", &self.macro_definitions)
+            .field("lexed_files", &self.lexed_files)
+            .field("file_frames", &self.file_frames)
+            .field("open_conditionals", &self.open_conditionals)
+            .field("translation_timestamp", &self.translation_timestamp)
+            .finish()
+    }
+}
+
+/// A source-file frame kept while no expansion is active.
 #[derive(Debug)]
-pub(crate) struct Preprocessor {
-    pub(crate) tokenizer:       TokenSource,
-    pub(crate) tokenizer_stack: Vec<TokenizerFrame>,
-    pub(crate) hash_hash_stack: Vec<HashHash>,
-    once_set:                   HashSet<u32>,
-    macro_definitions:          HashMap<StringCacheId, MacroDefinition>,
-    current_is_newline:         bool,
+struct FileFrame<'pp> {
+    conditional_base:           usize,
+    physical_source_file_index: u32,
+    tokenizer:                  TokenSource<'pp>,
+}
+
+/// What the preprocessor keeps while no macro expansion is active.
+#[derive(Debug)]
+struct Resting<'tu, 'pp> {
+    state:                 PreprocessorState<'pp>,
+    /// The innermost source file's cursor.
+    tokenizer:             TokenSource<'pp>,
+    current_is_newline:    bool,
+    last_was_newline:      bool,
+    output_purpose:        OutputPurpose,
+    expression_parser:     PreprocessorExpressionParser<'pp>,
+    pending_parser_token:  Option<Token>,
+    pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
+    source_segment_limit:  usize,
+}
+
+/// Translation phases 4 through 6 over one translation unit.
+///
+/// Macro expansion working memory comes from an expansion arena. It is reset
+/// at points where no expansion is active, so per-invocation data does not
+/// accumulate in the preprocessing arena for the whole phase. This is the
+/// chunking seam's expansion arena, at the granularity of top-level
+/// expansions.
+pub(crate) struct Preprocessor<'tu, 'pp> {
+    /// `None` only after a caller stopped preprocessing inside an expansion.
+    resting:   Option<Resting<'tu, 'pp>>,
+    expansion: Bump,
+    /// Where reading stopped, and the presumed source file there.
+    end:       (SourcePosition, u32),
+}
+
+impl Debug for Preprocessor<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Preprocessor")
+            .field("resting", &self.resting)
+            .field("end", &self.end)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The preprocessor while it reads input: its long-lived state plus the
+/// expansion state, whose memory comes from the expansion arena `'x`.
+pub(crate) struct Expander<'c, 'tu, 'pp: 'x, 'x> {
+    /// The translation context, borrowed while this expander runs.
+    pub(crate) context:    &'c mut Context<'tu>,
+    state:                 PreprocessorState<'pp>,
+    /// Source and include frames remain between expansions. Macro frames
+    /// share this stack until the current expansion finishes.
+    tokenizer_stack:       ArenaVec<'x, TokenizerFrame<'x>>,
+    pub(crate) tokenizer:  TokenSource<'x>,
+    /// Expansion working memory, reset between top-level expansions.
+    scratch:               &'x Bump,
+    hash_hash_stack:       ArenaVec<'x, HashHash>,
+    current_is_newline:    bool,
     /// Collect use-site hint metadata only when a language parser will consume
     /// the output.
-    output_purpose:             OutputPurpose,
-    last_was_newline:           bool,
-    /// Provenance of the `if`, `ifdef`, or `ifndef` name of each conditional
-    /// directive still waiting for its `#endif`, outermost first. It is owned
-    /// rather than an arena range because token iteration compacts the
-    /// preprocessor arena while a conditional remains open.
-    open_conditionals:          Vec<ConditionalGroup>,
-
-    generate_placeholders:      bool,
+    output_purpose:        OutputPurpose,
+    last_was_newline:      bool,
+    generate_placeholders: bool,
     /// The tokenizer-stack depth of the `#` or `##` operand being replaced,
     /// at which reading stops when that operand ends, or 0 outside such
     /// replacement.
-    operand_fence:              usize,
+    operand_fence:         usize,
     /// Argument prescan stops here without suppressing expansion within it.
-    expansion_fence:            usize,
-    empty_arguments:            std::rc::Rc<HashMap<StringCacheId, FunctionLikeMacroArgument>>,
-    empty_disabled_macros:      std::rc::Rc<[StringCacheId]>,
-    quote_include_directories:  SharedVec<PathBuf>,
-    system_include_directories: SharedVec<PathBuf>,
-    expression_parser:          PreprocessorExpressionParser,
-    pending_parser_token:       Option<Token>,
-    pending_parser_errors:      Vec<TranslationError>,
-    /// Fixed on first use so every `__DATE__` and `__TIME__` in one
-    /// translation unit agrees (C99 §6.10.8p1).
-    translation_timestamp:      Option<TranslationTimestamp>,
+    expansion_fence:       usize,
+    expression_parser:     PreprocessorExpressionParser<'pp>,
+    pending_parser_token:  Option<Token>,
+    pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
+    /// Parser-supplied provenance budget, checked within string concatenation
+    /// as well as between completed output tokens.
+    source_segment_limit:  usize,
+    /// Frames pushed since the expansion arena was last reset.
+    pushed_frames:         usize,
 }
 
-impl GetPosition for Preprocessor {
+impl Expander<'_, '_, '_, '_> {
+    /// The current position of the current token source.
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
-        self.tokenizer.position(context)
+    fn position(&self) -> SourcePosition {
+        self.tokenizer.position(self.context)
+    }
+
+    /// Moves the current token source to `position`.
+    #[inline(always)]
+    fn set_position(&mut self, position: SourcePosition) {
+        self.tokenizer.set_position(position);
+    }
+
+    /// Moves the current token source to `line`, keeping its index and
+    /// column.
+    fn set_line(&mut self, line: u32) {
+        let position = self.position();
+        self.set_position(SourcePosition { line, ..position });
+    }
+
+    /// Attributes the current token source to another source file.
+    fn set_source_file_index(&mut self, source_file_index: u32) {
+        self.tokenizer.set_source_file_index(source_file_index);
     }
 }
 
-impl SetPosition for Preprocessor {
-    #[inline(always)]
-    fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
-        self.tokenizer.set_position(context, position);
-    }
-}
-
-impl GetSourceFileIndex for Preprocessor {
+impl GetSourceFileIndex for Expander<'_, '_, '_, '_> {
     #[inline(always)]
     fn source_file_index(&self) -> u32 {
         self.tokenizer.source_file_index()
     }
 }
 
-impl SetSourceFileIndex for Preprocessor {
-    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
-        self.tokenizer
-            .set_source_file_index(context, source_file_index);
-    }
-}
-
-impl Preprocessor {
+impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
     pub(crate) fn prepare_for_parsing(&mut self) {
-        self.output_purpose = OutputPurpose::Parsing;
+        self.resting_mut().output_purpose = OutputPurpose::Parsing;
     }
 
+    #[cfg(test)]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Test-only constructor arguments, compiled only under `cfg(test)`."
+    )]
     pub(crate) fn new(
-        context: &mut Context,
+        pp: &'pp Bump,
+        context: &mut Context<'tu>,
         source_name: Box<Path>,
-        source: SharedString,
+        source: &str,
         quote_include_directories: SharedVec<PathBuf>,
         system_include_directories: SharedVec<PathBuf>,
     ) -> Self {
-        let macro_definitions = PREDEFINED_MACRO_NAMES
-            .into_iter()
-            .map(|s| -> (StringCacheId, MacroDefinition) {
-                (context.string_cache.intern(s), MacroDefinition::BuiltIn)
-            })
+        let quote: Vec<&Path> = quote_include_directories
+            .iter()
+            .map(PathBuf::as_path)
             .collect();
-        let source_file_index = context.intern_source_file(source_name);
-        context.record_source_text(source_file_index, source.clone());
-        let tokenizer = TokenSource::new(context, source_file_index, source);
-        Self {
-            tokenizer_stack: vec![TokenizerFrame {
-                frame_type: TokenizerFrameType::SourceFile {
-                    conditional_base:           0,
-                    physical_source_file_index: source_file_index,
-                },
-                tokenizer:  tokenizer.clone(),
-            }],
-            hash_hash_stack: Vec::new(),
-            once_set: HashSet::default(),
-            tokenizer,
-            macro_definitions,
-            last_was_newline: true,
-            current_is_newline: true,
-            open_conditionals: Vec::new(),
-            generate_placeholders: false,
-            operand_fence: 0,
-            expansion_fence: 0,
-            output_purpose: OutputPurpose::Preprocessing,
-            empty_arguments: std::rc::Rc::default(),
-            empty_disabled_macros: std::rc::Rc::from([]),
+        let system: Vec<&Path> = system_include_directories
+            .iter()
+            .map(PathBuf::as_path)
+            .collect();
+        let preprocessor =
+            Self::new_inner(pp, context, &source_name, source, None, &quote, &system);
+        drop((quote, system));
+        drop((
+            source_name,
             quote_include_directories,
             system_include_directories,
-            expression_parser: PreprocessorExpressionParser::new(),
-            pending_parser_token: None,
-            pending_parser_errors: Vec::new(),
-            translation_timestamp: None,
+        ));
+        preprocessor
+    }
+
+    pub(crate) fn new_with_arena_source(
+        pp: &'pp Bump,
+        context: &mut Context<'tu>,
+        source_name: &Path,
+        source: &'tu str,
+        quote_include_directories: &[&Path],
+        system_include_directories: &[&Path],
+    ) -> Self {
+        Self::new_inner(
+            pp,
+            context,
+            source_name,
+            source,
+            Some(source),
+            quote_include_directories,
+            system_include_directories,
+        )
+    }
+
+    fn new_inner(
+        pp: &'pp Bump,
+        context: &mut Context<'tu>,
+        source_name: &Path,
+        source: &str,
+        arena_source: Option<&'tu str>,
+        quote_include_directories: &[&Path],
+        system_include_directories: &[&Path],
+    ) -> Self {
+        context.set_include_directories(quote_include_directories, system_include_directories);
+        let mut macro_definitions = ArenaMap::with_hasher_in(FxBuildHasher, pp);
+        for name in PREDEFINED_MACRO_NAMES {
+            _ = macro_definitions
+                .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn);
+        }
+        let source_file_index = context.intern_source_file(source_name);
+        let mut lexed_files = LexedFiles::new_in(pp);
+        let tokenizer = lexed_files.open(context, source_file_index, source);
+        let mut file_frames = ArenaVec::new_in(pp);
+        file_frames.push(FileFrame {
+            conditional_base:           0,
+            physical_source_file_index: source_file_index,
+            tokenizer:                  tokenizer.clone(),
+        });
+        if let Some(source) = arena_source {
+            context.record_arena_source_text(source_file_index, source);
+        } else {
+            context.record_source_text(source_file_index, source);
+        }
+        let end = (tokenizer.position(context), source_file_index);
+        Self {
+            resting: Some(Resting {
+                state: PreprocessorState {
+                    arena: pp,
+                    once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
+                    macro_definitions,
+                    lexed_files,
+                    file_frames,
+                    open_conditionals: ArenaVec::new_in(pp),
+                    translation_timestamp: None,
+                    literal_scratch: LiteralScratch::new(pp),
+                },
+                tokenizer,
+                last_was_newline: true,
+                current_is_newline: true,
+                output_purpose: OutputPurpose::Preprocessing,
+                expression_parser: PreprocessorExpressionParser::new(pp),
+                pending_parser_token: None,
+                pending_parser_errors: ArenaVec::new_in(pp),
+                source_segment_limit: usize::MAX,
+            }),
+            expansion: Bump::new(),
+            end,
         }
     }
 
-    fn next_parser_token(&mut self, context: &mut Context) -> Option<Token> {
-        context.append_pending_errors(take(&mut self.pending_parser_errors));
+    fn resting_mut(&mut self) -> &mut Resting<'tu, 'pp> {
+        self.resting
+            .as_mut()
+            .expect("preprocessing does not resume after stopping inside an expansion")
+    }
+
+    /// The most bytes the expansion arena has held at once.
+    #[cfg(feature = "benchmarking-internals")]
+    pub(crate) fn expansion_high_water(&self) -> usize {
+        self.expansion.high_water()
+    }
+
+    /// Where reading stopped, for end-of-input diagnostics.
+    pub(crate) fn end_position(&self) -> SourcePosition {
+        self.end.0
+    }
+
+    /// The presumed source file where reading stopped.
+    pub(crate) fn end_source_file_index(&self) -> u32 {
+        self.end.1
+    }
+
+    /// Calls `step` until it breaks. Between calls, once enough frames were
+    /// pushed and no expansion is active, the expansion arena is reset.
+    ///
+    /// When `step` breaks inside an expansion, that expansion's state is
+    /// released with its arena and preprocessing cannot resume.
+    pub(crate) fn run<B>(
+        &mut self,
+        context: &mut Context<'tu>,
+        mut step: impl for<'c, 'x> FnMut(&mut Expander<'c, 'tu, 'pp, 'x>) -> ControlFlow<B>,
+    ) -> B {
+        loop {
+            // Nothing borrows the expansion arena between segments: the
+            // previous expander was suspended or dropped.
+            self.expansion.reset();
+            let resting = self
+                .resting
+                .take()
+                .expect("preprocessing does not resume after stopping inside an expansion");
+            let mut expander = Expander::resume(resting, context, &self.expansion);
+            let stopped = loop {
+                if let ControlFlow::Break(value) = step(&mut expander) {
+                    break Some(value);
+                }
+                if expander.pushed_frames >= RESET_EXPANSIONS_AFTER_FRAMES
+                    && expander.is_between_expansions()
+                {
+                    break None;
+                }
+            };
+            self.end = (expander.position(), expander.source_file_index());
+            if expander.is_between_expansions() {
+                self.resting = Some(expander.suspend());
+            }
+            if let Some(value) = stopped {
+                return value;
+            }
+        }
+    }
+
+    /// Calls `visit` with each phase-6 token as [`Expander::next_item`]
+    /// produces it, without compacting provenance.
+    #[cfg(test)]
+    pub(crate) fn for_each_item(
+        &mut self,
+        context: &mut Context<'tu>,
+        mut visit: impl FnMut(&mut Context<'tu>, Token),
+    ) {
+        self.run(context, |preprocessor| match preprocessor.next_item() {
+            | Some(token) => {
+                visit(preprocessor.context, token);
+                ControlFlow::Continue(())
+            },
+            | None => ControlFlow::Break(()),
+        });
+    }
+
+    /// Calls `visit` with each phase-6 token. Preprocessor provenance is
+    /// compacted before each token is produced, so `visit` must retain the
+    /// provenance it keeps.
+    pub(crate) fn for_each_iterator_item(
+        &mut self,
+        context: &mut Context<'tu>,
+        mut visit: impl FnMut(&mut Context<'tu>, Token),
+    ) {
+        self.run(context, |preprocessor| {
+            match preprocessor.next_iterator_item() {
+                | Some(token) => {
+                    visit(preprocessor.context, token);
+                    ControlFlow::Continue(())
+                },
+                | None => ControlFlow::Break(()),
+            }
+        });
+    }
+
+    /// Runs translation phases 4 through 6 without the parser's resource
+    /// budget, for direct preprocessing tests.
+    #[cfg(test)]
+    pub(crate) fn preprocess_all(&mut self, context: &mut Context<'tu>) -> RegionVec<Token> {
+        let mut tokens = RegionVec::new();
+        let _ = self.preprocess_into_arena(context, usize::MAX, &mut tokens);
+        tokens
+    }
+
+    /// Appends phase-6 output to the caller's token buffer before parsing
+    /// starts. Diagnostics stay pending in `context`; retained provenance
+    /// survives compaction of preprocessor working storage between tokens.
+    pub(crate) fn preprocess_into_arena(
+        &mut self,
+        context: &mut Context<'tu>,
+        source_segment_limit: usize,
+        tokens: &mut RegionVec<Token>,
+    ) -> Option<Token> {
+        self.collect_with_limit(context, source_segment_limit, |token| tokens.push(token))
+    }
+
+    /// Stops after the first token that exceeds the configured provenance
+    /// budget, letting the parser report the existing resource diagnostic.
+    fn collect_with_limit(
+        &mut self,
+        context: &mut Context<'tu>,
+        source_segment_limit: usize,
+        mut push: impl FnMut(Token),
+    ) -> Option<Token> {
+        self.resting_mut().source_segment_limit = source_segment_limit;
+        self.run(context, |preprocessor| {
+            let Some(mut token) = preprocessor.next_iterator_item() else {
+                return ControlFlow::Break(None);
+            };
+            let context = &mut *preprocessor.context;
+            token.source_vectors = context.retain_token_source(token.source_vectors);
+            push(token);
+            if context.source_segment_count() > source_segment_limit {
+                let mut limit_token = preprocessor.pending_parser_token.unwrap_or(token);
+                limit_token.source_vectors =
+                    context.retain_token_source(limit_token.source_vectors);
+                context.append_pending_errors(preprocessor.pending_parser_errors.drain(..));
+                return ControlFlow::Break(Some(limit_token));
+            }
+            ControlFlow::Continue(())
+        })
+    }
+}
+
+impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
+    /// Continues reading the resting source files with `context`, taking
+    /// expansion memory from `scratch`.
+    fn resume(
+        resting: Resting<'tu, 'pp>,
+        context: &'c mut Context<'tu>,
+        scratch: &'x Bump,
+    ) -> Self {
+        let Resting {
+            mut state,
+            tokenizer,
+            current_is_newline,
+            last_was_newline,
+            output_purpose,
+            expression_parser,
+            pending_parser_token,
+            pending_parser_errors,
+            source_segment_limit,
+        } = resting;
+        let mut tokenizer_stack = ArenaVec::with_capacity_in(state.file_frames.len(), scratch);
+        tokenizer_stack.extend(state.file_frames.drain(..).map(|frame| TokenizerFrame {
+            frame_type: TokenizerFrameType::SourceFile {
+                conditional_base:           frame.conditional_base,
+                physical_source_file_index: frame.physical_source_file_index,
+            },
+            tokenizer:  frame.tokenizer,
+        }));
+        Self {
+            context,
+            state,
+            tokenizer_stack,
+            tokenizer,
+            scratch,
+            hash_hash_stack: ArenaVec::new_in(scratch),
+            current_is_newline,
+            output_purpose,
+            last_was_newline,
+            generate_placeholders: false,
+            operand_fence: 0,
+            expansion_fence: 0,
+            expression_parser,
+            pending_parser_token,
+            pending_parser_errors,
+            source_segment_limit,
+            pushed_frames: 0,
+        }
+    }
+
+    /// Whether only source files are being read, so nothing refers to the
+    /// expansion arena except the frame stack itself.
+    fn is_between_expansions(&self) -> bool {
+        self.operand_fence == 0
+            && self.expansion_fence == 0
+            && self.hash_hash_stack.is_empty()
+            && self
+                .tokenizer_stack
+                .iter()
+                .all(|frame| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))
+    }
+
+    /// Returns the state to keep while the expansion arena is reset. Only
+    /// valid between expansions. Source cursors return to the `'pp`
+    /// lifetime through the registry of opened files.
+    fn suspend(self) -> Resting<'tu, 'pp> {
+        debug_assert!(
+            self.is_between_expansions(),
+            "only source-file frames may outlive the expansion arena"
+        );
+        let Self {
+            mut state,
+            mut tokenizer_stack,
+            tokenizer,
+            current_is_newline,
+            output_purpose,
+            last_was_newline,
+            expression_parser,
+            pending_parser_token,
+            pending_parser_errors,
+            source_segment_limit,
+            ..
+        } = self;
+        for frame in tokenizer_stack.drain(..) {
+            let TokenizerFrameType::SourceFile {
+                conditional_base,
+                physical_source_file_index,
+            } = frame.frame_type
+            else {
+                unreachable!("only source-file frames remain between expansions");
+            };
+            let tokenizer = state.lexed_files.persist(&frame.tokenizer);
+            state.file_frames.push(FileFrame {
+                conditional_base,
+                physical_source_file_index,
+                tokenizer,
+            });
+        }
+        let tokenizer = state.lexed_files.persist(&tokenizer);
+        Resting {
+            state,
+            tokenizer,
+            current_is_newline,
+            last_was_newline,
+            output_purpose,
+            expression_parser,
+            pending_parser_token,
+            pending_parser_errors,
+            source_segment_limit,
+        }
+    }
+
+    fn next_parser_token(&mut self) -> Option<Token> {
+        self.context
+            .append_pending_errors(self.pending_parser_errors.drain(..));
         if let Some(token) = self.pending_parser_token.take() {
             return Some(token);
         }
         loop {
-            let Some(token) = self.next_preprocessor_token::<true>(context) else {
-                for vectors in take(&mut self.open_conditionals) {
-                    let source_vectors = context.push_source_vectors(&vectors.source);
-                    context.preprocessor_error(PreprocessorError {
+            let Some(token) = self.next_preprocessor_token::<true>() else {
+                for vectors in self.state.open_conditionals.drain(..) {
+                    let source_vectors = self.context.push_source_vectors(vectors.source);
+                    self.context.preprocessor_error(PreprocessorError {
                         error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
                         source_vectors,
                     });
@@ -226,11 +647,12 @@ impl Preprocessor {
                 return None;
             };
 
-            if let Some(result) = self.map_preprocessor_token(context, token) {
+            if let Some(result) = self.map_preprocessor_token(token) {
                 if matches!(self.output_purpose, OutputPurpose::Parsing)
                     && let Some(site) = self.expansion_end()
                 {
-                    context.record_expansion_end(result.source_vectors, site);
+                    self.context
+                        .record_expansion_end(result.source_vectors, site);
                 }
                 return Some(result);
             }
@@ -242,26 +664,11 @@ impl Preprocessor {
     /// Adjacent-string concatenation may already have mapped a later token or
     /// EOF diagnostic. Source-vector compaction therefore belongs to the
     /// producer that owns that buffered work, not to each iterator consumer.
-    pub(crate) fn next_iterator_item(&mut self, context: &mut Context) -> Option<Token> {
+    pub(crate) fn next_iterator_item(&mut self) -> Option<Token> {
         if self.next_iterator_item_compacts() {
-            context.compact_preprocessor_vectors();
+            self.context.compact_preprocessor_vectors();
         }
-        self.next_item(context)
-    }
-
-    /// Runs translation phases 4 through 6 over the whole translation unit
-    /// before any token is parsed. Diagnostics stay pending in `context`.
-    ///
-    /// Each token's provenance is copied to the token arena as it is
-    /// produced, so the preprocessor arena is compacted between tokens
-    /// instead of holding every whitespace and intermediate vector.
-    pub(crate) fn preprocess_all(&mut self, context: &mut Context) -> ChunkedQueue<Token> {
-        let mut tokens = ChunkedQueue::default();
-        while let Some(mut token) = self.next_iterator_item(context) {
-            token.source_vectors = context.retain_token_source(token.source_vectors);
-            tokens.push_back(token);
-        }
-        tokens
+        self.next_item()
     }
 
     /// Whether the next [`Self::next_iterator_item`] call discards the
@@ -280,11 +687,11 @@ impl Preprocessor {
     }
 }
 
-impl TranslationPhase for Preprocessor {
-    type Item = Token;
-
-    fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
-        let token = self.next_parser_token(context)?;
-        Some(self.concatenate_adjacent_strings(context, token))
+impl Expander<'_, '_, '_, '_> {
+    /// Returns the next phase-6 token, with adjacent string literals
+    /// concatenated.
+    pub(crate) fn next_item(&mut self) -> Option<Token> {
+        let token = self.next_parser_token()?;
+        Some(self.concatenate_adjacent_strings(token))
     }
 }

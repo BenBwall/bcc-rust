@@ -1,0 +1,27 @@
+error: unterminated character constant
+ --> pp-invalid-character-in-header-name.c:1:13
+  |
+1 | #include <it's.h>
+  |             ^^^^^ the line ends before the closing `'`
+  |
+  = note: C99 §6.4.4.4: a character constant cannot span lines
+  = help: write `\n` for a newline character
+
+error: header name in `#include` cannot contain `'`
+ --> pp-invalid-character-in-header-name.c:1:13
+  |
+1 | #include <it's.h>
+  |             ^ not allowed in a header name
+  |
+  = note: C99 §6.4.7p3: the behavior is undefined if `'`, `\`, `//`, or `/*` occurs in a header name, or `"` occurs between `<` and `>`
+
+error: cannot find header `it's.h`
+ --> pp-invalid-character-in-header-name.c:1:10
+  |
+1 | #include <it's.h>
+  |          ^^^^^^^^ not found in any search directory
+  |
+  = note: the path is absolute; no directory was searched
+  = help: add the directory containing it with `--isystem <dir>`
+
+3 errors generated.

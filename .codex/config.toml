@@ -1,8 +1,7 @@
 # Project-scoped Codex config; loaded only while this project is trusted.
-# agentbus lets Codex coordinate with other agents (see tools/agentbus/README.md).
-# The launcher finds the checkout from the session directory, so linked
-# worktrees run their own copy of the server against the shared database.
+# agentbus lets Codex coordinate with other agents (see scripts/agentbus/README.md).
+# Discover the checkout from the session directory, including linked worktrees.
 [mcp_servers.agentbus]
 command = "python"
-args = ["-c", "import runpy, subprocess, sys; root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip(); sys.argv = [root + '/tools/agentbus/agentbus.py', 'serve']; runpy.run_path(sys.argv[0], run_name='__main__')"]
+args = ["-c", "import pathlib, runpy, subprocess; root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip(); runpy.run_path(str(pathlib.Path(root) / 'scripts/agentbus/run.py'), run_name='__main__')", "serve"]
 env = { AGENTBUS_AGENT = "codex" }

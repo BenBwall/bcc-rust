@@ -1,0 +1,144 @@
+=== <test> "#define F(x, y) x ## y + #x\nF(a, b) F(, 1) F(\"s\", 'c')\n"
+<test>:2:3: identifier `ab` [SourceVector { index: 30, column: 3, line: 2, source_file_index: 0, length: 1 }, SourceVector { index: 33, column: 6, line: 2, source_file_index: 0, length: 1 }]
+<test>:1:24: punctuator `+` [SourceVector { index: 23, column: 24, line: 1, source_file_index: 0, length: 1 }]
+<test>:1:26: string literal "a" [SourceVector { index: 25, column: 26, line: 1, source_file_index: 0, length: 1 }]
+<test>:2:13: integer constant `1` = 1 (int) [SourceVector { index: 40, column: 13, line: 2, source_file_index: 0, length: 1 }]
+<test>:1:24: punctuator `+` [SourceVector { index: 23, column: 24, line: 1, source_file_index: 0, length: 1 }]
+diagnostic [SourceVector { index: 45, column: 18, line: 2, source_file_index: 0, length: 3 }, SourceVector { index: 50, column: 23, line: 2, source_file_index: 0, length: 3 }]
+error: pasting `"s"` and `'c'` does not give a valid token
+ --> <test>:2:18
+  |
+2 | F(a, b) F(, 1) F("s", 'c')
+  |                  ^^^^^^^^ invalid token paste
+  |
+  = note: C99 §6.10.3.3p3: the result of `##` must be a single valid preprocessing token
+
+
+<test>:1:26: string literal "s" [SourceVector { index: 25, column: 26, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 45, column: 18, line: 2, source_file_index: 0, length: 3 }]
+<test>:1:24: punctuator `+` [SourceVector { index: 23, column: 24, line: 1, source_file_index: 0, length: 1 }]
+<test>:1:26: string literal "\"s\"" [SourceVector { index: 25, column: 26, line: 1, source_file_index: 0, length: 1 }]
+=== <test> "#define G(...) [__VA_ARGS__]\nG() G(1, (2, 3), 4)\n"
+<test>:1:16: punctuator `[` [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 1 }]
+<test>:1:28: punctuator `]` [SourceVector { index: 27, column: 28, line: 1, source_file_index: 0, length: 1 }]
+<test>:1:16: punctuator `[` [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 1 }]
+<test>:2:7: integer constant `1` = 1 (int) [SourceVector { index: 35, column: 7, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:8: punctuator `,` [SourceVector { index: 36, column: 8, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:10: punctuator `(` [SourceVector { index: 38, column: 10, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:11: integer constant `2` = 2 (int) [SourceVector { index: 39, column: 11, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:12: punctuator `,` [SourceVector { index: 40, column: 12, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:14: integer constant `3` = 3 (int) [SourceVector { index: 42, column: 14, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:15: punctuator `)` [SourceVector { index: 43, column: 15, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:16: punctuator `,` [SourceVector { index: 44, column: 16, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:18: integer constant `4` = 4 (int) [SourceVector { index: 46, column: 18, line: 2, source_file_index: 0, length: 1 }]
+<test>:1:28: punctuator `]` [SourceVector { index: 27, column: 28, line: 1, source_file_index: 0, length: 1 }]
+=== <test> "#define A B\n#define B A\nA B\n"
+<test>:2:11: identifier `A` [SourceVector { index: 22, column: 11, line: 2, source_file_index: 0, length: 1 }]
+<test>:1:11: identifier `B` [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+=== <test> "#if defined(A) || 1\nyes\n#elif 0\nno\n#else\nno\n#endif\n"
+<test>:2:1: identifier `yes` [SourceVector { index: 20, column: 1, line: 2, source_file_index: 0, length: 3 }]
+=== <test> "#if 0\n#include <a'b.h>\n\"unterminated\n#else\nok\n#endif\n"
+<test>:5:1: identifier `ok` [SourceVector { index: 43, column: 1, line: 5, source_file_index: 0, length: 2 }]
+=== <test> "#line 100 \"renamed.c\"\n__LINE__ __FILE__ x\n"
+renamed.c:100:1: integer constant `100` = 100 (int) [SourceVector { index: 22, column: 1, line: 100, source_file_index: 1, length: 8 }]
+renamed.c:100:10: string literal "renamed.c" [SourceVector { index: 31, column: 10, line: 100, source_file_index: 1, length: 8 }]
+renamed.c:100:19: identifier `x` [SourceVector { index: 40, column: 19, line: 100, source_file_index: 1, length: 1 }]
+=== <test> "_Pragma(\"once\") after\n"
+diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 1, length: 4 }]
+warning: `#pragma once` in main file
+ --> <pragma string>:1:1
+  |
+1 | once
+  | ^^^^ only affects files that are included
+
+
+<test>:1:17: identifier `after` [SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 5 }]
+=== <test> "#define X 1 // comment\nX\n"
+<test>:1:11: integer constant `1` = 1 (int) [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+=== <test> "#define EMPTY\n#define S(x) #x\nS( a  /* c */ \"b\\n\" ) EMPTY\n"
+<test>:2:14: string literal "a \"b\\n\"" [SourceVector { index: 27, column: 14, line: 2, source_file_index: 0, length: 1 }]
+=== <test> "#define H <stdio.h>\n#include H\n"
+diagnostic [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 5 }, SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 5 }, SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 17, column: 18, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 17, column: 18, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 18, column: 19, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 17, column: 18, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 18, column: 19, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 19, column: 20, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 18, column: 19, line: 1, source_file_index: 0, length: 1 }]
+error: cannot find header `stdio.h`
+ --> <test>:1:11
+  |
+1 | #define H <stdio.h>
+  |           ^^^^^^^^^ not found in any search directory
+  |
+  = note: the path is absolute; no directory was searched
+  = help: add the directory containing it with `--isystem <dir>`
+
+
+=== <test> "#define L(x) L ## x\nL(\"wide\") L('c')\n"
+<test>:1:14: wide string literal L"wide" [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 22, column: 3, line: 2, source_file_index: 0, length: 6 }]
+<test>:1:14: character constant `L'c'` = 99 (wchar_t) [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 32, column: 13, line: 2, source_file_index: 0, length: 3 }]
+=== <test> "??=define T 2\nT ??/\n+ 1\n"
+<test>:1:13: integer constant `2` = 2 (int) [SourceVector { index: 12, column: 13, line: 1, source_file_index: 0, length: 1 }]
+<test>:2:3: punctuator `+` [SourceVector { index: 16, column: 3, line: 2, source_file_index: 0, length: 5 }]
+<test>:3:3: integer constant `1` = 1 (int) [SourceVector { index: 22, column: 3, line: 3, source_file_index: 0, length: 1 }]
+=== <test> "#error message here\nafter\n"
+diagnostic [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 5 }]
+error: #error message here
+ --> <test>:1:2
+  |
+1 | #error message here
+  |  ^^^^^ `#error` directive
+
+
+<test>:2:1: identifier `after` [SourceVector { index: 20, column: 1, line: 2, source_file_index: 0, length: 5 }]
+=== <test> "#define F(x) x\nF(\n#define Y 1\nY)\n"
+=== <test> "#define FUNC(x) x\nFUNC\n(1) FUNC + 2\n"
+<test>:3:2: integer constant `1` = 1 (int) [SourceVector { index: 24, column: 2, line: 3, source_file_index: 0, length: 1 }]
+<test>:3:5: identifier `FUNC` [SourceVector { index: 27, column: 5, line: 3, source_file_index: 0, length: 4 }]
+<test>:3:10: punctuator `+` [SourceVector { index: 32, column: 10, line: 3, source_file_index: 0, length: 1 }]
+<test>:3:12: integer constant `2` = 2 (int) [SourceVector { index: 34, column: 12, line: 3, source_file_index: 0, length: 1 }]
+=== <test> "#define X 1"
+diagnostic [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 0 }]
+warning: no newline at end of file
+ --> <test>:1:12
+  |
+1 | #define X 1
+  |            ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+
+=== <test> "\"adjacent\" \"strings\" L\"wide\" \"mixed\"\n"
+<test>:1:1: wide string literal L"adjacentstringswidemixed" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 10 }, SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 9 }, SourceVector { index: 21, column: 22, line: 1, source_file_index: 0, length: 7 }, SourceVector { index: 29, column: 30, line: 1, source_file_index: 0, length: 7 }]
+=== <test> "0x1fUL 1.5e+3f 'ab' L'x' 077 08\n"
+<test>:1:1: integer constant `0x1fUL` = 31 (unsigned long) [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 6 }]
+<test>:1:8: floating constant `1.5e+3f` = 1500 (float) [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 7 }]
+<test>:1:16: character constant `'ab'` = 24930 (int) [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 4 }]
+<test>:1:21: character constant `L'x'` = 120 (wchar_t) [SourceVector { index: 20, column: 21, line: 1, source_file_index: 0, length: 4 }]
+<test>:1:26: integer constant `077` = 63 (int) [SourceVector { index: 25, column: 26, line: 1, source_file_index: 0, length: 3 }]
+diagnostic [SourceVector { index: 29, column: 30, line: 1, source_file_index: 0, length: 2 }]
+error: invalid octal integer constant `08`
+ --> <test>:1:30
+  |
+1 | 0x1fUL 1.5e+3f 'ab' L'x' 077 08
+  |                              ^^ not a valid octal constant
+  |
+  = note: C99 §6.4.4.1: a constant starting with `0` is octal, and octal digits are `0`-`7`
+
+
+<test>:1:30: integer constant `08` = 0 (int) [SourceVector { index: 29, column: 30, line: 1, source_file_index: 0, length: 2 }]
+=== <test> "#if 1\n"
+diagnostic [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 2 }]
+error: unterminated `#if`
+ --> <test>:1:2
+  |
+1 | #if 1
+  |  ^^ this conditional has no matching `#endif`
+  |
+  = help: add `#endif` where the conditional section should end
+
+
+=== <test> "#endif\n"
+diagnostic [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 5 }]
+error: `#endif` without `#if`
+ --> <test>:1:2
+  |
+1 | #endif
+  |  ^^^^^ no conditional directive is open here
+
+

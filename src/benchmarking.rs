@@ -2,32 +2,42 @@
 
 use std::{
     fmt::Write,
+    path::Path,
     sync::OnceLock,
 };
 
-pub use crate::pipeline::PreprocessingStrategy;
 use crate::{
-    pipeline::PreprocessorIterator,
+    configuration::CompilerConfiguration,
+    pipeline::{
+        parse_with_arena,
+        with_preprocessor,
+    },
     translation_phases::{
         Context,
         TranslationPhase,
-        box_path_from_str,
-        parsing::Parser,
+        parsing::{
+            Parser,
+            PreprocessedTranslationUnit,
+        },
         preprocessor_tokenizer::TokenSource,
     },
-    util::shared::{
-        SharedString,
-        SharedVec,
-    },
+    util::bump::Bump,
 };
+
+/// A translation context whose `__DATE__` and `__TIME__` spell the Unix
+/// epoch, so a benchmark never reads the clock and its result does not
+/// depend on when it runs.
+fn benchmark_context(tu: &Bump) -> Context<'_> {
+    Context::with_configuration(
+        tu,
+        CompilerConfiguration::default().with_source_date_epoch(Some(0)),
+    )
+}
 
 #[doc(hidden)]
 #[must_use]
 pub fn preprocess_one_million() -> usize {
-    preprocess(
-        BenchmarkInput::OneMillionLines,
-        PreprocessingStrategy::Streaming,
-    )
+    preprocess(BenchmarkInput::OneMillionLines)
 }
 
 /// A generated benchmark translation unit.
@@ -102,6 +112,12 @@ impl BenchmarkInput {
         clippy::large_include_file,
         reason = "The generated benchmark inputs are intentionally large."
     )]
+    #[expect(
+        clippy::disallowed_types,
+        clippy::disallowed_macros,
+        reason = "Builds a benchmark input once, outside any measured interval, and keeps it for \
+                  the process."
+    )]
     fn source(self) -> &'static str {
         match self {
             | Self::OneMillionLines =>
@@ -135,14 +151,15 @@ impl BenchmarkInput {
             },
         }
     }
-
-    fn shared_source(self) -> SharedString {
-        self.source().to_owned().into()
-    }
 }
 
 /// `count` functions whose statements nest expressions of every precedence
 /// level.
+#[expect(
+    clippy::disallowed_types,
+    reason = "Builds a benchmark input once, outside any measured interval, and keeps it for the \
+              process."
+)]
 fn expression_heavy_source(count: usize) -> String {
     let mut source = String::from(
         "typedef struct point { int x, y; } point;
@@ -170,6 +187,11 @@ fn expression_heavy_source(count: usize) -> String {
 
 /// `count` groups of file-scope declarations with nested declarators,
 /// aggregates, and initializers.
+#[expect(
+    clippy::disallowed_types,
+    reason = "Builds a benchmark input once, outside any measured interval, and keeps it for the \
+              process."
+)]
 fn declaration_heavy_source(count: usize) -> String {
     let mut source = String::new();
     for index in 0..count {
@@ -193,15 +215,15 @@ fn declaration_heavy_source(count: usize) -> String {
 }
 
 /// Runs translation phases 1 through 3 only and returns the number of
-/// preprocessing tokens. Every strategy but streaming lexes the whole file
-/// first.
+/// preprocessing tokens.
 #[doc(hidden)]
 #[must_use]
-pub fn lex(input: BenchmarkInput, strategy: PreprocessingStrategy) -> usize {
-    let mut context = Context::new();
-    context.set_lexing_strategy(strategy.lexing());
-    let file = context.intern_source_file(box_path_from_str("<input>"));
-    let mut tokens = TokenSource::new(&mut context, file, input.shared_source());
+pub fn lex(input: BenchmarkInput) -> usize {
+    let tu = Bump::new();
+    let mut context = benchmark_context(&tu);
+    let file = context.intern_source_file(Path::new("<input>"));
+    let pp = Bump::new();
+    let mut tokens = TokenSource::new(&mut context, &pp, file, input.source());
     let mut count = 0;
     while tokens.next_item(&mut context).is_some() {
         count += 1;
@@ -212,36 +234,103 @@ pub fn lex(input: BenchmarkInput, strategy: PreprocessingStrategy) -> usize {
     count
 }
 
-/// Runs translation phases 1 through 6 and returns the number of parser-facing
-/// tokens. Streaming strategies discard provenance as they go; the batch
-/// strategy keeps the whole translation unit, as a parser reading it later
-/// would need.
+/// Runs translation phases 1 through 6 over the whole translation unit and
+/// returns the number of parser-facing tokens. Their provenance is kept, as
+/// the parser reading them would need.
 #[doc(hidden)]
 #[must_use]
-pub fn preprocess(input: BenchmarkInput, strategy: PreprocessingStrategy) -> usize {
-    match strategy {
-        | PreprocessingStrategy::Streaming | PreprocessingStrategy::BatchLexing =>
-            PreprocessorIterator::with_lexing(
-                strategy.lexing(),
-                box_path_from_str("<input>"),
-                input.shared_source(),
-                SharedVec::default(),
-                SharedVec::default(),
-            )
-            .count(),
-        | PreprocessingStrategy::Batch => {
-            let mut context = Context::new();
-            strategy
-                .preprocessor(
-                    &mut context,
-                    box_path_from_str("<input>"),
-                    input.shared_source(),
-                    SharedVec::default(),
-                    SharedVec::default(),
-                )
-                .preprocess_all(&mut context)
-                .len()
+pub fn preprocess(input: BenchmarkInput) -> usize {
+    let tu = Bump::new();
+    let mut context = benchmark_context(&tu);
+    with_preprocessor(
+        &mut context,
+        Path::new("<input>"),
+        input.source(),
+        &[],
+        &[],
+        |mut preprocessor, context, _pp| {
+            let mut tokens = crate::util::region_vec::RegionVec::new();
+            let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
+            tokens.len()
         },
+    )
+}
+
+/// What the arenas of one compilation held, measured in-process.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArenaUsage {
+    /// The preprocessing arena's high-water mark over phases 4 to 6 (the
+    /// plan's `'pp` peak), lexed files included.
+    pub preprocessor_high_water: usize,
+    /// The expansion arena's high-water mark; it is reset between
+    /// top-level expansions.
+    pub expansion_high_water:    usize,
+    /// The parse arena's high-water mark over phase 7 (the plan's `'parse`
+    /// peak): frames, their pools, scopes, and recovery state.
+    pub parse_high_water:        usize,
+    /// The translation-unit arena's high-water mark after phase 7: source
+    /// text, diagnostics, and everything else that lives as long as the unit.
+    pub tu_high_water:           usize,
+    /// The most virtual-memory regions live at once over phases 1 to 7.
+    pub peak_regions:            usize,
+    /// The most address space those regions reserved at once.
+    pub peak_reserved:           usize,
+    /// The most bytes committed across all regions at once.
+    pub peak_committed:          usize,
+}
+
+/// Preprocesses and parses `input` to report its arena high-water marks, then
+/// compiles it through phase 7 to report its peak regions and commit.
+#[doc(hidden)]
+#[must_use]
+pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
+    use crate::util::vm::accounting;
+    let (preprocessor_high_water, expansion_high_water) = {
+        let tu = Bump::new();
+        let mut context = benchmark_context(&tu);
+        with_preprocessor(
+            &mut context,
+            Path::new("<input>"),
+            input.source(),
+            &[],
+            &[],
+            |mut preprocessor, context, pp| {
+                let mut tokens = crate::util::region_vec::RegionVec::new();
+                let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
+                (pp.high_water(), preprocessor.expansion_high_water())
+            },
+        )
+    };
+    let parse_high_water = with_prepared_parse(input, |prepared| {
+        let parse = prepared.parse;
+        _ = prepared.parse();
+        parse.high_water()
+    });
+    let before = accounting::live();
+    accounting::reset_peak();
+    let tu_high_water = {
+        let tu = Bump::new();
+        let mut context = benchmark_context(&tu);
+        let unit = crate::pipeline::parse_translation_unit(
+            &mut context,
+            Path::new("<input>"),
+            input.source(),
+            &[],
+            &[],
+        );
+        _ = unit.external_declarations().len();
+        tu.high_water()
+    };
+    let peak = accounting::peak();
+    ArenaUsage {
+        preprocessor_high_water,
+        expansion_high_water,
+        parse_high_water,
+        tu_high_water,
+        peak_regions: peak.regions - before.regions,
+        peak_reserved: peak.reserved - before.reserved,
+        peak_committed: peak.committed - before.committed,
     }
 }
 
@@ -257,63 +346,99 @@ pub struct ParseBenchmarkSummary {
 /// Runs translation phases 1 through 7 and summarizes the parse.
 #[doc(hidden)]
 #[must_use]
-pub fn parse(input: BenchmarkInput, strategy: PreprocessingStrategy) -> ParseBenchmarkSummary {
-    let mut context = Context::new();
-    let preprocessor = strategy.preprocessor(
-        &mut context,
-        box_path_from_str("<input>"),
-        input.shared_source(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let unit = strategy
-        .parser(preprocessor, &mut context)
-        .parse_translation_unit(&mut context);
+pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
+    let tu = Bump::new();
+    summarize_parse(&tu, Path::new("<input>"), input.source())
+}
+
+/// Runs translation phases 1 through 7 over `source`, copied into the
+/// translation-unit arena as the CLI's `--input` is, and summarizes the
+/// parse.
+#[doc(hidden)]
+#[must_use]
+pub fn parse_source(source: &str) -> ParseBenchmarkSummary {
+    let tu = Bump::new();
+    let source = tu.alloc_str(source);
+    summarize_parse(&tu, Path::new("<input>"), source)
+}
+
+/// Reads `path` and runs translation phases 1 through 7 over it as the CLI
+/// does, with no include directories, and summarizes the parse.
+///
+/// # Errors
+///
+/// When `path` cannot be read.
+#[doc(hidden)]
+pub fn parse_file(path: &Path) -> std::io::Result<ParseBenchmarkSummary> {
+    let tu = Bump::new();
+    let source = tu.read_to_str_lossy(path)?;
+    Ok(summarize_parse(&tu, path, source))
+}
+
+fn summarize_parse<'tu>(tu: &'tu Bump, path: &Path, source: &'tu str) -> ParseBenchmarkSummary {
+    let mut context = benchmark_context(tu);
+    let unit = crate::pipeline::parse_translation_unit(&mut context, path, source, &[], &[]);
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
-        diagnostics:           context.take_pending_errors().len(),
+        diagnostics:           context.pending_error_count(),
     }
 }
 
 /// A translation unit preprocessed through phase 6 and ready to parse, so a
 /// benchmark can time phase 7 alone.
 #[doc(hidden)]
-pub struct PreparedParse {
-    context: Context,
-    parser:  Parser,
+pub struct PreparedParse<'a, 'tu, 'parse> {
+    context:      &'a mut Context<'tu>,
+    preprocessed: PreprocessedTranslationUnit,
+    parse:        &'parse Bump,
 }
 
-impl std::fmt::Debug for PreparedParse {
+impl std::fmt::Debug for PreparedParse<'_, '_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedParse").finish_non_exhaustive()
     }
 }
 
-/// Runs translation phases 1 through 6 under the batch strategy, leaving
-/// only parsing to [`PreparedParse::parse`].
+/// Runs translation phases 1 through 6, then passes a prepared parser to a
+/// callback while its translation context remains alive.
 #[doc(hidden)]
-#[must_use]
-pub fn prepare_parse(input: BenchmarkInput) -> PreparedParse {
-    let mut context = Context::new();
-    let preprocessor = PreprocessingStrategy::Batch.preprocessor(
-        &mut context,
-        box_path_from_str("<input>"),
-        input.shared_source(),
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let parser = PreprocessingStrategy::Batch.parser(preprocessor, &mut context);
-    PreparedParse { context, parser }
+pub fn with_prepared_parse<R>(
+    input: BenchmarkInput,
+    inspect: impl FnOnce(PreparedParse<'_, '_, '_>) -> R,
+) -> R {
+    let tu = Bump::new();
+    let mut context = benchmark_context(&tu);
+    let preprocessed = prepare_parse_in_context(&mut context, input);
+    let parse = Bump::new();
+    inspect(PreparedParse {
+        context: &mut context,
+        preprocessed,
+        parse: &parse,
+    })
 }
 
-impl PreparedParse {
+fn prepare_parse_in_context(
+    context: &mut Context<'_>,
+    input: BenchmarkInput,
+) -> PreprocessedTranslationUnit {
+    with_preprocessor(
+        context,
+        Path::new("<input>"),
+        input.source(),
+        &[],
+        &[],
+        |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
+    )
+}
+
+impl PreparedParse<'_, '_, '_> {
     /// Runs translation phase 7 and summarizes the parse.
     #[must_use]
-    pub fn parse(mut self) -> ParseBenchmarkSummary {
-        let unit = self.parser.parse_translation_unit(&mut self.context);
+    pub fn parse(self) -> ParseBenchmarkSummary {
+        let unit = parse_with_arena(self.preprocessed, self.context, self.parse);
         ParseBenchmarkSummary {
             external_declarations: unit.external_declarations().len(),
-            diagnostics:           self.context.take_pending_errors().len(),
+            diagnostics:           self.context.pending_error_count(),
         }
     }
 }

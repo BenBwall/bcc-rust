@@ -23,7 +23,6 @@ use super::{
     syntax::ExternalDeclaration,
 };
 use crate::translation_phases::{
-    Context,
     ErrorSeverity,
     TranslationError,
     preprocessing::{
@@ -61,7 +60,7 @@ pub(super) enum ExternalDeclarationPhase {
     AwaitFunctionDefinition,
 }
 
-impl ExternalDeclarationFrame {
+impl<'tu, 'p> ExternalDeclarationFrame {
     pub(super) fn new(starting_error_count: usize, starting_diagnostic_count: usize) -> Self {
         Self {
             phase: ExternalDeclarationPhase::Start,
@@ -72,11 +71,10 @@ impl ExternalDeclarationFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | ExternalDeclarationPhase::Start => {
                 debug_assert!(
@@ -85,6 +83,7 @@ impl ExternalDeclarationFrame {
                 );
                 self.phase = ExternalDeclarationPhase::AwaitDeclaration;
                 ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
+                    parser.arena,
                     DeclarationContext::External,
                     parser.hard_error_count,
                 )))
@@ -93,35 +92,41 @@ impl ExternalDeclarationFrame {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("declaration frame returned an unexpected value: {returned:?}");
                 };
-                let is_definition = parser.declaration_is_definition_head(declaration)
+                let is_definition = declaration.is_definition_head()
                     && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                         || token.is_some_and(|token| parser.declaration_starter(token)));
                 if is_definition {
                     self.phase = ExternalDeclarationPhase::AwaitFunctionDefinition;
                     return ParseAction::Push(ParseFrame::FunctionDefinition(
-                        FunctionDefinitionFrame::new(declaration, self.starting_error_count),
+                        FunctionDefinitionFrame::new(
+                            parser.arena,
+                            declaration,
+                            self.starting_error_count,
+                        ),
                     ));
                 }
                 if parser.hard_error_count > self.starting_error_count {
-                    if !parser.declaration_is_meaningful(declaration) {
-                        let declaration_source = parser.syntax[declaration].source_vectors;
+                    if !declaration.is_meaningful() {
+                        let declaration_source = declaration.source_vectors;
                         let source = if declaration_source.length == 0 {
                             token.map_or(declaration_source, |token| token.source_vectors)
                         } else {
                             declaration_source
                         };
-                        if let Some(TranslationError::Parsing(error)) = context
+                        let related = token.map(|token| {
+                            parser.context.diagnostic_slice(&[RelatedParserDiagnostic {
+                                message:        "parsing resumes here",
+                                source_vectors: token.source_vectors,
+                            }])
+                        });
+                        if let Some(TranslationError::Parsing(error)) = parser.context
                             .pending_errors
                             .iter_mut()
                             .skip(self.starting_diagnostic_count)
                             .find(|error| matches!(error, TranslationError::Parsing(error) if error.severity == ErrorSeverity::Error && error.recovery.is_none()))
                         {
-                            if let Some(token) = token {
-                                error.related = vec![RelatedParserDiagnostic {
-                                    message: "parsing resumes here",
-                                    source_vectors: token.source_vectors,
-                                }]
-                                .into_boxed_slice();
+                            if let Some(related) = related {
+                                error.related = related;
                             }
                             error.recovery = Some(RecoverySummary {
                                 owner: ParseFrameKind::ExternalDeclaration,
@@ -146,7 +151,7 @@ impl ExternalDeclarationFrame {
                 let Some(ParseValue::FunctionDefinition(definition)) = returned else {
                     panic!("function-definition frame returned an unexpected value: {returned:?}");
                 };
-                let recovered = parser.syntax[definition].recovered;
+                let recovered = definition.recovered;
                 ParseAction::Reduce(ParseValue::ExternalDeclaration(if recovered {
                     ExternalDeclaration::RecoveredFunctionDefinition(definition)
                 } else {

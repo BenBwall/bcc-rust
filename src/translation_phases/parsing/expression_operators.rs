@@ -7,12 +7,11 @@ use super::{
     expression::ExpressionMode,
     syntax::{
         BinaryOperator,
-        ExpressionIndex,
+        Expression,
         UnaryOperator,
     },
 };
 use crate::translation_phases::{
-    Context,
     SourceVectors,
     preprocessing::{
         KeywordTokenType,
@@ -23,7 +22,7 @@ use crate::translation_phases::{
 };
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum LanguageExpressionOperator {
+pub(super) enum LanguageExpressionOperator<'tu> {
     Binary {
         operator:       BinaryOperator,
         source_vectors: SourceVectors,
@@ -32,13 +31,13 @@ pub(super) enum LanguageExpressionOperator {
         source_vectors: SourceVectors,
     },
     Conditional {
-        middle:          ExpressionIndex,
+        middle:          &'tu Expression<'tu>,
         question_source: SourceVectors,
         colon_source:    Option<SourceVectors>,
     },
 }
 
-impl LanguageExpressionOperator {
+impl LanguageExpressionOperator<'_> {
     pub(super) fn precedence(self) -> u32 {
         match self {
             | Self::Binary { operator, .. } => binary_operator_precedence(operator),
@@ -197,13 +196,12 @@ pub(super) fn is_postfix_starter(token: TokenType) -> bool {
 }
 
 pub(super) fn is_array_pointer_marker(
-    parser: &mut Parser,
-    context: &mut Context,
+    parser: &mut Parser<'_, '_, '_>,
     token: Option<Token>,
 ) -> bool {
     is_operator(token, OperatorTokenType::Asterisk)
         && is_operator(
-            parser.cursor.following(context),
+            parser.cursor.following(),
             OperatorTokenType::ClosingSquareBracket,
         )
 }

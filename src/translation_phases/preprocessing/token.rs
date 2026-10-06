@@ -59,14 +59,14 @@ pub(crate) struct Token {
 
 impl GetPosition for Token {
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.source_vectors.position(context)
     }
 }
 
 impl GetSourceVectors for Token {
     #[inline(always)]
-    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         self.source_vectors
     }
 }
@@ -416,20 +416,22 @@ impl TokenType {
     /// Describes a found token for a message, such as "keyword `int`",
     /// "`;`", or "identifier `count`". `spelling` is the token's source text
     /// when known.
-    pub(crate) fn found(self, spelling: Option<&str>) -> String {
-        let with_spelling = |kind: &str| match spelling.filter(|spelling| !spelling.is_empty()) {
-            | Some(spelling) => format!("{kind} {}", quote_spelling(spelling)),
-            | None => kind.to_owned(),
-        };
-        match self {
-            | Self::Keyword(keyword) => format!("keyword `{}`", keyword.spelling()),
-            | Self::Operator(operator) => format!("`{}`", operator.spelling()),
-            | Self::Identifier => with_spelling("identifier"),
-            | Self::Integer(_) => with_spelling("integer constant"),
-            | Self::Float(_) => with_spelling("floating constant"),
-            | Self::Character(_) => with_spelling("character constant"),
-            | Self::String(_) => with_spelling("string literal"),
-        }
+    pub(crate) fn found(self, spelling: Option<&str>) -> impl Display {
+        std::fmt::from_fn(move |f| {
+            let kind = match self {
+                | Self::Keyword(keyword) => return write!(f, "keyword `{}`", keyword.spelling()),
+                | Self::Operator(operator) => return write!(f, "`{}`", operator.spelling()),
+                | Self::Identifier => "identifier",
+                | Self::Integer(_) => "integer constant",
+                | Self::Float(_) => "floating constant",
+                | Self::Character(_) => "character constant",
+                | Self::String(_) => "string literal",
+            };
+            match spelling.filter(|spelling| !spelling.is_empty()) {
+                | Some(spelling) => write!(f, "{kind} {}", quote_spelling(spelling)),
+                | None => f.write_str(kind),
+            }
+        })
     }
 }
 

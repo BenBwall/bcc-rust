@@ -1,4 +1,4 @@
-//! Byte-class scans shared by the streaming and batch lexers.
+//! Byte-class scans for the lexer.
 //!
 //! Every scan answers "how many leading bytes belong to a class?" or "where
 //! is the first byte of a class?". With the nightly-only `portable-simd`
@@ -111,46 +111,6 @@ byte_class!(
 );
 
 byte_class!(
-    /// Bytes that end a verbatim run of raw source: phase 1-2 specials and
-    /// line endings.
-    RawBreak,
-    b'\\' | b'?' | b'\r' | b'\n',
-    |bytes| {
-        bytes.simd_eq(splat(b'\\'))
-            | bytes.simd_eq(splat(b'?'))
-            | bytes.simd_eq(splat(b'\r'))
-            | bytes.simd_eq(splat(b'\n'))
-    }
-);
-
-byte_class!(
-    /// Raw breaks plus `*`, which may end a block comment.
-    RawBlockCommentBreak,
-    b'\\' | b'?' | b'\r' | b'\n' | b'*',
-    |bytes| {
-        bytes.simd_eq(splat(b'\\'))
-            | bytes.simd_eq(splat(b'?'))
-            | bytes.simd_eq(splat(b'\r'))
-            | bytes.simd_eq(splat(b'\n'))
-            | bytes.simd_eq(splat(b'*'))
-    }
-);
-
-byte_class!(
-    /// Raw breaks plus both literal quotes and the escape character.
-    RawLiteralBreak,
-    b'\\' | b'?' | b'\r' | b'\n' | b'"' | b'\'',
-    |bytes| {
-        bytes.simd_eq(splat(b'\\'))
-            | bytes.simd_eq(splat(b'?'))
-            | bytes.simd_eq(splat(b'\r'))
-            | bytes.simd_eq(splat(b'\n'))
-            | bytes.simd_eq(splat(b'"'))
-            | bytes.simd_eq(splat(b'\''))
-    }
-);
-
-byte_class!(
     /// Bytes that end a string or character literal body in spliced text.
     LiteralBreak,
     b'\\' | b'\n' | b'"' | b'\'',
@@ -259,25 +219,6 @@ pub(crate) fn find_phase2_special(bytes: &[u8]) -> usize {
     find::<Phase2Special, true>(bytes)
 }
 
-/// Length of the leading raw run that phases 1-2 pass through unchanged and
-/// that contains no line ending.
-#[inline(always)]
-pub(crate) fn raw_verbatim_run(bytes: &[u8]) -> usize {
-    find::<RawBreak, true>(bytes)
-}
-
-/// Like [`raw_verbatim_run`], also stopping at `*`.
-#[inline(always)]
-pub(crate) fn raw_block_comment_run(bytes: &[u8]) -> usize {
-    find::<RawBlockCommentBreak, true>(bytes)
-}
-
-/// Like [`raw_verbatim_run`], also stopping at quotes.
-#[inline(always)]
-pub(crate) fn raw_literal_run(bytes: &[u8]) -> usize {
-    find::<RawLiteralBreak, true>(bytes)
-}
-
 /// Length of the leading run of a spliced literal body: no quote, escape,
 /// or line feed.
 #[inline(always)]
@@ -315,6 +256,12 @@ pub(crate) fn count_chars(bytes: &[u8]) -> usize {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests {
     use proptest::prelude::*;
 
@@ -357,8 +304,8 @@ mod tests {
                 scalar_find(&bytes, true, |b| matches!(b, b'\\' | b'?' | b'\r'))
             );
             prop_assert_eq!(
-                raw_literal_run(&bytes),
-                scalar_find(&bytes, true, |b| matches!(b, b'\\' | b'?' | b'\r' | b'\n' | b'"' | b'\''))
+                literal_run(&bytes),
+                scalar_find(&bytes, true, |b| matches!(b, b'\\' | b'\n' | b'"' | b'\''))
             );
             prop_assert_eq!(
                 block_comment_run(&bytes),

@@ -1,0 +1,273 @@
+=== "int x = 42;\n" []
+Identifier "int" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Whitespace " " [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+Identifier "x" [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+Whitespace " " [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Equals "=" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+Whitespace " " [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Number "42\0" [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+SemiColon ";" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+Newline "\n" [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 12, line: 2, column: 1 }
+end
+at SourcePosition { index: 12, line: 2, column: 1 }
+=== "a+=b->c<<=d>>=e...f.5e+3 1.e-2 0x1P-4 .x\n" []
+Identifier "a" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+PlusEquals "+=" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Identifier "b" [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+Arrow "->" [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Identifier "c" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+LessThanLessThanEquals "<<=" [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Identifier "d" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+GreaterThanGreaterThanEquals ">>=" [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 14, line: 1, column: 15 }
+Identifier "e" [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 15, line: 1, column: 16 }
+Ellipsis "..." [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 18, line: 1, column: 19 }
+Identifier "f" [SourceVector { index: 18, column: 19, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 19, line: 1, column: 20 }
+Number ".5e+3\0" [SourceVector { index: 19, column: 20, line: 1, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 24, line: 1, column: 25 }
+Whitespace " " [SourceVector { index: 24, column: 25, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 25, line: 1, column: 26 }
+Number "1.e-2\0" [SourceVector { index: 25, column: 26, line: 1, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 30, line: 1, column: 31 }
+Whitespace " " [SourceVector { index: 30, column: 31, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 31, line: 1, column: 32 }
+Number "0x1P-4\0" [SourceVector { index: 31, column: 32, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 37, line: 1, column: 38 }
+Whitespace " " [SourceVector { index: 37, column: 38, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 38, line: 1, column: 39 }
+Period "." [SourceVector { index: 38, column: 39, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 39, line: 1, column: 40 }
+Identifier "x" [SourceVector { index: 39, column: 40, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 40, line: 1, column: 41 }
+Newline "\n" [SourceVector { index: 40, column: 41, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 41, line: 2, column: 1 }
+end
+at SourcePosition { index: 41, line: 2, column: 1 }
+=== "L\"wide\" L'w' Lx \"s\\\"q\" 'c' '\\''\n" []
+String "L\"wide\"" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+Whitespace " " [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Character "L'w'" [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 12, line: 1, column: 13 }
+Whitespace " " [SourceVector { index: 12, column: 13, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 13, line: 1, column: 14 }
+Identifier "Lx" [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 15, line: 1, column: 16 }
+Whitespace " " [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 16, line: 1, column: 17 }
+String "\"s\\\"q\"" [SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 22, line: 1, column: 23 }
+Whitespace " " [SourceVector { index: 22, column: 23, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 23, line: 1, column: 24 }
+Character "'c'" [SourceVector { index: 23, column: 24, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 26, line: 1, column: 27 }
+Whitespace " " [SourceVector { index: 26, column: 27, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 27, line: 1, column: 28 }
+Character "'\\''" [SourceVector { index: 27, column: 28, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 31, line: 1, column: 32 }
+Newline "\n" [SourceVector { index: 31, column: 32, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 32, line: 2, column: 1 }
+end
+at SourcePosition { index: 32, line: 2, column: 1 }
+=== "#define F(a, ...) a ## __VA_ARGS__ #a\n" []
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "define" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+Whitespace " " [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Identifier "F" [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+OpeningParenthesis "(" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Identifier "a" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+Comma "," [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 12, line: 1, column: 13 }
+Whitespace " " [SourceVector { index: 12, column: 13, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 13, line: 1, column: 14 }
+Ellipsis "..." [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 16, line: 1, column: 17 }
+ClosingParenthesis ")" [SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 17, line: 1, column: 18 }
+Whitespace " " [SourceVector { index: 17, column: 18, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 18, line: 1, column: 19 }
+Identifier "a" [SourceVector { index: 18, column: 19, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 19, line: 1, column: 20 }
+Whitespace " " [SourceVector { index: 19, column: 20, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 20, line: 1, column: 21 }
+HashHash "##" [SourceVector { index: 20, column: 21, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 22, line: 1, column: 23 }
+Whitespace " " [SourceVector { index: 22, column: 23, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 23, line: 1, column: 24 }
+Identifier "__VA_ARGS__" [SourceVector { index: 23, column: 24, line: 1, source_file_index: 0, length: 11 }]
+at SourcePosition { index: 34, line: 1, column: 35 }
+Whitespace " " [SourceVector { index: 34, column: 35, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 35, line: 1, column: 36 }
+Hash "#" [SourceVector { index: 35, column: 36, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 36, line: 1, column: 37 }
+Identifier "a" [SourceVector { index: 36, column: 37, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 37, line: 1, column: 38 }
+Newline "\n" [SourceVector { index: 37, column: 38, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 38, line: 2, column: 1 }
+end
+at SourcePosition { index: 38, line: 2, column: 1 }
+=== "<: :> <% %> %: %:%: %:% %= <<= >>= && || != == ! ~ ^= |= &= ? ;\n" []
+OpeningSquareBracket "<:" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+Whitespace " " [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+ClosingSquareBracket ":>" [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+Whitespace " " [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+OpeningCurlyBrace "<%" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+ClosingCurlyBrace "%>" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+Whitespace " " [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 12, line: 1, column: 13 }
+Hash "%:" [SourceVector { index: 12, column: 13, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 14, line: 1, column: 15 }
+Whitespace " " [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 15, line: 1, column: 16 }
+HashHash "%:%:" [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 19, line: 1, column: 20 }
+Whitespace " " [SourceVector { index: 19, column: 20, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 20, line: 1, column: 21 }
+Hash "%:" [SourceVector { index: 20, column: 21, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 22, line: 1, column: 23 }
+Percent "%" [SourceVector { index: 22, column: 23, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 23, line: 1, column: 24 }
+Whitespace " " [SourceVector { index: 23, column: 24, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 24, line: 1, column: 25 }
+PercentEquals "%=" [SourceVector { index: 24, column: 25, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 26, line: 1, column: 27 }
+Whitespace " " [SourceVector { index: 26, column: 27, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 27, line: 1, column: 28 }
+LessThanLessThanEquals "<<=" [SourceVector { index: 27, column: 28, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 30, line: 1, column: 31 }
+Whitespace " " [SourceVector { index: 30, column: 31, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 31, line: 1, column: 32 }
+GreaterThanGreaterThanEquals ">>=" [SourceVector { index: 31, column: 32, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 34, line: 1, column: 35 }
+Whitespace " " [SourceVector { index: 34, column: 35, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 35, line: 1, column: 36 }
+AmpersandAmpersand "&&" [SourceVector { index: 35, column: 36, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 37, line: 1, column: 38 }
+Whitespace " " [SourceVector { index: 37, column: 38, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 38, line: 1, column: 39 }
+PipePipe "||" [SourceVector { index: 38, column: 39, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 40, line: 1, column: 41 }
+Whitespace " " [SourceVector { index: 40, column: 41, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 41, line: 1, column: 42 }
+ExclamationMarkEquals "!=" [SourceVector { index: 41, column: 42, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 43, line: 1, column: 44 }
+Whitespace " " [SourceVector { index: 43, column: 44, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 44, line: 1, column: 45 }
+EqualsEquals "==" [SourceVector { index: 44, column: 45, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 46, line: 1, column: 47 }
+Whitespace " " [SourceVector { index: 46, column: 47, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 47, line: 1, column: 48 }
+ExclamationMark "!" [SourceVector { index: 47, column: 48, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 48, line: 1, column: 49 }
+Whitespace " " [SourceVector { index: 48, column: 49, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 49, line: 1, column: 50 }
+Tilde "~" [SourceVector { index: 49, column: 50, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 50, line: 1, column: 51 }
+Whitespace " " [SourceVector { index: 50, column: 51, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 51, line: 1, column: 52 }
+CaretEquals "^=" [SourceVector { index: 51, column: 52, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 53, line: 1, column: 54 }
+Whitespace " " [SourceVector { index: 53, column: 54, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 54, line: 1, column: 55 }
+PipeEquals "|=" [SourceVector { index: 54, column: 55, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 56, line: 1, column: 57 }
+Whitespace " " [SourceVector { index: 56, column: 57, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 57, line: 1, column: 58 }
+AmpersandEquals "&=" [SourceVector { index: 57, column: 58, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 59, line: 1, column: 60 }
+Whitespace " " [SourceVector { index: 59, column: 60, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 60, line: 1, column: 61 }
+QuestionMark "?" [SourceVector { index: 60, column: 61, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 61, line: 1, column: 62 }
+Whitespace " " [SourceVector { index: 61, column: 62, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 62, line: 1, column: 63 }
+SemiColon ";" [SourceVector { index: 62, column: 63, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 63, line: 1, column: 64 }
+Newline "\n" [SourceVector { index: 63, column: 64, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 64, line: 2, column: 1 }
+end
+at SourcePosition { index: 64, line: 2, column: 1 }
+=== "é𝑥 = ünïcode; € \u{a0}x\n" []
+Identifier "é𝑥" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 6, line: 1, column: 3 }
+Whitespace " " [SourceVector { index: 6, column: 3, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 1, column: 4 }
+Equals "=" [SourceVector { index: 7, column: 4, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 1, column: 5 }
+Whitespace " " [SourceVector { index: 8, column: 5, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 6 }
+Identifier "ünïcode" [SourceVector { index: 9, column: 6, line: 1, source_file_index: 0, length: 9 }]
+at SourcePosition { index: 18, line: 1, column: 13 }
+SemiColon ";" [SourceVector { index: 18, column: 13, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 19, line: 1, column: 14 }
+Whitespace " " [SourceVector { index: 19, column: 14, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 20, line: 1, column: 15 }
+Other "€" [SourceVector { index: 20, column: 15, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 23, line: 1, column: 16 }
+Whitespace " " [SourceVector { index: 23, column: 16, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 26, line: 1, column: 18 }
+Identifier "x" [SourceVector { index: 26, column: 18, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 27, line: 1, column: 19 }
+Newline "\n" [SourceVector { index: 27, column: 19, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 28, line: 2, column: 1 }
+end
+at SourcePosition { index: 28, line: 2, column: 1 }
+=== "  \t\u{b}\u{c} x \u{a0}\u{2003} y\n" []
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Identifier "x" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+Whitespace " " [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 14, line: 1, column: 12 }
+Identifier "y" [SourceVector { index: 14, column: 12, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 15, line: 1, column: 13 }
+Newline "\n" [SourceVector { index: 15, column: 13, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 16, line: 2, column: 1 }
+end
+at SourcePosition { index: 16, line: 2, column: 1 }
+=== "" []
+end
+at SourcePosition { index: 0, line: 1, column: 1 }
+=== "\n\n\n" []
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+Newline "\n" [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 2, line: 3, column: 1 }
+Newline "\n" [SourceVector { index: 2, column: 1, line: 3, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 3, line: 4, column: 1 }
+end
+at SourcePosition { index: 3, line: 4, column: 1 }

@@ -25,17 +25,22 @@ pub(crate) mod util;
 
 #[cfg(feature = "benchmarking-internals")]
 pub use benchmarking::{
+    ArenaUsage,
     BenchmarkInput,
     ParseBenchmarkSummary,
     PreparedParse,
-    PreprocessingStrategy,
+    arena_usage,
     lex,
     parse,
-    prepare_parse,
+    parse_file,
+    parse_source,
     preprocess,
     preprocess_one_million,
+    with_prepared_parse,
 };
 pub use cli::{
+    CompileStep,
     MainError,
+    compile_file_measured,
     run,
 };

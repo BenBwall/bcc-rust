@@ -2,12 +2,13 @@ mod conditional_boundary_regressions;
 mod directive_regressions;
 mod encoding_regressions;
 mod expression_regressions;
+mod header_name_regressions;
 mod keyword_regressions;
 mod literal_regressions;
 mod macro_regressions;
+mod observables;
 mod other_token_regressions;
 mod predefined_regressions;
-mod strategies;
 
 use std::path::PathBuf;
 
@@ -38,7 +39,6 @@ use crate::{
         GetSourceVectors,
         SourceVectors,
         TranslationError,
-        TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,
@@ -47,84 +47,134 @@ use crate::{
     util::shared::SharedVec,
 };
 
-fn preprocess_with_configuration(
+fn preprocess_with_configuration<R>(
     source: &str,
     configuration: CompilerConfiguration,
-) -> (Vec<String>, Vec<TranslationError>) {
-    let mut context = Context::with_configuration(configuration);
+    inspect: impl FnOnce(Vec<String>, &[TranslationError<'_>]) -> R,
+) -> R {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::with_configuration(&tu, configuration);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
     let mut identifiers = Vec::new();
-    while let Some(token) = preprocessor.next_item(&mut context) {
+    preprocessor.for_each_item(&mut context, |context, token| {
         if token.kind == TokenType::Identifier {
             identifiers.push(context.string_cache.at(token.contents).to_owned());
         }
-    }
+    });
     let mut errors = Vec::new();
     while let Some(error) = context.pop_pending_error() {
         errors.push(error);
     }
-    (identifiers, errors)
+    inspect(identifiers, &errors)
 }
 
-fn preprocess(source: &str) -> (Vec<String>, Vec<TranslationError>) {
-    preprocess_with_configuration(source, CompilerConfiguration::default())
+fn preprocess<R>(
+    source: &str,
+    inspect: impl FnOnce(Vec<String>, &[TranslationError<'_>]) -> R,
+) -> R {
+    preprocess_with_configuration(source, CompilerConfiguration::default(), inspect)
+}
+
+#[test]
+fn independent_macro_expansions_keep_scratch_memory_bounded() {
+    fn run(invocations: usize) -> usize {
+        let source = format!(
+            "#define ID(x) x\n#define TWICE(x) x + x\n{}",
+            "TWICE(ID(7));\n".repeat(invocations)
+        );
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let preprocess_arena = crate::util::bump::Bump::new();
+        let mut preprocessor = Preprocessor::new(
+            &preprocess_arena,
+            &mut context,
+            PathBuf::from("<test>").into_boxed_path(),
+            &source,
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let mut output = 0;
+        preprocessor.for_each_item(&mut context, |context, token| {
+            assert_eq!(
+                context.string_cache.at(token.contents),
+                ["7\0", "+", "7\0", ";"][output % 4]
+            );
+            output += 1;
+        });
+        assert_eq!(output, invocations * 4);
+        assert_eq!(context.pending_error_count(), 0);
+        preprocessor.expansion.high_water()
+    }
+
+    let short = run(1_024);
+    let long = run(8_192);
+    assert!(
+        long <= short * 2,
+        "expansion scratch grew with independent invocations: {short} bytes for 1,024, {long} \
+         bytes for 8,192"
+    );
 }
 
 #[test]
 fn adjacent_string_lookahead_restores_diagnostics_to_the_phase_context() {
-    let (_, errors) = preprocess("\"a\" 0xg\n");
-
-    assert!(errors.iter().any(|error| matches!(
-        error,
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
-            ..
-        })
-    )));
+    preprocess("\"a\" 0xg\n", |_, errors| {
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::InvalidHexadecimalIntegerLiteral,
+                ..
+            })
+        )));
+    });
 }
 
 #[test]
 fn adjacent_string_diagnostics_remain_in_source_order() {
-    let (_, errors) = preprocess("\"\\q\" \"\\u1\"\n");
-
-    assert!(matches!(
-        errors.as_slice(),
-        [
-            TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::InvalidEscapeSequence,
-                ..
-            }),
-            TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
-                ..
-            })
-        ]
-    ));
+    preprocess("\"\\q\" \"\\u1\"\n", |_, errors| {
+        assert!(matches!(
+            errors,
+            [
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::InvalidEscapeSequence,
+                    ..
+                }),
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort,
+                    ..
+                })
+            ]
+        ));
+    });
 }
 
 #[test]
 fn malformed_include_restores_include_tokenization_mode() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<test>").into_boxed_path(),
-        "#include 123 extra\nint x = a < b > c;\n".to_owned().into(),
+        "#include 123 extra\nint x = a < b > c;\n",
         SharedVec::default(),
         SharedVec::default(),
     );
     let mut tokens = Vec::new();
-    while let Some(token) = preprocessor.next_item(&mut context) {
+    preprocessor.for_each_item(&mut context, |context, token| {
         tokens.push((
             token.kind,
             context.string_cache.at(token.contents).to_owned(),
         ));
-    }
+    });
     let errors = context.take_pending_errors();
 
     assert_eq!(
@@ -161,16 +211,16 @@ fn empty_include_preserves_the_following_logical_line() {
         "#include /* comment */\nint sentinel;\n",
         "#include\n#define TYPE int\nTYPE sentinel;\n",
     ] {
-        let (identifiers, errors) = preprocess(source);
-
-        assert_eq!(identifiers, ["sentinel"], "{source:?}");
-        assert!(errors.iter().any(|error| matches!(
-            error,
-            TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
-                ..
-            })
-        )));
+        preprocess(source, |identifiers, errors| {
+            assert_eq!(identifiers, ["sentinel"], "{source:?}");
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                    ..
+                })
+            )));
+        });
     }
 }
 
@@ -181,9 +231,41 @@ fn malformed_macro_expanded_include_unwinds_before_the_following_line() {
         "#define BAD() 123\n#include BAD() extra\nint sentinel;\n",
         "#define VALUE 123\n#define BAD VALUE\n#include BAD extra\nint sentinel;\n",
     ] {
-        let (identifiers, errors) = preprocess(source);
+        preprocess(source, |identifiers, errors| {
+            assert_eq!(identifiers, ["sentinel"], "{source:?}");
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
+                    ..
+                })
+            )));
+        });
+    }
+}
 
-        assert_eq!(identifiers, ["sentinel"], "{source:?}");
+#[test]
+fn malformed_macro_include_does_not_repeat_expansion_diagnostics() {
+    let source = "#define BAD(x) x\n#include BAD(123,456) extra\nint sentinel;\n";
+    preprocess(source, |identifiers, errors| {
+        assert_eq!(identifiers, ["sentinel"]);
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| matches!(
+                    error,
+                    TranslationError::Preprocessing(PreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
+                                ..
+                            },
+                        ..
+                    })
+                ))
+                .count(),
+            1,
+            "{errors:#?}"
+        );
         assert!(errors.iter().any(|error| matches!(
             error,
             TranslationError::Preprocessing(PreprocessorError {
@@ -191,48 +273,19 @@ fn malformed_macro_expanded_include_unwinds_before_the_following_line() {
                 ..
             })
         )));
-    }
-}
-
-#[test]
-fn malformed_macro_include_does_not_repeat_expansion_diagnostics() {
-    let source = "#define BAD(x) x\n#include BAD(123,456) extra\nint sentinel;\n";
-    let (identifiers, errors) = preprocess(source);
-
-    assert_eq!(identifiers, ["sentinel"]);
-    assert_eq!(
-        errors
-            .iter()
-            .filter(|error| matches!(
-                error,
-                TranslationError::Preprocessing(PreprocessorError {
-                    error_type:
-                        PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
-                            ..
-                        },
-                    ..
-                })
-            ))
-            .count(),
-        1,
-        "{errors:#?}"
-    );
-    assert!(errors.iter().any(|error| matches!(
-        error,
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::ExpectedIncludeStringOrAngleBracketString(_),
-            ..
-        })
-    )));
+    });
 }
 
 #[test]
 fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
-    let mut context = Context::new();
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<phase-7-totality-test>").into_boxed_path(),
-        String::new().into(),
+        "",
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -240,8 +293,6 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
 
     for kind in [
         PreprocessorTokenType::Placeholder,
-        PreprocessorTokenType::AngleBracketString,
-        PreprocessorTokenType::IncludeString,
         PreprocessorTokenType::Whitespace,
     ] {
         let token = PreprocessorToken {
@@ -250,7 +301,9 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
             contents,
         };
         assert_eq!(
-            preprocessor.map_preprocessor_token(&mut context, token),
+            preprocessor.run(&mut context, |preprocessor| {
+                std::ops::ControlFlow::Break(preprocessor.map_preprocessor_token(token))
+            }),
             None
         );
         assert!(matches!(
@@ -269,10 +322,10 @@ fn strict_c99() -> CompilerConfiguration {
 
 fn selected_identifier(expression: &str, identifier: &str) {
     let source = format!("#if {expression}\n{identifier}\n#endif\n");
-    let (identifiers, errors) = preprocess(&source);
-
-    assert_eq!(identifiers, [identifier]);
-    assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+    preprocess(&source, |identifiers, errors| {
+        assert_eq!(identifiers, [identifier]);
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+    });
 }
 
 #[test]
@@ -297,143 +350,164 @@ fn middle_expression_operators_reduce_before_colon() {
 
 #[test]
 fn unmatched_colon_reports_a_diagnostic_without_panicking() {
-    let (_, errors) = preprocess("#if 1 : 2\nUNREACHABLE\n#endif\n");
-
-    assert!(
-        errors.iter().any(|error| matches!(
-            error,
-            TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
-                ..
-            })
-        )),
-        "diagnostics: {errors:#?}"
-    );
+    preprocess("#if 1 : 2\nUNREACHABLE\n#endif\n", |_, errors| {
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
+                    ..
+                })
+            )),
+            "diagnostics: {errors:#?}"
+        );
+    });
 }
 
 #[test]
 fn trailing_unmatched_colon_reports_a_diagnostic_without_panicking() {
-    let (_, errors) = preprocess("#if 1 :\nRECOVERED\n#endif\n");
-
-    assert!(
-        errors.iter().any(|error| matches!(
-            error,
-            TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
-                ..
-            })
-        )),
-        "diagnostics: {errors:#?}"
-    );
+    preprocess("#if 1 :\nRECOVERED\n#endif\n", |_, errors| {
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
+                    ..
+                })
+            )),
+            "diagnostics: {errors:#?}"
+        );
+    });
 }
 
 #[test]
 fn default_extension_mode_evaluates_comma_to_rhs_without_a_diagnostic() {
-    let (identifiers, errors) = preprocess("#if (1, 0)\nUNREACHABLE\n#endif\n");
-
-    assert_eq!(identifiers, Vec::<String>::new());
-    assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+    preprocess(
+        "#if (1, 0)\nUNREACHABLE\n#endif\n",
+        |identifiers, errors| {
+            assert_eq!(identifiers, Vec::<String>::new());
+            assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+        },
+    );
 }
 
 #[test]
 fn strict_c99_diagnoses_an_evaluated_comma_after_reducing_to_rhs() {
-    let (identifiers, errors) =
-        preprocess_with_configuration("#if (0, 2)\nCOMMA_RESULT_2\n#endif\n", strict_c99());
-
-    assert_eq!(identifiers, ["COMMA_RESULT_2"]);
-    assert!(
-        errors
-            .iter()
-            .any(|error| error.severity() == ErrorSeverity::Error
-                && matches!(
-                    error,
-                    TranslationError::Preprocessing(PreprocessorError {
-                        error_type: PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
-                            ExtensionPolicy::Deny
-                        ),
-                        ..
-                    })
-                )),
-        "diagnostics: {errors:#?}"
+    preprocess_with_configuration(
+        "#if (0, 2)\nCOMMA_RESULT_2\n#endif\n",
+        strict_c99(),
+        |identifiers, errors| {
+            assert_eq!(identifiers, ["COMMA_RESULT_2"]);
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.severity() == ErrorSeverity::Error
+                        && matches!(
+                            error,
+                            TranslationError::Preprocessing(PreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
+                                        ExtensionPolicy::Deny
+                                    ),
+                                ..
+                            })
+                        )),
+                "diagnostics: {errors:#?}"
+            );
+        },
     );
 }
 
 #[test]
 fn warning_policy_reports_an_evaluated_comma_as_a_warning() {
     let configuration = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn);
-    let (identifiers, errors) =
-        preprocess_with_configuration("#if (0, 2)\nCOMMA_RESULT_2\n#endif\n", configuration);
-
-    assert_eq!(identifiers, ["COMMA_RESULT_2"]);
-    assert!(
-        errors
-            .iter()
-            .any(|error| error.severity() == ErrorSeverity::Warning
-                && matches!(
-                    error,
-                    TranslationError::Preprocessing(PreprocessorError {
-                        error_type: PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
-                            ExtensionPolicy::Warn
-                        ),
-                        ..
-                    })
-                )),
-        "diagnostics: {errors:#?}"
+    preprocess_with_configuration(
+        "#if (0, 2)\nCOMMA_RESULT_2\n#endif\n",
+        configuration,
+        |identifiers, errors| {
+            assert_eq!(identifiers, ["COMMA_RESULT_2"]);
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.severity() == ErrorSeverity::Warning
+                        && matches!(
+                            error,
+                            TranslationError::Preprocessing(PreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
+                                        ExtensionPolicy::Warn
+                                    ),
+                                ..
+                            })
+                        )),
+                "diagnostics: {errors:#?}"
+            );
+        },
     );
 }
 
 #[test]
 fn strict_c99_does_not_diagnose_comma_in_short_circuited_rhs() {
-    let (identifiers, errors) = preprocess_with_configuration(
+    preprocess_with_configuration(
         "#if 1 || (1, 2)\nSHORT_CIRCUIT_RESULT_1\n#endif\n",
         strict_c99(),
+        |identifiers, errors| {
+            assert_eq!(identifiers, ["SHORT_CIRCUIT_RESULT_1"]);
+            assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+        },
     );
-
-    assert_eq!(identifiers, ["SHORT_CIRCUIT_RESULT_1"]);
-    assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
 }
 
 #[test]
 fn comma_in_unevaluated_conditional_middle_preserves_the_question_marker() {
-    let (identifiers, errors) =
-        preprocess_with_configuration("#if 0 ? 2, 3 : 0\nUNREACHABLE\n#endif\n", strict_c99());
-
-    assert_eq!(identifiers, Vec::<String>::new());
-    assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+    preprocess_with_configuration(
+        "#if 0 ? 2, 3 : 0\nUNREACHABLE\n#endif\n",
+        strict_c99(),
+        |identifiers, errors| {
+            assert_eq!(identifiers, Vec::<String>::new());
+            assert!(errors.is_empty(), "unexpected diagnostics: {errors:#?}");
+        },
+    );
 }
 
-/// Preprocesses `source` as the file `path`, returning every token.
-fn tokens_of(source: &str, path: &str) -> (Vec<Token>, Context) {
-    let mut context = Context::new();
+/// Preprocesses `source` as the file `path`, keeping tokens and their context
+/// alive for the inspection callback.
+fn with_tokens_of<R>(
+    source: &str,
+    path: &str,
+    inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
+) -> R {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from(path).into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
     let mut tokens = Vec::new();
-    while let Some(token) = preprocessor.next_item(&mut context) {
+    preprocessor.for_each_item(&mut context, |_, token| {
         tokens.push(token);
-    }
-    (tokens, context)
+    });
+    inspect(&tokens, &mut context)
 }
 
-fn string_value(context: &Context, token: Token) -> (bool, String) {
+fn string_value(context: &Context<'_>, token: Token) -> (bool, String) {
     match token.kind {
         | TokenType::String(StringTokenType::String(contents)) => (
             false,
             context
-                .literal_text(contents, false)
-                .as_deref()
+                .literal_text_in(context.tu_arena(), contents, false)
                 .expect("UTF-8 test literal")
                 .to_owned(),
         ),
         | TokenType::String(StringTokenType::WideString(contents)) => (
             true,
             context
-                .literal_text(contents, true)
-                .as_deref()
+                .literal_text_in(context.tu_arena(), contents, true)
                 .expect("UTF-8 test literal")
                 .to_owned(),
         ),
@@ -444,46 +518,58 @@ fn string_value(context: &Context, token: Token) -> (bool, String) {
 #[test]
 fn wide_literal_spellings_keep_their_opening_quote() {
     // C99 §6.10.3.2p2: `#` produces each argument token's spelling.
-    let (tokens, context) = tokens_of("#define S(x) #x\nS(L'b') S(L\"w\")\n", "<test>");
-    assert_eq!(tokens.len(), 1);
-    assert_eq!(
-        string_value(&context, tokens[0]),
-        (false, "L'b'L\"w\"".to_owned())
+    with_tokens_of(
+        "#define S(x) #x\nS(L'b') S(L\"w\")\n",
+        "<test>",
+        |tokens, context| {
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(
+                string_value(context, tokens[0]),
+                (false, "L'b'L\"w\"".to_owned())
+            );
+        },
     );
 
-    let (tokens, mut context) = tokens_of("L'\"'\n", "<test>");
-    assert!(matches!(
-        tokens[0].kind,
-        TokenType::Character(CharacterTokenType::WideChar(34))
-    ));
-    assert!(context.take_pending_errors().is_empty());
+    with_tokens_of("L'\"'\n", "<test>", |tokens, context| {
+        assert!(matches!(
+            tokens[0].kind,
+            TokenType::Character(CharacterTokenType::WideChar(34))
+        ));
+        assert!(context.take_pending_errors().is_empty());
+    });
 
     // C99 §6.10.3.3p3: `L ## "ab"` pastes into the wide literal `L"ab"`.
-    let (tokens, mut context) = tokens_of("#define W(x) L ## x\nW(\"ab\")\n", "<test>");
-    assert_eq!(string_value(&context, tokens[0]), (true, "ab".to_owned()));
-    assert!(context.take_pending_errors().is_empty());
+    with_tokens_of(
+        "#define W(x) L ## x\nW(\"ab\")\n",
+        "<test>",
+        |tokens, context| {
+            assert_eq!(string_value(context, tokens[0]), (true, "ab".to_owned()));
+            assert!(context.take_pending_errors().is_empty());
+        },
+    );
 }
 
 #[test]
 fn wide_string_contents_may_start_with_a_quote() {
-    let (tokens, mut context) = tokens_of("L\"'x\"\n", "<test>");
-    assert_eq!(string_value(&context, tokens[0]), (true, "'x".to_owned()));
-    assert!(context.take_pending_errors().is_empty());
+    with_tokens_of("L\"'x\"\n", "<test>", |tokens, context| {
+        assert_eq!(string_value(context, tokens[0]), (true, "'x".to_owned()));
+        assert!(context.take_pending_errors().is_empty());
+    });
 }
 
 #[test]
 fn file_and_line_are_spelled_as_c_tokens_at_their_use() {
     let path = r"C:\dir\Lab.c";
-    let (tokens, mut context) = tokens_of("\n__FILE__ __LINE__\n", path);
-
-    assert_eq!(string_value(&context, tokens[0]), (false, path.to_owned()));
-    assert!(matches!(
-        tokens[1].kind,
-        TokenType::Integer(IntegerTokenType::Int(2))
-    ));
-    let line_vectors = context.get_source_vectors(tokens[1].source_vectors);
-    assert_eq!((line_vectors[0].line, line_vectors[0].column), (2, 10));
-    assert!(context.take_pending_errors().is_empty());
+    with_tokens_of("\n__FILE__ __LINE__\n", path, |tokens, context| {
+        assert_eq!(string_value(context, tokens[0]), (false, path.to_owned()));
+        assert!(matches!(
+            tokens[1].kind,
+            TokenType::Integer(IntegerTokenType::Int(2))
+        ));
+        let line_vectors = context.get_source_vectors(tokens[1].source_vectors);
+        assert_eq!((line_vectors[0].line, line_vectors[0].column), (2, 10));
+        assert!(context.take_pending_errors().is_empty());
+    });
 }
 
 #[test]
@@ -502,69 +588,77 @@ fn conditional_groups_select_exactly_one_group() {
             &["yes"],
         ),
     ] {
-        let (identifiers, errors) = preprocess(source);
-        assert_eq!(identifiers, expected, "{source:?}");
-        assert!(errors.is_empty(), "{source:?}: {errors:#?}");
+        preprocess(source, |identifiers, errors| {
+            assert_eq!(identifiers, expected, "{source:?}");
+            assert!(errors.is_empty(), "{source:?}: {errors:#?}");
+        });
     }
 }
 
 #[test]
 fn malformed_conditions_still_find_their_endif() {
     for source in ["#if 1.5\n#endif\nafter\n", "#if defined 1\n#endif\nafter\n"] {
-        let (identifiers, errors) = preprocess(source);
-        assert_eq!(identifiers, ["after"], "{source:?}");
-        assert_eq!(errors.len(), 1, "{source:?}: {errors:#?}");
+        preprocess(source, |identifiers, errors| {
+            assert_eq!(identifiers, ["after"], "{source:?}");
+            assert_eq!(errors.len(), 1, "{source:?}: {errors:#?}");
+        });
     }
-    let (_, errors) = preprocess("#if defined +\n#endif\n");
-    assert_eq!(errors.len(), 1, "{errors:#?}");
+    preprocess("#if defined +\n#endif\n", |_, errors| {
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+    });
 }
 
 #[test]
 fn unterminated_conditionals_point_at_their_directive() {
-    let (tokens, mut context) = tokens_of("#if 1\nx\n", "<test>");
-    assert_eq!(tokens.len(), 1);
-    let errors = context.take_pending_errors();
-    let [
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
-            source_vectors,
-        }),
-    ] = errors.as_slice()
-    else {
-        panic!("expected one unterminated-conditional error: {errors:#?}");
-    };
-    assert_eq!(context.source_spelling(*source_vectors), Some("if"));
+    with_tokens_of("#if 1\nx\n", "<test>", |tokens, context| {
+        assert_eq!(tokens.len(), 1);
+        let errors = context.take_pending_errors();
+        let [
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives,
+                source_vectors,
+            }),
+        ] = errors.as_slice()
+        else {
+            panic!("expected one unterminated-conditional error: {errors:#?}");
+        };
+        assert_eq!(context.source_spelling(*source_vectors), Some("if"));
+    });
 }
 
 #[test]
 fn identical_redefinitions_and_empty_definitions_are_accepted() {
-    let (identifiers, errors) = preprocess(
+    preprocess(
         "#define A 1\n#define A  1\n#define F(a) a\n#define F(a) a\n#define E\n#define E\nafter\n",
+        |identifiers, errors| {
+            assert_eq!(identifiers, ["after"]);
+            assert!(errors.is_empty(), "{errors:#?}");
+        },
     );
-    assert_eq!(identifiers, ["after"]);
-    assert!(errors.is_empty(), "{errors:#?}");
 
     for source in [
         "#define A 1\n#define A 2\n",
         "#define F(a) a\n#define F(b) b\n",
     ] {
-        let (identifiers, errors) = preprocess(&format!("{source}after\n"));
-        assert_eq!(identifiers, ["after"], "{source:?}");
-        assert!(matches!(
-            errors.as_slice(),
-            [TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_),
-                ..
-            })]
-        ));
+        preprocess(&format!("{source}after\n"), |identifiers, errors| {
+            assert_eq!(identifiers, ["after"], "{source:?}");
+            assert!(matches!(
+                errors,
+                [TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_),
+                    ..
+                })]
+            ));
+        });
     }
 }
 
 #[test]
 fn function_like_macro_names_without_parentheses_are_not_invocations() {
-    let (identifiers, errors) = preprocess("#define f(x) x\nf ;\n");
-    assert_eq!(identifiers, ["f"]);
-    assert!(errors.is_empty(), "{errors:#?}");
+    preprocess("#define f(x) x\nf ;\n", |identifiers, errors| {
+        assert_eq!(identifiers, ["f"]);
+        assert!(errors.is_empty(), "{errors:#?}");
+    });
 }
 
 #[test]
@@ -575,62 +669,66 @@ fn quoted_includes_search_beside_the_including_file_not_the_working_directory() 
     std::fs::write(nested.join("sibling.h"), "from_sibling\n").unwrap();
     let main = nested.join("main.c");
 
-    let (tokens, mut context) = tokens_of(
+    with_tokens_of(
         "#include \"sibling.h\"\n#include <sibling.h>\n",
         main.to_str().unwrap(),
-    );
-    let identifiers: Vec<&str> = tokens
-        .iter()
-        .filter(|token| token.kind == TokenType::Identifier)
-        .map(|token| context.string_cache.at(token.contents))
-        .collect();
-    assert_eq!(identifiers, ["from_sibling"]);
-    let errors = context.take_pending_errors();
-    assert!(
-        matches!(
-            errors.as_slice(),
-            [TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::HeaderNotFound {
-                    is_system_header: true,
-                    ..
-                },
-                ..
-            })]
-        ),
-        "{errors:#?}"
+        |tokens, context| {
+            let identifiers: Vec<&str> = tokens
+                .iter()
+                .filter(|token| token.kind == TokenType::Identifier)
+                .map(|token| context.string_cache.at(token.contents))
+                .collect();
+            assert_eq!(identifiers, ["from_sibling"]);
+            let errors = context.take_pending_errors();
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Preprocessing(PreprocessorError {
+                        error_type: PreprocessorErrorType::HeaderNotFound {
+                            is_system_header: true,
+                            ..
+                        },
+                        ..
+                    })]
+                ),
+                "{errors:#?}"
+            );
+        },
     );
     drop(std::fs::remove_dir_all(&directory));
 }
 
 /// Preprocesses `source`, spelling each token as written in C source with a
 /// space between tokens.
-fn expansion_of(source: &str) -> (String, Vec<TranslationError>) {
-    let (tokens, mut context) = tokens_of(source, "<test>");
-    let spellings: Vec<String> = tokens
-        .iter()
-        .map(|&token| match token.kind {
-            | TokenType::String(StringTokenType::String(contents)) => format!(
-                "{:?}",
-                context
-                    .literal_text(contents, false)
-                    .as_deref()
-                    .expect("UTF-8 test literal")
-            ),
-            | _ => context
-                .string_cache
-                .at(token.contents)
-                .trim_end_matches('\0')
-                .to_owned(),
-        })
-        .collect();
-    (spellings.join(" "), context.take_pending_errors())
+fn expansion_of<R>(source: &str, inspect: impl FnOnce(String, &[TranslationError<'_>]) -> R) -> R {
+    with_tokens_of(source, "<test>", |tokens, context| {
+        let spellings: Vec<String> = tokens
+            .iter()
+            .map(|&token| match token.kind {
+                | TokenType::String(StringTokenType::String(contents)) => format!(
+                    "{:?}",
+                    context
+                        .literal_text_in(context.tu_arena(), contents, false)
+                        .expect("UTF-8 test literal")
+                ),
+                | _ => context
+                    .string_cache
+                    .at(token.contents)
+                    .trim_end_matches('\0')
+                    .to_owned(),
+            })
+            .collect();
+        let errors = context.take_pending_errors();
+        inspect(spellings.join(" "), &errors)
+    })
 }
 
 #[track_caller]
 fn assert_expansion(source: &str, expected: &str) {
-    let (expansion, errors) = expansion_of(source);
-    assert_eq!(expansion, expected, "{source}");
-    assert!(errors.is_empty(), "{source}: {errors:#?}");
+    expansion_of(source, |expansion, errors| {
+        assert_eq!(expansion, expected, "{source}");
+        assert!(errors.is_empty(), "{source}: {errors:#?}");
+    });
 }
 
 #[test]
@@ -721,44 +819,49 @@ fn numbers_paste_into_preprocessing_numbers() {
 
     // Neither a sign without an exponent nor an identifier followed by an
     // exponent sign forms one token, and diagnostics spell numbers as source.
-    let (_, errors) = expansion_of("#define CAT(a, b) a ## b\nCAT(1, +) CAT(x, 1e+5)\n");
-    let pastes: Vec<_> = errors
-        .iter()
-        .filter_map(|error| match error {
-            | TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
-                ..
-            }) => Some((lhs.as_str(), rhs.as_str())),
-            | _ => None,
-        })
-        .collect();
-    assert_eq!(pastes, [("1", "+"), ("x", "1e+5")], "{errors:#?}");
+    expansion_of(
+        "#define CAT(a, b) a ## b\nCAT(1, +) CAT(x, 1e+5)\n",
+        |_, errors| {
+            let pastes: Vec<_> = errors
+                .iter()
+                .filter_map(|error| match error {
+                    | TranslationError::Preprocessing(PreprocessorError {
+                        error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
+                        ..
+                    }) => Some((*lhs, *rhs)),
+                    | _ => None,
+                })
+                .collect();
+            assert_eq!(pastes, [("1", "+"), ("x", "1e+5")], "{errors:#?}");
+        },
+    );
 }
 
 #[test]
 fn replayed_operands_report_their_source_locations() {
     let source = "#define CAT(a, b) a ## b\n#define O(i) CAT(i, 1 / 0 + 1)\n#if O(2)\n#endif\n";
-    let (_, mut context) = tokens_of(source, "<test>");
-    let errors = context.take_pending_errors();
-    let [error] = errors.as_slice() else {
-        panic!("expected one diagnostic: {errors:#?}");
-    };
-    assert!(matches!(
-        error,
-        TranslationError::Preprocessing(PreprocessorError {
-            error_type: PreprocessorErrorType::DivideByZero,
-            ..
-        })
-    ));
-    let source_vectors = error.source_vectors(&mut context);
-    let location = &context.get_source_vectors(source_vectors)[0];
-    assert_eq!(
-        (
-            context.get_source_file(location.source_file_index).to_str(),
-            location.line,
-        ),
-        (Some("<test>"), 2)
-    );
+    with_tokens_of(source, "<test>", |_, context| {
+        let errors = context.take_pending_errors();
+        let [error] = errors.as_slice() else {
+            panic!("expected one diagnostic: {errors:#?}");
+        };
+        assert!(matches!(
+            error,
+            TranslationError::Preprocessing(PreprocessorError {
+                error_type: PreprocessorErrorType::DivideByZero,
+                ..
+            })
+        ));
+        let source_vectors = error.source_vectors(context);
+        let location = &context.get_source_vectors(source_vectors)[0];
+        assert_eq!(
+            (
+                context.get_source_file(location.source_file_index).to_str(),
+                location.line,
+            ),
+            (Some("<test>"), 2)
+        );
+    });
 
     assert_expansion(
         "#define CAT(a, b) a ## b\n#define F(i) CAT(i, x __FILE__)\nF(y)\n",
@@ -802,20 +905,24 @@ fn variadic_macros_may_omit_the_variable_arguments() {
         assert_expansion(source, expected);
     }
 
-    let (_, errors) = preprocess("#define W(x, y, ...) x y __VA_ARGS__\nW(a) after\n");
-    assert!(
-        matches!(
-            errors.as_slice(),
-            [TranslationError::Preprocessing(PreprocessorError {
-                error_type:
-                    PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
-                        expected: 2,
-                        found:    1,
-                    },
-                ..
-            })]
-        ),
-        "{errors:#?}"
+    preprocess(
+        "#define W(x, y, ...) x y __VA_ARGS__\nW(a) after\n",
+        |_, errors| {
+            assert!(
+                matches!(
+                errors,
+                [TranslationError::Preprocessing(PreprocessorError {
+                    error_type:
+                        PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
+                            expected: 2,
+                            found:    1,
+                        },
+                    ..
+                })]
+            ),
+                "{errors:#?}"
+            );
+        },
     );
 
     // C99 §6.10.3p4 requires an argument for `...`.
@@ -825,18 +932,19 @@ fn variadic_macros_may_omit_the_variable_arguments() {
         (ExtensionPolicy::Deny, ErrorSeverity::Error),
     ] {
         let configuration = CompilerConfiguration::new(CStandard::C99, policy);
-        let (identifiers, errors) = preprocess_with_configuration(source, configuration);
-        assert_eq!(identifiers, ["a", "after"]);
-        assert!(
-            matches!(
-                errors.as_slice(),
-                [error @ TranslationError::Preprocessing(PreprocessorError {
-                    error_type: PreprocessorErrorType::MissingVariadicArgument(found),
-                    ..
-                })] if *found == policy && error.severity() == severity
-            ),
-            "{errors:#?}"
-        );
+        preprocess_with_configuration(source, configuration, |identifiers, errors| {
+            assert_eq!(identifiers, ["a", "after"]);
+            assert!(
+                matches!(
+                    errors,
+                    [error @ TranslationError::Preprocessing(PreprocessorError {
+                        error_type: PreprocessorErrorType::MissingVariadicArgument(found),
+                        ..
+                    })] if *found == policy && error.severity() == severity
+                ),
+                "{errors:#?}"
+            );
+        });
     }
 }
 

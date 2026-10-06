@@ -8,12 +8,8 @@
     reason = "We have a bunch of dependencies that are not used in our benchmarking module."
 )]
 
-use bcc_rust::{
-    BenchmarkInput,
-    PreprocessingStrategy,
-};
+use bcc_rust::BenchmarkInput;
 use criterion::{
-    BatchSize,
     BenchmarkId,
     Criterion,
     Throughput,
@@ -21,11 +17,9 @@ use criterion::{
     criterion_main,
 };
 
-const STRATEGIES: [(&str, PreprocessingStrategy); 3] = [
-    ("streaming", PreprocessingStrategy::Streaming),
-    ("batch lexing", PreprocessingStrategy::BatchLexing),
-    ("batch", PreprocessingStrategy::Batch),
-];
+/// The benchmark identifier's function name. The pipeline once had several
+/// scheduling strategies; keeping the batch name keeps results comparable.
+const PIPELINE: &str = "batch";
 
 fn throughput(input: BenchmarkInput) -> Throughput {
     Throughput::ElementsAndBytes {
@@ -34,21 +28,18 @@ fn throughput(input: BenchmarkInput) -> Throughput {
     }
 }
 
-/// Translation phases 1-3 only. "batch lexing" and "batch" lex identically
-/// here, so only one batch variant is measured.
+/// Translation phases 1-3.
 fn bench_lexer(c: &mut Criterion) {
     let mut group = c.benchmark_group("Lexer");
     for input in BenchmarkInput::ALL {
         _ = group.throughput(throughput(input));
-        for (name, strategy) in &STRATEGIES[..2] {
-            _ = group.bench_with_input(
-                BenchmarkId::new(*name, input.name()),
-                &input,
-                |b, &input| {
-                    b.iter(|| bcc_rust::lex(input, *strategy));
-                },
-            );
-        }
+        _ = group.bench_with_input(
+            BenchmarkId::new(PIPELINE, input.name()),
+            &input,
+            |b, &input| {
+                b.iter(|| bcc_rust::lex(input));
+            },
+        );
     }
     group.finish();
 }
@@ -58,22 +49,14 @@ fn bench_preprocessor(c: &mut Criterion) {
     let mut group = c.benchmark_group("Preprocessor");
     _ = group.sample_size(20);
     for input in BenchmarkInput::ALL {
-        let expected = bcc_rust::preprocess(input, PreprocessingStrategy::Streaming);
         _ = group.throughput(throughput(input));
-        for (name, strategy) in STRATEGIES {
-            assert_eq!(
-                bcc_rust::preprocess(input, strategy),
-                expected,
-                "every strategy must yield the same tokens"
-            );
-            _ = group.bench_with_input(
-                BenchmarkId::new(name, input.name()),
-                &input,
-                |b, &input| {
-                    b.iter(|| bcc_rust::preprocess(input, strategy));
-                },
-            );
-        }
+        _ = group.bench_with_input(
+            BenchmarkId::new(PIPELINE, input.name()),
+            &input,
+            |b, &input| {
+                b.iter(|| bcc_rust::preprocess(input));
+            },
+        );
     }
     group.finish();
 }
@@ -84,22 +67,20 @@ fn bench_parser(c: &mut Criterion) {
     _ = group.sample_size(20);
     for input in BenchmarkInput::ALL {
         _ = group.throughput(throughput(input));
-        for (name, strategy) in STRATEGIES {
-            let summary = bcc_rust::parse(input, strategy);
-            assert_eq!(
-                summary.diagnostics,
-                0,
-                "{} must parse cleanly",
-                input.name()
-            );
-            _ = group.bench_with_input(
-                BenchmarkId::new(name, input.name()),
-                &input,
-                |b, &input| {
-                    b.iter(|| bcc_rust::parse(input, strategy));
-                },
-            );
-        }
+        let summary = bcc_rust::parse(input);
+        assert_eq!(
+            summary.diagnostics,
+            0,
+            "{} must parse cleanly",
+            input.name()
+        );
+        _ = group.bench_with_input(
+            BenchmarkId::new(PIPELINE, input.name()),
+            &input,
+            |b, &input| {
+                b.iter(|| bcc_rust::parse(input));
+            },
+        );
     }
     group.finish();
 }
@@ -113,7 +94,7 @@ fn bench_parser_only(c: &mut Criterion) {
         .chain(BenchmarkInput::PARSER_STRESS)
     {
         _ = group.throughput(throughput(input));
-        let summary = bcc_rust::prepare_parse(input).parse();
+        let summary = bcc_rust::parse(input);
         assert_eq!(
             summary.diagnostics,
             0,
@@ -121,14 +102,20 @@ fn bench_parser_only(c: &mut Criterion) {
             input.name()
         );
         _ = group.bench_with_input(
-            BenchmarkId::new("batch", input.name()),
+            BenchmarkId::new(PIPELINE, input.name()),
             &input,
             |b, &input| {
-                b.iter_batched(
-                    || bcc_rust::prepare_parse(input),
-                    bcc_rust::PreparedParse::parse,
-                    BatchSize::PerIteration,
-                );
+                b.iter_custom(|iterations| {
+                    let mut elapsed = std::time::Duration::ZERO;
+                    for _ in 0..iterations {
+                        bcc_rust::with_prepared_parse(input, |prepared| {
+                            let start = std::time::Instant::now();
+                            _ = std::hint::black_box(prepared.parse());
+                            elapsed += start.elapsed();
+                        });
+                    }
+                    elapsed
+                });
             },
         );
     }
@@ -139,21 +126,12 @@ fn bench_preprocessor_allocations(c: &mut Criterion) {
     let mut group = c.benchmark_group("Preprocessor allocations");
     _ = group.sample_size(30);
     for input in BenchmarkInput::PREPROCESSOR_STRESS {
-        let expected = bcc_rust::preprocess(input, PreprocessingStrategy::Streaming);
         _ = group.throughput(throughput(input));
-        for (name, strategy) in STRATEGIES {
-            assert_eq!(
-                bcc_rust::preprocess(input, strategy),
-                expected,
-                "every strategy must yield the same tokens for {}",
-                input.name()
-            );
-            _ = group.bench_with_input(
-                BenchmarkId::new(name, input.name()),
-                &input,
-                |b, &input| b.iter(|| bcc_rust::preprocess(input, strategy)),
-            );
-        }
+        _ = group.bench_with_input(
+            BenchmarkId::new(PIPELINE, input.name()),
+            &input,
+            |b, &input| b.iter(|| bcc_rust::preprocess(input)),
+        );
     }
     group.finish();
 }

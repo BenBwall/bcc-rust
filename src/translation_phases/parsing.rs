@@ -9,14 +9,14 @@
 //!
 //! Hard syntax diagnostics do not discard useful syntax. If a declaration can
 //! be repaired, the parser yields [`ExternalDeclaration::RecoveredDeclaration`]
-//! with its arena handle so later semantic analysis can continue. The distinct
+//! with its syntax so later semantic analysis can continue. The distinct
 //! status prevents repaired syntax from being mistaken for fully valid input.
 //!
 //! Phase 05 closes declarations, function definitions, compound blocks, every
 //! C99 statement family, expressions, type names, initializers, and the scope
 //! transitions needed for typedef-sensitive grammar decisions into a complete
-//! translation-unit interface. All productions use heap-backed frames and
-//! retain recovered syntax at their owning grammar boundaries.
+//! translation-unit interface. All productions use frames held in the parse
+//! arena and retain recovered syntax at their owning grammar boundaries.
 //!
 //! Standard references in this module cite WG14/N1256, ISO/IEC 9899:TC3
 //! (C99 with Technical Corrigenda 1, 2, and 3). Each reference gives the
@@ -45,8 +45,15 @@ mod scope;
 mod statement;
 mod struct_or_union;
 mod syntax;
-mod syntax_store;
+mod syntax_log;
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests;
 mod token_cursor;
 mod type_name;
@@ -54,10 +61,8 @@ mod type_name;
 use std::fmt::Debug;
 
 #[cfg(test)]
-pub(crate) use declaration_syntax::{
-    DirectDeclarator,
-    TypeSpecifiers,
-};
+pub(crate) use declaration_syntax::DirectDeclarator;
+pub(crate) use declaration_syntax::TypeSpecifiers;
 pub(crate) use errors::ParserError;
 pub(crate) use inspection::InspectionOptions;
 #[cfg(test)]
@@ -69,15 +74,13 @@ use machine::{
 };
 use recovery::RecoveryState;
 use scope::{
-    LabelScope,
+    LabelScopes,
     ScopeStack,
     SwitchScope,
 };
 pub(crate) use syntax::ExternalDeclaration;
-use syntax_store::{
-    SyntaxStore,
-    SyntaxTree,
-};
+#[cfg(test)]
+use syntax_log::SyntaxLog;
 use token_cursor::TokenCursor;
 
 use crate::{
@@ -85,50 +88,79 @@ use crate::{
         Context,
         GetPosition,
         GetSourceFileIndex,
-        SetPosition,
-        SetSourceFileIndex,
         SourcePosition,
-        TranslationPhase,
     },
-    util::string_cache::StringCacheId,
+    util::{
+        bump::{
+            ArenaVec,
+            Bump,
+        },
+        region_vec::RegionVec,
+        string_cache::StringCacheId,
+    },
 };
 
-/// Owns parser input, control frames, syntax arenas, scopes, and diagnostics.
+/// Driver actions, recorded only by test builds.
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "A test-only trace, compiled only under `cfg(test)`."
+)]
+type FrameTrace = Vec<FrameTraceEvent>;
+
+/// Owns parser input, control frames, the syntax node count, scopes, and
+/// diagnostics.
 ///
-/// Calling [`TranslationPhase::next_item`] drives the machine until one
+/// Calling [`Parser::next_item`] drives the machine until one
 /// external declaration reduces or the preprocessed token stream ends.
 ///
 /// C99: translation units and external declarations are specified by §6.9,
 /// p. 140; PDF p. 152: a translation unit “consists of a sequence of external
 /// declarations.” The diagnostic obligation is §5.1.1.3, p. 11; PDF p. 23.
-pub(crate) struct Parser {
+pub(crate) struct Parser<'c, 'tu, 'p> {
+    /// The translation context, borrowed for the whole parse.
+    pub(super) context: &'c mut Context<'tu>,
+    /// The parse arena, which holds the parser's working memory until
+    /// parsing ends.
+    arena: &'p Bump,
+    /// The translation-unit arena, which holds the syntax tree until the
+    /// translation unit ends.
+    tree: &'tu Bump,
     /// Buffered parser-facing token stream.
     cursor: TokenCursor,
-    /// Heap-backed grammar control stack; the final element is active.
-    frames: Vec<ParseFrame>,
-    /// Spare vectors lent to pushed frames and reclaimed when they pop.
-    pools: frame_pool::FramePools,
+    /// Grammar control stack in the parse arena; the final element is
+    /// active.
+    frames: ArenaVec<'p, ParseFrame<'tu, 'p>>,
+    /// Spare storage lent to pushed frames and reclaimed when they pop.
+    pools: frame_pool::FramePools<'tu, 'p>,
     /// Syntax nodes retained by the pending frames, updated on push/pop.
     retained_frame_nodes: usize,
     /// Completed child value waiting for its parent frame.
-    returned: Option<ParseValue>,
-    /// Arenas owning every syntax node produced by this parser.
-    syntax: SyntaxStore,
-    /// Running total of the nodes in `syntax`, maintained by
-    /// [`Self::push_syntax`] and [`Self::append_syntax`].
+    returned: Option<ParseValue<'tu>>,
+    /// Every syntax node this parser allocated, by kind, for tests.
+    #[cfg(test)]
+    syntax: SyntaxLog<'tu>,
+    /// Running total of the syntax nodes allocated in the translation-unit
+    /// arena, maintained by [`Self::alloc_syntax`] and
+    /// [`Self::alloc_syntax_list`].
     syntax_nodes: usize,
-    /// Roots already returned through the streaming adapter.
-    emitted_roots: Vec<ExternalDeclaration>,
+    /// Roots parsed so far. They are output rather than working memory, so
+    /// they grow in place in their own region instead of the parse arena.
+    /// The finished vector becomes the parsed unit's, without a copy.
+    emitted_roots: RegionVec<ExternalDeclaration<'tu>>,
     /// Parser-visible ordinary-name classification used for typedef ambiguity.
-    scopes: ScopeStack,
+    scopes: ScopeStack<'p>,
     /// Function-local label namespaces, independent of ordinary identifiers.
-    label_scopes: Vec<LabelScope>,
+    label_scopes: LabelScopes<'p>,
     /// Interned `__func__`, predeclared in every function body.
     func_name: Option<StringCacheId>,
     /// Active switch contexts used to associate `case` and `default` labels.
-    switch_scopes: Vec<SwitchScope>,
+    switch_scopes: ArenaVec<'p, SwitchScope>,
+    /// Scan storage for the nested specifiers whose enumeration constants a
+    /// function definition's parameters declare, reused by every definition.
+    binding_scan: ArenaVec<'p, TypeSpecifiers<'tu>>,
     /// Delimiter depth and ownership while a synchronization scan is active.
-    recovery: RecoveryState,
+    recovery: RecoveryState<'p>,
     /// Number of hard parser diagnostics emitted so far.
     hard_error_count: usize,
     /// Frame currently executing, captured into every parser diagnostic.
@@ -144,11 +176,17 @@ pub(crate) struct Parser {
     resource_limit_reported: bool,
     #[cfg(test)]
     /// Driver actions retained only for machine and recovery regressions.
-    trace: Vec<FrameTraceEvent>,
+    trace: FrameTrace,
     #[cfg(test)]
     /// Optional hard stop used by malformed-input tests to turn nonprogress
     /// into a deterministic failure instead of an external test timeout.
     action_budget: Option<usize>,
+}
+
+/// Fully preprocessed parser input. The preprocessor can be dropped before
+/// parser working memory is created.
+pub(crate) struct PreprocessedTranslationUnit {
+    upstream: token_cursor::Upstream,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -170,59 +208,104 @@ impl Default for ParserLimits {
     }
 }
 
-/// One completely parsed translation unit and the syntax storage referenced by
-/// its source-ordered roots.
+/// One completely parsed translation unit: its source-ordered roots, which
+/// borrow the syntax tree from the translation-unit arena.
+///
+/// The roots themselves stay in the region the parser collected them in,
+/// which the unit owns and releases when it is dropped.
 ///
 /// This is the shared boundary for callers, inspection, tests, and the future
 /// semantic-analysis phase. Parser-machine state is deliberately not exposed.
 #[derive(Debug)]
-pub(crate) struct ParsedTranslationUnit {
-    roots:  Box<[ExternalDeclaration]>,
-    syntax: SyntaxTree,
+pub(crate) struct ParsedTranslationUnit<'tu> {
+    roots: RegionVec<ExternalDeclaration<'tu>>,
 }
 
-impl ParsedTranslationUnit {
-    pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration] {
+impl<'tu> ParsedTranslationUnit<'tu> {
+    #[cfg_attr(
+        not(any(test, feature = "benchmarking-internals")),
+        expect(
+            dead_code,
+            reason = "The CLI reads roots through inspection; tests and benchmarks read them here."
+        )
+    )]
+    pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration<'tu>] {
         &self.roots
     }
 
-    pub(crate) fn syntax(&self) -> &SyntaxTree {
-        &self.syntax
+    /// The whole tree as Rust debug output, for storage debugging. Each root
+    /// prints on one line in compact form even under `{:#?}`: indenting a
+    /// deeply nested tree would make the output grow with the square of its
+    /// depth.
+    pub(crate) fn raw_debug(&self) -> impl Debug + Send + '_ {
+        RawRoots(&self.roots)
     }
 }
 
-impl GetPosition for Parser {
-    fn position(&self, context: &Context) -> SourcePosition {
-        self.cursor.upstream.position(context)
+/// [`ParsedTranslationUnit::raw_debug`]'s view.
+struct RawRoots<'a, 'tu>(&'a [ExternalDeclaration<'tu>]);
+
+/// One root in compact debug form, whatever the formatter's flags.
+struct CompactRoot<'a, 'tu>(&'a ExternalDeclaration<'tu>);
+
+impl Debug for RawRoots<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParsedTranslationUnit")
+            .field("roots", &RawList(self.0))
+            .finish()
     }
 }
 
-impl SetPosition for Parser {
-    fn set_position(&mut self, context: &mut Context, position: SourcePosition) {
-        self.cursor.upstream.set_position(context, position);
+/// The roots as a list of compact entries.
+struct RawList<'a, 'tu>(&'a [ExternalDeclaration<'tu>]);
+
+impl Debug for RawList<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(CompactRoot))
+            .finish()
     }
 }
 
-impl GetSourceFileIndex for Parser {
+impl Debug for CompactRoot<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+
+impl Parser<'_, '_, '_> {
+    /// Where the preprocessor stopped reading, for end-of-input locations.
+    fn position(&self) -> SourcePosition {
+        self.cursor.upstream.position(self.context)
+    }
+}
+
+impl GetSourceFileIndex for Parser<'_, '_, '_> {
     fn source_file_index(&self) -> u32 {
         self.cursor.upstream.source_file_index()
     }
 }
 
-impl SetSourceFileIndex for Parser {
-    fn set_source_file_index(&mut self, context: &mut Context, source_file_index: u32) {
-        self.cursor
-            .upstream
-            .set_source_file_index(context, source_file_index);
-    }
-}
-
-impl TranslationPhase for Parser {
-    type Item = ExternalDeclaration;
-
-    fn next_item(&mut self, context: &mut Context) -> Option<Self::Item> {
-        let root = self.drive(context)?;
+impl<'tu> Parser<'_, 'tu, '_> {
+    /// Streaming adapter: drives the machine until one external declaration
+    /// reduces, and returns it.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Tests stream roots; the pipeline parses whole translation units."
+        )
+    )]
+    pub(crate) fn next_item(&mut self) -> Option<ExternalDeclaration<'tu>> {
+        let root = self.drive()?;
         self.emitted_roots.push(root);
         Some(root)
+    }
+
+    /// The translation context this parser borrows, for tests outside the
+    /// parser.
+    #[cfg(test)]
+    pub(crate) fn context(&mut self) -> &mut Context<'tu> {
+        self.context
     }
 }

@@ -1,0 +1,222 @@
+=== "#include <stdio.h>\n" [Next, Next, Save, Next, Restore]
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "include" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+LessThan "<" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Identifier "stdio" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 15, line: 1, column: 16 }
+Period "." [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 16, line: 1, column: 17 }
+Identifier "h" [SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 17, line: 1, column: 18 }
+GreaterThan ">" [SourceVector { index: 17, column: 18, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 18, line: 1, column: 19 }
+Newline "\n" [SourceVector { index: 18, column: 19, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 19, line: 2, column: 1 }
+end
+at SourcePosition { index: 19, line: 2, column: 1 }
+=== "#include \"dir\\file.h\"\n" [Next, Next, Save, Next, Restore]
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "include" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+String "\"dir\\file.h\"" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 12 }]
+at SourcePosition { index: 21, line: 1, column: 22 }
+Newline "\n" [SourceVector { index: 21, column: 22, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 22, line: 2, column: 1 }
+end
+at SourcePosition { index: 22, line: 2, column: 1 }
+=== "#include <unterminated\nx\n" [Next, Next, Save, Next, Restore]
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "include" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+LessThan "<" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Identifier "unterminated" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 12 }]
+at SourcePosition { index: 22, line: 1, column: 23 }
+Newline "\n" [SourceVector { index: 22, column: 23, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 23, line: 2, column: 1 }
+Identifier "x" [SourceVector { index: 23, column: 1, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 24, line: 2, column: 2 }
+Newline "\n" [SourceVector { index: 24, column: 2, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 25, line: 3, column: 1 }
+end
+at SourcePosition { index: 25, line: 3, column: 1 }
+=== "#include \"unterminated\nx\n" [Next, Next, Save, Next, Restore]
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "include" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+diagnostic [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 13 }]
+error: unterminated string literal
+ --> <test>:1:10
+  |
+1 | #include "unterminated
+  |          ^^^^^^^^^^^^^ the line ends before the closing `"`
+  |
+  = note: C99 §6.4.5: a string literal cannot span lines
+  = help: close the literal on this line and start another on the next; adjacent literals are concatenated
+
+
+String "\"unterminated\"" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 13 }]
+at SourcePosition { index: 22, line: 1, column: 23 }
+Newline "\n" [SourceVector { index: 22, column: 23, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 23, line: 2, column: 1 }
+Identifier "x" [SourceVector { index: 23, column: 1, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 24, line: 2, column: 2 }
+Newline "\n" [SourceVector { index: 24, column: 2, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 25, line: 3, column: 1 }
+end
+at SourcePosition { index: 25, line: 3, column: 1 }
+=== "#include <a//b.h>\n" [Next, Next, Save, Next, Restore]
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "include" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+LessThan "<" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Identifier "a" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+Whitespace " " [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 17, line: 1, column: 18 }
+Newline "\n" [SourceVector { index: 17, column: 18, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 18, line: 2, column: 1 }
+end
+at SourcePosition { index: 18, line: 2, column: 1 }
+=== "#define H <x.h>\nH\n" [Next, Next, Save, Next, Restore]
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "define" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+Whitespace " " [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Identifier "H" [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+LessThan "<" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+Identifier "x" [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 12, line: 1, column: 13 }
+Period "." [SourceVector { index: 12, column: 13, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 13, line: 1, column: 14 }
+Identifier "h" [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 14, line: 1, column: 15 }
+GreaterThan ">" [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 15, line: 1, column: 16 }
+Newline "\n" [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 16, line: 2, column: 1 }
+Identifier "H" [SourceVector { index: 16, column: 1, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 17, line: 2, column: 2 }
+Newline "\n" [SourceVector { index: 17, column: 2, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 18, line: 3, column: 1 }
+end
+at SourcePosition { index: 18, line: 3, column: 1 }
+=== "#  include<a.h>\n" [Next, Next, Save, Next, Restore]
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Identifier "include" [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Identifier "include" [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+LessThan "<" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+Identifier "a" [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 12, line: 1, column: 13 }
+Period "." [SourceVector { index: 12, column: 13, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 13, line: 1, column: 14 }
+Identifier "h" [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 14, line: 1, column: 15 }
+GreaterThan ">" [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 15, line: 1, column: 16 }
+Newline "\n" [SourceVector { index: 15, column: 16, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 16, line: 2, column: 1 }
+end
+at SourcePosition { index: 16, line: 2, column: 1 }
+=== "#include <a.h>" [Next, Next, Save, Next, Restore]
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "include" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+LessThan "<" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Identifier "a" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+Period "." [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 12, line: 1, column: 13 }
+Identifier "h" [SourceVector { index: 12, column: 13, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 13, line: 1, column: 14 }
+diagnostic [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 0 }]
+warning: no newline at end of file
+ --> <test>:1:15
+  |
+1 | #include <a.h>
+  |               ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+
+GreaterThan ">" [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 14, line: 1, column: 15 }
+end
+at SourcePosition { index: 14, line: 1, column: 15 }
+=== "#include <a'b.h>\n" []
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Identifier "include" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 7 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+LessThan "<" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+Identifier "a" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 1, column: 12 }
+diagnostic [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 5 }]
+error: unterminated character constant
+ --> <test>:1:12
+  |
+1 | #include <a'b.h>
+  |            ^^^^^ the line ends before the closing `'`
+  |
+  = note: C99 §6.4.4.4: a character constant cannot span lines
+  = help: write `\n` for a newline character
+
+
+Character "'b.h>'" [SourceVector { index: 11, column: 12, line: 1, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 16, line: 1, column: 17 }
+Newline "\n" [SourceVector { index: 16, column: 17, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 17, line: 2, column: 1 }
+end
+at SourcePosition { index: 17, line: 2, column: 1 }

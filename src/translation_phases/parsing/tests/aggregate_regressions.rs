@@ -4,13 +4,13 @@
 use super::{
     Parsed,
     declaration,
-    init_declarators,
-    parse,
     parser_errors,
+    with_parse,
 };
 use crate::translation_phases::{
     parsing::{
         declaration_syntax::{
+            BracedInitializerList,
             DirectDeclarator,
             EnumSpecifier,
             InitializerType,
@@ -27,38 +27,42 @@ use crate::translation_phases::{
     },
 };
 
-fn errors(parsed: &Parsed) -> Vec<ParserErrorType> {
+fn errors<'tu>(parsed: &Parsed<'_, 'tu>) -> Vec<ParserErrorType<'tu>> {
     parser_errors(parsed).cloned().collect()
 }
 
 /// Number of elements in the brace initializer of the first declarator of
 /// external declaration `item`.
-fn initializer_element_count(parsed: &Parsed, item: usize) -> u32 {
+fn initializer_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let declaration = declaration(parsed, item);
-    let [init_declarator, ..] = init_declarators(parsed, declaration) else {
+    let [init_declarator, ..] = declaration.init_declarators.as_slice() else {
         panic!("expected an initialized declarator")
     };
     let initializer = init_declarator
         .initializer
         .expect("expected an initializer");
-    let InitializerType::InitializerList(elements) = parsed.parser.syntax[initializer].kind else {
+    let InitializerType::InitializerList(&BracedInitializerList { elements, .. }) =
+        initializer.kind
+    else {
         panic!("expected an initializer list")
     };
-    elements.length
+    elements.len()
 }
 
-fn designated_element_count(parsed: &Parsed, item: usize) -> usize {
+fn designated_element_count(parsed: &Parsed<'_, '_>, item: usize) -> usize {
     let declaration = declaration(parsed, item);
-    let [init_declarator, ..] = init_declarators(parsed, declaration) else {
+    let [init_declarator, ..] = declaration.init_declarators.as_slice() else {
         panic!("expected an initialized declarator")
     };
     let initializer = init_declarator
         .initializer
         .expect("expected an initializer");
-    let InitializerType::InitializerList(elements) = parsed.parser.syntax[initializer].kind else {
+    let InitializerType::InitializerList(&BracedInitializerList { elements, .. }) =
+        initializer.kind
+    else {
         panic!("expected an initializer list")
     };
-    parsed.parser.syntax[elements]
+    elements
         .iter()
         .filter(|element| element.designation.is_some())
         .count()
@@ -72,50 +76,55 @@ fn stray_closer_after_initializer_element_keeps_the_following_separator() {
         "int x[] = { 1 ), 2 }; int ok;",
         "int x[] = { 1 ], 2 }; int ok;",
     ] {
-        let parsed = parse(source);
-        let errors = errors(&parsed);
-        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
-        assert_eq!(parsed.items.len(), 2, "{source}");
-        assert_eq!(initializer_element_count(&parsed, 0), 2, "{source}");
-        assert!(matches!(
-            parsed.items[1],
-            ExternalDeclaration::Declaration(_)
-        ));
+        with_parse(source, |parsed| {
+            let errors = errors(parsed);
+            assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+            assert_eq!(parsed.items.len(), 2, "{source}");
+            assert_eq!(initializer_element_count(parsed, 0), 2, "{source}");
+            assert!(matches!(
+                parsed.items[1],
+                ExternalDeclaration::Declaration(_)
+            ));
+        });
     }
 
     // A genuinely missing comma after the stray closer is still diagnosed.
-    let missing = parse("int x[] = { 1 ) 2 };");
-    assert_eq!(errors(&missing).len(), 2, "{:#?}", errors(&missing));
-    assert_eq!(initializer_element_count(&missing, 0), 2);
+    with_parse("int x[] = { 1 ) 2 };", |missing| {
+        assert_eq!(errors(missing).len(), 2, "{:#?}", errors(missing));
+        assert_eq!(initializer_element_count(missing, 0), 2);
+    });
 }
 
 /// aggregates-initializers:2. A missing separator is not a missing
 /// expression, and a field designator needs a member name.
 #[test]
 fn initializer_separator_and_field_designator_errors_name_what_is_expected() {
-    let missing_comma = parse("int a[2][1] = { {1} 2 };");
-    assert_eq!(
-        errors(&missing_comma),
-        [ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
-            Some(TokenType::Integer(IntegerTokenType::Int(2)))
-        )]
-    );
+    with_parse("int a[2][1] = { {1} 2 };", |missing_comma| {
+        assert_eq!(
+            errors(missing_comma),
+            [ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
+                Some(TokenType::Integer(IntegerTokenType::Int(2)))
+            )]
+        );
+    });
 
-    let stray = parse("int a[2][1] = { {1} ) };");
-    assert_eq!(
-        errors(&stray),
-        [ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
-            Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
-        )]
-    );
+    with_parse("int a[2][1] = { {1} ) };", |stray| {
+        assert_eq!(
+            errors(stray),
+            [ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(
+                Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
+            )]
+        );
+    });
 
-    let field = parse("struct { int a; } s = { .a. = 1 };");
-    assert_eq!(
-        errors(&field),
-        [ParserErrorType::ExpectedMemberIdentifier(Some(
-            TokenType::Operator(OperatorTokenType::Equals)
-        ))]
-    );
+    with_parse("struct { int a; } s = { .a. = 1 };", |field| {
+        assert_eq!(
+            errors(field),
+            [ParserErrorType::ExpectedMemberIdentifier(Some(
+                TokenType::Operator(OperatorTokenType::Equals)
+            ))]
+        );
+    });
 }
 
 /// aggregates-initializers:3 and expressions:7. C99 §6.7.8p1: a designator
@@ -136,23 +145,25 @@ fn invalid_operator_inside_array_designator_recovers_at_the_closing_bracket() {
         ),
         ("int y[2] = { [1, 1] = 2 };", OperatorTokenType::Comma),
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            errors(&parsed),
-            [
-                ParserErrorType::ExpectedClosingSquareBracketInArrayDesignator(Some(
-                    TokenType::Operator(found)
-                ))
-            ],
-            "{source}"
-        );
-        let item = usize::from(source.starts_with("int a;"));
-        assert_eq!(designated_element_count(&parsed, item), 1, "{source}");
+        with_parse(source, |parsed| {
+            assert_eq!(
+                errors(parsed),
+                [
+                    ParserErrorType::ExpectedClosingSquareBracketInArrayDesignator(Some(
+                        TokenType::Operator(found)
+                    ))
+                ],
+                "{source}"
+            );
+            let item = usize::from(source.starts_with("int a;"));
+            assert_eq!(designated_element_count(parsed, item), 1, "{source}");
+        });
     }
 
-    let trailing = parse("int a[] = { [1, 2] = 2, 3 }; int ok;");
-    assert_eq!(initializer_element_count(&trailing, 0), 2);
-    assert_eq!(trailing.items.len(), 2);
+    with_parse("int a[] = { [1, 2] = 2, 3 }; int ok;", |trailing| {
+        assert_eq!(initializer_element_count(trailing, 0), 2);
+        assert_eq!(trailing.items.len(), 2);
+    });
 
     // A designator whose `]` really is missing still resynchronizes at the
     // top-level `,` or `=`, where the missing bracket is reported.
@@ -160,17 +171,18 @@ fn invalid_operator_inside_array_designator_recovers_at_the_closing_bracket() {
         ("int a[] = { [1 = 2 };", OperatorTokenType::Equals),
         ("int a[] = { [1, 2, 3 };", OperatorTokenType::Comma),
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            errors(&parsed).first(),
-            Some(
-                &ParserErrorType::ExpectedClosingSquareBracketInArrayDesignator(Some(
-                    TokenType::Operator(found)
-                ))
-            ),
-            "{source}"
-        );
-        assert_eq!(designated_element_count(&parsed, 0), 1, "{source}");
+        with_parse(source, |parsed| {
+            assert_eq!(
+                errors(parsed).first(),
+                Some(
+                    &ParserErrorType::ExpectedClosingSquareBracketInArrayDesignator(Some(
+                        TokenType::Operator(found)
+                    ))
+                ),
+                "{source}"
+            );
+            assert_eq!(designated_element_count(parsed, 0), 1, "{source}");
+        });
     }
 }
 
@@ -185,29 +197,26 @@ fn keyword_in_enumerator_position_is_one_error() {
         ("struct S { int x; enum { int } e; }; int ok;", 2),
         ("enum E { A = 1, int = 2, B }; int ok;", 2),
     ] {
-        let parsed = parse(source);
-        let errors = errors(&parsed);
-        assert_eq!(
-            errors,
-            [
-                ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(Some(
-                    TokenType::Keyword(KeywordTokenType::Int)
-                ))
-            ],
-            "{source}"
-        );
-        assert_eq!(parsed.items.len(), items, "{source}");
+        with_parse(source, |parsed| {
+            let errors = errors(parsed);
+            assert_eq!(
+                errors,
+                [
+                    ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(
+                        Some(TokenType::Keyword(KeywordTokenType::Int))
+                    )
+                ],
+                "{source}"
+            );
+            assert_eq!(parsed.items.len(), items, "{source}");
+        });
     }
 
     // The missing-`}` heuristic still stops before a following declaration
     // rather than consuming its specifier as a misplaced enumerator.
-    let missing_close = parse("enum E { A,\nint x;");
-    assert_eq!(
-        missing_close.items.len(),
-        2,
-        "{:#?}",
-        errors(&missing_close)
-    );
+    with_parse("enum E { A,\nint x;", |missing_close| {
+        assert_eq!(missing_close.items.len(), 2, "{:#?}", errors(missing_close));
+    });
 }
 
 /// aggregates-initializers:9. The empty-list error must not repeat an
@@ -215,23 +224,25 @@ fn keyword_in_enumerator_position_is_one_error() {
 #[test]
 fn empty_enumerator_list_error_is_not_repeated_after_recovery() {
     for source in ["enum E { , };", "enum E { 1, };"] {
-        let parsed = parse(source);
-        let errors = errors(&parsed);
-        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
-        assert!(
-            matches!(
-                errors[0],
-                ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(_)
-            ),
-            "{source}: {errors:#?}"
-        );
+        with_parse(source, |parsed| {
+            let errors = errors(parsed);
+            assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+            assert!(
+                matches!(
+                    errors[0],
+                    ParserErrorType::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(_)
+                ),
+                "{source}: {errors:#?}"
+            );
+        });
     }
 
-    let empty = parse("enum E { };");
-    assert_eq!(
-        errors(&empty),
-        [ParserErrorType::ExpectedEnumeratorBeforeClosingCurlyBrace]
-    );
+    with_parse("enum E { };", |empty| {
+        assert_eq!(
+            errors(empty),
+            [ParserErrorType::ExpectedEnumeratorBeforeClosingCurlyBrace]
+        );
+    });
 }
 
 /// aggregates-initializers:7. One malformed member terminator is one error.
@@ -251,20 +262,22 @@ fn malformed_member_terminator_is_reported_once() {
             TokenType::Integer(IntegerTokenType::Int(1)),
         ),
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            errors(&parsed),
-            [ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(Some(found))],
-            "{source}"
-        );
-        assert_eq!(parsed.items.len(), 2, "{source}");
+        with_parse(source, |parsed| {
+            assert_eq!(
+                errors(parsed),
+                [ParserErrorType::ExpectedCommaOrSemicolonInStructDeclaratorList(Some(found))],
+                "{source}"
+            );
+            assert_eq!(parsed.items.len(), 2, "{source}");
+        });
     }
 
-    let control = parse("struct S { int a };");
-    assert_eq!(
-        errors(&control),
-        [ParserErrorType::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList]
-    );
+    with_parse("struct S { int a };", |control| {
+        assert_eq!(
+            errors(control),
+            [ParserErrorType::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList]
+        );
+    });
 }
 
 /// declarations:9. C99 §6.7.6p1: `[ * ]` takes no qualifiers in any abstract
@@ -278,15 +291,16 @@ fn qualified_variable_length_marker_is_rejected_in_every_abstract_suffix() {
         "int x = sizeof(int (*)[const *]);",
         "void k(int ([const *]));",
     ] {
-        let parsed = parse(source);
-        assert!(
-            parser_errors(&parsed).any(|error| matches!(
-                error,
-                ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
-            )),
-            "{source}: {:#?}",
-            errors(&parsed)
-        );
+        with_parse(source, |parsed| {
+            assert!(
+                parser_errors(parsed).any(|error| matches!(
+                    error,
+                    ParserErrorType::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
+                )),
+                "{source}: {:#?}",
+                errors(parsed)
+            );
+        });
     }
 
     for source in [
@@ -294,8 +308,9 @@ fn qualified_variable_length_marker_is_rejected_in_every_abstract_suffix() {
         "void k(int p[3][const *]);",
         "void k(int (p)[const *]);",
     ] {
-        let parsed = parse(source);
-        assert_eq!(errors(&parsed), [], "{source}");
+        with_parse(source, |parsed| {
+            assert_eq!(errors(parsed), [], "{source}");
+        });
     }
 }
 
@@ -306,48 +321,52 @@ fn qualified_variable_length_marker_is_rejected_in_every_abstract_suffix() {
 fn deeply_nested_function_declarators_track_whether_they_are_named() {
     let depth = 2_000;
     let source = format!("int {}x{};", "(*".repeat(depth), ")()".repeat(depth));
-    let parsed = parse(&source);
-    assert_eq!(errors(&parsed), []);
-    let declaration = declaration(&parsed, 0);
-    let [init_declarator] = init_declarators(&parsed, declaration) else {
-        panic!("expected one declarator")
-    };
-    let directs = &parsed.parser.syntax[init_declarator.declarator.kind];
-    assert!(matches!(
-        directs.last(),
-        Some(DirectDeclarator::KAndRStyleFunction { .. })
-    ));
+    with_parse(&source, |parsed| {
+        assert_eq!(errors(parsed), []);
+        let declaration = declaration(parsed, 0);
+        let [init_declarator] = declaration.init_declarators.as_slice() else {
+            panic!("expected one declarator")
+        };
+        let directs = init_declarator.declarator.kind;
+        assert!(matches!(
+            directs.last(),
+            Some(DirectDeclarator::KAndRStyleFunction { .. })
+        ));
+    });
 
     // A named parenthesized declarator accepts an identifier list; an
     // abstract one parses its contents as a prototype.
-    let named = parse("int (*(*f)(a))(b);");
-    assert_eq!(errors(&named), []);
-    let abstract_parameter = parse("void p(int (*)());");
-    assert_eq!(errors(&abstract_parameter), []);
-    let parameter = parse("void p(int (*)(a));");
-    assert!(
-        !errors(&parameter).is_empty(),
-        "an abstract function suffix has no identifier list"
-    );
+    with_parse("int (*(*f)(a))(b);", |named| {
+        assert_eq!(errors(named), []);
+    });
+    with_parse("void p(int (*)());", |abstract_parameter| {
+        assert_eq!(errors(abstract_parameter), []);
+    });
+    with_parse("void p(int (*)(a));", |parameter| {
+        assert!(
+            !errors(parameter).is_empty(),
+            "an abstract function suffix has no identifier list"
+        );
+    });
 }
 
-fn enumerator_counts(parsed: &Parsed) -> Vec<u32> {
+fn enumerator_counts(parsed: &Parsed<'_, '_>) -> Vec<usize> {
     parsed
         .parser
         .syntax
-        .iter::<EnumSpecifier>()
+        .iter::<EnumSpecifier<'_>>()
         .filter_map(|specifier| specifier.enumeration_list)
-        .map(|list| list.length)
+        .map(|list| list.len())
         .collect()
 }
 
-fn member_counts(parsed: &Parsed) -> Vec<u32> {
+fn member_counts(parsed: &Parsed<'_, '_>) -> Vec<usize> {
     parsed
         .parser
         .syntax
-        .iter::<StructOrUnionSpecifier>()
+        .iter::<StructOrUnionSpecifier<'_>>()
         .filter_map(|specifier| specifier.struct_declaration_list)
-        .map(|list| list.length)
+        .map(|list| list.len())
         .collect()
 }
 
@@ -364,36 +383,39 @@ fn declaration_keyword_in_initializer_element_does_not_close_the_list() {
         "int a[] = { 1, int 0, 2 }; int ok;",
         "int a[] = { [0] = 1, int (0) }; int ok;",
     ] {
-        let parsed = parse(source);
-        let errors = errors(&parsed);
-        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
-        assert!(
-            matches!(
-                errors[0],
-                ParserErrorType::ExpectedStatementExpression(
-                    _,
-                    Some(TokenType::Keyword(
-                        KeywordTokenType::Int | KeywordTokenType::Typedef
-                    ))
-                )
-            ),
-            "{source}: {errors:#?}"
-        );
-        assert_eq!(parsed.items.len(), 2, "{source}");
-        assert!(
-            matches!(parsed.items[1], ExternalDeclaration::Declaration(_)),
-            "{source}"
-        );
+        with_parse(source, |parsed| {
+            let errors = errors(parsed);
+            assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+            assert!(
+                matches!(
+                    errors[0],
+                    ParserErrorType::ExpectedStatementExpression(
+                        _,
+                        Some(TokenType::Keyword(
+                            KeywordTokenType::Int | KeywordTokenType::Typedef
+                        ))
+                    )
+                ),
+                "{source}: {errors:#?}"
+            );
+            assert_eq!(parsed.items.len(), 2, "{source}");
+            assert!(
+                matches!(parsed.items[1], ExternalDeclaration::Declaration(_)),
+                "{source}"
+            );
+        });
     }
 
-    let elements = parse("int a[] = { 1, int 0, 2 };");
-    assert_eq!(initializer_element_count(&elements, 0), 3);
+    with_parse("int a[] = { 1, int 0, 2 };", |elements| {
+        assert_eq!(initializer_element_count(elements, 0), 3);
+    });
 
     // Each malformed element is diagnosed once, and the list still closes.
-    let repeated = parse("int a[] = { 1, int 0, int 1 }; int ok;");
-    assert_eq!(errors(&repeated).len(), 2, "{:#?}", errors(&repeated));
-    assert_eq!(initializer_element_count(&repeated, 0), 3);
-    assert_eq!(repeated.items.len(), 2);
+    with_parse("int a[] = { 1, int 0, int 1 }; int ok;", |repeated| {
+        assert_eq!(errors(repeated).len(), 2, "{:#?}", errors(repeated));
+        assert_eq!(initializer_element_count(repeated, 0), 3);
+        assert_eq!(repeated.items.len(), 2);
+    });
 
     // Without a following `}` for this list, the keyword still starts the
     // next statement or declaration after a missing `}`.
@@ -407,13 +429,14 @@ fn declaration_keyword_in_initializer_element_does_not_close_the_list() {
             TokenType::Keyword(KeywordTokenType::Int),
         ),
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            errors(&parsed).first(),
-            Some(&ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(Some(found))),
-            "{source}"
-        );
-        assert_eq!(parsed.items.len(), 1, "{source}: {:#?}", errors(&parsed));
+        with_parse(source, |parsed| {
+            assert_eq!(
+                errors(parsed).first(),
+                Some(&ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(Some(found))),
+                "{source}"
+            );
+            assert_eq!(parsed.items.len(), 1, "{source}: {:#?}", errors(parsed));
+        });
     }
 }
 
@@ -426,16 +449,17 @@ fn stray_closer_after_initializer_element_names_the_separator() {
         "int a[] = { 1 ) };",
         "struct s { int x; } c = { .x = 1 ] };",
     ] {
-        let parsed = parse(source);
-        let errors = errors(&parsed);
-        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
-        assert!(
-            matches!(
-                errors[0],
-                ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(Some(_))
-            ),
-            "{source}: {errors:#?}"
-        );
+        with_parse(source, |parsed| {
+            let errors = errors(parsed);
+            assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+            assert!(
+                matches!(
+                    errors[0],
+                    ParserErrorType::ExpectedClosingCurlyBraceInInitializerList(Some(_))
+                ),
+                "{source}: {errors:#?}"
+            );
+        });
     }
 }
 
@@ -451,11 +475,12 @@ fn stray_closing_parenthesis_does_not_end_an_enumerator_or_member_list() {
         ("enum e { A = 1 + ), B }; int ok;", 2),
         ("enum e { A + ), B }; int ok;", 2),
     ] {
-        let parsed = parse(source);
-        let errors = errors(&parsed);
-        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
-        assert_eq!(parsed.items.len(), 2, "{source}");
-        assert_eq!(enumerator_counts(&parsed), [enumerators], "{source}");
+        with_parse(source, |parsed| {
+            let errors = errors(parsed);
+            assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+            assert_eq!(parsed.items.len(), 2, "{source}");
+            assert_eq!(enumerator_counts(parsed), [enumerators], "{source}");
+        });
     }
 
     for (source, members) in [
@@ -463,28 +488,31 @@ fn stray_closing_parenthesis_does_not_end_an_enumerator_or_member_list() {
         ("struct s { int a : 1 + ); int b; }; int ok;", 2),
         ("struct s { int a ), c; int b; }; int ok;", 2),
     ] {
-        let parsed = parse(source);
-        let errors = errors(&parsed);
-        assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
-        assert_eq!(parsed.items.len(), 2, "{source}");
-        assert_eq!(member_counts(&parsed), [members], "{source}");
+        with_parse(source, |parsed| {
+            let errors = errors(parsed);
+            assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+            assert_eq!(parsed.items.len(), 2, "{source}");
+            assert_eq!(member_counts(parsed), [members], "{source}");
+        });
     }
 
     // A genuinely missing separator after the stray `)` is still reported.
-    let missing = parse("enum e { A ) B }; int ok;");
-    assert_eq!(errors(&missing).len(), 2, "{:#?}", errors(&missing));
-    assert_eq!(enumerator_counts(&missing), [2]);
+    with_parse("enum e { A ) B }; int ok;", |missing| {
+        assert_eq!(errors(missing).len(), 2, "{:#?}", errors(missing));
+        assert_eq!(enumerator_counts(missing), [2]);
+    });
 
     // Inside an enclosing parenthesis the `)` still closes it.
     for source in [
         "int f(enum E { A ) int after;",
         "int f(struct S { int x ) int after;",
     ] {
-        let parsed = parse(source);
-        assert_eq!(parsed.items.len(), 2, "{source}: {:#?}", errors(&parsed));
-        assert!(
-            matches!(parsed.items[1], ExternalDeclaration::Declaration(_)),
-            "{source}"
-        );
+        with_parse(source, |parsed| {
+            assert_eq!(parsed.items.len(), 2, "{source}: {:#?}", errors(parsed));
+            assert!(
+                matches!(parsed.items[1], ExternalDeclaration::Declaration(_)),
+                "{source}"
+            );
+        });
     }
 }

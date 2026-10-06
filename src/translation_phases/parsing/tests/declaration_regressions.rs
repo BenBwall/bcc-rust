@@ -6,14 +6,12 @@ use super::{
     declaration,
     function_definition,
     identifier_name,
-    init_declarators,
-    parse,
     parser_errors,
+    with_parse,
 };
 use crate::translation_phases::{
     TranslationError,
     parsing::{
-        declaration_syntax::TypeSpecifiers,
         errors::ParserErrorType,
         syntax::ExternalDeclaration,
     },
@@ -87,25 +85,31 @@ fn every_ordering_of_every_c99_type_specifier_multiset_is_accepted() {
     ];
     let mut failures = Vec::new();
     for multiset in multisets {
-        let mut canonical: Option<TypeSpecifiers> = None;
+        // Each parse has its own tree, so the normalized specifiers are
+        // compared by their (reference-free) debug form.
+        let mut canonical: Option<String> = None;
         for ordering in orderings(multiset) {
             let source = format!("{} x;\n", ordering.join(" "));
-            let parsed = parse(&source);
-            let errors: Vec<_> = parser_errors(&parsed).collect();
-            if !errors.is_empty() {
-                failures.push(format!("{source:?}: {errors:?}"));
-                continue;
-            }
-            let type_specifiers = declaration(&parsed, 0)
-                .declaration_specifiers
-                .type_specifiers;
-            match canonical {
-                | None => canonical = Some(type_specifiers),
-                | Some(expected) if expected != type_specifiers => failures.push(format!(
-                    "{source:?}: normalized to {type_specifiers:?}, expected {expected:?}"
-                )),
-                | Some(_) => {},
-            }
+            with_parse(&source, |parsed| {
+                let errors: Vec<_> = parser_errors(parsed).collect();
+                if !errors.is_empty() {
+                    failures.push(format!("{source:?}: {errors:?}"));
+                    return;
+                }
+                let type_specifiers = format!(
+                    "{:?}",
+                    declaration(parsed, 0)
+                        .declaration_specifiers
+                        .type_specifiers
+                );
+                match &canonical {
+                    | None => canonical = Some(type_specifiers),
+                    | Some(expected) if *expected != type_specifiers => failures.push(format!(
+                        "{source:?}: normalized to {type_specifiers}, expected {expected}"
+                    )),
+                    | Some(_) => {},
+                }
+            });
         }
     }
     assert!(
@@ -127,24 +131,28 @@ fn unsigned_short_int_is_accepted() {
         "unsigned int long x;",
         "signed int long x;",
     ] {
-        let parsed = parse(source);
-        assert!(
-            !parser_errors(&parsed)
-                .any(|error| matches!(error, ParserErrorType::ConflictingTypeSpecifiers { .. })),
-            "{source:?} was rejected"
-        );
+        with_parse(source, |parsed| {
+            assert!(
+                !parser_errors(parsed).any(|error| matches!(
+                    error,
+                    ParserErrorType::ConflictingTypeSpecifiers { .. }
+                )),
+                "{source:?} was rejected"
+            );
+        });
     }
 }
 
 #[test]
 fn repeated_double_is_a_duplicate_not_a_conflict() {
-    let parsed = parse("double double x;\n");
-    let errors: Vec<_> = parser_errors(&parsed).collect();
-    assert_eq!(errors.len(), 1, "{:#?}", parsed.errors);
-    assert!(
-        matches!(errors[0], ParserErrorType::TypeSpecifierSpecifiedTwice(_)),
-        "{errors:?}"
-    );
+    with_parse("double double x;\n", |parsed| {
+        let errors: Vec<_> = parser_errors(parsed).collect();
+        assert_eq!(errors.len(), 1, "{:#?}", parsed.errors);
+        assert!(
+            matches!(errors[0], ParserErrorType::TypeSpecifierSpecifiedTwice(_)),
+            "{errors:?}"
+        );
+    });
 }
 
 /// C99 §6.7.2p2 lists `_Complex` only together with `float`, `double`, or
@@ -163,19 +171,22 @@ fn incomplete_complex_type_specifiers_are_diagnosed() {
         "const _Complex;\n",
         "_Complex",
     ] {
-        let parsed = parse(source);
-        let count = parser_errors(&parsed)
-            .filter(|error| matches!(error, ParserErrorType::IncompleteComplexTypeSpecifier))
-            .count();
-        assert_eq!(count, 1, "{source:?}: {:#?}", parsed.errors);
+        with_parse(source, |parsed| {
+            let count = parser_errors(parsed)
+                .filter(|error| matches!(error, ParserErrorType::IncompleteComplexTypeSpecifier))
+                .count();
+            assert_eq!(count, 1, "{source:?}: {:#?}", parsed.errors);
+        });
     }
-    let parsed = parse(
+    with_parse(
         "float _Complex a; _Complex double b; long _Complex double c; double long _Complex d;\n",
-    );
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
+        |parsed| {
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+        },
     );
 }
 
@@ -188,46 +199,44 @@ fn old_style_head_with_recovered_error_keeps_its_declaration_list_and_body() {
         ("f(a) int a; { return a; }\n", 1),
         ("static f(a) int a; { return a; }\n", 1),
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            parser_errors(&parsed).count(),
-            1,
-            "{source:?}: {:#?}",
-            parsed.errors
-        );
-        assert_eq!(parsed.items.len(), 1, "{source:?}");
-        assert!(
-            matches!(
-                parsed.items[0],
-                ExternalDeclaration::RecoveredFunctionDefinition(_)
-            ),
-            "{source:?}"
-        );
-        let definition = function_definition(&parsed, 0);
-        assert_eq!(
-            definition.declaration_list.length(),
-            list_length,
-            "{source:?}"
-        );
-        assert_eq!(block_items(&parsed, definition.body).len(), 1, "{source:?}");
+        with_parse(source, |parsed| {
+            assert_eq!(
+                parser_errors(parsed).count(),
+                1,
+                "{source:?}: {:#?}",
+                parsed.errors
+            );
+            assert_eq!(parsed.items.len(), 1, "{source:?}");
+            assert!(
+                matches!(
+                    parsed.items[0],
+                    ExternalDeclaration::RecoveredFunctionDefinition(_)
+                ),
+                "{source:?}"
+            );
+            let definition = function_definition(parsed, 0);
+            assert_eq!(definition.declaration_list.len(), list_length, "{source:?}");
+            assert_eq!(block_items(definition.body).len(), 1, "{source:?}");
+        });
     }
 
     // A non-function declarator with an error still resynchronizes at the
     // next declaration instead of becoming a definition head.
-    let parsed = parse("int x[3 int y;\n");
-    assert_eq!(parsed.items.len(), 2);
-    assert!(matches!(
-        parsed.items[0],
-        ExternalDeclaration::RecoveredDeclaration(_)
-    ));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("y")
-    );
+    with_parse("int x[3 int y;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert!(matches!(
+            parsed.items[0],
+            ExternalDeclaration::RecoveredDeclaration(_)
+        ));
+        assert_eq!(
+            identifier_name(
+                parsed,
+                declaration(parsed, 1).init_declarators[0].declarator
+            )
+            .as_deref(),
+            Some("y")
+        );
+    });
 }
 
 /// Once a declaration recovered from a bad continuation token, reaching the
@@ -242,33 +251,35 @@ fn declaration_continuation_recovery_reports_once() {
         ("void f(void) { int x y\n int z; }\n", 1),
         ("void f(void) { int x 5 return; }\n", 1),
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            parser_errors(&parsed).count(),
-            1,
-            "{source:?}: {:#?}",
-            parsed.errors
-        );
-        assert_eq!(parsed.items.len(), items, "{source:?}");
+        with_parse(source, |parsed| {
+            assert_eq!(
+                parser_errors(parsed).count(),
+                1,
+                "{source:?}: {:#?}",
+                parsed.errors
+            );
+            assert_eq!(parsed.items.len(), items, "{source:?}");
+        });
     }
 }
 
 fn continuation_explanation(source: &str) -> (String, String) {
-    let parsed = parse(source);
-    let explanation = parsed
-        .errors
-        .iter()
-        .find_map(|error| match error {
-            | TranslationError::Parsing(error)
-                if matches!(
-                    error.error_type,
-                    ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
-                ) =>
-                Some(error.error_type.explain(None)),
-            | _ => None,
-        })
-        .unwrap_or_else(|| panic!("{source:?}: no continuation error in {:#?}", parsed.errors));
-    (explanation.message, explanation.label.unwrap_or_default())
+    with_parse(source, |parsed| {
+        let explanation = parsed
+            .errors
+            .iter()
+            .find_map(|error| match error {
+                | TranslationError::Parsing(error)
+                    if matches!(
+                        error.error_type,
+                        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(..)
+                    ) =>
+                    Some(error.error_type.explain(None)),
+                | _ => None,
+            })
+            .unwrap_or_else(|| panic!("{source:?}: no continuation error in {:#?}", parsed.errors));
+        (explanation.message, explanation.label.unwrap_or_default())
+    })
 }
 
 /// The expected continuation set depends on where the declaration is: a
@@ -325,34 +336,36 @@ fn unknown_type_name_is_reported_once() {
         ("struct s { size_t n; int m; };\n", None),
         ("int f(int a, size_t n);\n", None),
     ] {
-        let parsed = parse(source);
-        let errors: Vec<_> = parser_errors(&parsed).collect();
-        assert_eq!(errors.len(), 1, "{source:?}: {:#?}", parsed.errors);
-        assert!(
-            matches!(errors[0], ParserErrorType::UnknownTypeName),
-            "{source:?}: {errors:?}"
-        );
-        if let Some(name) = name {
-            assert_eq!(
-                identifier_name(
-                    &parsed,
-                    init_declarators(&parsed, declaration(&parsed, 0))[0].declarator
-                )
-                .as_deref(),
-                Some(name),
-                "{source:?}"
+        with_parse(source, |parsed| {
+            let errors: Vec<_> = parser_errors(parsed).collect();
+            assert_eq!(errors.len(), 1, "{source:?}: {:#?}", parsed.errors);
+            assert!(
+                matches!(errors[0], ParserErrorType::UnknownTypeName),
+                "{source:?}: {errors:?}"
             );
-        }
+            if let Some(name) = name {
+                assert_eq!(
+                    identifier_name(
+                        parsed,
+                        declaration(parsed, 0).init_declarators[0].declarator
+                    )
+                    .as_deref(),
+                    Some(name),
+                    "{source:?}"
+                );
+            }
+        });
     }
 
     // A lone identifier is still a declarator lacking its type.
-    let parsed = parse("x;\n");
-    let errors: Vec<_> = parser_errors(&parsed).collect();
-    assert_eq!(errors.len(), 1, "{:#?}", parsed.errors);
-    assert!(matches!(
-        errors[0],
-        ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(_)
-    ));
+    with_parse("x;\n", |parsed| {
+        let errors: Vec<_> = parser_errors(parsed).collect();
+        assert_eq!(errors.len(), 1, "{:#?}", parsed.errors);
+        assert!(matches!(
+            errors[0],
+            ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(_)
+        ));
+    });
 }
 
 /// A non-typedef identifier in the empty type slot followed by another
@@ -371,24 +384,25 @@ fn unknown_type_name_before_specifier_keyword_is_reported_once() {
             None,
         ),
     ] {
-        let parsed = parse(source);
-        let errors: Vec<_> = parser_errors(&parsed).collect();
-        assert_eq!(errors.len(), 1, "{source:?}: {:#?}", parsed.errors);
-        assert!(
-            matches!(errors[0], ParserErrorType::UnknownTypeName),
-            "{source:?}: {errors:?}"
-        );
-        if let Some(name) = name {
-            assert_eq!(
-                identifier_name(
-                    &parsed,
-                    init_declarators(&parsed, declaration(&parsed, 0))[0].declarator
-                )
-                .as_deref(),
-                Some(name),
-                "{source:?}"
+        with_parse(source, |parsed| {
+            let errors: Vec<_> = parser_errors(parsed).collect();
+            assert_eq!(errors.len(), 1, "{source:?}: {:#?}", parsed.errors);
+            assert!(
+                matches!(errors[0], ParserErrorType::UnknownTypeName),
+                "{source:?}: {errors:?}"
             );
-        }
+            if let Some(name) = name {
+                assert_eq!(
+                    identifier_name(
+                        parsed,
+                        declaration(parsed, 0).init_declarators[0].declarator
+                    )
+                    .as_deref(),
+                    Some(name),
+                    "{source:?}"
+                );
+            }
+        });
     }
 }
 
@@ -403,14 +417,15 @@ fn declaration_recovery_over_a_brace_group_reports_once() {
         ("void f(int x)) { }\nint y;\n", 2),
         ("void f(int x)) {\n  x = 1;\n}\n", 1),
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            parser_errors(&parsed).count(),
-            1,
-            "{source:?}: {:#?}",
-            parsed.errors
-        );
-        assert_eq!(parsed.items.len(), items, "{source:?}");
+        with_parse(source, |parsed| {
+            assert_eq!(
+                parser_errors(parsed).count(),
+                1,
+                "{source:?}: {:#?}",
+                parsed.errors
+            );
+            assert_eq!(parsed.items.len(), items, "{source:?}");
+        });
     }
 }
 
@@ -420,23 +435,24 @@ fn declaration_recovery_over_a_brace_group_reports_once() {
 #[test]
 fn missing_semicolon_before_function_definition_suggests_semicolon() {
     let source = "int x\nint f(void) {}\n";
-    let parsed = parse(source);
-    let parsing_errors: Vec<_> = parsed
-        .errors
-        .iter()
-        .filter_map(|error| match error {
-            | TranslationError::Parsing(error) => Some(error),
-            | _ => None,
-        })
-        .collect();
-    assert_eq!(parsing_errors.len(), 1, "{:#?}", parsed.errors);
-    let error = parsing_errors[0];
-    assert!(error.insertion_point.is_some(), "{error:#?}");
-    assert_eq!(error.related.len(), 1, "{error:#?}");
-    assert!(
-        error.related[0].message.contains("not a function"),
-        "{error:#?}"
-    );
+    with_parse(source, |parsed| {
+        let parsing_errors: Vec<_> = parsed
+            .errors
+            .iter()
+            .filter_map(|error| match error {
+                | TranslationError::Parsing(error) => Some(error),
+                | _ => None,
+            })
+            .collect();
+        assert_eq!(parsing_errors.len(), 1, "{:#?}", parsed.errors);
+        let error = parsing_errors[0];
+        assert!(error.insertion_point.is_some(), "{error:#?}");
+        assert_eq!(error.related.len(), 1, "{error:#?}");
+        assert!(
+            error.related[0].message.contains("not a function"),
+            "{error:#?}"
+        );
+    });
 }
 
 /// The missing-`;` explanation for a non-function head never replaces an
@@ -444,31 +460,33 @@ fn missing_semicolon_before_function_definition_suggests_semicolon() {
 /// its own missing `;`.
 #[test]
 fn head_semicolon_suggestion_keeps_an_existing_insertion_point() {
-    let parsed = parse("int z\nint q\nint g(void) { return 1; }\n");
-    let parsing_errors: Vec<_> = parsed
-        .errors
-        .iter()
-        .filter_map(|error| match error {
-            | TranslationError::Parsing(error) => Some(error),
-            | _ => None,
-        })
-        .collect();
-    assert_eq!(parsing_errors.len(), 2, "{:#?}", parsed.errors);
-    let explains_head = |error: &crate::translation_phases::parsing::errors::ParserError| {
-        error
-            .related
+    with_parse("int z\nint q\nint g(void) { return 1; }\n", |parsed| {
+        let parsing_errors: Vec<_> = parsed
+            .errors
             .iter()
-            .any(|related| related.message.contains("not a function"))
-    };
-    // `int q` lacks its own `;`: that diagnostic keeps its insertion point
-    // after `q`, and the head explanation moves to the next diagnostic.
-    assert!(parsing_errors[0].insertion_point.is_some());
-    assert!(
-        !explains_head(parsing_errors[0]),
-        "{:#?}",
-        parsing_errors[0]
-    );
-    assert!(explains_head(parsing_errors[1]), "{:#?}", parsing_errors[1]);
+            .filter_map(|error| match error {
+                | TranslationError::Parsing(error) => Some(error),
+                | _ => None,
+            })
+            .collect();
+        assert_eq!(parsing_errors.len(), 2, "{:#?}", parsed.errors);
+        let explains_head =
+            |error: &crate::translation_phases::parsing::errors::ParserError<'_>| {
+                error
+                    .related
+                    .iter()
+                    .any(|related| related.message.contains("not a function"))
+            };
+        // `int q` lacks its own `;`: that diagnostic keeps its insertion point
+        // after `q`, and the head explanation moves to the next diagnostic.
+        assert!(parsing_errors[0].insertion_point.is_some());
+        assert!(
+            !explains_head(parsing_errors[0]),
+            "{:#?}",
+            parsing_errors[0]
+        );
+        assert!(explains_head(parsing_errors[1]), "{:#?}", parsing_errors[1]);
+    });
 }
 
 /// An identifier-list head that already needed recovery and is followed by
@@ -479,28 +497,30 @@ fn head_semicolon_suggestion_keeps_an_existing_insertion_point() {
 fn recovered_old_style_head_without_body_does_not_swallow_the_file() {
     let source = "__declspec(dllimport) int foo;\n__declspec(dllexport) int g(void) { return foo; \
                   }\nint h(void) { return 1; }\n";
-    let parsed = parse(source);
-    assert!(
-        !parser_errors(&parsed).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None)
-        )),
-        "{:#?}",
-        parsed.errors
-    );
-    assert!(
-        matches!(
-            parsed.items.last(),
-            Some(ExternalDeclaration::FunctionDefinition(_))
-        ),
-        "{:#?}",
-        parsed.items
-    );
+    with_parse(source, |parsed| {
+        assert!(
+            !parser_errors(parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None)
+            )),
+            "{:#?}",
+            parsed.errors
+        );
+        assert!(
+            matches!(
+                parsed.items.last(),
+                Some(ExternalDeclaration::FunctionDefinition(_))
+            ),
+            "{:#?}",
+            parsed.items
+        );
+    });
 
     // A recovered head followed directly by its body keeps that body.
-    let parsed = parse("f(a) int a; { return a; }\n");
-    let definition = function_definition(&parsed, 0);
-    assert_eq!(block_items(&parsed, definition.body).len(), 1);
+    with_parse("f(a) int a; { return a; }\n", |parsed| {
+        let definition = function_definition(parsed, 0);
+        assert_eq!(block_items(definition.body).len(), 1);
+    });
 }
 
 #[test]
@@ -508,21 +528,26 @@ fn recovered_old_style_head_does_not_swallow_unrelated_declarations() {
     // Round-2 review: after an error in an identifier-list head, every
     // following declaration up to the next `{` was read as its K&R
     // declaration list, absorbing a later function definition.
-    let parsed = parse("int f(a, 1)\nint x;\nint y;\nint g(void) { return x; }\n");
-    assert!(
-        parsed
-            .items
-            .iter()
-            .any(|item| matches!(item, ExternalDeclaration::FunctionDefinition(_))),
-        "{:#?}",
-        parsed.items
+    with_parse(
+        "int f(a, 1)\nint x;\nint y;\nint g(void) { return x; }\n",
+        |parsed| {
+            assert!(
+                parsed
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, ExternalDeclaration::FunctionDefinition(_))),
+                "{:#?}",
+                parsed.items
+            );
+            assert!(parsed.items.len() >= 3, "{:#?}", parsed.items);
+        },
     );
-    assert!(parsed.items.len() >= 3, "{:#?}", parsed.items);
 
     // A recovered head whose following declarations name its parameters is
     // still a definition.
-    let parsed = parse("int f(a b) int a; int b; { return a; }\n");
-    assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
+    with_parse("int f(a b) int a; int b; { return a; }\n", |parsed| {
+        assert_eq!(parsed.items.len(), 1, "{:#?}", parsed.items);
+    });
 }
 
 #[test]
@@ -534,19 +559,21 @@ fn complex_integer_type_is_diagnosed_once_in_any_order() {
         "_Complex int i;\n",
         "int _Complex j;\n",
     ] {
-        let parsed = parse(source);
-        assert_eq!(
-            parser_errors(&parsed).count(),
-            1,
-            "{source}: {:#?}",
+        with_parse(source, |parsed| {
+            assert_eq!(
+                parser_errors(parsed).count(),
+                1,
+                "{source}: {:#?}",
+                parsed.errors
+            );
+        });
+    }
+    with_parse("_Complex x;\n", |parsed| {
+        assert!(
+            parser_errors(parsed)
+                .any(|error| matches!(error, ParserErrorType::IncompleteComplexTypeSpecifier)),
+            "{:#?}",
             parsed.errors
         );
-    }
-    let parsed = parse("_Complex x;\n");
-    assert!(
-        parser_errors(&parsed)
-            .any(|error| matches!(error, ParserErrorType::IncompleteComplexTypeSpecifier)),
-        "{:#?}",
-        parsed.errors
-    );
+    });
 }

@@ -4,6 +4,7 @@ use std::fmt::Debug;
 
 use super::{
     Parser,
+    declaration_syntax::TypeName,
     errors::ParserErrorType,
     expression_operators::{
         LanguageExpressionOperator,
@@ -13,7 +14,10 @@ use super::{
         is_postfix_starter,
         prefix_operator,
     },
-    frame_pool::FramePools,
+    frame_pool::{
+        FramePools,
+        PoolBox,
+    },
     initializer::InitializerFrame,
     machine::{
         ConstantExpressionResult,
@@ -29,25 +33,30 @@ use super::{
     statement::is_statement_keyword,
     syntax::{
         BinaryOperator,
+        ConditionalExpression,
         Constant,
-        ConstantExpressionIndex,
-        ExpressionIndex,
+        ConstantExpression,
+        Expression,
         ExpressionType,
         Identifier,
-        TypeNameIndex,
         UnaryOperator,
     },
     type_name::TypeNameFrame,
 };
-use crate::translation_phases::{
-    Context,
-    GetPosition,
-    SourceVectors,
-    preprocessing::{
-        KeywordTokenType,
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        GetPosition,
+        SourceVectors,
+        preprocessing::{
+            KeywordTokenType,
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -80,25 +89,25 @@ pub(super) enum ExpressionBoundary {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct ExpressionOperand {
-    index:              ExpressionIndex,
+pub(super) struct ExpressionOperand<'tu> {
+    expression:         &'tu Expression<'tu>,
     unary_expression:   bool,
     postfix_expression: bool,
 }
 
 #[derive(Debug)]
-pub(super) struct ExpressionFrame {
+pub(super) struct ExpressionFrame<'tu, 'p> {
     mode:                  ExpressionMode,
     boundary:              ExpressionBoundary,
     recovery_boundary:     ExpressionBoundary,
-    phase:                 ExpressionPhase,
-    operators:             Vec<LanguageExpressionOperator>,
-    operands:              Vec<ExpressionOperand>,
+    phase:                 ExpressionPhase<'tu>,
+    operators:             ArenaVec<'p, LanguageExpressionOperator<'tu>>,
+    operands:              ArenaVec<'p, ExpressionOperand<'tu>>,
     state:                 ExpressionParserState,
     starting_error_count:  usize,
     /// Postfix call under construction, boxed because most expression frames
-    /// never parse a call.
-    pub(super) call:       Option<Box<CallState>>,
+    /// never parse a call. The box comes from and returns to the frame pools.
+    pub(super) call:       Option<PoolBox<'p, CallState<'tu, 'p>>>,
     pending_sizeof_prefix: Option<SourceVectors>,
     /// The top operand is an error operand that replaced a stray token
     /// already diagnosed, so the tokens after it need no second report.
@@ -107,29 +116,39 @@ pub(super) struct ExpressionFrame {
 
 /// Arguments and provenance of the postfix call an expression frame is
 /// building.
-#[derive(Debug, Default)]
-pub(super) struct CallState {
-    pub(super) arguments: Vec<ExpressionIndex>,
-    source_vectors:       Vec<SourceVectors>,
-    operator_sources:     Vec<SourceVectors>,
+#[derive(Debug)]
+pub(super) struct CallState<'tu, 'p> {
+    pub(super) arguments: ArenaVec<'p, &'tu Expression<'tu>>,
+    source_vectors:       ArenaVec<'p, SourceVectors>,
+    operator_sources:     ArenaVec<'p, SourceVectors>,
+}
+
+impl<'p> CallState<'_, 'p> {
+    pub(super) fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            arguments:        ArenaVec::new_in(arena),
+            source_vectors:   ArenaVec::new_in(arena),
+            operator_sources: ArenaVec::new_in(arena),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ExpressionPhase {
+pub(super) enum ExpressionPhase<'tu> {
     Parse,
     Finish,
     RecoverUnexpectedBrace(u32, SourceVectors),
     PushGrouped(SourceVectors),
     AwaitGrouped(SourceVectors),
-    CloseGrouped(SourceVectors, ExpressionIndex),
-    PushSubscript(ExpressionIndex, SourceVectors),
-    AwaitSubscript(ExpressionIndex, SourceVectors),
-    CloseSubscript(ExpressionIndex, SourceVectors, ExpressionIndex),
-    CallStart(ExpressionIndex, SourceVectors),
-    PushCallArgument(ExpressionIndex),
-    AwaitCallArgument(ExpressionIndex),
-    CallSeparator(ExpressionIndex),
-    ExpectMember(ExpressionIndex, bool, SourceVectors),
+    CloseGrouped(SourceVectors, &'tu Expression<'tu>),
+    PushSubscript(&'tu Expression<'tu>, SourceVectors),
+    AwaitSubscript(&'tu Expression<'tu>, SourceVectors),
+    CloseSubscript(&'tu Expression<'tu>, SourceVectors, &'tu Expression<'tu>),
+    CallStart(&'tu Expression<'tu>, SourceVectors),
+    PushCallArgument(&'tu Expression<'tu>),
+    AwaitCallArgument(&'tu Expression<'tu>),
+    CallSeparator(&'tu Expression<'tu>),
+    ExpectMember(&'tu Expression<'tu>, bool, SourceVectors),
     PushPrefix(UnaryOperator, SourceVectors, ExpressionMode),
     AwaitPrefix(UnaryOperator, SourceVectors),
     SizeofStart(SourceVectors),
@@ -137,14 +156,14 @@ pub(super) enum ExpressionPhase {
     AwaitSizeofExpression(SourceVectors),
     PushTypeName(SourceVectors, TypeNameUse),
     AwaitTypeName(SourceVectors, TypeNameUse),
-    CloseTypeName(SourceVectors, TypeNameUse, TypeNameIndex),
-    PushCompoundLiteral(TypeNameIndex, SourceVectors, TypeNameUse),
-    AwaitCompoundLiteral(TypeNameIndex, SourceVectors, TypeNameUse),
-    PushCastOperand(TypeNameIndex, SourceVectors),
-    AwaitCastOperand(TypeNameIndex, SourceVectors),
+    CloseTypeName(SourceVectors, TypeNameUse, &'tu TypeName<'tu>),
+    PushCompoundLiteral(&'tu TypeName<'tu>, SourceVectors, TypeNameUse),
+    AwaitCompoundLiteral(&'tu TypeName<'tu>, SourceVectors, TypeNameUse),
+    PushCastOperand(&'tu TypeName<'tu>, SourceVectors),
+    AwaitCastOperand(&'tu TypeName<'tu>, SourceVectors),
     PushConditionalMiddle,
     AwaitConditionalMiddle,
-    ExpectConditionalColon(ExpressionIndex),
+    ExpectConditionalColon(&'tu Expression<'tu>),
     PushConditionalElse,
     AwaitConditionalElse,
     /// Discards this many already-diagnosed tokens before the closer that
@@ -181,27 +200,29 @@ const BRACE_GROUP_LOOKAHEAD: usize = 256;
 /// C99: recovery serves §5.1.1.3, p. 11; PDF p. 23. An expression never
 /// contains `;` or a statement keyword (§6.5, pp. 67-94; PDF pp. 79-106).
 pub(super) fn closer_follows_stray_run(
-    parser: &mut Parser,
-    context: &mut Context,
+    parser: &mut Parser<'_, '_, '_>,
     closer: fn(TokenType) -> bool,
     stop_at_declarations: bool,
 ) -> Option<usize> {
-    let mut open = Vec::new();
+    // Each token opens at most one delimiter, so the run's open delimiters
+    // fit in a fixed stack.
+    let mut open = [OperatorTokenType::OpeningParenthesis; STRAY_RUN_LOOKAHEAD];
+    let mut depth = 0;
     let mut previous = None;
     for index in 0..STRAY_RUN_LOOKAHEAD {
         let token = if index == 0 {
-            parser.cursor.current(context)?
+            parser.cursor.current()?
         } else {
-            parser.cursor.lookahead(context, index - 1)?
+            parser.cursor.lookahead(index - 1)?
         };
-        if open.is_empty() && closer(token.kind) {
+        if depth == 0 && closer(token.kind) {
             return (index > 0).then_some(index);
         }
         if token.kind == TokenType::Operator(OperatorTokenType::Semicolon)
             || is_statement_keyword(token.kind)
             || stop_at_declarations
                 && (token.kind == TokenType::Operator(OperatorTokenType::QuestionMark)
-                    || open.is_empty() && parser.declaration_starter(token))
+                    || depth == 0 && parser.declaration_starter(token))
         {
             return None;
         }
@@ -214,10 +235,13 @@ pub(super) fn closer_follows_stray_run(
                 return None;
             },
             | TokenType::Operator(
-                OperatorTokenType::OpeningParenthesis
+                opening @ (OperatorTokenType::OpeningParenthesis
                 | OperatorTokenType::OpeningSquareBracket
-                | OperatorTokenType::OpeningCurlyBrace,
-            ) => open.push(token.kind),
+                | OperatorTokenType::OpeningCurlyBrace),
+            ) => {
+                open[depth] = opening;
+                depth += 1;
+            },
             | TokenType::Operator(
                 closing @ (OperatorTokenType::ClosingParenthesis
                 | OperatorTokenType::ClosingSquareBracket
@@ -230,9 +254,10 @@ pub(super) fn closer_follows_stray_run(
                         OperatorTokenType::OpeningSquareBracket,
                     | _ => OperatorTokenType::OpeningCurlyBrace,
                 };
-                if open.pop() != Some(TokenType::Operator(opening)) {
+                if depth == 0 || open[depth - 1] != opening {
                     return None;
                 }
+                depth -= 1;
             },
             | _ => {},
         }
@@ -244,13 +269,13 @@ pub(super) fn closer_follows_stray_run(
 /// Returns whether the brace group starting at the current `{` reads as a
 /// statement block rather than a misplaced initializer list: it contains a
 /// `;` or a statement keyword, is empty, or does not close within reach.
-fn brace_group_is_block(parser: &mut Parser, context: &mut Context) -> bool {
+fn brace_group_is_block(parser: &mut Parser<'_, '_, '_>) -> bool {
     let mut depth = 0_usize;
     for index in 0..BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
-            parser.cursor.current(context)
+            parser.cursor.current()
         } else {
-            parser.cursor.lookahead(context, index - 1)
+            parser.cursor.lookahead(index - 1)
         };
         let Some(token) = token else {
             return true;
@@ -285,13 +310,13 @@ const PARENTHESIZED_BRACE_GROUP_LOOKAHEAD: usize = 4096;
 /// C99: a `{` cannot start a primary expression (§6.5.1, p. 69; PDF p. 81),
 /// so the whole group is skipped as one diagnosed operand (§5.1.1.3, p. 11;
 /// PDF p. 23).
-fn brace_group_closes_before_parenthesis(parser: &mut Parser, context: &mut Context) -> bool {
+fn brace_group_closes_before_parenthesis(parser: &mut Parser<'_, '_, '_>) -> bool {
     let mut depth = 0_usize;
     for index in 0..PARENTHESIZED_BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
-            parser.cursor.current(context)
+            parser.cursor.current()
         } else {
-            parser.cursor.lookahead(context, index - 1)
+            parser.cursor.lookahead(index - 1)
         };
         let Some(token) = token else {
             return false;
@@ -301,7 +326,7 @@ fn brace_group_closes_before_parenthesis(parser: &mut Parser, context: &mut Cont
             | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    return parser.cursor.lookahead(context, index).is_some_and(|next| {
+                    return parser.cursor.lookahead(index).is_some_and(|next| {
                         next.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                     });
                 }
@@ -316,13 +341,13 @@ fn brace_group_closes_before_parenthesis(parser: &mut Parser, context: &mut Cont
 /// reach and is followed by `)`, `]`, or `,`: the group then sits inside an
 /// expression, as in `if (x == {}) ...`, rather than being a statement body
 /// left after a missing `)`.
-fn brace_group_continues_expression(parser: &mut Parser, context: &mut Context) -> bool {
+fn brace_group_continues_expression(parser: &mut Parser<'_, '_, '_>) -> bool {
     let mut depth = 0_usize;
     for index in 0..PARENTHESIZED_BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
-            parser.cursor.current(context)
+            parser.cursor.current()
         } else {
-            parser.cursor.lookahead(context, index - 1)
+            parser.cursor.lookahead(index - 1)
         };
         let Some(token) = token else {
             return false;
@@ -332,7 +357,7 @@ fn brace_group_continues_expression(parser: &mut Parser, context: &mut Context) 
             | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    return parser.cursor.lookahead(context, index).is_some_and(|next| {
+                    return parser.cursor.lookahead(index).is_some_and(|next| {
                         matches!(
                             next.kind,
                             TokenType::Operator(
@@ -350,25 +375,34 @@ fn brace_group_continues_expression(parser: &mut Parser, context: &mut Context) 
     false
 }
 
-impl ExpressionFrame {
+impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     pub(super) fn new(
+        arena: &'p Bump,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
         starting_error_count: usize,
     ) -> Self {
-        Self::with_recovery_boundary(mode, boundary, boundary, starting_error_count)
+        Self::with_recovery_boundary(arena, mode, boundary, boundary, starting_error_count)
     }
 
     fn nested(
         &self,
+        arena: &'p Bump,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
         starting_error_count: usize,
     ) -> Self {
-        Self::with_recovery_boundary(mode, boundary, self.recovery_boundary, starting_error_count)
+        Self::with_recovery_boundary(
+            arena,
+            mode,
+            boundary,
+            self.recovery_boundary,
+            starting_error_count,
+        )
     }
 
     pub(super) fn with_recovery_boundary(
+        arena: &'p Bump,
         mode: ExpressionMode,
         boundary: ExpressionBoundary,
         recovery_boundary: ExpressionBoundary,
@@ -379,8 +413,8 @@ impl ExpressionFrame {
             boundary,
             recovery_boundary,
             phase: ExpressionPhase::Parse,
-            operators: Vec::new(),
-            operands: Vec::new(),
+            operators: ArenaVec::new_in(arena),
+            operands: ArenaVec::new_in(arena),
             state: ExpressionParserState::Operand,
             starting_error_count,
             call: None,
@@ -390,20 +424,20 @@ impl ExpressionFrame {
     }
 
     /// Gives the operator and operand stacks spare allocations.
-    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools) {
+    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         pools.operators.lend(&mut self.operators);
         pools.operands.lend(&mut self.operands);
     }
 
     /// Returns the operator and operand stacks' allocations to the pools.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools) {
+    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         pools.operators.reclaim(&mut self.operators);
         pools.operands.reclaim(&mut self.operands);
         if let Some(mut call) = self.call.take() {
             call.arguments.clear();
             call.source_vectors.clear();
             call.operator_sources.clear();
-            pools.reclaim_call(call);
+            pools.calls.reclaim(call);
         }
     }
 
@@ -441,20 +475,21 @@ impl ExpressionFrame {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | ExpressionPhase::RecoverUnexpectedBrace(depth, source_vectors) => {
                 debug_assert!(returned.is_none());
                 let Some(token) = token else {
                     self.push_error_with_source(parser, source_vectors, None);
                     self.phase = ExpressionPhase::Parse;
-                    return self.finish(parser, context);
+                    return self.finish(parser);
                 };
-                let source_vectors = context.merge_vectors(source_vectors, token.source_vectors);
+                let source_vectors = parser
+                    .context
+                    .merge_vectors(source_vectors, token.source_vectors);
                 let depth = match token.kind {
                     | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => depth + 1,
                     | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => depth - 1,
@@ -472,6 +507,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitGrouped(opening);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::Expression,
                     ExpressionBoundary::ClosingParenthesis,
                     parser.hard_error_count,
@@ -485,17 +521,17 @@ impl ExpressionFrame {
             | ExpressionPhase::CloseGrouped(opening, child) => {
                 debug_assert!(returned.is_none());
                 let mut operator_source = opening;
-                let mut source =
-                    context.merge_vectors(opening, parser.syntax[child].source_vectors);
+                let mut source = parser.context.merge_vectors(opening, child.source_vectors);
                 let consume = if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                 {
-                    source = context.merge_vectors(source, close.source_vectors);
-                    operator_source = context.merge_vectors(operator_source, close.source_vectors);
+                    source = parser.context.merge_vectors(source, close.source_vectors);
+                    operator_source = parser
+                        .context
+                        .merge_vectors(operator_source, close.source_vectors);
                     true
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             "grouped expression",
                             token.map(|token| token.kind),
@@ -522,6 +558,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitSubscript(base, opening);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::Expression,
                     ExpressionBoundary::ClosingSquareBracket,
                     parser.hard_error_count,
@@ -535,17 +572,18 @@ impl ExpressionFrame {
             | ExpressionPhase::CloseSubscript(base, opening, child) => {
                 debug_assert!(returned.is_none());
                 let mut operator_source = opening;
-                let mut source = context.merge_vectors(parser.syntax[base].source_vectors, opening);
-                source = context.merge_vectors(source, parser.syntax[child].source_vectors);
+                let mut source = parser.context.merge_vectors(base.source_vectors, opening);
+                source = parser.context.merge_vectors(source, child.source_vectors);
                 let consume = if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
                 {
-                    source = context.merge_vectors(source, close.source_vectors);
-                    operator_source = context.merge_vectors(operator_source, close.source_vectors);
+                    source = parser.context.merge_vectors(source, close.source_vectors);
+                    operator_source = parser
+                        .context
+                        .merge_vectors(operator_source, close.source_vectors);
                     true
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingSquareBracketInSubscript(
                             token.map(|token| token.kind),
                         ),
@@ -573,7 +611,7 @@ impl ExpressionFrame {
             },
             | ExpressionPhase::CallStart(base, opening) => {
                 debug_assert!(returned.is_none());
-                let base_source = parser.syntax[base].source_vectors;
+                let base_source = base.source_vectors;
                 let call = self.call_state(&mut parser.pools);
                 call.source_vectors.clear();
                 call.source_vectors.extend([base_source, opening]);
@@ -584,7 +622,7 @@ impl ExpressionFrame {
                 {
                     self.merge_call_source(&mut parser.pools, close.source_vectors);
                     self.merge_call_operator_source(&mut parser.pools, close.source_vectors);
-                    self.finish_call(parser, context, base);
+                    self.finish_call(parser, base);
                     self.phase = ExpressionPhase::Parse;
                     return ParseAction::Consume;
                 }
@@ -595,6 +633,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitCallArgument(base);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::AssignmentExpression,
                     ExpressionBoundary::Argument,
                     parser.hard_error_count,
@@ -603,7 +642,7 @@ impl ExpressionFrame {
             | ExpressionPhase::AwaitCallArgument(base) => {
                 let argument = expression_value(returned);
                 self.call_state(&mut parser.pools).arguments.push(argument);
-                self.merge_call_source(&mut parser.pools, parser.syntax[argument].source_vectors);
+                self.merge_call_source(&mut parser.pools, argument.source_vectors);
                 self.phase = ExpressionPhase::CallSeparator(base);
                 return ParseAction::Continue;
             },
@@ -623,10 +662,9 @@ impl ExpressionFrame {
                 // Avoid retrying the boundary as another call argument.
                 if token.is_some_and(|token| {
                     is_expression_operand_starter(token.kind)
-                        && !self.is_strong_grammar_boundary(parser, context, token)
+                        && !self.is_strong_grammar_boundary(parser, token)
                 }) {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionCall(
                             token.map(|token| token.kind),
                         ),
@@ -643,7 +681,6 @@ impl ExpressionFrame {
                     true
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             "function call",
                             token.map(|token| token.kind),
@@ -652,7 +689,7 @@ impl ExpressionFrame {
                     );
                     false
                 };
-                self.finish_call(parser, context, base);
+                self.finish_call(parser, base);
                 self.phase = ExpressionPhase::Parse;
                 return if consume {
                     ParseAction::Consume
@@ -665,19 +702,22 @@ impl ExpressionFrame {
                 let Some(member_token) = token.filter(|token| token.kind == TokenType::Identifier)
                 else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedMemberIdentifier(token.map(|token| token.kind)),
                         token,
                     );
-                    let source =
-                        context.merge_vectors(parser.syntax[base].source_vectors, operator_source);
+                    let source = parser
+                        .context
+                        .merge_vectors(base.source_vectors, operator_source);
                     self.push_error_with_source(parser, source, Some(operator_source));
                     self.phase = ExpressionPhase::Parse;
                     return ParseAction::Reprocess;
                 };
-                let source =
-                    context.merge_vectors(parser.syntax[base].source_vectors, operator_source);
-                let source = context.merge_vectors(source, member_token.source_vectors);
+                let source = parser
+                    .context
+                    .merge_vectors(base.source_vectors, operator_source);
+                let source = parser
+                    .context
+                    .merge_vectors(source, member_token.source_vectors);
                 let kind = if indirect {
                     ExpressionType::IndirectMember {
                         base_expression: base,
@@ -703,6 +743,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitPrefix(operator, operator_source);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     child_mode,
                     self.boundary,
                     parser.hard_error_count,
@@ -710,8 +751,9 @@ impl ExpressionFrame {
             },
             | ExpressionPhase::AwaitPrefix(operator, operator_source) => {
                 let operand = expression_value(returned);
-                let source =
-                    context.merge_vectors(operator_source, parser.syntax[operand].source_vectors);
+                let source = parser
+                    .context
+                    .merge_vectors(operator_source, operand.source_vectors);
                 let index = parser.store_expression(
                     ExpressionType::Unary {
                         operator,
@@ -729,7 +771,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 if let Some(opening) = token
                     && opening.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
-                    && Self::parenthesized_type_name_follows(parser, context)
+                    && Self::parenthesized_type_name_follows(parser)
                 {
                     self.phase = ExpressionPhase::PushTypeName(
                         opening.source_vectors,
@@ -744,6 +786,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitSizeofExpression(sizeof_source);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::UnaryExpression,
                     self.boundary,
                     parser.hard_error_count,
@@ -751,8 +794,9 @@ impl ExpressionFrame {
             },
             | ExpressionPhase::AwaitSizeofExpression(sizeof_source) => {
                 let operand = expression_value(returned);
-                let source =
-                    context.merge_vectors(sizeof_source, parser.syntax[operand].source_vectors);
+                let source = parser
+                    .context
+                    .merge_vectors(sizeof_source, operand.source_vectors);
                 let index = parser.store_expression(
                     ExpressionType::SizeofExpr(operand),
                     source,
@@ -779,16 +823,16 @@ impl ExpressionFrame {
             },
             | ExpressionPhase::CloseTypeName(opening_source, use_kind, type_name) => {
                 debug_assert!(returned.is_none());
-                let mut source =
-                    context.merge_vectors(opening_source, parser.syntax[type_name].source_vectors);
+                let mut source = parser
+                    .context
+                    .merge_vectors(opening_source, type_name.source_vectors);
                 let consume = if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                 {
-                    source = context.merge_vectors(source, close.source_vectors);
+                    source = parser.context.merge_vectors(source, close.source_vectors);
                     true
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingParenthesisInStatement(
                             "type name",
                             token.map(|token| token.kind),
@@ -798,10 +842,10 @@ impl ExpressionFrame {
                     false
                 };
                 let starts_compound_literal = consume
-                    && parser.cursor.following(context).is_some_and(|following| {
+                    && parser.cursor.following().is_some_and(|following| {
                         following.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
                     })
-                    && !parser.cursor.lookahead(context, 1).is_some_and(|first| {
+                    && !parser.cursor.lookahead(1).is_some_and(|first| {
                         first.kind != TokenType::Identifier
                             && (parser.declaration_starter(first)
                                 || is_statement_keyword(first.kind))
@@ -811,7 +855,7 @@ impl ExpressionFrame {
                 } else {
                     match use_kind {
                         | TypeNameUse::Sizeof(sizeof_source) => {
-                            let source = context.merge_vectors(sizeof_source, source);
+                            let source = parser.context.merge_vectors(sizeof_source, source);
                             let index = parser.store_expression(
                                 ExpressionType::SizeofType(type_name),
                                 source,
@@ -829,9 +873,8 @@ impl ExpressionFrame {
                             // the `{` of a compound literal is missing after
                             // the `)`. Report it there and keep the operand as
                             // a recovered cast.
-                            let following = parser.cursor.following(context);
+                            let following = parser.cursor.following();
                             parser.report(
-                                context,
                                 ParserErrorType::ExpectedStatementExpression(
                                     "compound literal initializer",
                                     following.map(|following| following.kind),
@@ -843,12 +886,12 @@ impl ExpressionFrame {
                             }) {
                                 self.phase = ExpressionPhase::PushCastOperand(type_name, source);
                             } else {
-                                self.push_error(parser, context, following);
+                                self.push_error(parser, following);
                                 self.phase = ExpressionPhase::Parse;
                             }
                         },
                         | TypeNameUse::UnaryCompoundLiteral => {
-                            self.push_error(parser, context, token);
+                            self.push_error(parser, token);
                             self.phase = ExpressionPhase::Parse;
                         },
                     }
@@ -864,22 +907,22 @@ impl ExpressionFrame {
                 self.phase =
                     ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind);
                 return ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
+                    parser.arena,
                     parser.hard_error_count,
                     self.closing_parenthesis_is_boundary(),
                     self.closing_square_bracket_is_boundary(),
                 )));
             },
             | ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind) => {
-                let Some(ParseValue::Initializer(InitializerResult {
-                    index: initializer, ..
-                })) = returned
+                let Some(ParseValue::Initializer(InitializerResult { initializer, .. })) = returned
                 else {
                     panic!(
                         "compound-literal initializer returned an unexpected value: {returned:?}"
                     );
                 };
-                let source =
-                    context.merge_vectors(type_source, parser.syntax[initializer].source_vectors);
+                let source = parser
+                    .context
+                    .merge_vectors(type_source, initializer.source_vectors);
                 let compound = parser.store_expression(
                     ExpressionType::CompoundLiteral {
                         type_name,
@@ -900,6 +943,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitCastOperand(type_name, type_source);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::CastExpression,
                     self.boundary,
                     parser.hard_error_count,
@@ -907,8 +951,9 @@ impl ExpressionFrame {
             },
             | ExpressionPhase::AwaitCastOperand(type_name, type_source) => {
                 let operand = expression_value(returned);
-                let source =
-                    context.merge_vectors(type_source, parser.syntax[operand].source_vectors);
+                let source = parser
+                    .context
+                    .merge_vectors(type_source, operand.source_vectors);
                 let index = parser.store_expression(
                     ExpressionType::Cast {
                         target_type:        type_name,
@@ -926,6 +971,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitConditionalMiddle;
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::Expression,
                     ExpressionBoundary::Statement(ExpressionTerminator::Colon),
                     parser.hard_error_count,
@@ -956,7 +1002,6 @@ impl ExpressionFrame {
                     return ParseAction::Consume;
                 }
                 parser.report(
-                    context,
                     ParserErrorType::ExpectedColonInLabel(
                         "conditional expression",
                         token.map(|token| token.kind),
@@ -981,6 +1026,7 @@ impl ExpressionFrame {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitConditionalElse;
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
                     ExpressionMode::ConstantExpression,
                     self.boundary,
                     parser.hard_error_count,
@@ -996,36 +1042,40 @@ impl ExpressionFrame {
                 else {
                     panic!("conditional final operand must retain its completed marker");
                 };
-                let condition = self.pop_operand().index;
-                let source =
-                    context.merge_vectors(parser.syntax[condition].source_vectors, question_source);
-                let source = context.merge_vectors(source, parser.syntax[middle].source_vectors);
-                let source =
-                    colon_source.map_or(source, |colon| context.merge_vectors(source, colon));
-                let source =
-                    context.merge_vectors(source, parser.syntax[final_expression].source_vectors);
+                let condition = self.pop_operand().expression;
+                let source = parser
+                    .context
+                    .merge_vectors(condition.source_vectors, question_source);
+                let source = parser.context.merge_vectors(source, middle.source_vectors);
+                let source = colon_source
+                    .map_or(source, |colon| parser.context.merge_vectors(source, colon));
+                let source = parser
+                    .context
+                    .merge_vectors(source, final_expression.source_vectors);
+                let operands = parser.alloc_syntax_part(ConditionalExpression {
+                    condition_expression: condition,
+                    then_expression:      middle,
+                    else_expression:      final_expression,
+                });
+                let operator_source = colon_source.map_or(question_source, |colon| {
+                    parser.context.merge_vectors(question_source, colon)
+                });
                 let index = parser.store_expression(
-                    ExpressionType::Conditional {
-                        condition_expression: condition,
-                        then_expression:      middle,
-                        else_expression:      final_expression,
-                    },
+                    ExpressionType::Conditional(operands),
                     source,
-                    Some(colon_source.map_or(question_source, |colon| {
-                        context.merge_vectors(question_source, colon)
-                    })),
+                    Some(operator_source),
                     parser.hard_error_count > self.starting_error_count,
                 );
                 self.push_operand(index, false, false);
                 self.phase = ExpressionPhase::Parse;
                 return ParseAction::Reprocess;
             },
-            | ExpressionPhase::Finish => return self.finish(parser, context),
+            | ExpressionPhase::Finish => return self.finish(parser),
             | ExpressionPhase::SkipStray(remaining) => {
                 debug_assert!(returned.is_none());
                 if remaining == 0 || token.is_none() {
                     self.phase = ExpressionPhase::Parse;
-                    return self.finish(parser, context);
+                    return self.finish(parser);
                 }
                 self.phase = ExpressionPhase::SkipStray(remaining - 1);
                 return ParseAction::Consume;
@@ -1039,13 +1089,14 @@ impl ExpressionFrame {
             && self.pending_sizeof_prefix.is_some()
             && !token.is_some_and(|token| is_postfix_starter(token.kind))
         {
-            let operand = self.pop_operand().index;
+            let operand = self.pop_operand().expression;
             let sizeof_source = self
                 .pending_sizeof_prefix
                 .take()
                 .expect("pending sizeof operand has an operator source");
-            let source =
-                context.merge_vectors(sizeof_source, parser.syntax[operand].source_vectors);
+            let source = parser
+                .context
+                .merge_vectors(sizeof_source, operand.source_vectors);
             let index = parser.store_expression(
                 ExpressionType::SizeofExpr(operand),
                 source,
@@ -1066,13 +1117,12 @@ impl ExpressionFrame {
                 "operator in expression"
             };
             parser.report(
-                context,
                 ParserErrorType::ExpectedStatementExpression(position, Some(token.kind)),
                 Some(token),
             );
             if self.state == ExpressionParserState::Operand {
                 // The stray closer stands in for the missing operand.
-                self.push_error(parser, context, Some(token));
+                self.push_error(parser, Some(token));
             }
             self.phase = ExpressionPhase::Finish;
             return ParseAction::Consume;
@@ -1081,18 +1131,17 @@ impl ExpressionFrame {
         if self.state == ExpressionParserState::Operator
             && self.is_boundary(token.map(|token| token.kind))
         {
-            return self.finish(parser, context);
+            return self.finish(parser);
         }
 
         if self.state == ExpressionParserState::Operand {
             let Some(token) = token else {
                 parser.report(
-                    context,
                     ParserErrorType::ExpectedStatementExpression("expression operand", None),
                     None,
                 );
-                self.push_error(parser, context, None);
-                return self.finish(parser, context);
+                self.push_error(parser, None);
+                return self.finish(parser);
             };
             // A brace group directly inside a `(` and closed before its `)`,
             // such as a GNU statement expression `({ ... })`, is one error
@@ -1102,10 +1151,9 @@ impl ExpressionFrame {
                 && parser.cursor.previous.is_some_and(|previous| {
                     previous.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
                 })
-                && brace_group_closes_before_parenthesis(parser, context)
+                && brace_group_closes_before_parenthesis(parser)
             {
                 parser.report(
-                    context,
                     ParserErrorType::ExpectedStatementExpression(
                         "expression operand",
                         Some(token.kind),
@@ -1119,10 +1167,7 @@ impl ExpressionFrame {
             // primary expression. At the first initializer operand, do
             // not reinterpret declaration-shaped
             // lookahead as recovery evidence.
-            let following_kind = parser
-                .cursor
-                .following(context)
-                .map(|following| following.kind);
+            let following_kind = parser.cursor.following().map(|following| following.kind);
             let identifier_is_unambiguous_recovery_boundary = token.kind == TokenType::Identifier
                 && (following_kind == Some(TokenType::Operator(OperatorTokenType::Colon))
                     || self.recovery_boundary == ExpressionBoundary::Initializer
@@ -1133,7 +1178,7 @@ impl ExpressionFrame {
                 || self.recovery_boundary != self.boundary
                     && Self::is_owning_boundary_for(self.recovery_boundary, token.kind);
             if owned_boundary
-                || !identifier_is_operand && self.is_strong_grammar_boundary(parser, context, token)
+                || !identifier_is_operand && self.is_strong_grammar_boundary(parser, token)
             {
                 // A declaration-specifier keyword inside this expression's
                 // own delimiters, such as `f(int)` or `(static int)`, is a
@@ -1143,24 +1188,23 @@ impl ExpressionFrame {
                     && matches!(token.kind, TokenType::Keyword(_))
                     && let Some(closer) = self.closer()
                 {
-                    closer_follows_stray_run(parser, context, closer, false)
+                    closer_follows_stray_run(parser, closer, false)
                 } else {
                     None
                 };
                 parser.report(
-                    context,
                     ParserErrorType::ExpectedStatementExpression(
                         "expression operand",
                         Some(token.kind),
                     ),
                     Some(token),
                 );
-                self.push_error(parser, context, Some(token));
+                self.push_error(parser, Some(token));
                 if let Some(stray_run) = stray_run {
                     self.phase = ExpressionPhase::SkipStray(stray_run);
                     return ParseAction::Reprocess;
                 }
-                return self.finish(parser, context);
+                return self.finish(parser);
             }
             if token.kind == TokenType::Keyword(KeywordTokenType::Sizeof) {
                 self.phase = ExpressionPhase::SizeofStart(token.source_vectors);
@@ -1172,14 +1216,13 @@ impl ExpressionFrame {
                 return ParseAction::Consume;
             }
             if token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis) {
-                let type_name_use =
-                    Self::parenthesized_type_name_follows(parser, context).then(|| {
-                        if self.mode == ExpressionMode::UnaryExpression {
-                            TypeNameUse::UnaryCompoundLiteral
-                        } else {
-                            TypeNameUse::Cast
-                        }
-                    });
+                let type_name_use = Self::parenthesized_type_name_follows(parser).then(|| {
+                    if self.mode == ExpressionMode::UnaryExpression {
+                        TypeNameUse::UnaryCompoundLiteral
+                    } else {
+                        TypeNameUse::Cast
+                    }
+                });
                 if let Some(type_name_use) = type_name_use {
                     self.phase = ExpressionPhase::PushTypeName(token.source_vectors, type_name_use);
                     return ParseAction::Consume;
@@ -1196,7 +1239,6 @@ impl ExpressionFrame {
                 | TokenType::String(value) => ExpressionType::StringLiteral(value),
                 | _ => {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatementExpression(
                             "expression operand",
                             Some(token.kind),
@@ -1208,7 +1250,7 @@ impl ExpressionFrame {
                             ExpressionPhase::RecoverUnexpectedBrace(1, token.source_vectors);
                         return ParseAction::Consume;
                     }
-                    self.push_error(parser, context, Some(token));
+                    self.push_error(parser, Some(token));
                     if binary_operator(token.kind).is_some()
                         || token.kind == TokenType::Operator(OperatorTokenType::QuestionMark)
                     {
@@ -1230,7 +1272,7 @@ impl ExpressionFrame {
             ParseAction::Consume
         } else {
             let Some(token) = token else {
-                return self.finish(parser, context);
+                return self.finish(parser);
             };
             // A brace list right after a `)` this expression consumed reads
             // as a compound literal whose type name did not parse, as in
@@ -1242,12 +1284,11 @@ impl ExpressionFrame {
                 && parser.cursor.previous.is_some_and(|previous| {
                     previous.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
                 })
-                && !brace_group_is_block(parser, context)
+                && !brace_group_is_block(parser)
             {
-                let operand = self.pop_operand().index;
-                if !parser.syntax[operand].recovered {
+                let operand = self.pop_operand().expression;
+                if !operand.recovered {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatementExpression(
                             "operator before brace list",
                             Some(token.kind),
@@ -1255,8 +1296,9 @@ impl ExpressionFrame {
                         Some(token),
                     );
                 }
-                let source = context
-                    .merge_vectors(parser.syntax[operand].source_vectors, token.source_vectors);
+                let source = parser
+                    .context
+                    .merge_vectors(operand.source_vectors, token.source_vectors);
                 self.phase = ExpressionPhase::RecoverUnexpectedBrace(1, source);
                 return ParseAction::Consume;
             }
@@ -1267,7 +1309,6 @@ impl ExpressionFrame {
                     .is_some_and(|operand| operand.postfix_expression)
             {
                 parser.report(
-                    context,
                     ParserErrorType::ExpectedStatementExpression(
                         "postfix operator after a non-postfix expression",
                         Some(token.kind),
@@ -1280,12 +1321,12 @@ impl ExpressionFrame {
             }
             match token.kind {
                 | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => {
-                    let base = self.pop_operand().index;
+                    let base = self.pop_operand().expression;
                     self.phase = ExpressionPhase::PushSubscript(base, token.source_vectors);
                     return ParseAction::Consume;
                 },
                 | TokenType::Operator(OperatorTokenType::OpeningParenthesis) => {
-                    let base = self.pop_operand().index;
+                    let base = self.pop_operand().expression;
                     if let Some(call) = &mut self.call {
                         call.arguments.clear();
                         call.source_vectors.clear();
@@ -1294,7 +1335,7 @@ impl ExpressionFrame {
                     return ParseAction::Consume;
                 },
                 | TokenType::Operator(OperatorTokenType::Period | OperatorTokenType::Arrow) => {
-                    let base = self.pop_operand().index;
+                    let base = self.pop_operand().expression;
                     self.phase = ExpressionPhase::ExpectMember(
                         base,
                         token.kind == TokenType::Operator(OperatorTokenType::Arrow),
@@ -1305,9 +1346,10 @@ impl ExpressionFrame {
                 | TokenType::Operator(
                     OperatorTokenType::PlusPlus | OperatorTokenType::MinusMinus,
                 ) => {
-                    let base = self.pop_operand().index;
-                    let source = context
-                        .merge_vectors(parser.syntax[base].source_vectors, token.source_vectors);
+                    let base = self.pop_operand().expression;
+                    let source = parser
+                        .context
+                        .merge_vectors(base.source_vectors, token.source_vectors);
                     let operator = if token.kind == TokenType::Operator(OperatorTokenType::PlusPlus)
                     {
                         UnaryOperator::PostIncrement
@@ -1338,7 +1380,7 @@ impl ExpressionFrame {
                     !matches!(operator, LanguageExpressionOperator::Question { .. })
                         && operator.precedence() < 13
                 }) {
-                    self.reduce_one(parser, context);
+                    self.reduce_one(parser);
                 }
                 self.operators.push(LanguageExpressionOperator::Question {
                     source_vectors: token.source_vectors,
@@ -1363,7 +1405,7 @@ impl ExpressionFrame {
                     !matches!(stacked, LanguageExpressionOperator::Question { .. })
                         && stacked.has_precedence_over(incoming)
                 }) {
-                    self.reduce_one(parser, context);
+                    self.reduce_one(parser);
                 }
                 if is_assignment_operator(operator)
                     && !self
@@ -1372,7 +1414,6 @@ impl ExpressionFrame {
                         .is_some_and(|operand| operand.unary_expression)
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatementExpression(
                             "unary-expression left operand of assignment",
                             Some(token.kind),
@@ -1390,13 +1431,11 @@ impl ExpressionFrame {
                 // to the closer that follows it. Without such a closer, the
                 // closer itself is missing: finish quietly so its owner
                 // names the missing `)`, `]`, or `:` at this token.
-                let Some(stray_run) = closer_follows_stray_run(parser, context, closer, false)
-                else {
-                    return self.finish(parser, context);
+                let Some(stray_run) = closer_follows_stray_run(parser, closer, false) else {
+                    return self.finish(parser);
                 };
                 if !self.stray_error_operand {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedStatementExpression(
                             "operator in delimited expression",
                             Some(token.kind),
@@ -1417,23 +1456,22 @@ impl ExpressionFrame {
             {
                 // The statement that owns the terminator reports the missing
                 // `;` before the keyword.
-                return self.finish(parser, context);
+                return self.finish(parser);
             }
             if token.kind == TokenType::Operator(OperatorTokenType::Semicolon) {
                 // A `;` never continues an expression, and every owner of
                 // an expression that does not end at `;` (an enumerator
                 // value) names what it expected there instead.
-                return self.finish(parser, context);
+                return self.finish(parser);
             }
             parser.report(
-                context,
                 ParserErrorType::ExpectedStatementExpression(
                     "operator in expression",
                     Some(token.kind),
                 ),
                 Some(token),
             );
-            self.finish(parser, context)
+            self.finish(parser)
         }
     }
 
@@ -1470,8 +1508,8 @@ impl ExpressionFrame {
     /// Returns whether the current `(` opens a type name: a type-name starter
     /// follows, or a storage-class or `inline` keyword that a type-name frame
     /// diagnoses as not allowed before one, as in `(static int)x`.
-    fn parenthesized_type_name_follows(parser: &mut Parser, context: &mut Context) -> bool {
-        let Some(following) = parser.cursor.following(context) else {
+    fn parenthesized_type_name_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
+        let Some(following) = parser.cursor.following() else {
             return false;
         };
         parser.type_name_starter(following)
@@ -1487,18 +1525,18 @@ impl ExpressionFrame {
                 )
             ) && parser
                 .cursor
-                .lookahead(context, 1)
+                .lookahead(1)
                 .is_some_and(|next| parser.type_name_starter(next))
     }
 
     fn push_operand(
         &mut self,
-        index: ExpressionIndex,
+        expression: &'tu Expression<'tu>,
         unary_expression: bool,
         postfix_expression: bool,
     ) {
         self.operands.push(ExpressionOperand {
-            index,
+            expression,
             unary_expression,
             postfix_expression,
         });
@@ -1506,50 +1544,50 @@ impl ExpressionFrame {
         self.stray_error_operand = false;
     }
 
-    fn pop_operand(&mut self) -> ExpressionOperand {
+    fn pop_operand(&mut self) -> ExpressionOperand<'tu> {
         self.operands
             .pop()
             .expect("operator state has an expression operand")
     }
 
-    fn pop_operand_or_error(
-        &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
-    ) -> ExpressionOperand {
+    fn pop_operand_or_error(&mut self, parser: &mut Parser<'_, 'tu, 'p>) -> ExpressionOperand<'tu> {
         if let Some(operand) = self.operands.pop() {
             return operand;
         }
-        self.push_error(parser, context, None);
+        self.push_error(parser, None);
         self.operands
             .pop()
             .expect("error expression supplies one operand")
     }
 
-    fn call_state(&mut self, pools: &mut FramePools) -> &mut CallState {
-        self.call
-            .get_or_insert_with(|| pools.calls.pop().unwrap_or_default())
+    fn call_state(&mut self, pools: &mut FramePools<'tu, 'p>) -> &mut CallState<'tu, 'p> {
+        self.call.get_or_insert_with(|| pools.take_call())
     }
 
-    fn merge_call_source(&mut self, pools: &mut FramePools, source: SourceVectors) {
+    fn merge_call_source(&mut self, pools: &mut FramePools<'tu, 'p>, source: SourceVectors) {
         self.call_state(pools).source_vectors.push(source);
     }
 
-    fn merge_call_operator_source(&mut self, pools: &mut FramePools, source: SourceVectors) {
+    fn merge_call_operator_source(
+        &mut self,
+        pools: &mut FramePools<'tu, 'p>,
+        source: SourceVectors,
+    ) {
         self.call_state(pools).operator_sources.push(source);
     }
 
-    fn finish_call(&mut self, parser: &mut Parser, context: &mut Context, base: ExpressionIndex) {
+    fn finish_call(&mut self, parser: &mut Parser<'_, 'tu, 'p>, base: &'tu Expression<'tu>) {
         let call = self.call.as_mut().expect("a call is being finished");
-        let start = parser.append_syntax(&mut call.arguments);
-        let arguments = start;
+        let arguments = parser.alloc_syntax_list(&mut call.arguments);
+        let source_vectors = parser.context.merge_vector_list(&call.source_vectors);
+        let operator_sources = parser.context.merge_vector_list(&call.operator_sources);
         let index = parser.store_expression(
             ExpressionType::Call {
                 function_expression: base,
                 arguments,
             },
-            context.merge_vector_list(&call.source_vectors),
-            Some(context.merge_vector_list(&call.operator_sources)),
+            source_vectors,
+            Some(operator_sources),
             parser.hard_error_count > self.starting_error_count,
         );
         call.source_vectors.clear();
@@ -1557,7 +1595,7 @@ impl ExpressionFrame {
         self.push_operand(index, true, true);
     }
 
-    fn reduce_one(&mut self, parser: &mut Parser, context: &mut Context) {
+    fn reduce_one(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
         let operator = self
             .operators
             .pop()
@@ -1567,11 +1605,12 @@ impl ExpressionFrame {
                 operator,
                 source_vectors,
             } => {
-                let right = self.pop_operand_or_error(parser, context).index;
-                let left = self.pop_operand_or_error(parser, context).index;
-                let source =
-                    context.merge_vectors(parser.syntax[left].source_vectors, source_vectors);
-                let source = context.merge_vectors(source, parser.syntax[right].source_vectors);
+                let right = self.pop_operand_or_error(parser).expression;
+                let left = self.pop_operand_or_error(parser).expression;
+                let source = parser
+                    .context
+                    .merge_vectors(left.source_vectors, source_vectors);
+                let source = parser.context.merge_vectors(source, right.source_vectors);
                 let index = parser.store_expression(
                     ExpressionType::Binary {
                         operator,
@@ -1723,16 +1762,11 @@ impl ExpressionFrame {
         }
     }
 
-    fn is_strong_grammar_boundary(
-        &self,
-        parser: &mut Parser,
-        context: &mut Context,
-        token: Token,
-    ) -> bool {
+    fn is_strong_grammar_boundary(&self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) -> bool {
         let identifier_precedes_conditional_colon = self.boundary
             == ExpressionBoundary::Statement(ExpressionTerminator::Colon)
             && token.kind == TokenType::Identifier
-            && parser.cursor.following(context).is_some_and(|following| {
+            && parser.cursor.following().is_some_and(|following| {
                 following.kind == TokenType::Operator(OperatorTokenType::Colon)
             });
         // A brace in a statement-level expression ends it only when the
@@ -1744,40 +1778,31 @@ impl ExpressionFrame {
                 self.recovery_boundary,
                 ExpressionBoundary::Statement(_) | ExpressionBoundary::ClosingParenthesis
             )
-            && brace_group_is_block(parser, context)
-            && !brace_group_continues_expression(parser, context)
-            || Self::is_strong_grammar_boundary_for(parser, context, token, self.boundary)
+            && brace_group_is_block(parser)
+            && !brace_group_continues_expression(parser)
+            || Self::is_strong_grammar_boundary_for(parser, token, self.boundary)
             || self.recovery_boundary != self.boundary
                 && !identifier_precedes_conditional_colon
-                && Self::is_strong_grammar_boundary_for(
-                    parser,
-                    context,
-                    token,
-                    self.recovery_boundary,
-                )
+                && Self::is_strong_grammar_boundary_for(parser, token, self.recovery_boundary)
     }
 
     pub(super) fn is_strong_grammar_boundary_for(
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Token,
         boundary: ExpressionBoundary,
     ) -> bool {
         let identifier_continues_as_postfix = token.kind == TokenType::Identifier
             && parser
                 .cursor
-                .following(context)
+                .following()
                 .is_some_and(|following| is_postfix_starter(following.kind));
-        let declaration_starts_here = parser.declaration_recovery_starts_here(context, token);
+        let declaration_starts_here = parser.declaration_recovery_starts_here(token);
         match boundary {
             | ExpressionBoundary::Initializer =>
                 is_statement_keyword(token.kind)
                     || declaration_starts_here
                         && !matches!(
-                            parser
-                                .cursor
-                                .following(context)
-                                .map(|following| following.kind),
+                            parser.cursor.following().map(|following| following.kind),
                             Some(TokenType::Operator(
                                 OperatorTokenType::Comma
                                     | OperatorTokenType::Semicolon
@@ -1788,20 +1813,14 @@ impl ExpressionFrame {
                 token.kind != TokenType::Identifier
                     && parser.declaration_starter(token)
                     && !matches!(
-                        parser
-                            .cursor
-                            .following(context)
-                            .map(|following| following.kind),
+                        parser.cursor.following().map(|following| following.kind),
                         Some(TokenType::Operator(OperatorTokenType::ClosingSquareBracket))
                     ),
             | ExpressionBoundary::StructMember =>
                 token.kind != TokenType::Identifier
                     && parser.declaration_starter(token)
                     && !matches!(
-                        parser
-                            .cursor
-                            .following(context)
-                            .map(|following| following.kind),
+                        parser.cursor.following().map(|following| following.kind),
                         Some(TokenType::Operator(
                             OperatorTokenType::Comma
                                 | OperatorTokenType::Semicolon
@@ -1812,10 +1831,7 @@ impl ExpressionFrame {
                 token.kind != TokenType::Identifier
                     && parser.declaration_starter(token)
                     && !matches!(
-                        parser
-                            .cursor
-                            .following(context)
-                            .map(|following| following.kind),
+                        parser.cursor.following().map(|following| following.kind),
                         Some(TokenType::Operator(
                             OperatorTokenType::Comma | OperatorTokenType::ClosingCurlyBrace
                         ))
@@ -1827,7 +1843,7 @@ impl ExpressionFrame {
                         boundary,
                         ExpressionBoundary::Statement(ExpressionTerminator::Semicolon)
                     ) && token.kind == TokenType::Identifier
-                        && parser.cursor.following(context).is_some_and(|following| {
+                        && parser.cursor.following().is_some_and(|following| {
                             following.kind == TokenType::Operator(OperatorTokenType::Colon)
                         }),
             | ExpressionBoundary::ClosingSquareBracket
@@ -1836,31 +1852,33 @@ impl ExpressionFrame {
         }
     }
 
-    fn push_error(&mut self, parser: &mut Parser, context: &mut Context, anchor: Option<Token>) {
-        let anchor_vectors = anchor.map(|token| {
-            context
-                .get_source_vectors(token.source_vectors)
-                .iter()
-                .map(|source| (source.position(context), source.source_file_index))
-                .collect::<Vec<_>>()
-        });
-        let source_vectors = match anchor_vectors.filter(|vectors| !vectors.is_empty()) {
-            | Some(vectors) => vectors.into_iter().fold(
-                SourceVectors::default(),
-                |combined, (position, source_file_index)| {
-                    let anchor =
-                        context.create_retained_source_vectors(position, source_file_index, 0);
-                    context.merge_vectors(combined, anchor)
-                },
-            ),
-            | None => parser.missing_syntax_source(context),
+    fn push_error(&mut self, parser: &mut Parser<'_, 'tu, 'p>, anchor: Option<Token>) {
+        let source_vectors = match anchor {
+            | Some(token) if token.source_vectors.length != 0 => {
+                let mut combined = SourceVectors::default();
+                for index in 0..token.source_vectors.length as usize {
+                    // Creating an anchor appends to the retained provenance,
+                    // so the token's vectors are read again each time.
+                    let source = &parser.context.get_source_vectors(token.source_vectors)[index];
+                    let (position, source_file_index) =
+                        (source.position(parser.context), source.source_file_index);
+                    let anchor = parser.context.create_retained_source_vectors(
+                        position,
+                        source_file_index,
+                        0,
+                    );
+                    combined = parser.context.merge_vectors(combined, anchor);
+                }
+                combined
+            },
+            | _ => parser.missing_syntax_source(),
         };
         self.push_error_with_source(parser, source_vectors, None);
     }
 
     fn push_error_with_source(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<'_, 'tu, 'p>,
         source_vectors: SourceVectors,
         operator_source_vectors: Option<SourceVectors>,
     ) {
@@ -1873,34 +1891,38 @@ impl ExpressionFrame {
         // An error operand stands for whatever was meant, so operators that
         // need a unary or postfix operand do not diagnose it a second time.
         self.operands.push(ExpressionOperand {
-            index,
-            unary_expression: true,
+            expression:         index,
+            unary_expression:   true,
             postfix_expression: true,
         });
         self.state = ExpressionParserState::Operator;
         self.stray_error_operand = false;
     }
 
-    fn finish(&mut self, parser: &mut Parser, context: &mut Context) -> ParseAction {
+    fn finish(&mut self, parser: &mut Parser<'_, 'tu, 'p>) -> ParseAction<'tu, 'p> {
         while !self.operators.is_empty() {
-            self.reduce_one(parser, context);
+            self.reduce_one(parser);
         }
         let operand = self.operands.pop().unwrap_or_else(|| {
-            self.push_error(parser, context, None);
+            self.push_error(parser, None);
             self.operands
                 .pop()
                 .expect("error expression supplies one operand")
         });
         let recovered = parser.hard_error_count > self.starting_error_count;
-        parser.syntax[operand.index].recovered |= recovered;
+        let expression = if recovered {
+            parser.mark_expression_recovered(operand.expression)
+        } else {
+            operand.expression
+        };
         if self.mode == ExpressionMode::ConstantExpression {
             ParseAction::Reduce(ParseValue::ConstantExpression(ConstantExpressionResult {
-                index: ConstantExpressionIndex(operand.index.0),
+                expression: ConstantExpression(expression),
                 recovered,
             }))
         } else {
             ParseAction::Reduce(ParseValue::Expression(ExpressionResult {
-                index: operand.index,
+                expression,
                 recovered,
             }))
         }

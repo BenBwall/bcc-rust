@@ -16,8 +16,8 @@ use std::{
     },
 };
 
+use super::Preprocessor;
 use crate::{
-    pipeline::PreprocessingStrategy,
     translation_phases::{
         Context,
         SourceVector,
@@ -25,12 +25,6 @@ use crate::{
     },
     util::shared::SharedVec,
 };
-
-const STRATEGIES: [PreprocessingStrategy; 3] = [
-    PreprocessingStrategy::Streaming,
-    PreprocessingStrategy::BatchLexing,
-    PreprocessingStrategy::Batch,
-];
 
 #[derive(Debug)]
 struct Headers(PathBuf);
@@ -75,7 +69,7 @@ struct Observation {
     errors:    Vec<ErrorRecord>,
 }
 
-fn drain_errors(context: &mut Context, observation: &mut Observation) {
+fn drain_errors(context: &mut Context<'_>, observation: &mut Observation) {
     for error in context.take_pending_errors() {
         let TranslationError::Preprocessing(error) = error else {
             panic!("unexpected non-preprocessing diagnostic: {error:#?}");
@@ -97,33 +91,25 @@ fn drain_errors(context: &mut Context, observation: &mut Observation) {
     }
 }
 
-fn observe(source: &str, path: &Path, strategy: PreprocessingStrategy) -> Observation {
-    let mut context = Context::new();
-    let mut preprocessor = strategy.preprocessor(
+fn observe(source: &str, path: &Path) -> Observation {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         path.to_path_buf().into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
     let mut observation = Observation::default();
-    if strategy == PreprocessingStrategy::Batch {
-        for token in preprocessor.preprocess_all(&mut context) {
-            observation
-                .spellings
-                .push(context.string_cache.at(token.contents).to_owned());
-        }
-        drain_errors(&mut context, &mut observation);
-    } else {
-        loop {
-            let token = preprocessor.next_iterator_item(&mut context);
-            drain_errors(&mut context, &mut observation);
-            let Some(token) = token else { break };
-            observation
-                .spellings
-                .push(context.string_cache.at(token.contents).to_owned());
-        }
+    for token in preprocessor.preprocess_all(&mut context) {
+        observation
+            .spellings
+            .push(context.string_cache.at(token.contents).to_owned());
     }
+    drain_errors(&mut context, &mut observation);
     observation
 }
 
@@ -145,16 +131,14 @@ fn header_terminators_cannot_close_or_skip_the_callers_group() {
         ("#elif 0", "ElifDirectiveWithoutIfDirective"),
     ] {
         headers.write("bad.h", &format!("{directive}\nheader_after\n"));
-        for strategy in STRATEGIES {
-            let actual = observe(source, &main, strategy);
-            assert_eq!(
-                actual.spellings,
-                ["header_after", "caller_inside", "caller_after"],
-                "{directive}: {strategy:?}: {actual:#?}"
-            );
-            assert_eq!(actual.errors.len(), 1, "{actual:#?}");
-            assert_error(&actual.errors[0], error_kind, &header, 1);
-        }
+        let actual = observe(source, &main);
+        assert_eq!(
+            actual.spellings,
+            ["header_after", "caller_inside", "caller_after"],
+            "{directive}: {actual:#?}"
+        );
+        assert_eq!(actual.errors.len(), 1, "{actual:#?}");
+        assert_error(&actual.errors[0], error_kind, &header, 1);
     }
 }
 
@@ -176,17 +160,15 @@ fn unclosed_header_groups_diagnose_locally_and_restore_the_caller() {
         ),
     ] {
         headers.write("open.h", contents);
-        for strategy in STRATEGIES {
-            let actual = observe(source, &main, strategy);
-            assert_eq!(actual.spellings, expected, "{strategy:?}: {actual:#?}");
-            assert_eq!(actual.errors.len(), 1, "{actual:#?}");
-            assert_error(
-                &actual.errors[0],
-                "MoreIfDirectivesThanEndifDirectives",
-                &header,
-                1,
-            );
-        }
+        let actual = observe(source, &main);
+        assert_eq!(actual.spellings, expected, "{actual:#?}");
+        assert_eq!(actual.errors.len(), 1, "{actual:#?}");
+        assert_error(
+            &actual.errors[0],
+            "MoreIfDirectivesThanEndifDirectives",
+            &header,
+            1,
+        );
     }
 }
 
@@ -195,30 +177,27 @@ fn header_eof_diagnoses_every_local_opening_once_in_source_order() {
     let headers = Headers::new();
     let header = headers.0.join("open.h");
     headers.write("open.h", "#if 1\nouter_header\n#if 1\ninner_header\n");
-    for strategy in STRATEGIES {
-        let actual = observe(
-            "#include \"open.h\"\ncaller_after\n",
-            &headers.0.join("main.c"),
-            strategy,
-        );
-        assert_eq!(
-            actual.spellings,
-            ["outer_header", "inner_header", "caller_after"]
-        );
-        assert_eq!(actual.errors.len(), 2, "{actual:#?}");
-        assert_error(
-            &actual.errors[0],
-            "MoreIfDirectivesThanEndifDirectives",
-            &header,
-            1,
-        );
-        assert_error(
-            &actual.errors[1],
-            "MoreIfDirectivesThanEndifDirectives",
-            &header,
-            3,
-        );
-    }
+    let actual = observe(
+        "#include \"open.h\"\ncaller_after\n",
+        &headers.0.join("main.c"),
+    );
+    assert_eq!(
+        actual.spellings,
+        ["outer_header", "inner_header", "caller_after"]
+    );
+    assert_eq!(actual.errors.len(), 2, "{actual:#?}");
+    assert_error(
+        &actual.errors[0],
+        "MoreIfDirectivesThanEndifDirectives",
+        &header,
+        1,
+    );
+    assert_error(
+        &actual.errors[1],
+        "MoreIfDirectivesThanEndifDirectives",
+        &header,
+        3,
+    );
 }
 
 #[test]
@@ -229,24 +208,20 @@ fn valid_nested_header_conditionals_preserve_the_callers_selection() {
         "#if 1\n#include \"inner.h\"\nouter_header\n#endif\n",
     );
     headers.write("inner.h", "#if 0\ndead\n#else\ninner_header\n#endif\n");
-    for strategy in STRATEGIES {
-        let actual = observe(
-            "#if 1\n#include \
-             \"outer.h\"\ncaller_inside\n#else\ncaller_dead\n#endif\ncaller_after\n",
-            &headers.0.join("main.c"),
-            strategy,
-        );
-        assert_eq!(
-            actual.spellings,
-            [
-                "inner_header",
-                "outer_header",
-                "caller_inside",
-                "caller_after"
-            ]
-        );
-        assert!(actual.errors.is_empty(), "{actual:#?}");
-    }
+    let actual = observe(
+        "#if 1\n#include \"outer.h\"\ncaller_inside\n#else\ncaller_dead\n#endif\ncaller_after\n",
+        &headers.0.join("main.c"),
+    );
+    assert_eq!(
+        actual.spellings,
+        [
+            "inner_header",
+            "outer_header",
+            "caller_inside",
+            "caller_after"
+        ]
+    );
+    assert!(actual.errors.is_empty(), "{actual:#?}");
 }
 
 #[test]
@@ -254,21 +229,18 @@ fn unclosed_false_header_without_a_caller_group_preserves_the_remainder() {
     let headers = Headers::new();
     let header = headers.0.join("open.h");
     headers.write("open.h", "#if 0\nheader_dead\n");
-    for strategy in STRATEGIES {
-        let actual = observe(
-            "#include \"open.h\"\ncaller_after\n",
-            &headers.0.join("main.c"),
-            strategy,
-        );
-        assert_eq!(actual.spellings, ["caller_after"]);
-        assert_eq!(actual.errors.len(), 1, "{actual:#?}");
-        assert_error(
-            &actual.errors[0],
-            "MoreIfDirectivesThanEndifDirectives",
-            &header,
-            1,
-        );
-    }
+    let actual = observe(
+        "#include \"open.h\"\ncaller_after\n",
+        &headers.0.join("main.c"),
+    );
+    assert_eq!(actual.spellings, ["caller_after"]);
+    assert_eq!(actual.errors.len(), 1, "{actual:#?}");
+    assert_error(
+        &actual.errors[0],
+        "MoreIfDirectivesThanEndifDirectives",
+        &header,
+        1,
+    );
 }
 
 #[test]
@@ -278,47 +250,41 @@ fn macro_frame_pops_do_not_end_a_source_file_conditional() {
         "macros.h",
         "#define OBJECT object_token\n#define ID(x) x\n#if 1\nOBJECT ID(argument_token)\n#endif\n",
     );
-    for strategy in STRATEGIES {
-        let actual = observe(
-            "#if 1\n#include \"macros.h\"\ncaller_inside\n#endif\ncaller_after\n",
-            &headers.0.join("main.c"),
-            strategy,
-        );
-        assert_eq!(
-            actual.spellings,
-            [
-                "object_token",
-                "argument_token",
-                "caller_inside",
-                "caller_after"
-            ]
-        );
-        assert!(actual.errors.is_empty(), "{actual:#?}");
-    }
+    let actual = observe(
+        "#if 1\n#include \"macros.h\"\ncaller_inside\n#endif\ncaller_after\n",
+        &headers.0.join("main.c"),
+    );
+    assert_eq!(
+        actual.spellings,
+        [
+            "object_token",
+            "argument_token",
+            "caller_inside",
+            "caller_after"
+        ]
+    );
+    assert!(actual.errors.is_empty(), "{actual:#?}");
 }
 
 #[test]
 fn presumed_header_filename_does_not_change_its_conditional_boundary() {
     let headers = Headers::new();
     headers.write("bad.h", "#line 1 \"mapped.h\"\n#endif\nheader_after\n");
-    for strategy in STRATEGIES {
-        let actual = observe(
-            "#if 1\n#include \"bad.h\"\ncaller_inside\n#endif\ncaller_after\n",
-            &headers.0.join("main.c"),
-            strategy,
-        );
-        assert_eq!(
-            actual.spellings,
-            ["header_after", "caller_inside", "caller_after"]
-        );
-        assert_eq!(actual.errors.len(), 1, "{actual:#?}");
-        assert_error(
-            &actual.errors[0],
-            "MoreEndifDirectivesThanIfDirectives",
-            Path::new("mapped.h"),
-            1,
-        );
-    }
+    let actual = observe(
+        "#if 1\n#include \"bad.h\"\ncaller_inside\n#endif\ncaller_after\n",
+        &headers.0.join("main.c"),
+    );
+    assert_eq!(
+        actual.spellings,
+        ["header_after", "caller_inside", "caller_after"]
+    );
+    assert_eq!(actual.errors.len(), 1, "{actual:#?}");
+    assert_error(
+        &actual.errors[0],
+        "MoreEndifDirectivesThanIfDirectives",
+        Path::new("mapped.h"),
+        1,
+    );
 }
 
 #[test]
@@ -326,9 +292,7 @@ fn skipped_nested_malformed_operands_remain_ignored() {
     let headers = Headers::new();
     let source = "#if 0\n#unknown ##\n# 123\n#ifdef\n#if + garbage\n#endif ignored\n#endif \
                   also_ignored\n#else\nchosen\n#endif\nafter\n";
-    for strategy in STRATEGIES {
-        let actual = observe(source, &headers.0.join("main.c"), strategy);
-        assert_eq!(actual.spellings, ["chosen", "after"]);
-        assert!(actual.errors.is_empty(), "{actual:#?}");
-    }
+    let actual = observe(source, &headers.0.join("main.c"));
+    assert_eq!(actual.spellings, ["chosen", "after"]);
+    assert!(actual.errors.is_empty(), "{actual:#?}");
 }

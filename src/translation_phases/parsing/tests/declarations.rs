@@ -5,15 +5,13 @@ use super::{
     declaration,
     function_definition,
     identifier_name,
-    init_declarators,
-    parse,
     parser_errors,
     sourced_text,
+    with_parse,
 };
 use crate::{
     translation_phases::{
         TranslationError,
-        TranslationPhase,
         parsing::{
             declaration_syntax::{
                 DirectDeclarator,
@@ -28,15 +26,12 @@ use crate::{
                 TypeSpecifiers,
             },
             errors::ParserErrorType,
-            scope::NameClass,
             syntax::{
                 BlockItem,
-                EnumSpecifierIndex,
                 ExternalDeclaration,
                 Identifier,
                 StatementType,
                 StorageClass,
-                StructOrUnionSpecifierIndex,
             },
         },
         preprocessing::{
@@ -49,623 +44,647 @@ use crate::{
 
 #[test]
 fn specifier_only_declaration_runs_through_the_machine() {
-    let parsed = parse("int;\n");
-
-    assert_eq!(parsed.items.len(), 1);
-    let declaration = declaration(&parsed, 0);
-    assert_eq!(
-        declaration.declaration_specifiers.type_specifiers,
-        TypeSpecifiers::Int
-    );
-    assert_eq!(declaration.init_declarators.length, 0);
-    assert!(parser_errors(&parsed).next().is_none());
-    assert!(
-        parsed
-            .parser
-            .trace
-            .iter()
-            .any(|event| { event.frame == "declaration-specifiers" && event.action == "reduce" })
-    );
-    assert!(
-        parsed
-            .parser
-            .trace
-            .iter()
-            .any(|event| event.token.is_some())
-    );
-    assert!(
-        parsed
-            .parser
-            .trace
-            .iter()
-            .any(|event| { event.frame == "external-declaration" && event.action == "reduce" })
-    );
+    with_parse("int;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 1);
+        let declaration = declaration(parsed, 0);
+        assert_eq!(
+            declaration.declaration_specifiers.type_specifiers,
+            TypeSpecifiers::Int
+        );
+        assert_eq!(declaration.init_declarators.len(), 0);
+        assert!(parser_errors(parsed).next().is_none());
+        assert!(
+            parsed.parser.trace.iter().any(|event| {
+                event.frame == "declaration-specifiers" && event.action == "reduce"
+            })
+        );
+        assert!(
+            parsed
+                .parser
+                .trace
+                .iter()
+                .any(|event| event.token.is_some())
+        );
+        assert!(
+            parsed
+                .parser
+                .trace
+                .iter()
+                .any(|event| { event.frame == "external-declaration" && event.action == "reduce" })
+        );
+    });
 }
 
 #[test]
 fn empty_translation_unit_emits_one_dedicated_diagnostic() {
-    let mut parsed = parse("");
-
-    assert_eq!(parsed.items, []);
-    assert_eq!(
-        parser_errors(&parsed).collect::<Vec<_>>(),
-        [&ParserErrorType::EmptyTranslationUnit]
-    );
-    assert_eq!(parsed.parser.next_item(&mut parsed.context), None);
-    assert!(parsed.context.pop_pending_error().is_none());
+    with_parse("", |parsed| {
+        assert_eq!(parsed.items, []);
+        assert_eq!(
+            parser_errors(parsed).collect::<Vec<_>>(),
+            [&ParserErrorType::EmptyTranslationUnit]
+        );
+        assert_eq!(parsed.parser.next_item(), None);
+        assert!(parsed.parser.context.pop_pending_error().is_none());
+    });
 }
 
 #[test]
 fn ordinary_pointer_and_typedef_declarations_are_reachable() {
-    let parsed = parse(
+    with_parse(
         "int x;\nint x2, y;\nconst unsigned long *p;\nint *const *volatile q;\ntypedef int T;\nT \
          value;\n",
-    );
+        |parsed| {
+            assert_eq!(parsed.items.len(), 6);
+            assert!(parser_errors(parsed).next().is_none());
+            let names = parsed
+                .items
+                .iter()
+                .enumerate()
+                .flat_map(|(item, _)| (declaration(parsed, item)).init_declarators)
+                .map(|init| identifier_name(parsed, init.declarator).expect("named declarator"))
+                .collect::<Vec<_>>();
+            assert_eq!(names, ["x", "x2", "y", "p", "q", "T", "value"]);
+            let TypeSpecifiers::TypedefName(identifier) = declaration(parsed, 5)
+                .declaration_specifiers
+                .type_specifiers
+            else {
+                panic!("expected a typedef-name specifier")
+            };
+            assert_eq!(
+                identifier.name,
+                parsed
+                    .parser
+                    .context
+                    .string_cache
+                    .get_id_from_string("T")
+                    .expect("interned T")
+            );
 
-    assert_eq!(parsed.items.len(), 6);
-    assert!(parser_errors(&parsed).next().is_none());
-    let names = parsed
-        .items
-        .iter()
-        .enumerate()
-        .flat_map(|(item, _)| init_declarators(&parsed, declaration(&parsed, item)))
-        .map(|init| identifier_name(&parsed, init.declarator).expect("named declarator"))
-        .collect::<Vec<_>>();
-    assert_eq!(names, ["x", "x2", "y", "p", "q", "T", "value"]);
-    let TypeSpecifiers::TypedefName(identifier) = declaration(&parsed, 5)
-        .declaration_specifiers
-        .type_specifiers
-    else {
-        panic!("expected a typedef-name specifier")
-    };
-    assert_eq!(
-        identifier.name,
-        parsed
-            .context
-            .string_cache
-            .get_id_from_string("T")
-            .expect("interned T")
-    );
-
-    let pointer_declaration = declaration(&parsed, 3);
-    let pointer = init_declarators(&parsed, pointer_declaration)[0]
-        .declarator
-        .pointer
-        .type_qualifiers_list;
-    assert_eq!(
-        &parsed.parser.syntax[pointer],
-        &[TypeQualifiers::CONST, TypeQualifiers::VOLATILE]
+            let pointer_declaration = declaration(parsed, 3);
+            let pointer = pointer_declaration.init_declarators[0]
+                .declarator
+                .pointer
+                .type_qualifiers_list;
+            assert_eq!(*pointer, [TypeQualifiers::CONST, TypeQualifiers::VOLATILE]);
+        },
     );
 }
 
 #[test]
 fn name_classification_is_published_after_each_declarator() {
-    let parsed = parse("typedef int T, Prototype(T);\nint T, OldStyle(T);\n");
-
-    assert_eq!(parsed.items.len(), 2);
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
-    );
-    assert!(parsed
+    with_parse(
+        "typedef int T, Prototype(T);\nint T, OldStyle(T);\n",
+        |parsed| {
+            assert_eq!(parsed.items.len(), 2);
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert!(parsed
         .parser
         .syntax
-        .iter::<DirectDeclarator>()
-        .any(|direct| matches!(direct, DirectDeclarator::Function { parameter_list, .. } if parameter_list.length == 1)));
-    assert!(parsed
+        .iter::<DirectDeclarator<'_>>()
+        .any(|direct| matches!(direct, DirectDeclarator::Function { parameter_list, .. } if parameter_list.len() == 1)));
+            assert!(parsed
         .parser
         .syntax
-        .iter::<DirectDeclarator>()
-        .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 1)));
-    let t = parsed
-        .context
-        .string_cache
-        .get_id_from_string("T")
-        .expect("interned T");
-    assert_eq!(
-        parsed.parser.scopes.file_scope.get(&t),
-        Some(&NameClass::Ordinary)
+        .iter::<DirectDeclarator<'_>>()
+        .any(|direct| matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.len() == 1)));
+            let t = parsed
+                .parser
+                .context
+                .string_cache
+                .get_id_from_string("T")
+                .expect("interned T");
+            assert!(
+                !parsed.parser.scopes.is_file_scope_typedef(t),
+                "the ordinary declaration of T ends its typedef status"
+            );
+        },
     );
 }
 
 #[test]
 fn duplicate_storage_class_keeps_the_last_class_for_typedef_publication() {
-    let parsed = parse("extern typedef int T;\nT x;\n");
-
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(
-        declaration(&parsed, 0).declaration_specifiers.storage_class,
-        Some(StorageClass::Typedef)
-    );
-    assert!(
-        parser_errors(&parsed)
-            .any(|error| matches!(error, ParserErrorType::StorageClassRedefinition(..)))
-    );
-    let t = parsed
-        .context
-        .string_cache
-        .get_id_from_string("T")
-        .expect("interned T");
-    assert!(matches!(
-        declaration(&parsed, 1)
-            .declaration_specifiers
-            .type_specifiers,
-        TypeSpecifiers::TypedefName(identifier) if identifier.name == t
-    ));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("x")
-    );
+    with_parse("extern typedef int T;\nT x;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            declaration(parsed, 0).declaration_specifiers.storage_class,
+            Some(StorageClass::Typedef)
+        );
+        assert!(
+            parser_errors(parsed)
+                .any(|error| matches!(error, ParserErrorType::StorageClassRedefinition(..)))
+        );
+        let t = parsed
+            .parser
+            .context
+            .string_cache
+            .get_id_from_string("T")
+            .expect("interned T");
+        assert!(matches!(
+            declaration(parsed, 1)
+                .declaration_specifiers
+                .type_specifiers,
+            TypeSpecifiers::TypedefName(identifier) if identifier.name == t
+        ));
+        assert_eq!(
+            identifier_name(
+                parsed,
+                declaration(parsed, 1).init_declarators[0].declarator
+            )
+            .as_deref(),
+            Some("x")
+        );
+    });
 }
 
 #[test]
 fn conflicting_type_specifiers_are_anchored_to_the_conflicting_token() {
-    let parsed = parse(
+    with_parse(
         "int float primitive; int struct S { int member; } tagged; int union U { int member; } \
          united; int enum E { A } enumerated;\n",
+        |parsed| {
+            let mut conflict_sources = parsed
+                .errors
+                .iter()
+                .filter_map(|error| match error {
+                    | TranslationError::Parsing(error)
+                        if matches!(
+                            error.error_type,
+                            ParserErrorType::ConflictingTypeSpecifiers { .. }
+                        ) =>
+                        Some(sourced_text(parsed, error.source_vectors)),
+                    | _ => None,
+                })
+                .collect::<Vec<_>>();
+            conflict_sources.sort_unstable();
+            assert_eq!(conflict_sources, ["enum", "float", "struct", "union"]);
+        },
     );
-
-    let mut conflict_sources = parsed
-        .errors
-        .iter()
-        .filter_map(|error| match error {
-            | TranslationError::Parsing(error)
-                if matches!(
-                    error.error_type,
-                    ParserErrorType::ConflictingTypeSpecifiers { .. }
-                ) =>
-                Some(sourced_text(&parsed, error.source_vectors)),
-            | _ => None,
-        })
-        .collect::<Vec<_>>();
-    conflict_sources.sort_unstable();
-    assert_eq!(conflict_sources, ["enum", "float", "struct", "union"]);
 }
 
 #[test]
 fn conflicting_type_specifier_messages_use_source_spellings() {
-    let parsed = parse(
+    with_parse(
         "typedef int T; T long a; struct S { int m; } long b; enum E { A } T c; long T d;
 ",
+        |parsed| {
+            let messages = parsed
+                .errors
+                .iter()
+                .filter_map(|error| match error {
+                    | TranslationError::Parsing(error)
+                        if matches!(
+                            error.error_type,
+                            ParserErrorType::ConflictingTypeSpecifiers { .. }
+                        ) =>
+                        Some(error.to_string()),
+                    | _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                messages,
+                [
+                    "cannot combine `long` with `T`",
+                    "cannot combine `long` with `struct S`",
+                    "cannot combine `T` with `enum E`",
+                    "cannot combine `T` with `long`",
+                ]
+            );
+            for message in &messages {
+                assert!(!message.contains("VectorSlice"), "{message}");
+                assert!(!message.contains("StringCacheId"), "{message}");
+            }
+        },
     );
-
-    let messages = parsed
-        .errors
-        .iter()
-        .filter_map(|error| match error {
-            | TranslationError::Parsing(error)
-                if matches!(
-                    error.error_type,
-                    ParserErrorType::ConflictingTypeSpecifiers { .. }
-                ) =>
-                Some(error.to_string()),
-            | _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        messages,
-        [
-            "cannot combine `long` with `T`",
-            "cannot combine `long` with `struct S`",
-            "cannot combine `T` with `enum E`",
-            "cannot combine `T` with `long`",
-        ]
-    );
-    for message in &messages {
-        assert!(!message.contains("VectorSlice"), "{message}");
-        assert!(!message.contains("StringCacheId"), "{message}");
-    }
 }
 
 #[test]
 fn conflicting_typedef_names_remain_specifiers_and_preserve_following_declarations() {
-    let parsed =
-        parse("typedef int T; unsigned T x; unsigned T (*pointer); unsigned T ((*nested)); T y;\n");
-
-    assert_eq!(parsed.items.len(), 5);
-    let conflict = parsed
-        .errors
-        .iter()
-        .find_map(|error| match error {
-            | TranslationError::Parsing(error)
-                if matches!(
-                    &error.error_type,
-                    ParserErrorType::ConflictingTypeSpecifiers {
-                        existing,
-                        conflicting,
-                    } if &**existing == "unsigned" && &**conflicting == "T"
-                ) =>
-                Some(error),
-            | _ => None,
-        })
-        .expect("typedef conflict diagnostic");
-    assert_eq!(sourced_text(&parsed, conflict.source_vectors), "T");
-    assert_eq!(conflict.to_string(), "cannot combine `T` with `unsigned`");
-    assert_eq!(
-        parsed
-            .parser
-            .syntax
-            .iter::<InitDeclarator>()
-            .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
-            .collect::<Vec<_>>(),
-        ["T", "x", "pointer", "nested", "y"]
-    );
-    assert!(
-        declaration(&parsed, 4)
-            .declaration_specifiers
-            .type_specifiers
-            .is_typedef_name()
+    with_parse(
+        "typedef int T; unsigned T x; unsigned T (*pointer); unsigned T ((*nested)); T y;\n",
+        |parsed| {
+            assert_eq!(parsed.items.len(), 5);
+            let conflict = parsed
+                .errors
+                .iter()
+                .find_map(|error| match error {
+                    | TranslationError::Parsing(error)
+                        if matches!(
+                            &error.error_type,
+                            ParserErrorType::ConflictingTypeSpecifiers {
+                                existing,
+                                conflicting,
+                            } if &**existing == "unsigned" && &**conflicting == "T"
+                        ) =>
+                        Some(error),
+                    | _ => None,
+                })
+                .expect("typedef conflict diagnostic");
+            assert_eq!(sourced_text(parsed, conflict.source_vectors), "T");
+            assert_eq!(conflict.to_string(), "cannot combine `T` with `unsigned`");
+            assert_eq!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<InitDeclarator<'_>>()
+                    .filter_map(|declarator| identifier_name(parsed, declarator.declarator))
+                    .collect::<Vec<_>>(),
+                ["T", "x", "pointer", "nested", "y"]
+            );
+            assert!(
+                declaration(parsed, 4)
+                    .declaration_specifiers
+                    .type_specifiers
+                    .is_typedef_name()
+            );
+        },
     );
 }
 
 #[test]
 fn parenthesized_identifier_lists_preserve_typedef_shadowing() {
-    let parsed = parse("typedef int T; unsigned T (x); T y;\n");
-
-    assert_eq!(parsed.items.len(), 3);
-    assert_eq!(
-        [declaration(&parsed, 0), declaration(&parsed, 1)]
-            .into_iter()
-            .flat_map(|declaration| init_declarators(&parsed, declaration))
-            .filter_map(|declarator| identifier_name(&parsed, declarator.declarator))
-            .collect::<Vec<_>>(),
-        ["T", "T"]
-    );
-    assert!(matches!(
-        parsed.items[2],
-        ExternalDeclaration::RecoveredDeclaration(_)
-    ));
-    let typedef_name = parsed
-        .context
-        .string_cache
-        .get_id_from_string("T")
-        .expect("interned typedef name");
-    assert!(!parsed.parser.scopes.is_typedef(typedef_name));
+    with_parse("typedef int T; unsigned T (x); T y;\n", |parsed| {
+        assert_eq!(parsed.items.len(), 3);
+        assert_eq!(
+            [declaration(parsed, 0), declaration(parsed, 1)]
+                .into_iter()
+                .flat_map(|declaration| declaration.init_declarators)
+                .filter_map(|declarator| identifier_name(parsed, declarator.declarator))
+                .collect::<Vec<_>>(),
+            ["T", "T"]
+        );
+        assert!(matches!(
+            parsed.items[2],
+            ExternalDeclaration::RecoveredDeclaration(_)
+        ));
+        let typedef_name = parsed
+            .parser
+            .context
+            .string_cache
+            .get_id_from_string("T")
+            .expect("interned typedef name");
+        assert!(!parsed.parser.scopes.is_typedef(typedef_name));
+    });
 }
 
 #[test]
 fn arrays_functions_abstract_parameters_variadics_and_k_and_r_parse() {
-    let parsed = parse(
+    with_parse(
         "int a[];\nint matrix[][];\nint f(int, const char *, ...);\nint old(a,b);\nint \
          (*factory(void))(int);\n",
-    );
-
-    assert_eq!(parsed.items.len(), 5);
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
-    );
-    assert!(
-        parsed
-            .parser
-            .syntax
-            .iter::<DirectDeclarator>()
-            .any(|direct| {
-                matches!(
-                    direct,
-                    DirectDeclarator::Array {
-                        assignment_expression: None,
-                        ..
-                    }
-                )
-            })
-    );
-    assert!(
-        parsed
-            .parser
-            .syntax
-            .iter::<DirectDeclarator>()
-            .any(|direct| {
-                matches!(
-                    direct,
-                    DirectDeclarator::Function {
-                        is_variadic: true,
-                        ..
-                    }
-                )
-            })
-    );
-    assert!(parsed.parser.syntax.iter::<DirectDeclarator>().any(|direct| {
-        matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.length == 2)
+        |parsed| {
+            assert_eq!(parsed.items.len(), 5);
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<DirectDeclarator<'_>>()
+                    .any(|direct| {
+                        matches!(
+                            direct,
+                            DirectDeclarator::Array {
+                                assignment_expression: None,
+                                ..
+                            }
+                        )
+                    })
+            );
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<DirectDeclarator<'_>>()
+                    .any(|direct| {
+                        matches!(
+                            direct,
+                            DirectDeclarator::Function {
+                                is_variadic: true,
+                                ..
+                            }
+                        )
+                    })
+            );
+            assert!(parsed.parser.syntax.iter::<DirectDeclarator<'_>>().any(|direct| {
+        matches!(direct, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.len() == 2)
     }));
+        },
+    );
 }
 
 #[test]
 fn union_kind_and_enum_arena_slice_are_correct() {
-    let parsed = parse(
+    with_parse(
         "struct S;\nunion Forward;\nstruct { int anonymous; };\nunion U { int x; char y; \
          };\nstruct Outer { union { int nested; } value; };\nenum E { A, B, };\nenum { C, D };\n",
-    );
-
-    assert_eq!(parsed.items.len(), 7);
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
-    );
-    assert!(
-        parsed
-            .parser
-            .syntax
-            .iter::<StructOrUnionSpecifier>()
-            .any(|specifier| specifier.struct_or_union == StructOrUnion::Union)
-    );
-    let enum_specifier = parsed
-        .parser
-        .syntax
-        .iter::<EnumSpecifier>()
-        .find(|specifier| specifier.name.is_some())
-        .expect("named enum specifier");
-    let enumeration_list = enum_specifier.enumeration_list.expect("enum body");
-    assert_eq!(enumeration_list.length, 2);
-    let names = parsed.parser.syntax[enumeration_list]
-        .iter()
-        .map(|enumerator| parsed.context.string_cache.at(enumerator.name.name))
-        .collect::<Vec<_>>();
-    assert_eq!(names, ["A", "B"]);
-    assert!(
-        parsed
-            .parser
-            .syntax
-            .iter::<Enumerator>()
-            .all(|enumerator| enumerator.source_vectors.length > 0)
-    );
-    assert!(
-        parsed
-            .parser
-            .syntax
-            .iter::<StructDeclaration>()
-            .map(|declaration| declaration.source_vectors)
-            .chain(
+        |parsed| {
+            assert_eq!(parsed.items.len(), 7);
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert!(
                 parsed
                     .parser
                     .syntax
-                    .iter::<StructDeclarator>()
-                    .map(|declarator| declarator.source_vectors)
-            )
-            .all(|source_vectors| source_vectors.length > 0)
+                    .iter::<StructOrUnionSpecifier<'_>>()
+                    .any(|specifier| specifier.struct_or_union == StructOrUnion::Union)
+            );
+            let enum_specifier = parsed
+                .parser
+                .syntax
+                .iter::<EnumSpecifier<'_>>()
+                .find(|specifier| specifier.name.is_some())
+                .expect("named enum specifier");
+            let enumeration_list = enum_specifier.enumeration_list.expect("enum body");
+            assert_eq!(enumeration_list.len(), 2);
+            let names = enumeration_list
+                .iter()
+                .map(|enumerator| parsed.parser.context.string_cache.at(enumerator.name.name))
+                .collect::<Vec<_>>();
+            assert_eq!(names, ["A", "B"]);
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<Enumerator<'_>>()
+                    .all(|enumerator| enumerator.source_vectors.length > 0)
+            );
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<StructDeclaration<'_>>()
+                    .map(|declaration| declaration.source_vectors)
+                    .chain(
+                        parsed
+                            .parser
+                            .syntax
+                            .iter::<StructDeclarator<'_>>()
+                            .map(|declarator| declarator.source_vectors)
+                    )
+                    .all(|source_vectors| source_vectors.length > 0)
+            );
+        },
     );
 }
 
 #[test]
 fn specifier_combinations_and_conflicts_keep_legacy_diagnostics() {
-    let parsed = parse(
+    with_parse(
         "extern const unsigned long int x;\ninline static double f(void);\nconst const int \
          duplicate;\nlong long double conflict;\ndouble long long reordered;\n",
-    );
-
-    assert_eq!(parsed.items.len(), 5);
-    assert_eq!(
-        declaration(&parsed, 0)
-            .declaration_specifiers
-            .type_specifiers,
-        TypeSpecifiers::UnsignedLongInt
-    );
-    assert!(
-        declaration(&parsed, 0)
-            .declaration_specifiers
-            .type_qualifiers
-            .contains(TypeQualifiers::CONST)
-    );
-    assert!(
-        declaration(&parsed, 1)
-            .declaration_specifiers
-            .function_specifiers
-            .is_inline
-    );
-    assert!(
-        parser_errors(&parsed)
-            .any(|error| { matches!(error, ParserErrorType::ConstSpecifiedTwice) })
-    );
-    assert_eq!(
-        parser_errors(&parsed)
-            .filter(|error| matches!(error, ParserErrorType::LongLongDoubleSpecified))
-            .count(),
-        2
-    );
-    assert!(TypeSpecifiers::Long.is_long());
-    assert!(TypeSpecifiers::LongDouble.is_long_double());
-    assert!(TypeSpecifiers::StructOrUnion(StructOrUnionSpecifierIndex(0)).is_struct_or_union());
-    assert!(TypeSpecifiers::Enum(EnumSpecifierIndex(0)).is_enum());
-    let duplicate = parsed
-        .context
-        .string_cache
-        .get_id_from_string("duplicate")
-        .expect("interned identifier");
-    assert!(
-        TypeSpecifiers::TypedefName(Identifier::new(duplicate, VectorSlice::empty()))
-            .is_typedef_name()
+        |parsed| {
+            assert_eq!(parsed.items.len(), 5);
+            assert_eq!(
+                declaration(parsed, 0)
+                    .declaration_specifiers
+                    .type_specifiers,
+                TypeSpecifiers::UnsignedLongInt
+            );
+            assert!(
+                declaration(parsed, 0)
+                    .declaration_specifiers
+                    .type_qualifiers
+                    .contains(TypeQualifiers::CONST)
+            );
+            assert!(
+                declaration(parsed, 1)
+                    .declaration_specifiers
+                    .function_specifiers
+                    .is_inline
+            );
+            assert!(
+                parser_errors(parsed)
+                    .any(|error| { matches!(error, ParserErrorType::ConstSpecifiedTwice) })
+            );
+            assert_eq!(
+                parser_errors(parsed)
+                    .filter(|error| matches!(error, ParserErrorType::LongLongDoubleSpecified))
+                    .count(),
+                2
+            );
+            assert!(TypeSpecifiers::Long.is_long());
+            assert!(TypeSpecifiers::LongDouble.is_long_double());
+            let structure = StructOrUnionSpecifier {
+                struct_or_union:         StructOrUnion::Struct,
+                identifier:              None,
+                struct_declaration_list: None,
+                source_vectors:          VectorSlice::empty(),
+            };
+            assert!(TypeSpecifiers::StructOrUnion(&structure).is_struct_or_union());
+            let enumeration = EnumSpecifier {
+                name:             None,
+                enumeration_list: None,
+                source_vectors:   VectorSlice::empty(),
+            };
+            assert!(TypeSpecifiers::Enum(&enumeration).is_enum());
+            let duplicate = parsed
+                .parser
+                .context
+                .string_cache
+                .get_id_from_string("duplicate")
+                .expect("interned identifier");
+            assert!(
+                TypeSpecifiers::TypedefName(Identifier::new(duplicate, VectorSlice::empty()))
+                    .is_typedef_name()
+            );
+        },
     );
 }
 
 #[test]
 fn expression_dependent_positions_store_typed_syntax_children() {
-    let parsed = parse(
+    with_parse(
         "int bounded[4];\nstruct Bits { unsigned value:3; };\nenum Values { A=1, B };\nint \
          initialized=42;\nint function(void) { return 0; }\nint after;\n",
-    );
-
-    assert_eq!(parsed.items.len(), 6);
-    assert!(
-        parsed
-            .parser
-            .syntax
-            .iter::<DirectDeclarator>()
-            .any(|direct| matches!(
-                direct,
-                DirectDeclarator::Array {
-                    assignment_expression: Some(_),
-                    ..
-                }
-            ))
-    );
-    assert!(
-        parsed
-            .parser
-            .syntax
-            .iter::<StructDeclarator>()
-            .any(|declarator| declarator.bitfield_width.is_some())
-    );
-    assert!(
-        parsed
-            .parser
-            .syntax
-            .iter::<Enumerator>()
-            .any(|enumerator| enumerator.expression.is_some())
-    );
-    assert!(
-        parsed
-            .parser
-            .syntax
-            .iter::<InitDeclarator>()
-            .any(|declarator| declarator.initializer.is_some())
-    );
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
-    );
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 5))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
+        |parsed| {
+            assert_eq!(parsed.items.len(), 6);
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<DirectDeclarator<'_>>()
+                    .any(|direct| matches!(
+                        direct,
+                        DirectDeclarator::Array {
+                            assignment_expression: Some(_),
+                            ..
+                        }
+                    ))
+            );
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<StructDeclarator<'_>>()
+                    .any(|declarator| declarator.bitfield_width.is_some())
+            );
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<Enumerator<'_>>()
+                    .any(|enumerator| enumerator.expression.is_some())
+            );
+            assert!(
+                parsed
+                    .parser
+                    .syntax
+                    .iter::<InitDeclarator<'_>>()
+                    .any(|declarator| declarator.initializer.is_some())
+            );
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{:#?}",
+                parsed.errors
+            );
+            assert_eq!(
+                identifier_name(
+                    parsed,
+                    declaration(parsed, 5).init_declarators[0].declarator
+                )
+                .as_deref(),
+                Some("after")
+            );
+        },
     );
 }
 
 #[test]
 fn assignments_are_rejected_in_constant_expression_owners() {
-    let parsed = parse("enum E { A = value = 1, B }; int after;\n");
-
-    assert!(matches!(
-        parsed.items.as_slice(),
-        [
-            ExternalDeclaration::RecoveredDeclaration(_),
-            ExternalDeclaration::Declaration(_)
-        ]
-    ));
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
-    let errors = parser_errors(&parsed).collect::<Vec<_>>();
-    assert!(matches!(
-        errors.as_slice(),
-        [
-            ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(
-                TokenType::Operator(OperatorTokenType::Equals)
-            ))
-        ]
-    ));
+    with_parse("enum E { A = value = 1, B }; int after;\n", |parsed| {
+        assert!(matches!(
+            parsed.items.as_slice(),
+            [
+                ExternalDeclaration::RecoveredDeclaration(_),
+                ExternalDeclaration::Declaration(_)
+            ]
+        ));
+        assert_eq!(
+            identifier_name(
+                parsed,
+                declaration(parsed, 1).init_declarators[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+        let errors = parser_errors(parsed).collect::<Vec<_>>();
+        assert!(matches!(
+            errors.as_slice(),
+            [
+                ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(Some(
+                    TokenType::Operator(OperatorTokenType::Equals)
+                ))
+            ]
+        ));
+    });
 }
 
 #[test]
 fn braced_declarators_retain_function_definition_syntax_before_constraint_checking() {
-    let parsed = parse("int object { int retained; } int after;\n");
+    with_parse("int object { int retained; } int after;\n", |parsed| {
+        assert!(!function_definition(parsed, 0).recovered);
+        let [BlockItem::Declaration(retained)] = block_items(function_definition(parsed, 0).body)
+        else {
+            panic!("expected the braced declarator to retain its compound body")
+        };
+        assert_eq!(
+            identifier_name(parsed, retained.init_declarators[0].declarator).as_deref(),
+            Some("retained")
+        );
+        assert_eq!(
+            identifier_name(
+                parsed,
+                declaration(parsed, 1).init_declarators[0].declarator
+            )
+            .as_deref(),
+            Some("after")
+        );
+    });
 
-    assert!(!function_definition(&parsed, 0).recovered);
-    let [BlockItem::Declaration(retained)] =
-        block_items(&parsed, function_definition(&parsed, 0).body)
-    else {
-        panic!("expected the braced declarator to retain its compound body")
-    };
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, &parsed.parser.syntax[retained])[0].declarator
-        )
-        .as_deref(),
-        Some("retained")
-    );
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
-    );
-
-    let parsed = parse("int object, f() { int swallowed; } int after;\n");
-    assert!(parser_errors(&parsed).any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
-            Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)),
-            _
-        )
-    )));
-    assert_eq!(init_declarators(&parsed, declaration(&parsed, 0)).len(), 2);
-    assert_eq!(
-        identifier_name(
-            &parsed,
-            init_declarators(&parsed, declaration(&parsed, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
+    with_parse(
+        "int object, f() { int swallowed; } int after;\n",
+        |parsed| {
+            assert!(parser_errors(parsed).any(|error| matches!(
+                error,
+                ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+                    Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)),
+                    _
+                )
+            )));
+            assert_eq!(declaration(parsed, 0).init_declarators.len(), 2);
+            assert_eq!(
+                identifier_name(
+                    parsed,
+                    declaration(parsed, 1).init_declarators[0].declarator
+                )
+                .as_deref(),
+                Some("after")
+            );
+        },
     );
 }
 
 #[test]
 fn declaration_lists_retain_constraint_invalid_function_definitions() {
-    let parsed = parse("int f int parameter; { return 0; }\n");
-
-    assert!(matches!(
-        parsed.items.as_slice(),
-        [ExternalDeclaration::FunctionDefinition(_)]
-    ));
-    assert!(
-        parser_errors(&parsed).next().is_none(),
-        "{:#?}",
-        parsed.errors
-    );
-    let definition = function_definition(&parsed, 0);
-    assert_eq!(definition.declaration_list.length(), 1);
-    assert!(matches!(
-        parsed.parser.syntax[definition.body].kind,
-        StatementType::Compound { .. }
-    ));
+    with_parse("int f int parameter; { return 0; }\n", |parsed| {
+        assert!(matches!(
+            parsed.items.as_slice(),
+            [ExternalDeclaration::FunctionDefinition(_)]
+        ));
+        assert!(
+            parser_errors(parsed).next().is_none(),
+            "{:#?}",
+            parsed.errors
+        );
+        let definition = function_definition(parsed, 0);
+        assert_eq!(definition.declaration_list.len(), 1);
+        assert!(matches!(
+            definition.body.kind,
+            StatementType::Compound { .. }
+        ));
+    });
 }
 
 #[test]
 fn function_body_dispatch_follows_parenthesized_pointer_binding() {
-    let function = parse("int (f()) { return 0; } int after;\n");
-    assert!(
-        parser_errors(&function).next().is_none(),
-        "{:#?}",
-        function.errors
-    );
-    assert!(!parser_errors(&function).any(|error| matches!(
-        error,
-        ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
-            Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)),
-            _
-        )
-    )));
+    with_parse("int (f()) { return 0; } int after;\n", |function| {
+        assert!(
+            parser_errors(function).next().is_none(),
+            "{:#?}",
+            function.errors
+        );
+        assert!(!parser_errors(function).any(|error| matches!(
+            error,
+            ParserErrorType::ExpectedDeclarationContinuationAfterDeclarator(
+                Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)),
+                _
+            )
+        )));
+    });
 
-    let pointer = parse("int (*fp)(void) { int swallowed; } int after;\n");
-    assert!(!function_definition(&pointer, 0).recovered);
-    assert_eq!(
-        block_items(&pointer, function_definition(&pointer, 0).body).len(),
-        1
-    );
-    assert_eq!(
-        identifier_name(
-            &pointer,
-            init_declarators(&pointer, declaration(&pointer, 1))[0].declarator
-        )
-        .as_deref(),
-        Some("after")
+    with_parse(
+        "int (*fp)(void) { int swallowed; } int after;\n",
+        |pointer| {
+            assert!(!function_definition(pointer, 0).recovered);
+            assert_eq!(block_items(function_definition(pointer, 0).body).len(), 1);
+            assert_eq!(
+                identifier_name(
+                    pointer,
+                    declaration(pointer, 1).init_declarators[0].declarator
+                )
+                .as_deref(),
+                Some("after")
+            );
+        },
     );
 }

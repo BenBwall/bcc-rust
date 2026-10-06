@@ -22,33 +22,29 @@ use super::{
         ParseFrame,
         ParseValue,
     },
-    syntax::TypeNameIndex,
 };
-use crate::translation_phases::{
-    Context,
-    preprocessing::{
-        OperatorTokenType,
-        Token,
-        TokenType,
-    },
+use crate::translation_phases::preprocessing::{
+    OperatorTokenType,
+    Token,
+    TokenType,
 };
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct TypeNameFrame {
-    phase:                  TypeNamePhase,
-    declaration_specifiers: Option<DeclarationSpecifiers>,
+pub(super) struct TypeNameFrame<'tu> {
+    phase:                  TypeNamePhase<'tu>,
+    declaration_specifiers: Option<DeclarationSpecifiers<'tu>>,
     starting_error_count:   usize,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum TypeNamePhase {
+pub(super) enum TypeNamePhase<'tu> {
     Start,
     AwaitSpecifiers,
     AwaitDeclarator,
-    Finish(Option<Declarator>),
+    Finish(Option<Declarator<'tu>>),
 }
 
-impl TypeNameFrame {
+impl<'tu, 'p> TypeNameFrame<'tu> {
     pub(super) fn new(starting_error_count: usize) -> Self {
         Self {
             phase: TypeNamePhase::Start,
@@ -63,11 +59,10 @@ impl TypeNameFrame {
     )]
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | TypeNamePhase::Start => {
                 debug_assert!(returned.is_none());
@@ -84,6 +79,7 @@ impl TypeNameFrame {
                 if token.is_some_and(|token| is_abstract_declarator_starter(token.kind)) {
                     self.phase = TypeNamePhase::AwaitDeclarator;
                     ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        parser.arena,
                         DeclaratorMode::Abstract,
                     )))
                 } else {
@@ -105,18 +101,18 @@ impl TypeNameFrame {
                     .expect("type name cannot finish without specifiers");
                 let source_vectors =
                     declarator.map_or(declaration_specifiers.source_vectors, |declarator| {
-                        context.merge_vectors(
+                        parser.context.merge_vectors(
                             declaration_specifiers.source_vectors,
                             declarator.source_vectors,
                         )
                     });
-                let index = TypeNameIndex(parser.push_syntax(TypeName {
+                let type_name = parser.alloc_syntax(TypeName {
                     declaration_specifiers,
                     declarator,
                     source_vectors,
                     recovered: parser.hard_error_count > self.starting_error_count,
-                }));
-                ParseAction::Reduce(ParseValue::TypeName(index))
+                });
+                ParseAction::Reduce(ParseValue::TypeName(type_name))
             },
         }
     }

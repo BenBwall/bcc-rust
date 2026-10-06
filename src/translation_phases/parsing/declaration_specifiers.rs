@@ -24,7 +24,6 @@ use super::{
     },
 };
 use crate::translation_phases::{
-    Context,
     SourceVectors,
     preprocessing::{
         KeywordTokenType,
@@ -58,13 +57,13 @@ pub(super) enum SpecifierMode {
     clippy::struct_excessive_bools,
     reason = "The booleans record independent facts about the specifier sequence."
 )]
-pub(super) struct DeclarationSpecifiersFrame {
+pub(super) struct DeclarationSpecifiersFrame<'tu> {
     /// Current collection/child-wait transition.
     phase:                  DeclarationSpecifiersPhase,
     /// Grammar context limiting legal specifier families.
     mode:                   SpecifierMode,
     /// Accumulated normalized specifier result.
-    specifiers:             DeclarationSpecifiers,
+    specifiers:             DeclarationSpecifiers<'tu>,
     /// Whether at least one legal specifier has been consumed.
     consumed:               bool,
     /// Whether a storage-class specifier has already appeared.
@@ -97,7 +96,7 @@ pub(super) enum DeclarationSpecifiersPhase {
     AwaitEnum,
 }
 
-impl DeclarationSpecifiersFrame {
+impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
     pub(super) fn new(mode: SpecifierMode) -> Self {
         Self {
             phase: DeclarationSpecifiersPhase::Collect,
@@ -115,11 +114,10 @@ impl DeclarationSpecifiersFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | DeclarationSpecifiersPhase::AwaitStructOrUnion => {
                 let Some(ParseValue::StructOrUnionSpecifier(index)) = returned else {
@@ -135,12 +133,12 @@ impl DeclarationSpecifiersFrame {
                 // that follows the child.
                 self.specifiers
                     .type_specifiers
-                    .make_struct_or_union(parser, context, index, token);
+                    .make_struct_or_union(parser, index, token);
                 {
-                    let source_vectors = parser.syntax[index].source_vectors;
+                    let source_vectors = index.source_vectors;
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            context.merge_vectors(existing, source_vectors)
+                            parser.context.merge_vectors(existing, source_vectors)
                         }));
                 }
                 self.consumed = true;
@@ -164,12 +162,12 @@ impl DeclarationSpecifiersFrame {
                 // belonging to this specifier sequence.
                 self.specifiers
                     .type_specifiers
-                    .make_enum(parser, context, index, token);
+                    .make_enum(parser, index, token);
                 {
-                    let source_vectors = parser.syntax[index].source_vectors;
+                    let source_vectors = index.source_vectors;
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            context.merge_vectors(existing, source_vectors)
+                            parser.context.merge_vectors(existing, source_vectors)
                         }));
                 }
                 self.consumed = true;
@@ -194,20 +192,15 @@ impl DeclarationSpecifiersFrame {
         let Some(token) = token else {
             if !self.consumed {
                 parser.report(
-                    context,
                     ParserErrorType::UnexpectedEndBeforeDeclarationSpecifier,
                     None,
                 );
             } else if self.specifiers.type_specifiers == TypeSpecifiers::Empty
                 && !self.invalid_type_seen
             {
-                parser.report(
-                    context,
-                    ParserErrorType::UnexpectedEndBeforeTypeSpecifier,
-                    None,
-                );
+                parser.report(ParserErrorType::UnexpectedEndBeforeTypeSpecifier, None);
             }
-            self.report_incomplete_complex(parser, context);
+            self.report_incomplete_complex(parser);
             self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
             return ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers));
         };
@@ -221,30 +214,31 @@ impl DeclarationSpecifiersFrame {
             // it as the first token it owns.
             self.pending_type_specifier = Some(token);
             self.phase = DeclarationSpecifiersPhase::AwaitStructOrUnion;
-            return ParseAction::Push(ParseFrame::StructOrUnionSpecifier(Box::new(
-                StructOrUnionSpecifierFrame::new(),
-            )));
+            let frame = StructOrUnionSpecifierFrame::new(parser.arena);
+            return ParseAction::Push(ParseFrame::StructOrUnionSpecifier(
+                parser.pools.struct_or_union_specifier(frame),
+            ));
         }
         if token.kind == TokenType::Keyword(KeywordTokenType::Enum) {
             self.pending_type_specifier = Some(token);
             self.phase = DeclarationSpecifiersPhase::AwaitEnum;
-            return ParseAction::Push(ParseFrame::EnumSpecifier(EnumSpecifierFrame::new()));
+            return ParseAction::Push(ParseFrame::EnumSpecifier(EnumSpecifierFrame::new(
+                parser.arena,
+            )));
         }
 
         if let Some(storage_class) = storage_class(token.kind) {
             if self.mode != SpecifierMode::Declaration {
                 parser.report(
-                    context,
                     ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                     Some(token),
                 );
-                parser.merge_source(context, &mut self.source_vectors, token);
+                parser.merge_source(&mut self.source_vectors, token);
                 self.consumed = true;
                 return ParseAction::Consume;
             }
             if self.storage_seen {
                 parser.report(
-                    context,
                     ParserErrorType::StorageClassRedefinition(
                         self.specifiers
                             .storage_class
@@ -256,7 +250,7 @@ impl DeclarationSpecifiersFrame {
             }
             self.specifiers.storage_class = Some(storage_class);
             self.storage_seen = true;
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -264,10 +258,10 @@ impl DeclarationSpecifiersFrame {
         if let TokenType::Keyword(keyword) = token.kind
             && let Some(specifier) = primitive_type_specifier(keyword)
         {
-            let reported_before = context.pending_errors.len();
-            self.apply_type_specifier(parser, context, token, specifier);
-            self.type_conflict_seen |= context.pending_errors.len() != reported_before;
-            parser.merge_source(context, &mut self.source_vectors, token);
+            let reported_before = parser.context.pending_errors.len();
+            self.apply_type_specifier(parser, token, specifier);
+            self.type_conflict_seen |= parser.context.pending_errors.len() != reported_before;
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -276,10 +270,10 @@ impl DeclarationSpecifiersFrame {
             if self.mode != SpecifierMode::TypeName
                 && self.specifiers.type_qualifiers.contains(qualifier)
             {
-                report_duplicate_type_qualifier(parser, context, token, qualifier);
+                report_duplicate_type_qualifier(parser, token, qualifier);
             }
             self.specifiers.type_qualifiers.insert(qualifier);
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -287,19 +281,18 @@ impl DeclarationSpecifiersFrame {
         if token.kind == TokenType::Keyword(KeywordTokenType::Inline) {
             if self.mode != SpecifierMode::Declaration {
                 parser.report(
-                    context,
                     ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                     Some(token),
                 );
-                parser.merge_source(context, &mut self.source_vectors, token);
+                parser.merge_source(&mut self.source_vectors, token);
                 self.consumed = true;
                 return ParseAction::Consume;
             }
             if self.specifiers.function_specifiers.is_inline {
-                parser.report(context, ParserErrorType::InlineSpecifiedTwice, Some(token));
+                parser.report(ParserErrorType::InlineSpecifiedTwice, Some(token));
             }
             self.specifiers.function_specifiers.is_inline = true;
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -308,7 +301,7 @@ impl DeclarationSpecifiersFrame {
             && parser.scopes.is_typedef(token.contents)
             && (self.mode == SpecifierMode::TypeName
                 || self.specifiers.type_specifiers == TypeSpecifiers::Empty
-                || parser.typedef_name_continues_specifiers(context))
+                || parser.typedef_name_continues_specifiers())
         {
             // A visible typedef spelling is still allowed to become the
             // declarator name. Consume it as a specifier only when no
@@ -316,11 +309,10 @@ impl DeclarationSpecifiersFrame {
             // proves another declarator follows.
             self.specifiers.type_specifiers.make_typedef_name(
                 parser,
-                context,
                 Identifier::from_token(token),
                 token,
             );
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -336,15 +328,15 @@ impl DeclarationSpecifiersFrame {
             && self.specifiers.type_specifiers == TypeSpecifiers::Empty
             && !self.invalid_type_seen
             && !parser.scopes.is_typedef(token.contents)
-            && parser.cursor.following(context).is_some_and(|following| {
+            && parser.cursor.following().is_some_and(|following| {
                 following.kind == TokenType::Identifier
                     || following.kind == TokenType::Operator(OperatorTokenType::Asterisk)
                     || parser.declaration_starter(following)
             })
         {
-            parser.report(context, ParserErrorType::UnknownTypeName, Some(token));
+            parser.report(ParserErrorType::UnknownTypeName, Some(token));
             self.invalid_type_seen = true;
-            parser.merge_source(context, &mut self.source_vectors, token);
+            parser.merge_source(&mut self.source_vectors, token);
             self.consumed = true;
             return ParseAction::Consume;
         }
@@ -356,7 +348,6 @@ impl DeclarationSpecifiersFrame {
         // means no declaration started here at all.
         if !self.consumed && token.kind != TokenType::Identifier {
             parser.report(
-                context,
                 ParserErrorType::EmptyDeclarationSpecifiers(token.kind),
                 Some(token),
             );
@@ -364,12 +355,11 @@ impl DeclarationSpecifiersFrame {
             && !self.invalid_type_seen
         {
             parser.report(
-                context,
                 ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(token.kind),
                 Some(token),
             );
         }
-        self.report_incomplete_complex(parser, context);
+        self.report_incomplete_complex(parser);
         self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
         ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers))
     }
@@ -379,7 +369,7 @@ impl DeclarationSpecifiersFrame {
     ///
     /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112 lists only
     /// `float _Complex`, `double _Complex`, and `long double _Complex`.
-    fn report_incomplete_complex(&self, parser: &mut Parser, context: &mut Context) {
+    fn report_incomplete_complex(&self, parser: &mut Parser<'_, 'tu, 'p>) {
         if !self.invalid_type_seen
             && !self.type_conflict_seen
             && matches!(
@@ -388,7 +378,6 @@ impl DeclarationSpecifiersFrame {
             )
         {
             parser.report(
-                context,
                 ParserErrorType::IncompleteComplexTypeSpecifier,
                 self.complex_token,
             );
@@ -397,8 +386,7 @@ impl DeclarationSpecifiersFrame {
 
     fn apply_type_specifier(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Token,
         specifier: PrimitiveTypeSpecifier,
     ) {
@@ -409,12 +397,11 @@ impl DeclarationSpecifiersFrame {
             ($is_duplicate:ident, $apply:ident) => {
                 if type_specifiers.$is_duplicate() {
                     parser.report(
-                        context,
                         ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                         Some(token),
                     );
                 } else {
-                    type_specifiers.$apply(parser, context, token);
+                    type_specifiers.$apply(parser, token);
                 }
             };
         }
@@ -425,35 +412,26 @@ impl DeclarationSpecifiersFrame {
             | PrimitiveTypeSpecifier::Int => apply_once!(is_int, make_int),
             | PrimitiveTypeSpecifier::Short => apply_once!(is_short, make_short),
             | PrimitiveTypeSpecifier::Long if type_specifiers.is_long_double() => {
-                parser.report(
-                    context,
-                    ParserErrorType::LongLongDoubleSpecified,
-                    Some(token),
-                );
+                parser.report(ParserErrorType::LongLongDoubleSpecified, Some(token));
             },
             | PrimitiveTypeSpecifier::Long
                 if type_specifiers.is_long() && type_specifiers.is_long_long() =>
             {
-                parser.report(context, ParserErrorType::LongSpecifiedThrice, Some(token));
+                parser.report(ParserErrorType::LongSpecifiedThrice, Some(token));
             },
-            | PrimitiveTypeSpecifier::Long => type_specifiers.make_long(parser, context, token),
+            | PrimitiveTypeSpecifier::Long => type_specifiers.make_long(parser, token),
             | PrimitiveTypeSpecifier::Char => apply_once!(is_char, make_char),
             | PrimitiveTypeSpecifier::Float => apply_once!(is_float, make_float),
             | PrimitiveTypeSpecifier::Double if type_specifiers.is_double() => {
                 parser.report(
-                    context,
                     ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
                     Some(token),
                 );
             },
             | PrimitiveTypeSpecifier::Double if type_specifiers.is_long_long() => {
-                parser.report(
-                    context,
-                    ParserErrorType::LongLongDoubleSpecified,
-                    Some(token),
-                );
+                parser.report(ParserErrorType::LongLongDoubleSpecified, Some(token));
             },
-            | PrimitiveTypeSpecifier::Double => type_specifiers.make_double(parser, context, token),
+            | PrimitiveTypeSpecifier::Double => type_specifiers.make_double(parser, token),
             | PrimitiveTypeSpecifier::Void => apply_once!(is_void, make_void),
             | PrimitiveTypeSpecifier::Bool => apply_once!(is_bool, make_bool),
             | PrimitiveTypeSpecifier::Complex => {
@@ -465,7 +443,6 @@ impl DeclarationSpecifiersFrame {
             | PrimitiveTypeSpecifier::Imaginary => {
                 self.invalid_type_seen = true;
                 parser.report(
-                    context,
                     ParserErrorType::UnsupportedImaginaryTypeSpecifier,
                     Some(token),
                 );
@@ -501,8 +478,7 @@ pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
 }
 
 pub(super) fn report_duplicate_type_qualifier(
-    parser: &mut Parser,
-    context: &mut Context,
+    parser: &mut Parser<'_, '_, '_>,
     token: Token,
     qualifier: TypeQualifiers,
 ) {
@@ -512,7 +488,7 @@ pub(super) fn report_duplicate_type_qualifier(
         | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
         | _ => unreachable!("one type qualifier is handled at a time"),
     };
-    parser.report(context, error_type, Some(token));
+    parser.report(error_type, Some(token));
 }
 
 /// Primitive keyword recognized while accumulating a C type-specifier set.

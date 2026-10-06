@@ -1,6 +1,7 @@
 //! Parser diagnostics and their rendering.
 
 use std::fmt::{
+    self,
     Debug,
     Display,
     Formatter,
@@ -16,6 +17,7 @@ use crate::{
         Diagnostic,
         Explanation,
         ToDiagnostic,
+        format_in,
         quote_spelling,
     },
     translation_phases::{
@@ -32,6 +34,7 @@ use crate::{
             TokenType,
         },
     },
+    util::bump::Bump,
 };
 
 /// Structured parser diagnostic paired with original-source provenance.
@@ -104,33 +107,32 @@ pub(crate) struct DeclarationContinuation {
 
 impl DeclarationContinuation {
     /// Returns the "expected ..." phrase and the primary label.
-    fn expected(self) -> (String, String) {
-        let mut phrases = vec!["`,`"];
-        let mut tokens = vec!["`,`"];
+    fn expected(self, arena: &Bump) -> (&str, &str) {
+        let mut phrases = ["`,`"; 4];
+        let mut tokens = ["`,`"; 4];
+        let mut count = 1;
+        let mut offer = |phrase, token| {
+            phrases[count] = phrase;
+            tokens[count] = token;
+            count += 1;
+        };
         if self.initializer {
-            phrases.push("`=`");
-            tokens.push("`=`");
+            offer("`=`", "`=`");
         }
         // In a `for` header, `)` only ends recovery: the declaration still
         // needs its `;` (C99 6.8.5p1), so it is not offered here.
-        phrases.push("`;`");
-        tokens.push("`;`");
+        offer("`;`", "`;`");
         if self.function_body {
-            phrases.push("a function body");
-            tokens.push("`{`");
+            offer("a function body", "`{`");
         }
-        let alternatives = |items: &[&str]| match items {
-            | [first, second] => format!("{first} or {second}"),
-            | [rest @ .., last] => format!("{}, or {last}", rest.join(", ")),
-            | [] => String::new(),
-        };
+        let (phrases, tokens) = (&phrases[..count], &tokens[..count]);
         let label = if tokens.len() == 2 {
-            format!("expected {}", alternatives(&tokens))
+            format_in!(arena, "expected {}", alternatives(tokens))
         } else {
-            format!("expected one of {}", alternatives(&tokens))
+            format_in!(arena, "expected one of {}", alternatives(tokens))
         };
         (
-            format!("{} after the declarator", alternatives(&phrases)),
+            format_in!(arena, "{} after the declarator", alternatives(phrases)),
             label,
         )
     }
@@ -153,7 +155,7 @@ impl DeclarationContinuation {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct RelatedParserDiagnostic {
     pub(crate) message:        &'static str,
     pub(crate) source_vectors: SourceVectors,
@@ -167,8 +169,8 @@ pub(crate) struct RecoverySummary {
     pub(crate) stopped_at:       Option<TokenType>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct ParserError {
+#[derive(Debug, PartialEq)]
+pub(crate) struct ParserError<'tu> {
     pub(crate) code:              ParserDiagnosticCode,
     pub(crate) severity:          ErrorSeverity,
     pub(crate) warning_group:     Option<ParserWarningGroup>,
@@ -177,16 +179,16 @@ pub(crate) struct ParserError {
     pub(crate) found:             Option<TokenType>,
     /// Source spelling of the found token, captured when the diagnostic is
     /// reported so messages can quote what was written.
-    pub(crate) found_spelling:    Option<Box<str>>,
+    pub(crate) found_spelling:    Option<&'tu str>,
     /// Where a missing `;` most likely belongs, when the found token starts
     /// a new line.
     pub(crate) insertion_point:   Option<SourceVectors>,
     /// Dedicated diagnostic kind and its grammar-specific payload.
-    pub(crate) error_type:        ParserErrorType,
+    pub(crate) error_type:        ParserErrorType<'tu>,
     /// Source segments to underline when the diagnostic is rendered.
     pub(crate) source_vectors:    SourceVectors,
-    pub(crate) ranges:            Box<[SourceVectors]>,
-    pub(crate) related:           Box<[RelatedParserDiagnostic]>,
+    pub(crate) ranges:            &'tu mut [SourceVectors],
+    pub(crate) related:           &'tu mut [RelatedParserDiagnostic],
     pub(crate) recovery:          Option<RecoverySummary>,
     /// Tokens the parser had consumed when it reported this diagnostic. Two
     /// errors at one place with no input consumed between them come from one
@@ -196,7 +198,7 @@ pub(crate) struct ParserError {
     pub(crate) ordering_location: Option<(u32, u32)>,
 }
 
-impl ParserError {
+impl ParserError<'_> {
     /// Whether a later error at the same place may be folded into this one,
     /// or this one into an earlier error. A resource limit always shows,
     /// because it explains why the rest of the input was not parsed.
@@ -205,6 +207,10 @@ impl ParserError {
             self.error_type,
             ParserErrorType::ResourceLimitExceeded { .. }
         )
+    }
+
+    pub(crate) fn is_empty_translation_unit(&self) -> bool {
+        matches!(self.error_type, ParserErrorType::EmptyTranslationUnit)
     }
 
     /// Visits every provenance range this diagnostic reads from a context
@@ -217,10 +223,10 @@ impl ParserError {
         if let Some(insertion_point) = &mut self.insertion_point {
             visit(insertion_point);
         }
-        for range in &mut self.ranges {
+        for range in self.ranges.iter_mut() {
             visit(range);
         }
-        for related in &mut self.related {
+        for related in self.related.iter_mut() {
             visit(&mut related.source_vectors);
         }
         if let Some(discarded) = self
@@ -233,24 +239,27 @@ impl ParserError {
     }
 }
 
-impl Display for ParserError {
+impl Display for ParserError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.error_type)
     }
 }
 
-impl ToDiagnostic for ParserError {
-    fn to_diagnostic(&self, context: &Context, source: SourceVectors) -> Diagnostic {
-        let mut explanation = self.error_type.explain(self.found_spelling.as_deref());
+impl ToDiagnostic for ParserError<'_> {
+    fn diagnostic_in<'d>(
+        &self,
+        context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
+        let mut explanation = self.error_type.explain_in(arena, self.found_spelling);
         if self.insertion_point.is_some() {
             if self.error_type.expects_terminating_semicolon() {
                 // The likely fix is known, so lead with it.
-                explanation.message = format!(
+                explanation.message = format_in!(
+                    arena,
                     "expected `;`, found {}",
-                    self.found.map_or_else(
-                        || "end of file".to_owned(),
-                        |found| found.found(self.found_spelling.as_deref())
-                    )
+                    found_token(self.found, self.found_spelling)
                 );
             }
             explanation.help.clear();
@@ -263,14 +272,15 @@ impl ToDiagnostic for ParserError {
         }
         let mut diagnostic = explanation.at(self.severity, source);
         let primary = context.get_source_vectors(source);
-        for range in &self.ranges {
+        for range in self.ranges.iter() {
             // Show only input skipped beyond the token the error is about.
-            let skipped: Vec<SourceVector> = context
-                .get_source_vectors(*range)
-                .iter()
-                .filter(|vector| !primary.contains(vector))
-                .cloned()
-                .collect();
+            let skipped: &[SourceVector] = arena.alloc_slice_fill_iter(
+                context
+                    .get_source_vectors(*range)
+                    .iter()
+                    .filter(|vector| !primary.contains(vector))
+                    .cloned(),
+            );
             if !skipped.is_empty() {
                 diagnostic = diagnostic.secondary_segments(skipped, "skipped to recover");
             }
@@ -288,7 +298,7 @@ impl ToDiagnostic for ParserError {
                 .recovery
                 .is_some_and(|recovery| recovery.discarded_tokens > 0)
         {
-            for related in &self.related {
+            for related in self.related.iter() {
                 let related_line = context
                     .get_source_vectors(related.source_vectors)
                     .first()
@@ -302,25 +312,25 @@ impl ToDiagnostic for ParserError {
     }
 }
 
-impl GetSeverity for ParserError {
+impl GetSeverity for ParserError<'_> {
     fn severity(&self) -> ErrorSeverity {
         self.severity
     }
 }
 
-impl GetPosition for ParserError {
-    fn position(&self, context: &Context) -> SourcePosition {
+impl GetPosition for ParserError<'_> {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         self.source_vectors.position(context)
     }
 }
 
-impl GetSourceVectors for ParserError {
-    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+impl GetSourceVectors for ParserError<'_> {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         self.source_vectors
     }
 }
 
-impl std::error::Error for ParserError {}
+impl std::error::Error for ParserError<'_> {}
 
 /// Every diagnostic produced by the language parser.
 ///
@@ -333,7 +343,7 @@ impl std::error::Error for ParserError {}
 /// §5.1.1.3, p. 11; PDF p. 23. Each variant below also cites the production,
 /// constraint, or semantic rule it concerns.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum ParserErrorType {
+pub(crate) enum ParserErrorType<'tu> {
     /// The preprocessed token stream contained no external declaration.
     /// C99: §6.9, p. 140; PDF p. 152.
     EmptyTranslationUnit,
@@ -506,8 +516,8 @@ pub(crate) enum ParserErrorType {
     /// pp. 99-100; PDF pp. 111-112. Both fields are user-facing spellings
     /// resolved when the diagnostic is reported.
     ConflictingTypeSpecifiers {
-        existing:    Box<str>,
-        conflicting: Box<str>,
+        existing:    &'tu str,
+        conflicting: &'tu str,
     },
     /// A type keyword was repeated where no repetition is legal.
     /// C99: the permitted specifier sets are §6.7.2 paragraph 2,
@@ -584,7 +594,7 @@ pub(crate) enum ParserErrorType {
     EmptyStructDeclarator,
 }
 
-impl GetSeverity for ParserErrorType {
+impl GetSeverity for ParserErrorType<'_> {
     fn severity(&self) -> ErrorSeverity {
         match self {
             | Self::EmptyTranslationUnit
@@ -681,29 +691,54 @@ impl ParserResource {
 
 /// Describes where a statement-level error occurred, quoting the keyword of
 /// statement names such as "if statement".
-fn statement_position(position: &str) -> String {
-    match position.split_once(' ') {
+fn statement_position(position: &str) -> impl Display {
+    fmt::from_fn(move |f| match position.split_once(' ') {
         | Some((
             keyword @ ("if" | "while" | "for" | "do" | "switch" | "return" | "goto" | "case"),
             rest,
-        )) => format!("`{keyword}` {rest}"),
-        | _ => position.to_owned(),
-    }
+        )) => write!(f, "`{keyword}` {rest}"),
+        | _ => f.write_str(position),
+    })
 }
 
 /// The spelling of a keyword token, or a description of any other token.
-fn token_spelling(token: TokenType) -> String {
-    match token {
-        | TokenType::Keyword(keyword) => keyword.spelling().to_owned(),
-        | TokenType::Operator(operator) => operator.spelling().to_owned(),
-        | other => other.found(None),
-    }
+fn token_spelling(token: TokenType) -> impl Display {
+    fmt::from_fn(move |f| match token {
+        | TokenType::Keyword(keyword) => f.write_str(keyword.spelling()),
+        | TokenType::Operator(operator) => f.write_str(operator.spelling()),
+        | other => write!(f, "{}", other.found(None)),
+    })
+}
+
+/// Lists alternatives as "a or b" or "a, b, or c".
+fn alternatives<'a>(items: &'a [&'a str]) -> impl Display {
+    fmt::from_fn(move |f| match items {
+        | [first, second] => write!(f, "{first} or {second}"),
+        | [rest @ .., last] => {
+            for (index, item) in rest.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
+                f.write_str(item)?;
+            }
+            write!(f, ", or {last}")
+        },
+        | [] => Ok(()),
+    })
+}
+
+/// Describes a found token, or the end of the file when there is none.
+fn found_token(token: Option<TokenType>, spelling: Option<&str>) -> impl Display {
+    fmt::from_fn(move |f| match token {
+        | Some(token) => write!(f, "{}", token.found(spelling)),
+        | None => f.write_str("end of file"),
+    })
 }
 
 const SPECIFIER_COMBINATIONS_NOTE: &str =
     "C99 §6.7.2p2 lists every valid combination of type specifiers";
 
-impl ParserErrorType {
+impl ParserErrorType<'_> {
     pub(super) fn code(&self) -> ParserDiagnosticCode {
         match self {
             | Self::ResourceLimitExceeded { .. } => ParserDiagnosticCode::ResourceLimit,
@@ -857,19 +892,22 @@ impl ParserErrorType {
 
     /// Describes the error; `spelling` is the source spelling of the token
     /// the parser found, when there was one.
-    pub(crate) fn explain(&self, spelling: Option<&str>) -> Explanation {
-        let found = |token: Option<TokenType>| {
-            token.map_or_else(|| "end of file".to_owned(), |token| token.found(spelling))
-        };
+    pub(crate) fn explain_in<'d>(
+        &self,
+        arena: &'d Bump,
+        spelling: Option<&str>,
+    ) -> Explanation<'d> {
+        let new = |message: &'d str| Explanation::new(arena, message);
+        let found = |token: Option<TokenType>| found_token(token, spelling);
         // "expected X, found Y", labelled with what was expected.
         let expected = |what: &str, token: Option<TokenType>| {
-            Explanation::new(format!("expected {what}, found {}", found(token)))
-                .label(format!("expected {what}"))
+            new(format_in!(arena, "expected {what}, found {}", found(token)))
+                .label(format_in!(arena, "expected {what}"))
         };
-        let expected_with_label = |what: &str, label: &str, token: Option<TokenType>| {
-            Explanation::new(format!("expected {what}, found {}", found(token))).label(label)
+        let expected_with_label = |what: &str, label: &'d str, token: Option<TokenType>| {
+            new(format_in!(arena, "expected {what}, found {}", found(token))).label(label)
         };
-        let missing_semicolon_help = |explanation: Explanation, token: Option<TokenType>| {
+        let missing_semicolon_help = |explanation: Explanation<'d>, token: Option<TokenType>| {
             if matches!(token, Some(TokenType::Keyword(_) | TokenType::Identifier)) {
                 explanation.help("if this starts a new declaration, add `;` before it")
             } else {
@@ -877,16 +915,18 @@ impl ParserErrorType {
             }
         };
         match self {
-            | Self::EmptyTranslationUnit => Explanation::new("translation unit is empty")
+            | Self::EmptyTranslationUnit => new("translation unit is empty")
                 .label("expected a declaration or function definition")
                 .note("C99 §6.9: a translation unit contains at least one external declaration"),
-            | Self::ResourceLimitExceeded { resource, limit } => Explanation::new(format!(
+            | Self::ResourceLimitExceeded { resource, limit } => new(format_in!(
+                arena,
                 "input exceeds the parser's {} limit of {limit}",
                 resource.description()
             ))
             .label("parsing stopped here")
             .note("bcc bounds parser memory and nesting; split or simplify this input"),
-            | Self::ParserFrameConsumedAtEndOfInput(frame) => Explanation::new(format!(
+            | Self::ParserFrameConsumedAtEndOfInput(frame) => new(format_in!(
+                arena,
                 "internal compiler error: the {} parser read past the end of input",
                 frame.label()
             ))
@@ -894,7 +934,7 @@ impl ParserErrorType {
             | Self::ExpectedFunctionBody(token) =>
                 expected_with_label("a function body", "expected `{`", *token),
             | Self::DeclarationListAfterParameterTypeList =>
-                Explanation::new("parameter declarations after a prototype")
+                new("parameter declarations after a prototype")
                     .label("old-style parameter declarations need an identifier list")
                     .note(
                         "C99 §6.9.1p5-6: declarations between `)` and `{` are only allowed when \
@@ -935,7 +975,8 @@ impl ParserErrorType {
             | Self::ExpectedStatementExpression(
                 "postfix operator after a non-postfix expression",
                 token,
-            ) => Explanation::new(format!(
+            ) => new(format_in!(
+                arena,
                 "postfix {} cannot follow a cast, `sizeof`, or unary expression",
                 found(*token)
             ))
@@ -954,14 +995,14 @@ impl ParserErrorType {
             | Self::ExpectedStatementExpression(
                 "unary-expression left operand of assignment",
                 _,
-            ) => Explanation::new("invalid left-hand side of assignment")
+            ) => new("invalid left-hand side of assignment")
                 .label("cannot assign to this expression")
                 .note(
                     "C99 §6.5.16: the left operand of an assignment operator is a unary \
                      expression, such as a name, `*p`, `a[i]`, or `s.m`",
                 ),
             | Self::ExpectedStatementExpression(position, token) => expected_with_label(
-                &format!("an expression in {}", statement_position(position)),
+                format_in!(arena, "an expression in {}", statement_position(position)),
                 "expected an expression",
                 *token,
             ),
@@ -984,39 +1025,37 @@ impl ParserErrorType {
                     "C99 §6.7.8: a designation is written `[index] = value` or `.member = value`",
                 ),
             | Self::ExpectedOpeningParenthesisInStatement(position, token) => expected_with_label(
-                &format!("`(` in {}", statement_position(position)),
+                format_in!(arena, "`(` in {}", statement_position(position)),
                 "expected `(`",
                 *token,
             ),
             | Self::ExpectedClosingParenthesisInStatement(position, token) => expected_with_label(
-                &format!("`)` in {}", statement_position(position)),
+                format_in!(arena, "`)` in {}", statement_position(position)),
                 "expected `)`",
                 *token,
             ),
             | Self::ExpectedSemicolonInStatement(position, token) => missing_semicolon_help(
                 expected_with_label(
-                    &format!("`;` after {}", statement_position(position)),
+                    format_in!(arena, "`;` after {}", statement_position(position)),
                     "expected `;`",
                     *token,
                 ),
                 *token,
             ),
             | Self::ExpectedColonInLabel(position, token) => expected_with_label(
-                &format!("`:` after {}", statement_position(position)),
+                format_in!(arena, "`:` after {}", statement_position(position)),
                 "expected `:`",
                 *token,
             ),
-            | Self::UnsupportedImaginaryTypeSpecifier =>
-                Explanation::new("`_Imaginary` is not supported")
-                    .label("imaginary types are not implemented")
-                    .note(
-                        "C99 §6.7.2 reserves `_Imaginary`; imaginary types are only defined by \
-                         the optional Annex G",
-                    ),
-            | Self::DuplicateDefaultLabel =>
-                Explanation::new("multiple `default` labels in one `switch`")
-                    .label("second `default` label")
-                    .note("C99 §6.8.4.2p3: a `switch` body has at most one `default` label"),
+            | Self::UnsupportedImaginaryTypeSpecifier => new("`_Imaginary` is not supported")
+                .label("imaginary types are not implemented")
+                .note(
+                    "C99 §6.7.2 reserves `_Imaginary`; imaginary types are only defined by the \
+                     optional Annex G",
+                ),
+            | Self::DuplicateDefaultLabel => new("multiple `default` labels in one `switch`")
+                .label("second `default` label")
+                .note("C99 §6.8.4.2p3: a `switch` body has at most one `default` label"),
             | Self::ExpectedWhileAfterDoBody(token) =>
                 expected_with_label("`while` after the `do` body", "expected `while`", *token)
                     .note("C99 §6.8.5: write `do statement while (condition);`"),
@@ -1026,8 +1065,8 @@ impl ParserErrorType {
             | Self::ExpectedDeclaratorInDeclaration(token) =>
                 expected_with_label("a declarator", "expected a name to declare", *token),
             | Self::ExpectedDeclarationContinuationAfterDeclarator(token, continuation) => {
-                let (what, label) = continuation.expected();
-                let explanation = expected_with_label(&what, &label, *token);
+                let (what, label) = continuation.expected(arena);
+                let explanation = expected_with_label(what, label, *token);
                 let explanation = match continuation.function_body_note(*token) {
                     | Some(note) => explanation.note(note),
                     | None => explanation,
@@ -1044,7 +1083,8 @@ impl ParserErrorType {
                     *token,
                 );
                 match token {
-                    | Some(TokenType::Keyword(keyword)) => explanation.note(format!(
+                    | Some(TokenType::Keyword(keyword)) => explanation.note(format_in!(
+                        arena,
                         "`{}` is a keyword and cannot be used as a name",
                         keyword.spelling()
                     )),
@@ -1102,14 +1142,14 @@ impl ParserErrorType {
             | Self::ExpectedClosingCurlyBraceInStructDeclarationList(token) =>
                 expected_with_label("`}` to close the member list", "expected `}`", *token),
             | Self::ExpectedStructDeclarationBeforeClosingCurlyBrace =>
-                Explanation::new("struct or union has no members")
+                new("struct or union has no members")
                     .label("expected a member declaration before `}`")
                     .note(
                         "C99 §6.7.2.1: the member list of a struct or union contains at least one \
                          declaration",
                     ),
             | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList =>
-                Explanation::new("expected `;` after the last member declaration, found `}`")
+                new("expected `;` after the last member declaration, found `}`")
                     .label("expected `;`")
                     .note(
                         "C99 §6.7.2.1: every member declaration ends with `;`, including the last",
@@ -1131,70 +1171,78 @@ impl ParserErrorType {
                     "expected an identifier or `}`",
                     *token,
                 ),
-            | Self::ExpectedEnumeratorBeforeClosingCurlyBrace =>
-                Explanation::new("enum has no enumerators")
-                    .label("expected an enumerator before `}`")
-                    .note("C99 §6.7.2.2: an enumerator list contains at least one enumerator"),
+            | Self::ExpectedEnumeratorBeforeClosingCurlyBrace => new("enum has no enumerators")
+                .label("expected an enumerator before `}`")
+                .note("C99 §6.7.2.2: an enumerator list contains at least one enumerator"),
             | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(token) => expected_with_label(
                 "`,` or `}` after the enumerator",
                 "expected `,` or `}`",
                 *token,
             ),
-            | Self::StorageClassRedefinition(previous, new) => Explanation::new(format!(
+            | Self::StorageClassRedefinition(previous, repeated) => new(format_in!(
+                arena,
                 "cannot combine storage classes `{}` and `{}`",
                 previous.spelling(),
-                token_spelling(*new)
+                token_spelling(*repeated)
             ))
-            .label(format!("`{}` was already specified", previous.spelling()))
+            .label(format_in!(
+                arena,
+                "`{}` was already specified",
+                previous.spelling()
+            ))
             .note("C99 §6.7.1p2: a declaration has at most one storage-class specifier"),
-            | Self::DeclarationSpecifierNotAllowedHere(token) =>
-                Explanation::new(format!("`{}` is not allowed here", token_spelling(*token)))
-                    .label("only type specifiers and qualifiers may appear here")
-                    .note(
-                        "C99 §6.7.2.1 and §6.7.6: member declarations and type names use a \
-                         specifier-qualifier list, which excludes storage classes and `inline`",
-                    ),
-            | Self::ConstSpecifiedTwice => Explanation::new("duplicate `const`")
+            | Self::DeclarationSpecifierNotAllowedHere(token) => new(format_in!(
+                arena,
+                "`{}` is not allowed here",
+                token_spelling(*token)
+            ))
+            .label("only type specifiers and qualifiers may appear here")
+            .note(
+                "C99 §6.7.2.1 and §6.7.6: member declarations and type names use a \
+                 specifier-qualifier list, which excludes storage classes and `inline`",
+            ),
+            | Self::ConstSpecifiedTwice => new("duplicate `const`")
                 .label("`const` was already specified")
                 .note("C99 §6.7.3p4: repeating a qualifier has no effect"),
-            | Self::VolatileSpecifiedTwice => Explanation::new("duplicate `volatile`")
+            | Self::VolatileSpecifiedTwice => new("duplicate `volatile`")
                 .label("`volatile` was already specified")
                 .note("C99 §6.7.3p4: repeating a qualifier has no effect"),
-            | Self::RestrictSpecifiedTwice => Explanation::new("duplicate `restrict`")
+            | Self::RestrictSpecifiedTwice => new("duplicate `restrict`")
                 .label("`restrict` was already specified")
                 .note("C99 §6.7.3p4: repeating a qualifier has no effect"),
-            | Self::InlineSpecifiedTwice => Explanation::new("duplicate `inline`")
+            | Self::InlineSpecifiedTwice => new("duplicate `inline`")
                 .label("`inline` was already specified")
                 .note("repeating `inline` has no effect"),
-            | Self::StaticSpecifiedTwice =>
-                Explanation::new("duplicate `static` in array declarator")
-                    .label("`static` was already specified")
-                    .note("C99 §6.7.5: an array declarator takes `static` at most once"),
+            | Self::StaticSpecifiedTwice => new("duplicate `static` in array declarator")
+                .label("`static` was already specified")
+                .note("C99 §6.7.5: an array declarator takes `static` at most once"),
             | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator =>
-                Explanation::new("type qualifiers on both sides of `static`")
+                new("type qualifiers on both sides of `static`")
                     .label("qualifiers may appear before or after `static`, not both")
                     .note("C99 §6.7.5: write `[static const 3]` or `[const static 3]`"),
             | Self::ConflictingTypeSpecifiers {
                 existing,
                 conflicting,
-            } => Explanation::new(format!("cannot combine `{conflicting}` with `{existing}`"))
-                .label(format!("conflicts with `{existing}`"))
-                .note(SPECIFIER_COMBINATIONS_NOTE),
+            } => new(format_in!(
+                arena,
+                "cannot combine `{conflicting}` with `{existing}`"
+            ))
+            .label(format_in!(arena, "conflicts with `{existing}`"))
+            .note(SPECIFIER_COMBINATIONS_NOTE),
             | Self::TypeSpecifierSpecifiedTwice(token) => {
                 let keyword = token_spelling(*token);
-                Explanation::new(format!("duplicate `{keyword}`"))
-                    .label(format!("`{keyword}` was already specified"))
+                new(format_in!(arena, "duplicate `{keyword}`"))
+                    .label(format_in!(arena, "`{keyword}` was already specified"))
                     .note(SPECIFIER_COMBINATIONS_NOTE)
-                    .help(format!("remove the repeated `{keyword}`"))
+                    .help(format_in!(arena, "remove the repeated `{keyword}`"))
             },
-            | Self::LongSpecifiedThrice => Explanation::new("`long long long` is too long")
+            | Self::LongSpecifiedThrice => new("`long long long` is too long")
                 .label("third `long`")
                 .note("C99 §6.7.2p2: `long long` is the longest integer type"),
-            | Self::LongLongDoubleSpecified =>
-                Explanation::new("cannot combine `long long` with `double`")
-                    .label("`long long double` is not a type")
-                    .note(SPECIFIER_COMBINATIONS_NOTE)
-                    .help("use `long double` for extended precision"),
+            | Self::LongLongDoubleSpecified => new("cannot combine `long long` with `double`")
+                .label("`long long double` is not a type")
+                .note(SPECIFIER_COMBINATIONS_NOTE)
+                .help("use `long double` for extended precision"),
             | Self::EmptyDeclarationSpecifiers(token) => {
                 let explanation = expected_with_label(
                     "a declaration",
@@ -1209,29 +1257,29 @@ impl ParserErrorType {
                     explanation
                 }
             },
-            | Self::NoTypeSpecifiersInDeclarationSpecifiers(_) =>
-                Explanation::new("missing type specifier")
-                    .label("expected a type such as `int` before this")
-                    .note(
-                        "C99 §6.7.2p2: every declaration needs at least one type specifier; C99 \
-                         removed implicit `int`",
-                    ),
-            | Self::UnknownTypeName => Explanation::new(spelling.map_or_else(
-                || "unknown type name".to_owned(),
-                |spelling| format!("unknown type name {}", quote_spelling(spelling)),
-            ))
+            | Self::NoTypeSpecifiersInDeclarationSpecifiers(_) => new("missing type specifier")
+                .label("expected a type such as `int` before this")
+                .note(
+                    "C99 §6.7.2p2: every declaration needs at least one type specifier; C99 \
+                     removed implicit `int`",
+                ),
+            | Self::UnknownTypeName => new(match spelling {
+                | Some(spelling) =>
+                    format_in!(arena, "unknown type name {}", quote_spelling(spelling)),
+                | None => "unknown type name",
+            })
             .label("not a type name in scope")
             .note("C99 §6.7.7: an identifier names a type only after a `typedef` declares it"),
             | Self::IncompleteComplexTypeSpecifier =>
-                Explanation::new("`_Complex` requires `float`, `double`, or `long double`")
+                new("`_Complex` requires `float`, `double`, or `long double`")
                     .label("incomplete complex type")
                     .note(SPECIFIER_COMBINATIONS_NOTE),
             | Self::BothStaticAndPointerInArrayDirectDeclarator =>
-                Explanation::new("`static` and `*` in one array declarator")
+                new("`static` and `*` in one array declarator")
                     .label("`[*]` cannot be combined with `static`")
                     .note("C99 §6.7.5: `[static N]` and `[*]` are separate forms"),
             | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator =>
-                Explanation::new("expected an array size after `static`")
+                new("expected an array size after `static`")
                     .label("expected an expression")
                     .note("C99 §6.7.5: `[static N]` requires the minimum size `N`"),
             | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(token) =>
@@ -1239,18 +1287,18 @@ impl ParserErrorType {
                     .note("C99 §6.7.5: `[*]` declares a variable-length array of unspecified size"),
             | Self::UnexpectedEndOfArrayDeclaratorAfterPointer =>
                 expected_with_label("`]` after `*`", "expected `]`", None),
-            | Self::PointerSpecifiedTwice => Explanation::new("duplicate `*` in array declarator")
+            | Self::PointerSpecifiedTwice => new("duplicate `*` in array declarator")
                 .label("`*` was already specified")
                 .note("C99 §6.7.5: write `[*]` with a single `*`"),
             | Self::TypeQualifiersWithoutDeclarator =>
-                Explanation::new("expected a declarator after the pointer")
+                new("expected a declarator after the pointer")
                     .label("qualifiers must be followed by the declared name"),
             | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator =>
-                Explanation::new("type qualifiers before `*` in an abstract array declarator")
+                new("type qualifiers before `*` in an abstract array declarator")
                     .label("not allowed in a type name")
                     .note("C99 §6.7.6: an abstract array declarator allows only `[*]` here"),
             | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator =>
-                Explanation::new("identifier list mixed with parameter declarations")
+                new("identifier list mixed with parameter declarations")
                     .label("prototype parameter in an old-style identifier list")
                     .note(
                         "C99 §6.7.5: a parameter list is either all names (old style) or all \
@@ -1262,7 +1310,7 @@ impl ParserErrorType {
                 .note("C99 §6.7.5: `...` must be the last parameter"),
             | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList =>
                 expected_with_label("`)` after `...`", "expected `)`", None),
-            | Self::EmptyStructDeclarator => Explanation::new("expected a member name")
+            | Self::EmptyStructDeclarator => new("expected a member name")
                 .label("this member declaration declares nothing")
                 .note(
                     "C99 §6.7.2.1: each member declarator names a member or gives a bit-field \
@@ -1272,8 +1320,18 @@ impl ParserErrorType {
     }
 }
 
-impl Display for ParserErrorType {
+impl ParserErrorType<'_> {
+    /// The explanation with owned text, for tests to inspect.
+    #[cfg(test)]
+    pub(crate) fn explain(&self, spelling: Option<&str>) -> crate::diagnostics::OwnedExplanation {
+        let arena = Bump::new();
+        self.explain_in(&arena, spelling).to_owned_explanation()
+    }
+}
+
+impl Display for ParserErrorType<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        f.write_str(&self.explain(None).message)
+        let arena = Bump::new();
+        f.write_str(self.explain_in(&arena, None).message)
     }
 }

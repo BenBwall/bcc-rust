@@ -1,6 +1,6 @@
 # bcc-rust Compiler Domain
 
-This glossary defines the canonical language for bcc-rust's C front end and its agreed parser direction.
+This glossary defines the canonical language for bcc-rust's C front end.
 
 ## Translation pipeline
 
@@ -14,11 +14,11 @@ The character-level phase that normalizes source text before preprocessing-token
 A lexical unit recognized before macro expansion and directive handling; it preserves spellings and categories needed by the C preprocessor. Recognition replaces each comment with whitespace.
 _Avoid_: Token
 
-**Lexing strategy** *(implemented as `LexingStrategy`)*:
-When initial processing and preprocessing-token recognition run relative to preprocessing. *Streaming* lexing recognizes each preprocessing token when preprocessing asks for it; *batch* lexing recognizes all of a source buffer's preprocessing tokens when the buffer is opened and then replays them. Both yield identical preprocessing tokens, provenance, and diagnostics.
+**Batch pipeline**:
+How the front end schedules translation phases 1 through 7. Each opened source file is lexed in full, the whole translation unit is preprocessed, and only then is it parsed; preprocessing diagnostics precede parser diagnostics.
 
-**Preprocessing strategy** *(implemented as `PreprocessingStrategy`)*:
-How the front end schedules translation phases 1 through 7: streaming throughout, batch lexing with streaming preprocessing, or batch, which also preprocesses the whole translation unit before parsing. Batch reports every preprocessing diagnostic before any parser diagnostic.
+**Header name**:
+The `<…>` or `"…"` operand of `#include` (C99 §6.4.7). It is interpreted in the directive from ordinary preprocessing tokens, using the source text between delimiters for a written operand or combined token spellings for a macro-expanded one.
 
 **Preprocessing**:
 The phase that expands macros, executes directives, resolves includes and conditional groups, and converts surviving preprocessing tokens into parser-facing tokens.
@@ -28,13 +28,47 @@ A parser-facing lexical unit whose category already distinguishes identifiers, k
 _Avoid_: Preprocessing token
 
 **Source vector**:
-A segment of original-source provenance attached to generated characters, preprocessing tokens, tokens, and diagnostics. A value may carry multiple source vectors when preprocessing combines or transforms input.
-A value refers to its ordered source vectors as one contiguous range in a context-owned arena. Each phase-6 output token's source vectors are copied once into a token arena in output order, so merging the provenance of consecutive syntax extends a range instead of copying it; any merge yields exactly the first value's source vectors followed by the second's. The preprocessor's own arena is then discarded between output tokens; ranges that pending diagnostics still name move to a retained arena first.
+A segment of original-source provenance attached to generated characters, preprocessing tokens, tokens, and diagnostics. A value may carry multiple ordered source vectors when preprocessing combines or transforms input; provenance needed after preprocessing is retained for the translation unit.
 _Avoid_: Source span
 
 **Context**:
-The compilation-wide state shared by translation phases, including interned spellings, source files, source vectors, and pending diagnostics.
+The compilation-wide state shared by translation phases, including interned spellings, source files, source vectors, and pending diagnostics. The object running a phase (the parser, or the preprocessor while it reads input) holds the context exclusively for as long as it runs, rather than receiving it with each call.
 _Avoid_: Parser context
+
+## Storage and lifetimes
+
+**Translation-unit arena** (`'tu`):
+Storage retained across preprocessing and parsing for one translation unit, including source text, diagnostic data, and the syntax tree. It ends when that translation unit is finished; retained provenance shares its lifetime in dedicated regions.
+
+**Phase arena**:
+Storage owned by one translation phase for its working state and released when that phase ends. The preprocessing arena (`'pp`) spans preprocessing, while the parse arena (`'parse`) spans parsing; neither owns the retained syntax tree.
+
+**Preprocessing arena** (`'pp`):
+The phase arena for lexed files, macro definitions, and include and conditional state. It ends after the whole translation unit has been preprocessed, before parsing begins; source provenance that must survive it is retained separately.
+
+**Expansion arena** (`'x`):
+Resettable storage for temporary macro-expansion work within preprocessing. It is reused between completed top-level expansions while the preprocessing arena keeps state that must survive them.
+
+**Expansion scope** (`'x`):
+The lifetime of one active expansion's temporary references and state. It ends before the expansion arena is reset; references that must survive an expansion belong to a longer-lived arena.
+
+**Parse arena** (`'parse`):
+The phase arena for parser frames, open scopes, and recovery state. It ends when parsing finishes; syntax reachable from the parsed translation unit remains in the translation-unit arena.
+
+**Dedicated region**:
+Independent storage for a buffer that exists once per compilation and must grow without moving. It lasts as long as that buffer is needed; per-file temporary buffers instead belong in a phase arena.
+
+**Commit follows use**:
+The boundary between reserved address space and memory made available for use: a growing arena or buffer commits pages just ahead of written data, rather than its full reserved capacity. Its address space is itself reserved only when it is first used. On Linux, regions commit whole 2 MiB transparent huge pages, so commit may run up to one huge page ahead of written data, and a region in use commits at least one huge page.
+
+**Tail vector**:
+A temporary, growable sequence occupying the unused tail of an arena while its final length is unknown. When finished, only its written contents remain in the arena; unfinished contents are abandoned.
+
+**File-scope typedef set**:
+The parser's classification of names whose latest file-scope declaration is a typedef, retained through parsing in a dedicated region rather than the parse arena. An ordinary file-scope declaration removes that name; nested scopes may temporarily shadow it without changing the file-scope classification.
+
+**Chunking seam**:
+The boundary reserved for a future pipeline that preprocesses and parses successive token chunks. State that crosses a chunk boundary remains in its phase arena; expansion storage may reset after active expansions finish, and token storage after parsing consumes the chunk.
 
 ## C syntax
 
@@ -43,13 +77,16 @@ The complete sequence of external declarations produced from one preprocessed C 
 _Avoid_: Source file
 
 **Parsed translation unit** *(implemented as `ParsedTranslationUnit`)*:
-The owning parser result containing source-ordered external roots and one
-validated `SyntaxTree`. It is the shared caller and behavior-test seam.
+The parser result: the source-ordered external roots, which borrow the syntax
+tree from the translation-unit arena. It is the shared caller and behavior-test
+seam.
 
-**Syntax tree** *(implemented as `SyntaxTree`)*:
-Read-only typed access to arena-backed declarations, definitions, statements,
-expressions, type names, and initializers. Raw arena storage is an opt-in debug
-view, not the normal consumer interface.
+**Syntax tree**:
+The declarations, definitions, statements, expressions, type names, and
+initializers reachable from the parsed roots. Nodes live in the
+translation-unit arena and refer to their children by reference and by
+immutable list; a node never changes once allocated. The raw Rust debug form
+is an opt-in debug view, not the normal consumer interface.
 
 **External declaration**:
 A top-level declaration or function definition within a translation unit.
@@ -96,12 +133,8 @@ A syntax tree for operators and operands that may compute a value, designate an 
 **Abstract syntax tree (AST)**:
 The structured syntax representation produced by language parsing. It records grammatical form and provenance without deciding every semantic property of the program.
 
-**Arena**:
-An owning collection for compiler-domain objects whose relationships are represented by compact handles rather than nested ownership. Syntax nodes of every kind share one chunked arena, so it grows a block at a time instead of reallocating.
-
 **Index handle**:
-A typed numeric reference to one object or contiguous object range owned by an arena. Handles distinguish domains such as expressions, statements, declarations, and types.
-_Avoid_: Pointer
+A small typed numeric key into one specific structure, kept where identity or compactness matters more than direct access: interned strings, literal values, source files, and source-vector ranges. Syntax nodes are references, not handles.
 
 ## Names, scopes, and ambiguity
 
@@ -136,7 +169,7 @@ translation units, declarations, function definitions, statements,
 expressions, type names, initializers, and recovery.
 
 **ParserMachine** *(implemented as `Parser`)*:
-The single driver that owns the buffered token cursor, control stack, typed child return, syntax arenas, file-scope name classification, and diagnostic/recovery state for language parsing.
+The single driver that holds the context and owns the token cursor, control stack, typed child return, syntax-node count, file-scope name classification, and diagnostic/recovery state for language parsing. It allocates syntax nodes in the translation-unit arena and its working memory in the parse arena.
 _Avoid_: Recursive-descent parser
 
 **ParseFrame** *(implemented)*:
@@ -163,8 +196,8 @@ _Avoid_: Global recovery point
 **Recovered declaration** *(implemented at the external-declaration boundary)*:
 A declaration AST retained after one or more hard syntax diagnostics and local
 repair. Migrated frames finish synchronization and provenance collection, then
-yield `ExternalDeclaration::RecoveredDeclaration` with the declaration's arena
-handle. Later analysis may inspect the repaired tree to find additional
+yield `ExternalDeclaration::RecoveredDeclaration` with the declaration's
+syntax. Later analysis may inspect the repaired tree to find additional
 problems, while the distinct variant prevents it from being mistaken for fully
 valid syntax.
 
@@ -192,8 +225,8 @@ rule), and help. Rendering never exposes internal representation.
 _Avoid_: Debug-formatted error
 
 **Parser resource limit**:
-A configured ceiling for external roots, syntax nodes, or active frame depth.
-Crossing a ceiling emits a stable resource diagnostic, clears transient parser
+A configured ceiling for external roots, syntax nodes, active frame depth, or
+stored source-vector segments. Crossing a ceiling emits a stable resource diagnostic, clears transient parser
 state, and returns an explicit external error root rather than panicking.
 
 **Syntax inspection view**:

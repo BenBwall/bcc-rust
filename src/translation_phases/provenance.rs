@@ -17,7 +17,7 @@ use super::{
     context::Context,
 };
 use crate::util::{
-    shared::SharedString,
+    region_vec::RegionVec,
     vector_slice::VectorSlice,
 };
 
@@ -99,7 +99,7 @@ impl Default for SourceVector {
 
 impl GetPosition for SourceVector {
     #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
         SourcePosition {
             index:  self.index as usize,
             line:   self.line,
@@ -112,7 +112,7 @@ pub(crate) type SourceVectors = VectorSlice<SourceVector>;
 
 impl GetPosition for SourceVectors {
     #[inline(always)]
-    fn position(&self, context: &Context) -> SourcePosition {
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
         let start = context.first_source_vector(*self);
         SourcePosition {
             index:  start.index as usize,
@@ -123,68 +123,20 @@ impl GetPosition for SourceVectors {
 }
 
 impl GetSourceVectors for SourceVectors {
-    fn source_vectors(&self, _context: &mut Context) -> SourceVectors {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         *self
     }
 }
 
 impl GetPosition for SourcePosition {
     #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
         *self
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "I think using source and source_file_index as member names is fine here."
-)]
-pub(crate) struct SourceFile {
-    pub(crate) source_file_index: u32,
-    pub(crate) source:            SharedString,
-    pub(crate) line:              u32,
-    pub(crate) column:            u32,
-    pub(crate) index:             usize,
-}
-
-impl Default for SourceFile {
-    fn default() -> Self {
-        Self {
-            source_file_index: 0,
-            source:            SharedString::default(),
-            line:              1,
-            column:            1,
-            index:             0,
-        }
-    }
-}
-
-impl SourceFile {
-    pub(crate) fn new(source_file_index: u32, source: SharedString) -> Self {
-        Self {
-            source_file_index,
-            source,
-            line: 1,
-            column: 1,
-            index: 0,
-        }
-    }
-}
-
-impl GetPosition for SourceFile {
-    #[inline(always)]
-    fn position(&self, _context: &Context) -> SourcePosition {
-        SourcePosition {
-            index:  self.index,
-            line:   self.line,
-            column: self.column,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub(crate) struct SourceVectorStack(pub(crate) Vec<SourceVector>);
+#[derive(Debug)]
+pub(crate) struct SourceVectorStack(pub(crate) RegionVec<SourceVector>);
 
 impl Display for SourceVectorStack {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {

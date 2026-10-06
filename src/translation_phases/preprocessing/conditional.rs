@@ -6,40 +6,48 @@ use std::{
 };
 
 use super::{
-    Preprocessor,
+    Expander,
     driver::TokenizerFrameType,
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVector,
-    TranslationPhase,
-    preprocessor_tokenizer::{
-        PreprocessorToken,
-        PreprocessorTokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVector,
+        TranslationPhase,
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+        },
     },
+    util::bump::Bump,
 };
 
 /// One source-file-local conditional, including whether its final arm began.
 #[derive(Debug)]
-pub(super) struct ConditionalGroup {
-    pub(super) source: Box<[SourceVector]>,
+pub(super) struct ConditionalGroup<'pp> {
+    pub(super) source: &'pp [SourceVector],
     saw_else:          bool,
 }
 
-impl ConditionalGroup {
-    fn new(context: &Context, directive: PreprocessorToken) -> Self {
+impl<'pp> ConditionalGroup<'pp> {
+    fn new(pp: &'pp Bump, context: &Context<'_>, directive: PreprocessorToken) -> Self {
         Self {
-            source:   context.get_source_vectors(directive.source_vectors).into(),
+            source:   pp.alloc_slice_fill_iter(
+                context
+                    .get_source_vectors(directive.source_vectors)
+                    .iter()
+                    .cloned(),
+            ),
             saw_else: false,
         }
     }
 }
 
-/// How far [`Preprocessor::skip_over_dead_code`] skips.
+/// How far [`Expander::skip_over_dead_code`] skips.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SkipMode {
     /// A group whose condition was false: stop at the matching `#elif` whose
@@ -49,7 +57,7 @@ pub(super) enum SkipMode {
     ToEndif,
 }
 
-impl Preprocessor {
+impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// Physical source frames own conditional groups. Presumed filenames
     /// changed by #line do not change the frame's boundary.
     fn current_file_conditional_base(&self) -> usize {
@@ -72,18 +80,13 @@ impl Preprocessor {
     ///
     /// `at_line_start` says whether the directive that started the skip has
     /// already consumed its terminating newline.
-    fn skip_over_dead_code(
-        &mut self,
-        context: &mut Context,
-        mut at_line_start: bool,
-        mode: SkipMode,
-    ) {
-        let depth = self.open_conditionals.len();
-        context.set_ignore_tokenizer_errors(true);
-        'lines: while depth > 0 && self.open_conditionals.len() >= depth {
+    fn skip_over_dead_code(&mut self, mut at_line_start: bool, mode: SkipMode) {
+        let depth = self.state.open_conditionals.len();
+        self.context.set_ignore_tokenizer_errors(true);
+        'lines: while depth > 0 && self.state.open_conditionals.len() >= depth {
             if !at_line_start {
                 loop {
-                    match self.tokenizer.next_item(context) {
+                    match self.tokenizer.next_item(self.context) {
                         | Some(token) if token.kind == PreprocessorTokenType::Newline => break,
                         | Some(_) => {},
                         | None => break 'lines,
@@ -91,7 +94,8 @@ impl Preprocessor {
                 }
             }
             at_line_start = false;
-            let Some(first) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
+            let Some(first) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+            else {
                 break 'lines;
             };
             match first.kind {
@@ -102,7 +106,7 @@ impl Preprocessor {
                 | PreprocessorTokenType::Hash => {},
                 | _ => continue 'lines,
             }
-            let Some(name) = Self::next_ignore_whitespace(&mut self.tokenizer, context) else {
+            let Some(name) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context) else {
                 break 'lines;
             };
             match name.kind {
@@ -114,28 +118,26 @@ impl Preprocessor {
                 | PreprocessorTokenType::UniversalIdentifier => {},
                 | _ => continue 'lines,
             }
-            let innermost = self.open_conditionals.len() == depth;
-            match context.string_cache.at(name.contents) {
+            let innermost = self.state.open_conditionals.len() == depth;
+            match self.context.string_cache.at(name.contents) {
                 | "if" | "ifdef" | "ifndef" => self
+                    .state
                     .open_conditionals
-                    .push(ConditionalGroup::new(context, name)),
+                    .push(ConditionalGroup::new(self.state.arena, self.context, name)),
                 | "endif" => {
-                    drop(self.open_conditionals.pop());
+                    let _ = self.state.open_conditionals.pop();
                     if innermost {
-                        context.set_ignore_tokenizer_errors(false);
-                        self.finish_conditional_directive(context, "endif");
+                        self.context.set_ignore_tokenizer_errors(false);
+                        self.finish_conditional_directive("endif");
                         at_line_start = true;
                     }
                 },
                 | "elif" if innermost => {
-                    if !self.check_conditional_arm(context, name, false)
-                        || mode == SkipMode::ToEndif
-                    {
+                    if !self.check_conditional_arm(name, false) || mode == SkipMode::ToEndif {
                         continue 'lines;
                     }
-                    context.set_ignore_tokenizer_errors(false);
+                    self.context.set_ignore_tokenizer_errors(false);
                     let taken = self.eval_preprocessor_expression(
-                        context,
                         PreprocessorErrorType::NoConditionInElifDirective,
                     );
                     if taken {
@@ -143,68 +145,55 @@ impl Preprocessor {
                         self.current_is_newline = true;
                         return;
                     }
-                    context.set_ignore_tokenizer_errors(true);
+                    self.context.set_ignore_tokenizer_errors(true);
                     at_line_start = true;
                 },
                 | "else" if innermost => {
-                    let valid = self.check_conditional_arm(context, name, true);
-                    context.set_ignore_tokenizer_errors(false);
-                    self.finish_conditional_directive(context, "else");
+                    let valid = self.check_conditional_arm(name, true);
+                    self.context.set_ignore_tokenizer_errors(false);
+                    self.finish_conditional_directive("else");
                     at_line_start = true;
                     if valid && mode == SkipMode::FalseGroup {
                         break 'lines;
                     }
-                    context.set_ignore_tokenizer_errors(true);
+                    self.context.set_ignore_tokenizer_errors(true);
                 },
                 | _ => {},
             }
         }
-        context.set_ignore_tokenizer_errors(false);
+        self.context.set_ignore_tokenizer_errors(false);
         if !at_line_start {
-            self.skip_until_newline(context);
+            self.skip_until_newline();
         }
         self.last_was_newline = true;
         self.current_is_newline = true;
     }
 
-    pub(super) fn parse_if_directive(
-        &mut self,
-        context: &mut Context,
-        directive: PreprocessorToken,
-    ) {
-        self.open_conditionals
-            .push(ConditionalGroup::new(context, directive));
-        if self
-            .eval_preprocessor_expression(context, PreprocessorErrorType::NoConditionInIfDirective)
-        {
+    pub(super) fn parse_if_directive(&mut self, directive: PreprocessorToken) {
+        self.state.open_conditionals.push(ConditionalGroup::new(
+            self.state.arena,
+            self.context,
+            directive,
+        ));
+        if self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective) {
             self.last_was_newline = true;
             self.current_is_newline = true;
         } else {
-            self.skip_over_dead_code(context, true, SkipMode::FalseGroup);
+            self.skip_over_dead_code(true, SkipMode::FalseGroup);
         }
     }
 
     /// `#elif` and `#else` reached while translating a group end that group:
     /// the rest of the conditional is skipped through its `#endif`.
-    pub(super) fn parse_elif_directive(
-        &mut self,
-        context: &mut Context,
-        directive: PreprocessorToken,
-    ) {
+    pub(super) fn parse_elif_directive(&mut self, directive: PreprocessorToken) {
         self.skip_remaining_groups(
-            context,
             directive,
             PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
         );
     }
 
-    pub(super) fn parse_else_directive(
-        &mut self,
-        context: &mut Context,
-        directive: PreprocessorToken,
-    ) {
+    pub(super) fn parse_else_directive(&mut self, directive: PreprocessorToken) {
         self.skip_remaining_groups(
-            context,
             directive,
             PreprocessorErrorType::ElseDirectiveWithoutIfDirective,
         );
@@ -212,37 +201,31 @@ impl Preprocessor {
 
     fn skip_remaining_groups(
         &mut self,
-        context: &mut Context,
         directive: PreprocessorToken,
-        unmatched_error: PreprocessorErrorType,
+        unmatched_error: PreprocessorErrorType<'tu>,
     ) {
-        if self.open_conditionals.len() <= self.current_file_conditional_base() {
-            context.preprocessor_error(PreprocessorError {
+        if self.state.open_conditionals.len() <= self.current_file_conditional_base() {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     unmatched_error,
                 source_vectors: directive.source_vectors,
             });
-            self.skip_until_newline(context);
+            self.skip_until_newline();
             return;
         }
-        let is_else = context.string_cache.at(directive.contents) == "else";
-        _ = self.check_conditional_arm(context, directive, is_else);
+        let is_else = self.context.string_cache.at(directive.contents) == "else";
+        _ = self.check_conditional_arm(directive, is_else);
         if is_else {
-            self.finish_conditional_directive(context, "else");
+            self.finish_conditional_directive("else");
         }
-        self.skip_over_dead_code(context, is_else, SkipMode::ToEndif);
+        self.skip_over_dead_code(is_else, SkipMode::ToEndif);
     }
 
-    fn check_conditional_arm(
-        &mut self,
-        context: &mut Context,
-        directive: PreprocessorToken,
-        is_else: bool,
-    ) -> bool {
-        let Some(group) = self.open_conditionals.last_mut() else {
+    fn check_conditional_arm(&mut self, directive: PreprocessorToken, is_else: bool) -> bool {
+        let Some(group) = self.state.open_conditionals.last_mut() else {
             return false;
         };
         if group.saw_else {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::ConditionalArmAfterElse(if is_else {
                     "else"
                 } else {
@@ -256,66 +239,51 @@ impl Preprocessor {
         true
     }
 
-    fn finish_conditional_directive(&mut self, context: &mut Context, name: &'static str) {
-        if let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, context)
+    fn finish_conditional_directive(&mut self, name: &'static str) {
+        if let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             && token.kind != PreprocessorTokenType::Newline
         {
-            context.preprocessor_error(PreprocessorError {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::ExtraTokensAfterConditionalDirective(name),
                 source_vectors: token.source_vectors,
             });
-            self.skip_until_newline(context);
+            self.skip_until_newline();
         }
         self.last_was_newline = true;
         self.current_is_newline = true;
     }
 
-    pub(super) fn parse_endif_directive(
-        &mut self,
-        context: &mut Context,
-        directive: PreprocessorToken,
-    ) {
-        if self.open_conditionals.len() <= self.current_file_conditional_base() {
-            context.preprocessor_error(PreprocessorError {
+    pub(super) fn parse_endif_directive(&mut self, directive: PreprocessorToken) {
+        if self.state.open_conditionals.len() <= self.current_file_conditional_base() {
+            self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives,
                 source_vectors: directive.source_vectors,
             });
         } else {
-            drop(self.open_conditionals.pop());
+            let _ = self.state.open_conditionals.pop();
         }
-        self.finish_conditional_directive(context, "endif");
+        self.finish_conditional_directive("endif");
     }
 
-    pub(super) fn parse_ifdef_directive(
-        &mut self,
-        context: &mut Context,
-        directive: PreprocessorToken,
-    ) {
-        self.parse_macro_test_directive(context, directive, true);
+    pub(super) fn parse_ifdef_directive(&mut self, directive: PreprocessorToken) {
+        self.parse_macro_test_directive(directive, true);
     }
 
-    pub(super) fn parse_ifndef_directive(
-        &mut self,
-        context: &mut Context,
-        directive: PreprocessorToken,
-    ) {
-        self.parse_macro_test_directive(context, directive, false);
+    pub(super) fn parse_ifndef_directive(&mut self, directive: PreprocessorToken) {
+        self.parse_macro_test_directive(directive, false);
     }
 
     /// Handles `#ifdef` (`wants_defined`) and `#ifndef`. A missing macro name
     /// is diagnosed and the group is skipped, as GCC and Clang do.
-    fn parse_macro_test_directive(
-        &mut self,
-        context: &mut Context,
-        directive: PreprocessorToken,
-        wants_defined: bool,
-    ) {
-        self.open_conditionals
-            .push(ConditionalGroup::new(context, directive));
+    fn parse_macro_test_directive(&mut self, directive: PreprocessorToken, wants_defined: bool) {
+        self.state.open_conditionals.push(ConditionalGroup::new(
+            self.state.arena,
+            self.context,
+            directive,
+        ));
         let Some(name) = self.expect_token_from_previous_phase::<true>(
-            context,
-            |_, _, t| t.kind.is_identifier(),
-            |_, _, token| {
+            |_, t| t.kind.is_identifier(),
+            |_, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     if wants_defined {
                         PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(token.kind)
@@ -331,14 +299,13 @@ impl Preprocessor {
                 "parsing ifndef directive"
             },
         ) else {
-            self.skip_over_dead_code(context, false, SkipMode::FalseGroup);
+            self.skip_over_dead_code(false, SkipMode::FalseGroup);
             return;
         };
         if self
             .expect_token_from_previous_phase::<true>(
-                context,
-                |_, _, t| t.kind == PreprocessorTokenType::Newline,
-                |_, _, t| {
+                |_, t| t.kind == PreprocessorTokenType::Newline,
+                |_, t| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:     if wants_defined {
                             PreprocessorErrorType::ExtraTokensAfterIfdefDirective
@@ -352,17 +319,18 @@ impl Preprocessor {
             )
             .is_none()
         {
-            self.skip_until_newline(context);
+            self.skip_until_newline();
         }
         if self
+            .state
             .macro_definitions
-            .contains_key(&name.identifier_id(context))
+            .contains_key(&name.identifier_id(self.context))
             == wants_defined
         {
             self.last_was_newline = true;
             self.current_is_newline = true;
         } else {
-            self.skip_over_dead_code(context, true, SkipMode::FalseGroup);
+            self.skip_over_dead_code(true, SkipMode::FalseGroup);
         }
     }
 }

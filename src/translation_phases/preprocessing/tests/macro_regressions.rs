@@ -1,16 +1,15 @@
-//! C99 macro replacement regressions under every preprocessing strategy.
+//! C99 macro replacement regressions.
 
 use std::{
     fmt::Write,
     path::PathBuf,
 };
 
+use super::Preprocessor;
 use crate::{
-    pipeline::PreprocessingStrategy,
     translation_phases::{
         Context,
         TranslationError,
-        TranslationPhase,
         preprocessing::{
             PreprocessorError,
             PreprocessorErrorType,
@@ -21,40 +20,26 @@ use crate::{
     util::shared::SharedVec,
 };
 
-const STRATEGIES: [PreprocessingStrategy; 3] = [
-    PreprocessingStrategy::Streaming,
-    PreprocessingStrategy::BatchLexing,
-    PreprocessingStrategy::Batch,
-];
-
-fn expansion(source: &str, strategy: PreprocessingStrategy) -> (String, Vec<TranslationError>) {
-    let mut context = Context::new();
-    let mut preprocessor = strategy.preprocessor(
+fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError<'_>]) -> R) -> R {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<macro regression>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
-    let tokens = if strategy == PreprocessingStrategy::Batch {
-        preprocessor
-            .preprocess_all(&mut context)
-            .collect::<Vec<_>>()
-    } else {
-        let mut tokens = Vec::new();
-        while let Some(token) = preprocessor.next_item(&mut context) {
-            tokens.push(token);
-        }
-        tokens
-    };
+    let tokens = preprocessor.preprocess_all(&mut context);
     let spellings: Vec<_> = tokens
         .iter()
         .map(|token| match token.kind {
             | TokenType::String(StringTokenType::String(contents)) => format!(
                 "{:?}",
                 context
-                    .literal_text(contents, false)
-                    .as_deref()
+                    .literal_text_in(context.tu_arena(), contents, false)
                     .expect("UTF-8 test literal")
             ),
             | _ => context
@@ -64,16 +49,17 @@ fn expansion(source: &str, strategy: PreprocessingStrategy) -> (String, Vec<Tran
                 .to_owned(),
         })
         .collect();
-    (spellings.join(" "), context.take_pending_errors())
+    let spelling = spellings.join(" ");
+    let errors = context.take_pending_errors();
+    inspect(&spelling, &errors)
 }
 
 #[track_caller]
 fn assert_expansion(source: &str, expected: &str) {
-    for strategy in STRATEGIES {
-        let (actual, errors) = expansion(source, strategy);
-        assert_eq!(actual, expected, "{strategy:?}: {source}");
-        assert!(errors.is_empty(), "{strategy:?}: {source}: {errors:#?}");
-    }
+    with_expansion(source, |actual, errors| {
+        assert_eq!(actual, expected, "{source}");
+        assert!(errors.is_empty(), "{source}: {errors:#?}");
+    });
 }
 
 #[test]
@@ -109,12 +95,11 @@ fn arity_diagnostics_count_every_supplied_argument() {
         ("#define F(x) marker\nF(a,b,c)\n", 1, 3),
         ("#define F(x,y) marker\nF(a,b,c,d,e)\n", 2, 5),
     ] {
-        for strategy in STRATEGIES {
-            let (actual, errors) = expansion(source, strategy);
-            assert_eq!(actual, "marker", "{strategy:?}: {source}");
+        with_expansion(source, |actual, errors| {
+            assert_eq!(actual, "marker", "{source}");
             assert!(
                 matches!(
-                    errors.as_slice(),
+                    errors,
                     [TranslationError::Preprocessing(PreprocessorError {
                         error_type:
                             PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
@@ -124,9 +109,9 @@ fn arity_diagnostics_count_every_supplied_argument() {
                         ..
                     })] if *actual_expected == expected && *actual_found == found
                 ),
-                "{strategy:?}: {source}: {errors:#?}",
+                "{source}: {errors:#?}",
             );
-        }
+        });
     }
 }
 
@@ -178,19 +163,18 @@ fn pasted_hash_hash_is_a_token_in_later_stringification() {
 
 #[test]
 fn mixed_hash_spellings_do_not_form_a_single_pasted_token() {
-    for strategy in STRATEGIES {
-        let (_, errors) = expansion("#define CAT(a,b) a##b\nCAT(#,%:)\n", strategy);
+    with_expansion("#define CAT(a,b) a##b\nCAT(#,%:)\n", |_, errors| {
         assert!(
             errors.iter().any(|error| matches!(
                 error,
                 TranslationError::Preprocessing(PreprocessorError {
                     error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
                     ..
-                }) if lhs == "#" && rhs == "%:"
+                }) if *lhs == "#" && *rhs == "%:"
             )),
-            "{strategy:?}: {errors:#?}"
+            "{errors:#?}"
         );
-    }
+    });
 }
 
 #[test]
@@ -226,33 +210,27 @@ fn generated_wide_literal_pastes_accept_values_starting_with_l() {
     );
 }
 
-use super::strategies::assert_strategies_agree;
-
 #[test]
 fn replacement_aliases_call_functions_from_parent_input_once() {
     let source = "#define g(x) [x]\n#define G g\n#define H G\nG(0) between G\n(1) H(2) after\n";
-    assert_strategies_agree(source);
     assert_expansion(source, "[ 0 ] between [ 1 ] [ 2 ] after");
 }
 
 #[test]
 fn alias_call_does_not_read_following_macro_definition_lines() {
     let source = "#define g(x) [x]\n#define G g\n(earlier)\nG(0) G; after\n";
-    assert_strategies_agree(source);
     assert_expansion(source, "( earlier ) [ 0 ] g ; after");
 }
 
 #[test]
 fn alias_call_arguments_use_the_cursor_owners_parameter_environment() {
     let source = "#define g(x) [x]\n#define G g\n#define C(v) G(v)\nC(foo) C(bar) after\n";
-    assert_strategies_agree(source);
     assert_expansion(source, "[ foo ] [ bar ] after");
 }
 
 #[test]
 fn alias_call_remains_inside_its_current_argument() {
     let source = "#define g(x) [x]\n#define G g\n#define P(v) v\nP(G(3)) P(G((a,b))) after\n";
-    assert_strategies_agree(source);
     assert_expansion(source, "[ 3 ] [ ( a , b ) ] after");
 }
 
@@ -261,7 +239,6 @@ fn alias_call_keeps_raw_hash_and_paste_operands() {
     let source = "#define g(x) [x]\n#define G g\n#define S(v) #v\n#define XS(v) S(v)\n#define \
                   CAT(a,b) a##b\n#define ALIAS CAT\n#define C(v) ALIAS(v,end)\nXS(G)(0) S(G(4)) \
                   C(front) after\n";
-    assert_strategies_agree(source);
     assert_expansion(source, "\"g\" ( 0 ) \"G(4)\" frontend after");
 }
 
@@ -269,7 +246,6 @@ fn alias_call_keeps_raw_hash_and_paste_operands() {
 fn replacement_aliases_keep_noncall_parent_input_untouched() {
     for suffix in ["; after", " + after", "\n; after"] {
         let source = format!("#define g(x) [x]\n#define G g\nG{suffix}\n");
-        assert_strategies_agree(&source);
         let expected = if suffix.contains('+') {
             "g + after"
         } else {
@@ -280,7 +256,7 @@ fn replacement_aliases_keep_noncall_parent_input_untouched() {
 }
 
 #[test]
-fn repeated_alias_calls_preserve_locations_through_streaming_compaction() {
+fn repeated_alias_calls_preserve_locations_through_compaction() {
     let mut source = String::from("#define g(x) [x]\n#define G g\n");
     let mut expected = String::new();
     for value in 0..2000 {
@@ -292,16 +268,13 @@ fn repeated_alias_calls_preserve_locations_through_streaming_compaction() {
     }
     // The differential helper owns locations at each iterator boundary, so
     // this compares diagnostics/provenance in addition to the token sequence.
-    assert_strategies_agree(&source);
     assert_expansion(&source, &expected);
 }
 
 #[test]
 fn unterminated_alias_call_reports_a_clean_diagnostic() {
     let source = "#define g(x) [x]\n#define G g\nG(0";
-    assert_strategies_agree(source);
-    for strategy in STRATEGIES {
-        let (_, errors) = expansion(source, strategy);
+    with_expansion(source, |_, errors| {
         assert!(
             errors.iter().any(|error| matches!(
                 error,
@@ -312,9 +285,9 @@ fn unterminated_alias_call_reports_a_clean_diagnostic() {
                     ..
                 })
             )),
-            "{strategy:?}: {errors:#?}"
+            "{errors:#?}"
         );
-    }
+    });
 }
 
 #[test]
@@ -337,7 +310,6 @@ fn macro_invocations_can_span_replacement_and_argument_frames() {
             "\"a b\" after",
         ),
     ] {
-        assert_strategies_agree(source);
         assert_expansion(source, expected);
     }
 }
@@ -352,7 +324,6 @@ fn stringified_other_tokens_are_interpreted_as_c_literal_spelling() {
         (r"'\\'", r"'\\'"),
     ] {
         let source = format!("#define S(x) #x\nS({argument})\n");
-        assert_strategies_agree(&source);
         assert_expansion(&source, &format!("{value:?}"));
     }
 }
@@ -419,7 +390,6 @@ fn nested_calls_receive_stringified_parent_arguments() {
         "#define G(x) x\n#define H(x) G(#x)\nH(a) after\n",
         "#define G(x) x\n#define Alias G\n#define H(x) Alias(#x)\nH(a) after\n",
     ] {
-        assert_strategies_agree(source);
         assert_expansion(source, "\"a\" after");
     }
 }
@@ -427,9 +397,8 @@ fn nested_calls_receive_stringified_parent_arguments() {
 #[test]
 fn failed_cross_frame_lookahead_prescans_each_argument_once() {
     let source = "#define F(x) x\n#define BAD(a,b) a\n#define H(x) F x\nH(BAD(1)) after\n";
-    for strategy in STRATEGIES {
-        let (tokens, errors) = expansion(source, strategy);
-        assert_eq!(errors.len(), 1, "{strategy:?}: {errors:?}");
+    with_expansion(source, |tokens, errors| {
+        assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(tokens, "F 1 after");
-    }
+    });
 }

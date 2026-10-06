@@ -10,7 +10,55 @@ Snapshots record current behavior, including defects. The guard test rejects pan
 
 ## Coverage
 
-There are **218 C inputs and 218 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **6/7 tokenizer**, **126/131 preprocessor**, and **64/73 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 60 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
+### Review criteria
+
+When changing diagnostics, inspect complete stderr as well as the structured
+error. Preserve user spellings, escape control bytes, and label the offending
+token or a zero-width EOF position. Related labels should identify prior
+declarations, opening delimiters, or macro invocation sites when useful.
+Recovery should preserve following valid input and avoid cascades caused only
+by already diagnosed syntax. Missing operands in directives should point into
+the directive expression, not the following `#endif`.
+
+Prefer context-specific help over repeated headline text. Quote fixed language
+tokens consistently, preserve user-provided `#error` messages, and distinguish
+invalid shift counts from arithmetic result overflow. A standard citation must
+support the exact claim; missing citations alone are a documentation-quality
+issue, not evidence that the diagnostic is wrong. Use the repository's
+[N1256 reference](../../../c-spec.pdf): conditional replacement/arithmetic is
+§6.10.1p4, shift-count constraints are §6.5.7p3, line-number syntax is
+§6.10.4p3, pragma switches are §6.10.6p2, and repeated `inline` is §6.7.4p5.
+
+### Remaining output issues
+
+The following observations were checked against the tracked `.stderr` snapshots
+on 3 October 2026 while consolidating the earlier diagnostic review; the
+include-directive row was rechecked on 5 October 2026. They are
+output improvements to revisit, not claims that the golden tests currently
+fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
+
+| Evidence | Follow-up |
+| --- | --- |
+| [Missing declaration semicolon](parser-expected-declaration-continuation-after-declarator-missing-semicolon.stderr) | Prefer the missing declaration terminator as the primary error instead of diagnosing a function body after interpreting later declarations as parameters. |
+| [Invalid assignment left operand](parser-expected-statement-expression-assignment.stderr) | The cannot-assign label points at `=`; retain and label the offending left expression. |
+| [Extra pragma tokens](pp-extra-tokens-after-pragma-once.stderr) | The extra-token diagnostic names and labels `once` instead of `extra`. |
+| [Pragma switch](pp-missing-on-off-switch-in-s-t-d-c-pragma.stderr) | Name `FP_CONTRACT` as the pragma requiring a switch, rather than saying the switch belongs after `MAYBE`. |
+| [System header lookup](pp-header-not-found-system.stderr) | Distinguish an empty search-path list from an absolute header path. |
+| [Invalid macro replacement list](pp-cannot-use-hash-hash-after-function-like-macro-call.stderr) | Diagnose `##` at the start of the definition's replacement list, rather than describing pasting onto an invocation. Check fresh definitions as well as redefinitions. |
+| [Left shift](pp-left-shift-overflow.stderr), [right shift](pp-right-shift-overflow.stderr) | Describe an invalid shift count separately from an overflowing result. |
+| [Preprocessor arithmetic](pp-binary-minus-overflow.stderr) | Correct the N1256 replacement/arithmetic citation from §6.10.1p3 to §6.10.1p4 across the evaluator's notes. |
+| [Angle-header newline](tokenizer-angle-header-newline.stderr), [angle-header EOF](tokenizer-angle-header-eof.stderr), [quoted-header EOF](tokenizer-quoted-header-eof.stderr) | The missing closing `>` or `"` is diagnosed at the absent delimiter, but the lookup of the partial name still reports a missing header; review whether that lookup should run. Angle EOF also reports an unexpected end of file in the directive, which quoted EOF no longer does; review whether it is redundant beside the missing `>`. |
+| [Unicode identifier recovery](parser-unicode-identifier.stderr) | Review the missing-type and continuation diagnostics for a single malformed declaration together. |
+| [Macro keyword](parser-macro-expanded-keyword.stderr), [macro operand](parser-expected-statement-expression-macro.stderr) | Add useful macro invocation context alongside spelling or recovery locations. |
+| [Conflicting storage classes](parser-storage-class-redefinition.stderr) | Label the earlier `static` as well as the new `extern`. |
+
+The prior panic and raw-NUL findings remain protected by the guard test and
+their existing fixtures. Keep those regressions even though the old review's
+captured failing output is no longer the current snapshot.
+
+### Dispatch inventory
+
+There are **222 C inputs and 222 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **128/134 preprocessor**, and **64/73 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 60 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -27,10 +75,10 @@ The mapping below comes from checking the emitter/dispatch paths and their CLI o
 | `UnknownToken` | rendered | [tokenizer-unknown-token-backtick.c](tokenizer-unknown-token-backtick.c), [tokenizer-unknown-token-nul.c](tokenizer-unknown-token-nul.c), [tokenizer-unknown-token.c](tokenizer-unknown-token.c) |
 | `UnterminatedCharacter` | rendered | [tokenizer-unterminated-character.c](tokenizer-unterminated-character.c) |
 | `UnterminatedString` | rendered | [tokenizer-unterminated-string.c](tokenizer-unterminated-string.c) |
-| `UnterminatedIncludeString` | believed unreachable | The initial processor synthesizes a newline at EOF. Quoted header scanning ignores escapes, so it takes NewlineInIncludeString before it can reach EOF. Angle headers use a separate fallback path. The quoted/angle EOF stress fixtures preserve those actual outputs. |
 | `NewlineInCharacter` | rendered | [tokenizer-newline-in-character.c](tokenizer-newline-in-character.c) |
-| `NewlineInString` | rendered | [tokenizer-newline-in-string.c](tokenizer-newline-in-string.c) |
-| `NewlineInIncludeString` | rendered | [tokenizer-newline-in-include-string.c](tokenizer-newline-in-include-string.c), [tokenizer-quoted-header-eof.c](tokenizer-quoted-header-eof.c) |
+| `NewlineInString` | rendered | [tokenizer-newline-in-string.c](tokenizer-newline-in-string.c), [tokenizer-newline-in-include-string.c](tokenizer-newline-in-include-string.c), [tokenizer-quoted-header-eof.c](tokenizer-quoted-header-eof.c) |
+
+The lexer no longer forms header names: an `#include` operand is ordinary preprocessing tokens, so an unterminated `"…"` operand draws the lexer's string-literal error, and the `#include` handler adds a missing closing `"` or `>` error at the delimiter position. For a written quoted name whose final `"` follows a backslash, the default `ExtensionPolicy::Allow` (and Warn) reads the backslash as a path character, closes the name at that quote, and withdraws the lexer's error for that one token; Deny keeps the lexer and missing-quote errors.
 
 ### PreprocessorErrorType
 
@@ -100,7 +148,7 @@ The mapping below comes from checking the emitter/dispatch paths and their CLI o
 | `IdentifierInsteadOfBinaryOperatorInPreprocessorExpression` | rendered | [pp-identifier-instead-of-binary-operator-in-preprocessor-expression.c](pp-identifier-instead-of-binary-operator-in-preprocessor-expression.c) |
 | `CharacterInsteadOfBinaryOperatorInPreprocessorExpression` | rendered | [pp-character-instead-of-binary-operator-in-preprocessor-expression.c](pp-character-instead-of-binary-operator-in-preprocessor-expression.c) |
 | `UnexpectedTokenInPreprocessorExpression` | rendered | [pp-unexpected-token-in-preprocessor-expression.c](pp-unexpected-token-in-preprocessor-expression.c) |
-| `UnexpectedTokenAtPhase7` | believed unreachable | The emitter only handles Placeholder, AngleBracketString, IncludeString, and Whitespace. Include strings are consumed by #include, whitespace is filtered, and empty argument placeholders are consumed by macro expansion before phase 7. No C-only CLI reproducer was found. |
+| `UnexpectedTokenAtPhase7` | believed unreachable | The emitter only handles Placeholder and Whitespace. Whitespace is filtered, and empty argument placeholders are consumed by macro expansion before phase 7. No C-only CLI reproducer was found. |
 | `FloatInsteadOfIntegerInPreprocessorExpression` | rendered | [pp-float-instead-of-integer-in-preprocessor-expression.c](pp-float-instead-of-integer-in-preprocessor-expression.c) |
 | `ExpectedBinaryOperatorInPreprocessorExpression` | rendered | [pp-expected-binary-operator-in-preprocessor-expression.c](pp-expected-binary-operator-in-preprocessor-expression.c) |
 | `MissingOpeningParenthesisOrIdentifierInDefinedDirective` | rendered | [pp-missing-opening-parenthesis-or-identifier-in-defined-directive.c](pp-missing-opening-parenthesis-or-identifier-in-defined-directive.c) |
@@ -118,9 +166,12 @@ The mapping below comes from checking the emitter/dispatch paths and their CLI o
 | `RedefinitionOfBuiltInMacro` | rendered | [pp-redefinition-of-built-in-macro.c](pp-redefinition-of-built-in-macro.c) |
 | `UndefinedIdentifierInPreprocessorExpression` | rendered | [pp-undefined-identifier-in-preprocessor-expression.c](pp-undefined-identifier-in-preprocessor-expression.c) |
 | `ExpectedIncludeStringOrAngleBracketString` | rendered | [pp-expected-include-string-or-angle-bracket-string.c](pp-expected-include-string-or-angle-bracket-string.c) |
-| `UnexpectedEndOfInput` | rendered | [pp-unexpected-end-of-input.c](pp-unexpected-end-of-input.c) |
+| `InvalidCharacterInHeaderName` | rendered | [pp-invalid-character-in-header-name.c](pp-invalid-character-in-header-name.c) |
+| `UnterminatedHeaderName` | rendered | [pp-unterminated-header-name.c](pp-unterminated-header-name.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c), [tokenizer-angle-header-newline.c](tokenizer-angle-header-newline.c), [tokenizer-newline-in-include-string.c](tokenizer-newline-in-include-string.c), [tokenizer-quoted-header-eof.c](tokenizer-quoted-header-eof.c). Labelled zero-width where the delimiter is missing. Quoted EOF keeps the lexer's string error and the missing-`"` error without an unexpected-EOF error; angle EOF keeps the unexpected-EOF error and the parser's separate empty-translation-unit error. Despite its name, [pp-unterminated-header-name-quoted.c](pp-unterminated-header-name-quoted.c) (`"dir\"`) is now a closed name under the default policy; see `BackslashInQuotedHeaderName`. |
+| `BackslashInQuotedHeaderName` | unavailable in default CLI | A backslash in a `"…"` header name is an extension that the default ExtensionPolicy::Allow accepts silently, as [pp-header-not-found-backslash.c](pp-header-not-found-backslash.c) shows. Allow and Warn also treat `#include "dir\"` as the name `dir\` and withdraw only that token's unterminated-string error, as [pp-unterminated-header-name-quoted.c](pp-unterminated-header-name-quoted.c) shows; Deny keeps that error, reports the missing `"`, and skips the lookup. Warn and Deny are covered by unit tests in `preprocessing/tests/header_name_regressions.rs`. |
+| `UnexpectedEndOfInput` | rendered | [pp-unexpected-end-of-input.c](pp-unexpected-end-of-input.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c) |
 | `WrongNumberOfArgumentsInFunctionLikeMacroInvocation` | rendered | [pp-wrong-number-of-arguments-in-function-like-macro-invocation.c](pp-wrong-number-of-arguments-in-function-like-macro-invocation.c) |
-| `HeaderNotFound` | rendered | [pp-header-not-found-system.c](pp-header-not-found-system.c), [pp-header-not-found.c](pp-header-not-found.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c), [tokenizer-angle-header-newline.c](tokenizer-angle-header-newline.c) |
+| `HeaderNotFound` | rendered | [pp-header-not-found-system.c](pp-header-not-found-system.c), [pp-header-not-found.c](pp-header-not-found.c), [pp-header-not-found-backslash.c](pp-header-not-found-backslash.c), [pp-unterminated-header-name-quoted.c](pp-unterminated-header-name-quoted.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c), [tokenizer-angle-header-newline.c](tokenizer-angle-header-newline.c) |
 | `HeaderFileInaccessible` | environment-dependent; not covered | Requires a discovered header whose subsequent read fails, such as a permissions/sharing violation or filesystem race. A normal checked-in C/header pair cannot establish that condition portably; the OS error wording is also host-dependent. |
 | `HashHashUsedOutsideOfMacro` | rendered | [pp-hash-hash-used-outside-of-macro.c](pp-hash-hash-used-outside-of-macro.c) |
 | `CannotUseHashHashAfterFunctionLikeMacroCall` | rendered | [pp-cannot-use-hash-hash-after-function-like-macro-call.c](pp-cannot-use-hash-hash-after-function-like-macro-call.c) |
@@ -159,7 +210,7 @@ The mapping below comes from checking the emitter/dispatch paths and their CLI o
 | `UnknownPragmaSTDCArgument` | rendered | [pp-unknown-pragma-s-t-d-c-argument.c](pp-unknown-pragma-s-t-d-c-argument.c) |
 | `ExtraTokensAfterPragmaOnce` | rendered | [pp-extra-tokens-after-pragma-once.c](pp-extra-tokens-after-pragma-once.c) |
 | `ExtraTokensAfterPragmaOperator` | rendered | [pp-extra-tokens-after-pragma-operator.c](pp-extra-tokens-after-pragma-operator.c) |
-| `ExtraTokensAfterIncludeDirective` | rendered | [pp-extra-tokens-after-include-directive.c](pp-extra-tokens-after-include-directive.c) |
+| `ExtraTokensAfterIncludeDirective` | rendered | [pp-extra-tokens-after-include-directive.c](pp-extra-tokens-after-include-directive.c). A written angle name followed immediately by `>` or `=` (which ordinary lexing reads as `>>` or `>=`) warns at the first character after the closing `>`. While the quoted-backslash extension is accepted, non-whitespace text after the first closing quote also warns at its first character; whitespace alone does not. Both cases are covered by `preprocessing/tests/header_name_regressions.rs`. |
 | `ExtraTokensAfterIfdefDirective` | rendered | [pp-extra-tokens-after-ifdef-directive.c](pp-extra-tokens-after-ifdef-directive.c) |
 | `ExtraTokensAfterIfndefDirective` | rendered | [pp-extra-tokens-after-ifndef-directive.c](pp-extra-tokens-after-ifndef-directive.c) |
 | `STDCPragmaDirectiveWithoutArgument` | rendered | [pp-s-t-d-c-pragma-directive-without-argument.c](pp-s-t-d-c-pragma-directive-without-argument.c) |
@@ -172,7 +223,7 @@ The mapping below comes from checking the emitter/dispatch paths and their CLI o
 
 | Variant | Status | Fixture or reason |
 | --- | --- | --- |
-| `EmptyTranslationUnit` | rendered | [parser-empty-translation-unit.c](parser-empty-translation-unit.c) |
+| `EmptyTranslationUnit` | rendered | [parser-empty-translation-unit.c](parser-empty-translation-unit.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c) |
 | `ResourceLimitExceeded` | reachable; not covered | The CLI uses the default memory/frame budgets and does not expose smaller budgets. Reaching them needs a deliberately large input, contrary to the small-fixture scope. Existing unit tests lower the budgets; no tiny C-only default-CLI fixture is claimed. |
 | `ParserFrameConsumedAtEndOfInput` | internal invariant; not covered | Reports a parser-machine bug rather than a malformed C production. No reproducer was found, and it should not be manufactured by changing parser state. |
 | `ExpectedFunctionBody` | rendered | [parser-expected-function-body.c](parser-expected-function-body.c) |

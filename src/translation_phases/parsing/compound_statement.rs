@@ -23,25 +23,29 @@ use super::{
     syntax::{
         BlockItem,
         Statement,
-        StatementIndex,
         StatementType,
     },
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        SourceVectors,
+        preprocessing::{
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
 #[derive(Debug)]
-pub(super) struct CompoundStatementFrame {
+pub(super) struct CompoundStatementFrame<'tu, 'p> {
     phase:                     CompoundStatementPhase,
-    pub(super) items:          Vec<BlockItem>,
-    pub(super) source_vectors: Vec<SourceVectors>,
+    pub(super) items:          ArenaVec<'p, BlockItem<'tu>>,
+    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     starting_error_count:      usize,
     entry_scope_depth:         Option<usize>,
     function_body:             bool,
@@ -61,12 +65,12 @@ pub(super) enum CompoundStatementPhase {
     reason = "Frame phases assert the typed driver protocol, whose mismatch already identifies \
               the invariant."
 )]
-impl CompoundStatementFrame {
-    pub(super) fn new(starting_error_count: usize, function_body: bool) -> Self {
+impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
+    pub(super) fn new(arena: &'p Bump, starting_error_count: usize, function_body: bool) -> Self {
         Self {
             phase: CompoundStatementPhase::Start,
-            items: Vec::new(),
-            source_vectors: Vec::new(),
+            items: ArenaVec::new_in(arena),
+            source_vectors: ArenaVec::new_in(arena),
             starting_error_count,
             entry_scope_depth: None,
             function_body,
@@ -75,11 +79,10 @@ impl CompoundStatementFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | CompoundStatementPhase::Start => {
                 debug_assert!(returned.is_none());
@@ -91,14 +94,13 @@ impl CompoundStatementFrame {
                     if self.function_body {
                         let name = *parser
                             .func_name
-                            .get_or_insert_with(|| context.string_cache.intern("__func__"));
+                            .get_or_insert_with(|| parser.context.string_cache.intern("__func__"));
                         parser.scopes.publish(name, NameClass::Ordinary);
                     }
                     self.phase = CompoundStatementPhase::ItemOrClose;
                     ParseAction::Consume
                 } else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedOpeningCurlyBraceInCompoundStatement(
                             token.map(|token| token.kind),
                         ),
@@ -117,7 +119,6 @@ impl CompoundStatementFrame {
                     ParseAction::Consume
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedClosingCurlyBraceInCompoundStatement(None),
                         None,
                     );
@@ -125,10 +126,11 @@ impl CompoundStatementFrame {
                     ParseAction::Reprocess
                 } else {
                     let is_label = token.is_some_and(|token| token.kind == TokenType::Identifier)
-                        && is_operator(parser.cursor.following(context), OperatorTokenType::Colon);
+                        && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
                     if !is_label && token.is_some_and(|token| parser.declaration_starter(token)) {
                         self.phase = CompoundStatementPhase::AwaitDeclaration;
                         ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
+                            parser.arena,
                             DeclarationContext::Block,
                             parser.hard_error_count,
                         )))
@@ -145,7 +147,7 @@ impl CompoundStatementFrame {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("block declaration returned an unexpected value: {returned:?}");
                 };
-                let source = parser.syntax[declaration].source_vectors;
+                let source = declaration.source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Declaration(declaration));
                 self.phase = CompoundStatementPhase::ItemOrClose;
@@ -155,7 +157,7 @@ impl CompoundStatementFrame {
                 let Some(ParseValue::Statement(statement)) = returned else {
                     panic!("block statement returned an unexpected value: {returned:?}");
                 };
-                let source = parser.statement_source(statement);
+                let source = statement.source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Statement(statement));
                 self.phase = CompoundStatementPhase::ItemOrClose;
@@ -163,17 +165,18 @@ impl CompoundStatementFrame {
             },
             | CompoundStatementPhase::Finish => {
                 debug_assert!(returned.is_none());
-                let item_start = parser.append_syntax(&mut self.items);
-                let index = parser.push_syntax(Statement {
-                    kind:           StatementType::Compound { items: item_start },
-                    source_vectors: context.merge_vector_list(&self.source_vectors),
-                    recovered:      parser.hard_error_count > self.starting_error_count,
+                let item_start = parser.alloc_syntax_list(&mut self.items);
+                let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
+                let index = parser.alloc_syntax(Statement {
+                    kind: StatementType::Compound { items: item_start },
+                    source_vectors,
+                    recovered: parser.hard_error_count > self.starting_error_count,
                 });
                 parser.scopes.restore_depth(
                     self.entry_scope_depth
                         .expect("compound statement entered block scope"),
                 );
-                ParseAction::Reduce(ParseValue::CompoundStatement(StatementIndex(index)))
+                ParseAction::Reduce(ParseValue::CompoundStatement(index))
             },
         }
     }

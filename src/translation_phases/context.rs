@@ -2,7 +2,8 @@
 //! arenas, interned strings, source files, and pending diagnostics.
 
 use std::{
-    collections::VecDeque,
+    cell::OnceCell,
+    ffi::OsStr,
     path::Path,
 };
 
@@ -29,15 +30,18 @@ use crate::{
             LiteralUnit,
             PreprocessorError,
         },
-        preprocessor_tokenizer::{
-            LexingStrategy,
-            PreprocessorTokenizerError,
-        },
+        preprocessor_tokenizer::PreprocessorTokenizerError,
     },
     util::{
-        HashMap,
+        bump::{
+            ArenaMap,
+            ArenaQueue,
+            ArenaString,
+            ArenaVec,
+            Bump,
+        },
         dedup_arena::DedupArena,
-        shared::SharedString,
+        region_vec::RegionVec,
         string_cache::{
             StringCache,
             StringCacheId,
@@ -46,25 +50,235 @@ use crate::{
     },
 };
 
+/// A vector in an arena that grows by adding segments, each twice as long as
+/// the one before, so it never moves or copies its elements and leaves no
+/// outgrown buffers in the arena. Removing from the front only advances its
+/// start, and clearing keeps the segments for reuse, as a `Vec` keeps its
+/// capacity.
+struct SegmentedVec<'a, T> {
+    arena:    &'a Bump,
+    segments: ArenaVec<'a, ArenaVec<'a, T>>,
+    /// The position of the first element.
+    start:    usize,
+    /// The position after the last element.
+    end:      usize,
+    /// The segment that holds the last element, or 0 when empty.
+    tail:     usize,
+}
+
+impl<'a, T: Clone> SegmentedVec<'a, T> {
+    /// The length of the first segment.
+    const FIRST_SEGMENT: usize = 16;
+
+    fn new_in(arena: &'a Bump) -> Self {
+        Self {
+            arena,
+            segments: ArenaVec::new_in(arena),
+            start: 0,
+            end: 0,
+            tail: 0,
+        }
+    }
+
+    /// The segment holding `position`, and the offset there.
+    fn locate(position: usize) -> (usize, usize) {
+        let blocks = position / Self::FIRST_SEGMENT + 1;
+        let segment = blocks.ilog2() as usize;
+        (
+            segment,
+            position - Self::FIRST_SEGMENT * ((1 << segment) - 1),
+        )
+    }
+
+    fn len(&self) -> usize {
+        self.end - self.start
+    }
+
+    fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    fn get(&self, index: usize) -> Option<&T> {
+        (index < self.len()).then(|| {
+            let (segment, offset) = Self::locate(self.start + index);
+            &self.segments[segment][offset]
+        })
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        (index < self.len()).then(|| {
+            let (segment, offset) = Self::locate(self.start + index);
+            &mut self.segments[segment][offset]
+        })
+    }
+
+    fn last(&self) -> Option<&T> {
+        if self.is_empty() {
+            None
+        } else {
+            self.segments[self.tail].last()
+        }
+    }
+
+    fn last_mut(&mut self) -> Option<&mut T> {
+        if self.is_empty() {
+            None
+        } else {
+            self.segments[self.tail].last_mut()
+        }
+    }
+
+    fn push(&mut self, value: T) {
+        // The tail segment takes the element unless it is full.
+        let segment = match self.segments.get(self.tail) {
+            | Some(tail) if self.end == 0 || tail.len() < Self::FIRST_SEGMENT << self.tail =>
+                self.tail,
+            | Some(_) => self.tail + 1,
+            | None => 0,
+        };
+        if segment == self.segments.len() {
+            self.segments.push(ArenaVec::with_capacity_in(
+                Self::FIRST_SEGMENT << segment,
+                self.arena,
+            ));
+        }
+        debug_assert_eq!(
+            Self::locate(self.end),
+            (segment, self.segments[segment].len()),
+            "segments fill in order"
+        );
+        self.segments[segment].push(value);
+        self.tail = segment;
+        self.end += 1;
+    }
+
+    /// Inserts `value` at `index`, shifting the elements after it.
+    fn insert(&mut self, index: usize, value: T) {
+        let Some(last) = self.last().cloned() else {
+            self.push(value);
+            return;
+        };
+        self.push(last);
+        for position in (index + 1..self.len() - 1).rev() {
+            let previous = self[position - 1].clone();
+            self[position] = previous;
+        }
+        self[index] = value;
+    }
+
+    /// The elements in order, one slice per segment.
+    fn slices(&self) -> impl Iterator<Item = &[T]> {
+        let (first, offset) = Self::locate(self.start);
+        let segments = if self.is_empty() {
+            &[][..]
+        } else {
+            &self.segments[first..=self.tail]
+        };
+        segments.iter().enumerate().map(move |(index, segment)| {
+            if index == 0 {
+                &segment[offset..]
+            } else {
+                &segment[..]
+            }
+        })
+    }
+
+    /// The number of leading elements for which `predicate` holds, which must
+    /// hold for a prefix.
+    fn partition_point(&self, mut predicate: impl FnMut(&T) -> bool) -> usize {
+        let mut count = 0;
+        for slice in self.slices() {
+            match slice.last() {
+                | Some(last) if predicate(last) => count += slice.len(),
+                | _ => return count + slice.partition_point(&mut predicate),
+            }
+        }
+        count
+    }
+
+    /// Removes the first `count` elements.
+    fn discard_front(&mut self, count: usize) {
+        self.start += count.min(self.len());
+        if self.is_empty() {
+            self.clear();
+        }
+    }
+
+    fn clear(&mut self) {
+        if self.end == 0 {
+            return;
+        }
+        for segment in &mut self.segments[..=self.tail] {
+            segment.clear();
+        }
+        self.start = 0;
+        self.end = 0;
+        self.tail = 0;
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.slices().flatten()
+    }
+
+    fn for_each_mut(&mut self, mut visit: impl FnMut(&mut T)) {
+        if self.is_empty() {
+            return;
+        }
+        let (first, offset) = Self::locate(self.start);
+        for (index, segment) in self.segments[first..=self.tail].iter_mut().enumerate() {
+            let skip = if index == 0 { offset } else { 0 };
+            segment[skip..].iter_mut().for_each(&mut visit);
+        }
+    }
+}
+
+impl<T: Clone> std::ops::Index<usize> for SegmentedVec<'_, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &T {
+        self.get(index)
+            .expect("segmented vector index out of bounds")
+    }
+}
+
+impl<T: Clone> std::ops::IndexMut<usize> for SegmentedVec<'_, T> {
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        self.get_mut(index)
+            .expect("segmented vector index out of bounds")
+    }
+}
+
 /// Endpoints are normally appended in source-arena order. Keep sparse keys
 /// packed, and reuse end locations within each invocation. Unlike a global
 /// interner, the transient pool is cleared during preprocessing compaction.
-#[derive(Default)]
-struct ExpansionSites {
-    entries: Vec<(u32, u32)>,
-    ends:    Vec<SourceVector>,
+///
+/// Both tables live in the translation-unit arena. They grow by segments, so
+/// the parser-token table, which holds an entry for every macro-expanded
+/// token until parsing reads past it, never copies itself into a larger
+/// buffer and leaves the old one behind.
+struct ExpansionSites<'tu> {
+    entries: SegmentedVec<'tu, (u32, u32)>,
+    ends:    SegmentedVec<'tu, SourceVector>,
 }
 
-impl ExpansionSites {
+impl<'tu> ExpansionSites<'tu> {
+    fn new_in(tu: &'tu Bump) -> Self {
+        Self {
+            entries: SegmentedVec::new_in(tu),
+            ends:    SegmentedVec::new_in(tu),
+        }
+    }
+
     fn get(&self, end: u32) -> Option<u32> {
         let &(last, id) = self.entries.last()?;
         if end >= last {
             return (end == last).then_some(id);
         }
+        let index = self.entries.partition_point(|&(key, _)| key < end);
         self.entries
-            .binary_search_by_key(&end, |&(key, _)| key)
-            .ok()
-            .map(|index| self.entries[index].1)
+            .get(index)
+            .filter(|&&(key, _)| key == end)
+            .map(|&(_, id)| id)
     }
 
     fn insert(&mut self, end: u32, id: u32) {
@@ -74,9 +288,11 @@ impl ExpansionSites {
                 return;
             }
             if last.0 > end {
-                match self.entries.binary_search_by_key(&end, |&(key, _)| key) {
-                    | Ok(index) => self.entries[index].1 = id,
-                    | Err(index) => self.entries.insert(index, (end, id)),
+                let index = self.entries.partition_point(|&(key, _)| key < end);
+                if self.entries[index].0 == end {
+                    self.entries[index].1 = id;
+                } else {
+                    self.entries.insert(index, (end, id));
                 }
                 return;
             }
@@ -95,20 +311,18 @@ impl ExpansionSites {
 
     fn discard_before(&mut self, end: u32) {
         let count = self.entries.partition_point(|&(key, _)| key < end);
-        // Compact geometrically for full-batch input; shifting the whole tail
-        // after every declaration would make parsing quadratic.
+        // Compact geometrically for full-batch input; renumbering the whole
+        // tail after every declaration would make parsing quadratic.
         if count == 0 || count < self.entries.len() / 2 {
             return;
         }
-        drop(self.entries.drain(..count));
+        self.entries.discard_front(count);
         let Some(first_id) = self.entries.iter().map(|&(_, id)| id).min() else {
             self.ends.clear();
             return;
         };
-        drop(self.ends.drain(..first_id as usize));
-        for (_, id) in &mut self.entries {
-            *id -= first_id;
-        }
+        self.ends.discard_front(first_id as usize);
+        self.entries.for_each_mut(|(_, id)| *id -= first_id);
     }
 
     fn clear(&mut self) {
@@ -117,36 +331,66 @@ impl ExpansionSites {
     }
 }
 
-pub(crate) struct Context {
-    pub(crate) configuration:         CompilerConfiguration,
-    pub(crate) source_vectors:        SourceVectorStack,
-    parser_token_vectors:             Vec<SourceVector>,
-    retained_vectors:                 Vec<SourceVector>,
-    pub(crate) string_cache:          StringCache,
-    pub(crate) canonical_identifiers: HashMap<StringCacheId, StringCacheId>,
-    literal_values:                   DedupArena<Box<[LiteralUnit]>, FxBuildHasher>,
-    /// Sparse endpoints follow their source arena's lifetime.
-    expansion_sites:                  [ExpansionSites; 3],
-    is_tokenizing_include_string:     bool,
-    ignore_tokenizer_errors:          bool,
-    lexing_strategy:                  LexingStrategy,
-    pub(super) pending_errors:        VecDeque<TranslationError>,
-    /// How many leading pending errors no longer refer to the preprocessor
-    /// arena, so compaction relocates each error's provenance only once.
-    relocated_errors:                 usize,
-    pub(crate) source_files:          DedupArena<Box<Path>, FxBuildHasher>,
-    /// Original text of each source file, indexed like `source_files`, kept
-    /// so diagnostics can quote the lines they point at.
-    source_texts:                     Vec<Option<SharedString>>,
+/// Source text and its lazily built physical-line index share one identity.
+/// Replacing the text replaces the index, while rendering another diagnostic
+/// reuses it without rescanning the file.
+struct SourceText<'tu> {
+    text:        &'tu str,
+    line_starts: OnceCell<&'tu [usize]>,
 }
 
-impl Context {
-    pub(crate) fn new() -> Self {
-        Self::with_configuration(CompilerConfiguration::default())
+pub(crate) struct Context<'tu> {
+    tu: &'tu Bump,
+    pub(crate) configuration: CompilerConfiguration,
+    pub(crate) source_vectors: SourceVectorStack,
+    parser_token_vectors: RegionVec<SourceVector>,
+    retained_vectors: RegionVec<SourceVector>,
+    pub(crate) string_cache: StringCache<'tu>,
+    pub(crate) canonical_identifiers: ArenaMap<'tu, StringCacheId, StringCacheId>,
+    literal_values: DedupArena<'tu, &'tu [LiteralUnit], FxBuildHasher>,
+    /// Sparse endpoints follow their source arena's lifetime.
+    expansion_sites: [ExpansionSites<'tu>; 3],
+    ignore_tokenizer_errors: bool,
+    pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
+    /// How many leading pending errors no longer refer to the preprocessor
+    /// arena, so compaction relocates each error's provenance only once.
+    relocated_errors: usize,
+    pub(crate) source_files: DedupArena<'tu, &'tu Path, FxBuildHasher>,
+    quote_include_directories: &'tu [&'tu Path],
+    system_include_directories: &'tu [&'tu Path],
+    /// Original text of each source file, indexed like `source_files`, kept
+    /// so diagnostics can quote the lines they point at.
+    source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
+}
+
+impl<'tu> Context<'tu> {
+    /// The translation-unit arena, which holds everything that lives until
+    /// the translation unit ends, the syntax tree included.
+    pub(crate) fn tu_arena(&self) -> &'tu Bump {
+        self.tu
     }
 
-    pub(crate) fn with_configuration(configuration: CompilerConfiguration) -> Self {
-        let mut string_cache = StringCache::new();
+    pub(crate) fn diagnostic_text(&self, text: &str) -> &'tu str {
+        self.tu.alloc_str(text)
+    }
+
+    /// Formats diagnostic text straight into the translation-unit arena.
+    pub(crate) fn diagnostic_format(&self, arguments: std::fmt::Arguments<'_>) -> &'tu str {
+        let mut text = ArenaString::new_in(self.tu);
+        std::fmt::Write::write_fmt(&mut text, arguments).expect("arena formatting cannot fail");
+        text.into_str()
+    }
+
+    pub(crate) fn diagnostic_slice<T: Copy>(&self, values: &[T]) -> &'tu mut [T] {
+        self.tu.alloc_slice_copy(values)
+    }
+
+    pub(crate) fn new(tu: &'tu Bump) -> Self {
+        Self::with_configuration(tu, CompilerConfiguration::default())
+    }
+
+    pub(crate) fn with_configuration(tu: &'tu Bump, configuration: CompilerConfiguration) -> Self {
+        let mut string_cache = StringCache::new(tu);
         for &keyword in KeywordTokenType::ALL {
             let id = string_cache.intern(keyword.spelling());
             debug_assert_eq!(
@@ -156,21 +400,22 @@ impl Context {
             );
         }
         Self {
+            tu,
             configuration,
-            source_vectors: SourceVectorStack(Vec::new()),
-            parser_token_vectors: Vec::new(),
-            retained_vectors: Vec::new(),
+            source_vectors: SourceVectorStack(RegionVec::new()),
+            parser_token_vectors: RegionVec::new(),
+            retained_vectors: RegionVec::new(),
             string_cache,
-            canonical_identifiers: HashMap::default(),
-            literal_values: DedupArena::new(),
-            expansion_sites: Default::default(),
-            is_tokenizing_include_string: false,
+            canonical_identifiers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            literal_values: DedupArena::new(tu),
+            expansion_sites: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
             ignore_tokenizer_errors: false,
-            lexing_strategy: LexingStrategy::default(),
-            pending_errors: VecDeque::new(),
+            pending_errors: ArenaQueue::new_in(tu),
             relocated_errors: 0,
-            source_files: DedupArena::new(),
-            source_texts: Vec::new(),
+            source_files: DedupArena::new(tu),
+            quote_include_directories: &[],
+            system_include_directories: &[],
+            source_texts: ArenaVec::new_in(tu),
         }
     }
 
@@ -219,78 +464,113 @@ impl Context {
         }
     }
 
+    /// How many macro invocation hints are still recorded.
     #[cfg(test)]
-    pub(crate) fn macro_hint_storage_capacity(&self) -> usize {
+    pub(crate) fn macro_hint_entries(&self) -> usize {
         self.expansion_sites
             .iter()
-            .map(|sites| {
-                sites.entries.capacity() * size_of::<(u32, u32)>()
-                    + sites.ends.capacity() * size_of::<SourceVector>()
-            })
+            .map(|sites| sites.entries.len())
             .sum()
     }
 
-    pub(crate) fn intern_literal(&mut self, units: Vec<LiteralUnit>) -> LiteralId {
-        LiteralId(self.literal_values.intern(units.into_boxed_slice()))
+    pub(crate) fn intern_literal(&mut self, units: &[LiteralUnit]) -> LiteralId {
+        let tu = self.tu;
+        LiteralId(
+            self.literal_values
+                .intern_by(units, || tu.alloc_slice_copy(units)),
+        )
     }
 
     pub(crate) fn literal_units(&self, id: LiteralId) -> &[LiteralUnit] {
-        &self.literal_values[id.0]
+        self.literal_values[id.0]
     }
 
-    pub(crate) fn literal_bytes(&self, id: LiteralId) -> Vec<u8> {
-        let mut bytes = Vec::new();
+    /// The literal's characters spelled in `arena`, if they are text.
+    /// Text-only consumers (filenames and tests) must reject non-UTF-8
+    /// values.
+    pub(crate) fn literal_text_in<'a>(
+        &self,
+        arena: &'a Bump,
+        id: LiteralId,
+        wide: bool,
+    ) -> Option<&'a str> {
+        let text = self.decode_literal_text(arena, id, wide)?.leak();
+        // SAFETY: decoding checked that these bytes are UTF-8.
+        Some(unsafe { std::str::from_utf8_unchecked(text) })
+    }
+
+    /// The literal's characters as UTF-8 in `arena`, if they are text.
+    fn decode_literal_text<'a>(
+        &self,
+        arena: &'a Bump,
+        id: LiteralId,
+        wide: bool,
+    ) -> Option<ArenaVec<'a, u8>> {
+        let mut text = ArenaVec::new_in(arena);
+        for unit in self.literal_units(id) {
+            let character = match *unit {
+                | LiteralUnit::Character(c) => c,
+                | LiteralUnit::Numeric(code) if wide => char::from_u32(code)?,
+                | LiteralUnit::Numeric(code) => {
+                    text.push(u8::try_from(code).expect("narrow escape checked during decoding"));
+                    continue;
+                },
+            };
+            text.extend_from_slice(character.encode_utf8(&mut [0; 4]).as_bytes());
+        }
+        std::str::from_utf8(&text).is_ok().then_some(text)
+    }
+
+    /// The literal as a C string literal in `arena`: quoted and escaped when
+    /// its characters are text, and as numeric escapes otherwise. The text is
+    /// decoded in `scratch` and taken back, unless something else is
+    /// allocated there meanwhile.
+    pub(crate) fn literal_spelling_in<'a>(
+        &self,
+        arena: &'a Bump,
+        scratch: &Bump,
+        id: LiteralId,
+        wide: bool,
+    ) -> &'a str {
+        let mut spelling = ArenaString::new_in(arena);
+        let text = self.decode_literal_text(scratch, id, wide);
+        let text = text
+            .as_deref()
+            .and_then(|text| std::str::from_utf8(text).ok());
+        self.write_literal_spelling(&mut spelling, text, id, wide)
+            .expect("arena formatting cannot fail");
+        spelling.into_str()
+    }
+
+    /// Writes the literal as a C string literal: quoted and escaped when
+    /// `text` holds its characters, and as numeric escapes otherwise.
+    fn write_literal_spelling(
+        &self,
+        out: &mut impl std::fmt::Write,
+        text: Option<&str>,
+        id: LiteralId,
+        wide: bool,
+    ) -> std::fmt::Result {
+        if let Some(text) = text {
+            return crate::diagnostics::write_c_quoted(out, if wide { "L" } else { "" }, '"', text);
+        }
+        out.write_str(if wide { "L\"" } else { "\"" })?;
         for unit in self.literal_units(id) {
             match *unit {
-                | LiteralUnit::Character(c) => {
-                    bytes.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
-                },
-                | LiteralUnit::Numeric(code) =>
-                    bytes.push(u8::try_from(code).expect("narrow escape checked during decoding")),
+                | LiteralUnit::Character(c) if wide => write!(out, "\\x{:x}", u32::from(c))?,
+                | LiteralUnit::Numeric(code) if wide => write!(out, "\\x{code:x}")?,
+                | LiteralUnit::Character(c) =>
+                    for byte in c.encode_utf8(&mut [0; 4]).bytes() {
+                        write!(out, "\\{byte:03o}")?;
+                    },
+                | LiteralUnit::Numeric(code) => write!(
+                    out,
+                    "\\{:03o}",
+                    u8::try_from(code).expect("narrow escape checked during decoding")
+                )?,
             }
         }
-        bytes
-    }
-
-    pub(crate) fn literal_wide_units(&self, id: LiteralId) -> Vec<u32> {
-        self.literal_units(id)
-            .iter()
-            .map(|unit| match *unit {
-                | LiteralUnit::Character(c) => u32::from(c),
-                | LiteralUnit::Numeric(code) => code,
-            })
-            .collect()
-    }
-
-    /// Text-only consumers (filenames and tests) must reject non-UTF-8 values.
-    pub(crate) fn literal_text(&self, id: LiteralId, wide: bool) -> Option<String> {
-        if wide {
-            self.literal_wide_units(id)
-                .into_iter()
-                .map(char::from_u32)
-                .collect()
-        } else {
-            String::from_utf8(self.literal_bytes(id)).ok()
-        }
-    }
-
-    pub(crate) fn literal_spelling(&self, id: LiteralId, wide: bool) -> String {
-        use std::fmt::Write;
-        if let Some(text) = self.literal_text(id, wide) {
-            return crate::diagnostics::c_quoted(if wide { "L" } else { "" }, '"', &text);
-        }
-        let mut spelling = String::from(if wide { "L\"" } else { "\"" });
-        if wide {
-            for unit in self.literal_wide_units(id) {
-                let _ = write!(spelling, "\\x{unit:x}");
-            }
-        } else {
-            for byte in self.literal_bytes(id) {
-                let _ = write!(spelling, "\\{byte:03o}");
-            }
-        }
-        spelling.push('"');
-        spelling
+        out.write_char('"')
     }
 
     pub(crate) fn push_source_vector(
@@ -312,7 +592,7 @@ impl Context {
         reason = "We already checked that it is in range before casting"
     )]
     pub(crate) fn duplicate_source_vectors(
-        self_source_vectors: &mut Vec<SourceVector>,
+        self_source_vectors: &mut RegionVec<SourceVector>,
         source_vectors: SourceVectors,
     ) -> u32 {
         let end = u32::try_from(source_vectors.length as usize + self_source_vectors.len())
@@ -393,37 +673,17 @@ impl Context {
     /// Parser anchors are dropped as in [`Self::merge_vectors`]: after the
     /// first nonempty range, or before the range they point at.
     pub(crate) fn merge_vector_list(&mut self, sources: &[SourceVectors]) -> SourceVectors {
-        let mut kept = Vec::new();
-        let sources = if sources.iter().any(|source| self.is_parser_anchor(*source)) {
-            // Before the first real range, an anchor is dropped only if it
-            // points at the start of the next real range.
-            let first_real = sources
-                .iter()
-                .find(|source| source.length != 0 && !self.is_parser_anchor(**source))
-                .copied();
-            let mut real_seen = false;
-            for source in sources.iter().filter(|source| source.length != 0) {
-                if self.is_parser_anchor(*source) {
-                    if real_seen
-                        || first_real.is_some_and(|first| self.anchors_start_of(*source, first))
-                    {
-                        continue;
-                    }
-                } else {
-                    real_seen = true;
-                }
-                kept.push(*source);
-            }
-            &kept[..]
-        } else {
-            sources
-        };
+        let anchors = MergeAnchors::new(self, sources);
+        let mut kept = anchors;
         let mut first = None;
         let mut end = 0;
         let mut contiguous = true;
         let mut all_preprocessor = true;
-        for source in sources.iter().filter(|source| source.length != 0) {
-            let (arena, start) = SourceArena::decode(*source);
+        for &source in sources {
+            if !kept.keeps(self, source) {
+                continue;
+            }
+            let (arena, start) = SourceArena::decode(source);
             all_preprocessor &= arena == SourceArena::Preprocessor;
             match first {
                 | None => first = Some((arena, start)),
@@ -442,8 +702,11 @@ impl Context {
         }
         let target = Self::merge_target(all_preprocessor);
         let start = self.arena(target).len().to_u32();
-        for source in sources.iter().filter(|source| source.length != 0) {
-            self.copy_into(target, *source);
+        let mut kept = anchors;
+        for &source in sources {
+            if kept.keeps(self, source) {
+                self.copy_into(target, source);
+            }
         }
         target.encode(start, self.arena(target).len().to_u32())
     }
@@ -466,9 +729,9 @@ impl Context {
         anchor.source_file_index == start.source_file_index && anchor.index == start.index
     }
 
-    /// Copies a phase-6 output token's provenance into the token arena once,
-    /// so provenance of consecutive tokens is adjacent and survives
-    /// [`Self::compact_preprocessor_vectors`].
+    /// Copies a phase-6 output token's provenance into the parser-token
+    /// provenance once, so provenance of consecutive tokens is adjacent and
+    /// survives [`Self::compact_preprocessor_vectors`].
     pub(crate) fn retain_token_source(&mut self, source_vectors: SourceVectors) -> SourceVectors {
         if source_vectors.length == 0
             || SourceArena::decode(source_vectors).0 != SourceArena::Preprocessor
@@ -501,7 +764,8 @@ impl Context {
         if self.source_vectors.0.is_empty() {
             return;
         }
-        let mut pending_errors = std::mem::take(&mut self.pending_errors);
+        let mut pending_errors =
+            std::mem::replace(&mut self.pending_errors, ArenaQueue::new_in(self.tu));
         for error in pending_errors.iter_mut().skip(self.relocated_errors) {
             error.for_each_source_vectors_mut(&mut |source_vectors| {
                 *source_vectors = self.retain_preprocessor_range(*source_vectors);
@@ -511,6 +775,16 @@ impl Context {
         self.pending_errors = pending_errors;
         self.source_vectors.0.clear();
         self.expansion_sites[SourceArena::Preprocessor as usize].clear();
+    }
+
+    /// Discards the preprocessor provenance arena once preprocessing has
+    /// ended and releases its region, which would otherwise stay reserved,
+    /// empty, through parsing. Parsed tokens and parser locations use the
+    /// other two arenas; a later preprocessor-arena range would reserve a new
+    /// region.
+    pub(crate) fn release_preprocessor_vectors(&mut self) {
+        self.compact_preprocessor_vectors();
+        self.source_vectors.0 = RegionVec::new();
     }
 
     /// Copies a preprocessor-arena range into the retained arena; other
@@ -539,7 +813,7 @@ impl Context {
         }
     }
 
-    fn arena(&self, arena: SourceArena) -> &Vec<SourceVector> {
+    fn arena(&self, arena: SourceArena) -> &[SourceVector] {
         match arena {
             | SourceArena::Preprocessor => &self.source_vectors.0,
             | SourceArena::ParserTokens => &self.parser_token_vectors,
@@ -587,24 +861,6 @@ impl Context {
         target.extend_from_slice(source);
     }
 
-    /// When translation phases 1 through 3 run for source buffers opened
-    /// from now on.
-    pub(crate) fn lexing_strategy(&self) -> LexingStrategy {
-        self.lexing_strategy
-    }
-
-    pub(crate) fn set_lexing_strategy(&mut self, strategy: LexingStrategy) {
-        self.lexing_strategy = strategy;
-    }
-
-    pub(crate) fn is_tokenizing_include_string(&self) -> bool {
-        self.is_tokenizing_include_string
-    }
-
-    pub(crate) fn set_is_tokenizing_include_string(&mut self, value: bool) {
-        self.is_tokenizing_include_string = value;
-    }
-
     pub(crate) fn ignore_tokenizer_errors(&self) -> bool {
         self.ignore_tokenizer_errors
     }
@@ -641,9 +897,21 @@ impl Context {
         }
     }
 
+    /// The quoted include extension treats the first quote after a backslash
+    /// as the header delimiter, even though phase 3 lexed it as an escape.
+    pub(crate) fn withdraw_quoted_header_lexer_error(&mut self, source: &SourceVector) {
+        self.pending_errors.retain(|error| {
+            !matches!(error, TranslationError::PreprocessorTokenizining(error) if error.is_unclosed_header_string_at(source))
+        });
+        // Retaining can remove a diagnostic from the relocated prefix.
+        // Rechecking already-retained ranges during the next compaction is
+        // safe.
+        self.relocated_errors = 0;
+    }
+
     #[cold]
     #[inline(never)]
-    pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError) {
+    pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError<'tu>) {
         self.pending_errors
             .push_back(TranslationError::Preprocessing(error));
     }
@@ -651,37 +919,55 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn raw_preprocessor_error(
-        self_pending_errors: &mut impl Extend<TranslationError>,
-        error: PreprocessorError,
+        self_pending_errors: &mut impl Extend<TranslationError<'tu>>,
+        error: PreprocessorError<'tu>,
     ) {
         self_pending_errors.extend([TranslationError::Preprocessing(error)]);
     }
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn parser_error(&mut self, error: ParserError) {
+    pub(crate) fn parser_error(&mut self, error: ParserError<'tu>) {
         self.pending_errors
             .push_back(TranslationError::Parsing(error));
     }
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError> {
+    pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError<'tu>> {
         let error = self.pending_errors.pop_front();
         self.relocated_errors = self.relocated_errors.saturating_sub(1);
         error
     }
 
-    pub(crate) fn has_pending_errors(&self) -> bool {
-        !self.pending_errors.is_empty()
+    pub(crate) fn pending_error_count(&self) -> usize {
+        self.pending_errors.len()
     }
 
-    pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError> {
+    #[cfg(test)]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Test-only owned list of the pending errors, compiled only under `cfg(test)`."
+    )]
+    pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError<'tu>> {
         self.relocated_errors = 0;
-        std::mem::take(&mut self.pending_errors).into()
+        std::iter::from_fn(|| self.pending_errors.pop_front()).collect()
     }
 
-    pub(crate) fn append_pending_errors(&mut self, errors: Vec<TranslationError>) {
+    /// Removes and yields the pending errors after the first `keep`, in
+    /// order.
+    pub(crate) fn split_off_pending_errors(
+        &mut self,
+        keep: usize,
+    ) -> impl Iterator<Item = TranslationError<'tu>> + '_ {
+        self.relocated_errors = self.relocated_errors.min(keep);
+        self.pending_errors.split_off(keep)
+    }
+
+    pub(crate) fn append_pending_errors(
+        &mut self,
+        errors: impl IntoIterator<Item = TranslationError<'tu>>,
+    ) {
         self.pending_errors.extend(errors);
     }
 
@@ -699,30 +985,86 @@ impl Context {
         &self.arena(arena)[start as usize]
     }
 
-    pub(crate) fn intern_source_file(&mut self, path: Box<Path>) -> u32 {
-        self.source_files.intern(path)
+    pub(crate) fn intern_source_file(&mut self, path: &Path) -> u32 {
+        let tu = self.tu;
+        self.source_files
+            .intern_by(path, || Self::alloc_path(tu, path))
     }
 
     /// Registers synthetic source text under a fresh identity, even when
     /// `path` names an earlier input, so diagnostics retained from each
     /// input keep quoting their own text.
-    pub(crate) fn add_synthetic_source_file(&mut self, path: Box<Path>, text: SharedString) -> u32 {
-        let index = self.source_files.push_unindexed(path);
-        self.record_source_text(index, text);
+    pub(crate) fn add_synthetic_source_file(&mut self, path: &Path, text: &'tu str) -> u32 {
+        let index = self
+            .source_files
+            .push_unindexed(Self::alloc_path(self.tu, path));
+        self.record_arena_source_text(index, text);
         index
     }
 
     pub(crate) fn get_source_file(&self, index: u32) -> &Path {
-        &self.source_files[index]
+        self.source_files[index]
+    }
+
+    pub(crate) fn set_include_directories(&mut self, quote: &[&Path], system: &[&Path]) {
+        self.quote_include_directories = self
+            .tu
+            .alloc_slice_fill_iter(quote.iter().map(|path| Self::alloc_path(self.tu, path)));
+        self.system_include_directories = self
+            .tu
+            .alloc_slice_fill_iter(system.iter().map(|path| Self::alloc_path(self.tu, path)));
+    }
+
+    /// The directories searched for a header named in a file, in order: for
+    /// a `"…"` name the including file's directory and the quote
+    /// directories, then for both forms the system directories.
+    pub(crate) fn include_search_directories(
+        &self,
+        including_file: u32,
+        is_system_header: bool,
+    ) -> impl Iterator<Item = &'tu Path> + Clone + use<'tu> {
+        let including_file: &'tu Path = self.source_files[including_file];
+        let quote_directories: &'tu [&'tu Path] = self.quote_include_directories;
+        let system_directories: &'tu [&'tu Path] = self.system_include_directories;
+        let quote = (!is_system_header).then(|| {
+            let directory = including_file.parent().unwrap_or_else(|| Path::new(""));
+            std::iter::once(directory).chain(quote_directories.iter().copied())
+        });
+        quote
+            .into_iter()
+            .flatten()
+            .chain(system_directories.iter().copied())
+    }
+
+    fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {
+        let bytes = tu.alloc_slice_copy(path.as_os_str().as_encoded_bytes());
+        // SAFETY: These are the complete encoded bytes of an OsStr from this
+        // process and target, copied without splitting or changing them.
+        Path::new(unsafe { OsStr::from_encoded_bytes_unchecked(bytes) })
     }
 
     /// Remembers the text a source file was translated from.
-    pub(crate) fn record_source_text(&mut self, index: u32, text: SharedString) {
+    pub(crate) fn record_source_text(&mut self, index: u32, text: &str) {
+        let text = self.tu.alloc_str(text);
+        self.record_arena_source_text(index, text);
+    }
+
+    pub(crate) fn record_arena_source_text(&mut self, index: u32, text: &'tu str) {
         let index = index as usize;
         if self.source_texts.len() <= index {
-            self.source_texts.resize(index + 1, None);
+            self.source_texts.resize_with(index + 1, || None);
         }
-        self.source_texts[index] = Some(text);
+        self.source_texts[index] = Some(SourceText {
+            text,
+            line_starts: OnceCell::new(),
+        });
+    }
+
+    /// Reads and retains an included file without a temporary heap string.
+    pub(crate) fn read_source_file(&mut self, index: u32) -> std::io::Result<&'tu str> {
+        let text = self.tu.read_to_str_lossy(self.get_source_file(index))?;
+        self.record_arena_source_text(index, text);
+        Ok(text)
     }
 
     /// Returns the text of a source file, if it was recorded.
@@ -730,7 +1072,28 @@ impl Context {
         self.source_texts
             .get(index as usize)?
             .as_ref()
-            .map(|text| &**text)
+            .map(|source| source.text)
+    }
+
+    /// Byte offsets at which physical lines start, built only when a
+    /// diagnostic needs them and retained across renderers. LF, CRLF, and
+    /// lone CR each end a line, just as in initial processing.
+    pub(crate) fn source_line_starts(&self, index: u32) -> Option<&'tu [usize]> {
+        let source = self.source_texts.get(index as usize)?.as_ref()?;
+        Some(*source.line_starts.get_or_init(|| {
+            let bytes = source.text.as_bytes();
+            self.tu.alloc_slice_fill_iter(
+                std::iter::once(0).chain(
+                    bytes
+                        .iter()
+                        .enumerate()
+                        .filter(|&(index, &byte)| {
+                            byte == b'\n' || (byte == b'\r' && bytes.get(index + 1) != Some(&b'\n'))
+                        })
+                        .map(|(index, _)| index + 1),
+                ),
+            )
+        }))
     }
 
     /// Returns the exact source spelling covered by a single-segment range.
@@ -743,17 +1106,197 @@ impl Context {
     }
 }
 
+/// Which ranges [`Context::merge_vector_list`] keeps, decided in order
+/// without collecting them: empty ranges are dropped, and parser anchors are
+/// dropped after the first real range, or before it when they point at its
+/// start.
+#[derive(Clone, Copy)]
+struct MergeAnchors {
+    /// Whether any range is an anchor; otherwise every nonempty range stays.
+    any:        bool,
+    first_real: Option<SourceVectors>,
+    real_seen:  bool,
+}
+
+impl MergeAnchors {
+    fn new(context: &Context<'_>, sources: &[SourceVectors]) -> Self {
+        let any = sources
+            .iter()
+            .any(|source| context.is_parser_anchor(*source));
+        Self {
+            any,
+            first_real: any
+                .then(|| {
+                    sources
+                        .iter()
+                        .find(|source| source.length != 0 && !context.is_parser_anchor(**source))
+                        .copied()
+                })
+                .flatten(),
+            real_seen: false,
+        }
+    }
+
+    /// Whether the next range in order, `source`, is kept.
+    fn keeps(&mut self, context: &Context<'_>, source: SourceVectors) -> bool {
+        if source.length == 0 {
+            return false;
+        }
+        if !self.any {
+            return true;
+        }
+        if context.is_parser_anchor(source) {
+            !(self.real_seen
+                || self
+                    .first_real
+                    .is_some_and(|first| context.anchors_start_of(source, first)))
+        } else {
+            self.real_seen = true;
+            true
+        }
+    }
+}
+
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
 mod tests {
     use super::{
         Context,
+        SegmentedVec,
         SourceArena,
         SourceVector,
     };
 
     #[test]
+    fn source_line_indices_are_lazy_reused_and_replaced_with_the_text() {
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let file = context.intern_source_file(std::path::Path::new("example.c"));
+        assert_eq!(context.source_line_starts(file), None);
+        context.record_arena_source_text(file, "a\r\nb\rc\n");
+        assert!(
+            context.source_texts[file as usize]
+                .as_ref()
+                .unwrap()
+                .line_starts
+                .get()
+                .is_none()
+        );
+        let starts = context.source_line_starts(file).unwrap();
+        assert_eq!(starts, &[0, 3, 5, 7]);
+        let used = tu.used();
+        for _ in 0..1_000 {
+            assert!(std::ptr::eq(
+                context.source_line_starts(file).unwrap(),
+                starts
+            ));
+        }
+        assert_eq!(tu.used(), used);
+
+        context.record_arena_source_text(file, "x\ny");
+        assert_eq!(context.source_line_starts(file), Some(&[0, 2][..]));
+        // A previously borrowed index still lives as long as the TU arena.
+        assert_eq!(starts, &[0, 3, 5, 7]);
+        context.record_arena_source_text(file, "");
+        assert_eq!(context.source_line_starts(file), Some(&[0][..]));
+    }
+
+    #[test]
+    fn segmented_vectors_keep_order_across_segments_and_reuse_them() {
+        let arena = crate::util::bump::Bump::new();
+        let mut values = SegmentedVec::new_in(&arena);
+        // 100 values span the first three segments (16, 32, and 64).
+        for value in (0..200).step_by(2) {
+            values.push(value);
+        }
+        values.insert(50, 99);
+        let mut expected: Vec<i32> = (0..100).step_by(2).collect();
+        expected.push(99);
+        expected.extend((100..200).step_by(2));
+        assert_eq!(values.iter().copied().collect::<Vec<_>>(), expected);
+        assert_eq!(values.partition_point(|&value| value < 100), 51);
+        assert_eq!(values.last(), Some(&198));
+
+        values.discard_front(10);
+        assert_eq!((values.len(), values[0]), (91, 20));
+        assert_eq!(values.partition_point(|&value| value < 100), 41);
+        assert_eq!(values.iter().count(), 91);
+        values.for_each_mut(|value| *value += 1);
+        assert_eq!(values[0], 21);
+
+        // Clearing keeps the segments, so refilling takes no arena memory.
+        let used = arena.used();
+        values.clear();
+        assert!(values.is_empty());
+        for value in 0..100 {
+            values.push(value);
+        }
+        assert_eq!(arena.used(), used);
+        assert_eq!(
+            values.iter().copied().collect::<Vec<_>>(),
+            (0..100).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn repeated_literal_values_keep_one_identity_after_arena_growth() {
+        use crate::translation_phases::preprocessing::LiteralUnit;
+
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let original = [LiteralUnit::Character('é'), LiteralUnit::Numeric(0)];
+        let id = context.intern_literal(&original);
+        for value in 0..2_000 {
+            _ = context.intern_literal(&[LiteralUnit::Numeric(value)]);
+        }
+        assert_eq!(context.intern_literal(&original), id);
+        assert_eq!(context.literal_units(id), original);
+    }
+
+    #[test]
+    fn source_paths_keep_indices_and_synthetic_inputs_keep_distinct_text() {
+        use std::path::PathBuf;
+
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let path = PathBuf::from("included/header.h");
+        let first = context.intern_source_file(&path);
+        for index in 0..2_000 {
+            _ = context.intern_source_file(&PathBuf::from(format!("included/{index}.h")));
+        }
+        assert_eq!(context.intern_source_file(&path), first);
+        assert_eq!(context.get_source_file(first), path);
+        let synthetic = context.add_synthetic_source_file(&path, "second input");
+        assert_ne!(synthetic, first);
+        assert_eq!(context.source_text(synthetic), Some("second input"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_paths_preserve_unpaired_utf16_surrogates() {
+        use std::{
+            ffi::OsString,
+            os::windows::ffi::OsStringExt,
+            path::PathBuf,
+        };
+
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let path = PathBuf::from(OsString::from_wide(&[u16::from(b'x'), 0xD800]));
+        let id = context.intern_source_file(&path);
+        assert_eq!(context.get_source_file(id), path);
+        assert_eq!(context.intern_source_file(&path), id);
+    }
+
+    #[test]
     fn macro_locations_survive_compaction_without_retaining_temporary_metadata() {
-        let mut context = Context::new();
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
         let mut saved = Vec::new();
         for index in 0..2_000 {
             let source = context.push_source_vectors(&[SourceVector {
@@ -772,8 +1315,8 @@ mod tests {
             saved.push((token, retained, site));
             context.compact_preprocessor_vectors();
             let temporary = &context.expansion_sites[SourceArena::Preprocessor as usize];
-            assert_eq!(temporary.entries, []);
-            assert_eq!(temporary.ends, []);
+            assert!(temporary.entries.is_empty());
+            assert!(temporary.ends.is_empty());
         }
         for (token, retained, site) in saved {
             assert_eq!(context.user_source_end(token), Some(site.clone()));

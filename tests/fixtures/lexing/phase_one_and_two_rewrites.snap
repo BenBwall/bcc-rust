@@ -1,0 +1,213 @@
+=== "??=define ??( ??) ??< ??> ??' ??! ??- ??/ ???= ?? ?\n" []
+Hash "#" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Identifier "define" [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+Whitespace " " [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 10, line: 1, column: 11 }
+OpeningSquareBracket "[" [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 13, line: 1, column: 14 }
+Whitespace " " [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 14, line: 1, column: 15 }
+ClosingSquareBracket "]" [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 17, line: 1, column: 18 }
+Whitespace " " [SourceVector { index: 17, column: 18, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 18, line: 1, column: 19 }
+OpeningCurlyBrace "{" [SourceVector { index: 18, column: 19, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 21, line: 1, column: 22 }
+Whitespace " " [SourceVector { index: 21, column: 22, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 22, line: 1, column: 23 }
+ClosingCurlyBrace "}" [SourceVector { index: 22, column: 23, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 25, line: 1, column: 26 }
+Whitespace " " [SourceVector { index: 25, column: 26, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 26, line: 1, column: 27 }
+Caret "^" [SourceVector { index: 26, column: 27, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 29, line: 1, column: 30 }
+Whitespace " " [SourceVector { index: 29, column: 30, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 30, line: 1, column: 31 }
+Pipe "|" [SourceVector { index: 30, column: 31, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 33, line: 1, column: 34 }
+Whitespace " " [SourceVector { index: 33, column: 34, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 34, line: 1, column: 35 }
+Tilde "~" [SourceVector { index: 34, column: 35, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 37, line: 1, column: 38 }
+Whitespace " " [SourceVector { index: 37, column: 38, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 38, line: 1, column: 39 }
+Other "\\" [SourceVector { index: 38, column: 39, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 41, line: 1, column: 42 }
+Whitespace " " [SourceVector { index: 41, column: 42, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 42, line: 1, column: 43 }
+QuestionMark "?" [SourceVector { index: 42, column: 43, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 43, line: 1, column: 44 }
+Hash "#" [SourceVector { index: 43, column: 44, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 46, line: 1, column: 47 }
+Whitespace " " [SourceVector { index: 46, column: 47, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 47, line: 1, column: 48 }
+QuestionMark "?" [SourceVector { index: 47, column: 48, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 48, line: 1, column: 49 }
+QuestionMark "?" [SourceVector { index: 48, column: 49, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 49, line: 1, column: 50 }
+Whitespace " " [SourceVector { index: 49, column: 50, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 50, line: 1, column: 51 }
+QuestionMark "?" [SourceVector { index: 50, column: 51, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 51, line: 1, column: 52 }
+Newline "\n" [SourceVector { index: 51, column: 52, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 52, line: 2, column: 1 }
+end
+at SourcePosition { index: 52, line: 2, column: 1 }
+=== "ab\\\ncd \\\r\nef\\\rgh\n" []
+Identifier "abcd" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 6, line: 2, column: 3 }
+Whitespace " " [SourceVector { index: 6, column: 3, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 2, column: 4 }
+Identifier "efgh" [SourceVector { index: 7, column: 4, line: 2, source_file_index: 0, length: 9 }]
+at SourcePosition { index: 16, line: 4, column: 3 }
+Newline "\n" [SourceVector { index: 16, column: 3, line: 4, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 17, line: 5, column: 1 }
+end
+at SourcePosition { index: 17, line: 5, column: 1 }
+=== "line1\r\nline2\rline3\n" []
+Identifier "line1" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+Newline "\n" [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 7, line: 2, column: 1 }
+Identifier "line2" [SourceVector { index: 7, column: 1, line: 2, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 12, line: 2, column: 6 }
+Newline "\n" [SourceVector { index: 12, column: 6, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 13, line: 3, column: 1 }
+Identifier "line3" [SourceVector { index: 13, column: 1, line: 3, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 18, line: 3, column: 6 }
+Newline "\n" [SourceVector { index: 18, column: 6, line: 3, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 19, line: 4, column: 1 }
+end
+at SourcePosition { index: 19, line: 4, column: 1 }
+=== "x ??/\ny\n" []
+Identifier "x" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+Identifier "y" [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 7, line: 2, column: 2 }
+Newline "\n" [SourceVector { index: 7, column: 2, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 3, column: 1 }
+end
+at SourcePosition { index: 8, line: 3, column: 1 }
+=== "\"str\\\ning\" 'a\\\n'\n" []
+String "\"string\"" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 10 }]
+at SourcePosition { index: 10, line: 2, column: 5 }
+Whitespace " " [SourceVector { index: 10, column: 5, line: 2, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 11, line: 2, column: 6 }
+Character "'a'" [SourceVector { index: 11, column: 6, line: 2, source_file_index: 0, length: 5 }]
+at SourcePosition { index: 16, line: 3, column: 2 }
+Newline "\n" [SourceVector { index: 16, column: 2, line: 3, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 17, line: 4, column: 1 }
+end
+at SourcePosition { index: 17, line: 4, column: 1 }
+=== "trailing\\\n" []
+diagnostic [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:9
+  |
+1 | trailing\
+  |         ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "trailing" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 8 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+end
+at SourcePosition { index: 10, line: 2, column: 1 }
+=== "trailing splice\\\n\\\n" []
+Identifier "trailing" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 8 }]
+at SourcePosition { index: 8, line: 1, column: 9 }
+Whitespace " " [SourceVector { index: 8, column: 9, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 9, line: 1, column: 10 }
+diagnostic [SourceVector { index: 17, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "splice" [SourceVector { index: 9, column: 10, line: 1, source_file_index: 0, length: 6 }]
+at SourcePosition { index: 15, line: 1, column: 16 }
+end
+at SourcePosition { index: 19, line: 3, column: 1 }
+=== "x\\" []
+Identifier "x" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Other "\\" [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+diagnostic [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 0 }]
+warning: no newline at end of file
+ --> <test>:1:3
+  |
+1 | x\
+  |   ^ the file ends without a newline
+  |
+  = note: C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character
+  = help: add a newline at the end of the file
+
+
+Newline "\n" [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 0 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+end
+at SourcePosition { index: 2, line: 1, column: 3 }
+=== "\\ $ @ `\n" []
+Other "\\" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+Other "$" [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Whitespace " " [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+Other "@" [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+Whitespace " " [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Other "`" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+Newline "\n" [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 2, column: 1 }
+end
+at SourcePosition { index: 8, line: 2, column: 1 }
+=== "a ??/ b\n" []
+Identifier "a" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 2, line: 1, column: 3 }
+Other "\\" [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+Whitespace " " [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Identifier "b" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 1, column: 8 }
+Newline "\n" [SourceVector { index: 7, column: 8, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 8, line: 2, column: 1 }
+end
+at SourcePosition { index: 8, line: 2, column: 1 }
+=== "/**/1e\\\n" []
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+diagnostic [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:7
+  |
+1 | /**/1e\
+  |       ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Number "1e\0" [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 8, line: 2, column: 1 }
+end
+at SourcePosition { index: 8, line: 2, column: 1 }

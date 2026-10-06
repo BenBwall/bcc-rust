@@ -1,0 +1,783 @@
+=== "\n\\\n" []
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 3, line: 3, column: 1 }
+=== "\n\\\n" [Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 3, line: 3, column: 1 }
+=== "\n\\\n" [Next, Save, Next, Restore]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 3, line: 3, column: 1 }
+end
+at SourcePosition { index: 3, line: 3, column: 1 }
+=== "\n\\\n" [SetLine(90), Next, Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 91, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 91, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:91:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 3, line: 92, column: 1 }
+end
+at SourcePosition { index: 3, line: 92, column: 1 }
+end
+at SourcePosition { index: 3, line: 92, column: 1 }
+=== "\n??/\n" []
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 4 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | ??/
+  | ^^^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 3, column: 1 }
+=== "\n??/\n" [Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 4 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | ??/
+  | ^^^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 3, column: 1 }
+=== "\n??/\n" [Next, Save, Next, Restore]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 4 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | ??/
+  | ^^^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 3, column: 1 }
+end
+at SourcePosition { index: 5, line: 3, column: 1 }
+=== "\n??/\n" [SetLine(90), Next, Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 91, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 91, source_file_index: 0, length: 4 }]
+warning: final newline is escaped
+ --> <test>:91:1
+  |
+2 | ??/
+  | ^^^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 92, column: 1 }
+end
+at SourcePosition { index: 5, line: 92, column: 1 }
+end
+at SourcePosition { index: 5, line: 92, column: 1 }
+=== "\r\n\\\r\n" []
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 2, column: 1 }
+diagnostic [SourceVector { index: 2, column: 1, line: 2, source_file_index: 0, length: 3 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 3, column: 1 }
+=== "\r\n\\\r\n" [Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 2, column: 1 }
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 2, column: 1 }
+diagnostic [SourceVector { index: 2, column: 1, line: 2, source_file_index: 0, length: 3 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 3, column: 1 }
+=== "\r\n\\\r\n" [Next, Save, Next, Restore]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 2, column: 1 }
+diagnostic [SourceVector { index: 2, column: 1, line: 2, source_file_index: 0, length: 3 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 3, column: 1 }
+end
+at SourcePosition { index: 5, line: 3, column: 1 }
+=== "\r\n\\\r\n" [SetLine(90), Next, Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 91, column: 1 }
+diagnostic [SourceVector { index: 2, column: 1, line: 91, source_file_index: 0, length: 3 }]
+warning: final newline is escaped
+ --> <test>:91:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 92, column: 1 }
+end
+at SourcePosition { index: 5, line: 92, column: 1 }
+end
+at SourcePosition { index: 5, line: 92, column: 1 }
+=== "\r\n??/\r\n" []
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 2, column: 1 }
+diagnostic [SourceVector { index: 2, column: 1, line: 2, source_file_index: 0, length: 5 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | ??/
+  | ^^^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 7, line: 3, column: 1 }
+=== "\r\n??/\r\n" [Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 2, column: 1 }
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 2, column: 1 }
+diagnostic [SourceVector { index: 2, column: 1, line: 2, source_file_index: 0, length: 5 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | ??/
+  | ^^^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 7, line: 3, column: 1 }
+=== "\r\n??/\r\n" [Next, Save, Next, Restore]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 2, column: 1 }
+diagnostic [SourceVector { index: 2, column: 1, line: 2, source_file_index: 0, length: 5 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | ??/
+  | ^^^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 7, line: 3, column: 1 }
+end
+at SourcePosition { index: 7, line: 3, column: 1 }
+=== "\r\n??/\r\n" [SetLine(90), Next, Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 91, column: 1 }
+diagnostic [SourceVector { index: 2, column: 1, line: 91, source_file_index: 0, length: 5 }]
+warning: final newline is escaped
+ --> <test>:91:1
+  |
+2 | ??/
+  | ^^^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 7, line: 92, column: 1 }
+end
+at SourcePosition { index: 7, line: 92, column: 1 }
+end
+at SourcePosition { index: 7, line: 92, column: 1 }
+=== "\r\\\r" []
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 3, line: 3, column: 1 }
+=== "\r\\\r" [Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 3, line: 3, column: 1 }
+=== "\r\\\r" [Next, Save, Next, Restore]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 3, line: 3, column: 1 }
+end
+at SourcePosition { index: 3, line: 3, column: 1 }
+=== "\r\\\r" [SetLine(90), Next, Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 91, column: 1 }
+diagnostic [SourceVector { index: 1, column: 1, line: 91, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:91:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 3, line: 92, column: 1 }
+end
+at SourcePosition { index: 3, line: 92, column: 1 }
+end
+at SourcePosition { index: 3, line: 92, column: 1 }
+=== "int x;\n\\\n" []
+Identifier "int" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Whitespace " " [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+Identifier "x" [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+SemiColon ";" [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Newline "\n" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 2, column: 1 }
+diagnostic [SourceVector { index: 7, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 9, line: 3, column: 1 }
+=== "int x;\n\\\n" [Save, Next, Restore, Next]
+Identifier "int" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Identifier "int" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Whitespace " " [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+Identifier "x" [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+SemiColon ";" [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Newline "\n" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 2, column: 1 }
+diagnostic [SourceVector { index: 7, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 9, line: 3, column: 1 }
+=== "int x;\n\\\n" [Next, Save, Next, Restore]
+Identifier "int" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 3, line: 1, column: 4 }
+Whitespace " " [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+Whitespace " " [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+Identifier "x" [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 5, line: 1, column: 6 }
+SemiColon ";" [SourceVector { index: 5, column: 6, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 1, column: 7 }
+Newline "\n" [SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 2, column: 1 }
+diagnostic [SourceVector { index: 7, column: 1, line: 2, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:2:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 9, line: 3, column: 1 }
+=== "int x;\n\\\n" [SetLine(90), Next, Save, Next, Restore, Next]
+Identifier "int" [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 3 }]
+at SourcePosition { index: 3, line: 90, column: 4 }
+Whitespace " " [SourceVector { index: 3, column: 4, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 90, column: 5 }
+Whitespace " " [SourceVector { index: 3, column: 4, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 4, line: 90, column: 5 }
+Identifier "x" [SourceVector { index: 4, column: 5, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 5, line: 90, column: 6 }
+SemiColon ";" [SourceVector { index: 5, column: 6, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 6, line: 90, column: 7 }
+Newline "\n" [SourceVector { index: 6, column: 7, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 7, line: 91, column: 1 }
+diagnostic [SourceVector { index: 7, column: 1, line: 91, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:91:1
+  |
+2 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 9, line: 92, column: 1 }
+=== "word\\\n" []
+diagnostic [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:5
+  |
+1 | word\
+  |     ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "word" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+end
+at SourcePosition { index: 6, line: 2, column: 1 }
+=== "word\\\n" [Save, Next, Restore, Next]
+diagnostic [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:5
+  |
+1 | word\
+  |     ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "word" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+diagnostic [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:5
+  |
+1 | word\
+  |     ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "word" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+end
+at SourcePosition { index: 6, line: 2, column: 1 }
+=== "word\\\n" [Next, Save, Next, Restore]
+diagnostic [SourceVector { index: 4, column: 5, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:5
+  |
+1 | word\
+  |     ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "word" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 4, line: 1, column: 5 }
+end
+at SourcePosition { index: 6, line: 2, column: 1 }
+end
+at SourcePosition { index: 6, line: 2, column: 1 }
+=== "word\\\n" [SetLine(90), Next, Save, Next, Restore, Next]
+diagnostic [SourceVector { index: 4, column: 5, line: 90, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:90:5
+  |
+1 | word\
+  |     ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "word" [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 4 }]
+at SourcePosition { index: 4, line: 90, column: 5 }
+end
+at SourcePosition { index: 6, line: 91, column: 1 }
+end
+at SourcePosition { index: 6, line: 91, column: 1 }
+end
+at SourcePosition { index: 6, line: 91, column: 1 }
+=== " \\\n" []
+diagnostic [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:2
+  |
+1 |  \
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+end
+at SourcePosition { index: 3, line: 2, column: 1 }
+=== " \\\n" [Save, Next, Restore, Next]
+diagnostic [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:2
+  |
+1 |  \
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+diagnostic [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:2
+  |
+1 |  \
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+end
+at SourcePosition { index: 3, line: 2, column: 1 }
+=== " \\\n" [Next, Save, Next, Restore]
+diagnostic [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:2
+  |
+1 |  \
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 1, column: 2 }
+end
+at SourcePosition { index: 3, line: 2, column: 1 }
+end
+at SourcePosition { index: 3, line: 2, column: 1 }
+=== " \\\n" [SetLine(90), Next, Save, Next, Restore, Next]
+diagnostic [SourceVector { index: 1, column: 2, line: 90, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:90:2
+  |
+1 |  \
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Whitespace " " [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 90, column: 2 }
+end
+at SourcePosition { index: 3, line: 91, column: 1 }
+end
+at SourcePosition { index: 3, line: 91, column: 1 }
+end
+at SourcePosition { index: 3, line: 91, column: 1 }
+=== "\n\\\n\\\n" []
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 3, column: 1, line: 3, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:3:1
+  |
+3 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 4, column: 1 }
+=== "\n\\\n\\\n" [Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 3, column: 1, line: 3, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:3:1
+  |
+3 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 4, column: 1 }
+=== "\n\\\n\\\n" [Next, Save, Next, Restore]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 2, column: 1 }
+diagnostic [SourceVector { index: 3, column: 1, line: 3, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:3:1
+  |
+3 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 4, column: 1 }
+end
+at SourcePosition { index: 5, line: 4, column: 1 }
+=== "\n\\\n\\\n" [SetLine(90), Next, Save, Next, Restore, Next]
+Newline "\n" [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 1 }]
+at SourcePosition { index: 1, line: 91, column: 1 }
+diagnostic [SourceVector { index: 3, column: 1, line: 92, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:92:1
+  |
+3 | \
+  | ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+end
+at SourcePosition { index: 5, line: 93, column: 1 }
+end
+at SourcePosition { index: 5, line: 93, column: 1 }
+end
+at SourcePosition { index: 5, line: 93, column: 1 }
+=== "é\\\n" []
+diagnostic [SourceVector { index: 2, column: 2, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:2
+  |
+1 | é\
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "é" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 1, column: 2 }
+end
+at SourcePosition { index: 4, line: 2, column: 1 }
+=== "é\\\n" [Save, Next, Restore, Next]
+diagnostic [SourceVector { index: 2, column: 2, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:2
+  |
+1 | é\
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "é" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 1, column: 2 }
+diagnostic [SourceVector { index: 2, column: 2, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:2
+  |
+1 | é\
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "é" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 1, column: 2 }
+end
+at SourcePosition { index: 4, line: 2, column: 1 }
+=== "é\\\n" [Next, Save, Next, Restore]
+diagnostic [SourceVector { index: 2, column: 2, line: 1, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:1:2
+  |
+1 | é\
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "é" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 1, column: 2 }
+end
+at SourcePosition { index: 4, line: 2, column: 1 }
+end
+at SourcePosition { index: 4, line: 2, column: 1 }
+=== "é\\\n" [SetLine(90), Next, Save, Next, Restore, Next]
+diagnostic [SourceVector { index: 2, column: 2, line: 90, source_file_index: 0, length: 2 }]
+warning: final newline is escaped
+ --> <test>:90:2
+  |
+1 | é\
+  |  ^ this splice removes the final physical newline
+  |
+  = note: C99 5.1.1.2p2: the final newline shall not be immediately preceded by a backslash before splicing
+  = help: add an unescaped newline at the end of the file
+
+
+Identifier "é" [SourceVector { index: 0, column: 1, line: 90, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 90, column: 2 }
+end
+at SourcePosition { index: 4, line: 91, column: 1 }
+end
+at SourcePosition { index: 4, line: 91, column: 1 }
+end
+at SourcePosition { index: 4, line: 91, column: 1 }

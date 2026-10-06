@@ -1,0 +1,4 @@
+# Lexing snapshots record diagnostic output byte for byte, including empty
+# source lines and the blank separator at the end of a rendered diagnostic.
+tests/fixtures/lexing/directives_and_macros.snap whitespace=-blank-at-eof
+tests/fixtures/lexing/test_programs.snap whitespace=-trailing-space

@@ -1,54 +1,60 @@
 //! Deterministic, source-oriented syntax-tree inspection.
 
-use std::{
-    collections::HashSet,
-    fmt::Write,
+use std::fmt::{
+    self,
+    Display,
+    Write,
 };
 
+use hashbrown::hash_map::Entry;
+use rustc_hash::FxBuildHasher;
+
 use super::{
+    ParsedTranslationUnit,
     declaration_syntax::{
+        Declaration,
         Declarator,
+        Designation,
         Designator,
         DesignatorType,
         DirectDeclarator,
+        EnumSpecifier,
         Enumerator,
         InitDeclarator,
+        Initializer,
         InitializerElement,
         InitializerType,
         ParameterDeclaration,
         StructDeclaration,
         StructDeclarator,
         StructOrUnion,
+        StructOrUnionSpecifier,
+        TypeName,
         TypeQualifiers,
         TypeSpecifiers,
     },
     syntax::{
         BinaryOperator,
         BlockItem,
+        ConditionalExpression,
         Constant,
         ConstantExpressionSlot,
-        DeclarationIndex,
-        DesignationIndex,
-        EnumSpecifierIndex,
-        ExpressionIndex,
+        Expression,
         ExpressionSlot,
         ExpressionType,
         ExternalDeclaration,
         ForInitializer,
-        FunctionDefinitionIndex,
+        ForStatement,
+        FunctionDefinition,
         Identifier,
-        InitializerIndex,
-        StatementIndex,
+        Statement,
         StatementType,
         StorageClass,
-        StructOrUnionSpecifierIndex,
-        TypeNameIndex,
         UnaryOperator,
     },
-    syntax_store::SyntaxTree,
 };
 use crate::{
-    diagnostics::c_quoted,
+    diagnostics::write_c_quoted,
     translation_phases::{
         Context,
         GetPosition,
@@ -59,6 +65,13 @@ use crate::{
             StringTokenType,
         },
     },
+    util::bump::{
+        ArenaMap,
+        ArenaSet,
+        ArenaString,
+        ArenaVec,
+        Bump,
+    },
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -66,50 +79,60 @@ pub(crate) struct InspectionOptions {
     pub(crate) show_locations: bool,
 }
 
-enum Work {
-    Root(ExternalDeclaration, usize),
-    Declaration(DeclarationIndex, usize, &'static str),
-    InitDeclarator(InitDeclarator, usize),
-    Function(FunctionDefinitionIndex, usize, &'static str),
-    Declarator(Declarator, usize, &'static str),
-    DirectDeclarator(DirectDeclarator, usize),
+enum Work<'tu> {
+    Root(ExternalDeclaration<'tu>, usize),
+    Declaration(&'tu Declaration<'tu>, usize, &'static str),
+    InitDeclarator(InitDeclarator<'tu>, usize),
+    Function(&'tu FunctionDefinition<'tu>, usize, &'static str),
+    Declarator(Declarator<'tu>, usize, &'static str),
+    DirectDeclarator(DirectDeclarator<'tu>, usize),
     Identifier(Identifier, usize, &'static str),
-    Parameter(ParameterDeclaration, usize),
-    StructOrUnion(StructOrUnionSpecifierIndex, usize),
-    StructDeclaration(StructDeclaration, usize),
-    StructDeclarator(StructDeclarator, usize),
-    Enum(EnumSpecifierIndex, usize),
-    Enumerator(Enumerator, usize),
-    Statement(StatementIndex, usize, &'static str),
-    Expression(ExpressionIndex, usize, &'static str),
+    Parameter(ParameterDeclaration<'tu>, usize),
+    StructOrUnion(&'tu StructOrUnionSpecifier<'tu>, usize),
+    StructDeclaration(StructDeclaration<'tu>, usize),
+    StructDeclarator(StructDeclarator<'tu>, usize),
+    Enum(&'tu EnumSpecifier<'tu>, usize),
+    Enumerator(Enumerator<'tu>, usize),
+    Statement(&'tu Statement<'tu>, usize, &'static str),
+    Expression(&'tu Expression<'tu>, usize, &'static str),
     Missing(SourceVectors, usize, &'static str),
-    Initializer(InitializerIndex, usize, &'static str),
-    InitializerElement(InitializerElement, usize),
-    Designation(DesignationIndex, usize),
-    Designator(Designator, usize),
-    TypeName(TypeNameIndex, usize, &'static str),
+    Initializer(&'tu Initializer<'tu>, usize, &'static str),
+    InitializerElement(InitializerElement<'tu>, usize),
+    Designation(&'tu Designation<'tu>, usize),
+    Designator(Designator<'tu>, usize),
+    TypeName(&'tu TypeName<'tu>, usize, &'static str),
 }
 
-impl SyntaxTree {
+impl<'tu> ParsedTranslationUnit<'tu> {
     #[expect(
         clippy::too_many_lines,
         reason = "One iterative dispatcher keeps traversal order and cycle handling centralized."
     )]
-    pub(crate) fn inspect(
+    pub(crate) fn inspect<'a>(
         &self,
-        roots: &[ExternalDeclaration],
-        context: &Context,
+        arena: &'a Bump,
+        context: &Context<'_>,
         options: InspectionOptions,
-    ) -> String {
-        let mut output = String::new();
-        let mut work = roots
-            .iter()
-            .copied()
-            .enumerate()
-            .rev()
-            .map(|(ordinal, root)| Work::Root(root, ordinal))
-            .collect::<Vec<_>>();
-        let mut seen = HashSet::new();
+    ) -> &'a str {
+        let mut output = ArenaString::new_in(arena);
+        // Each working collection has its own arena, so each grows in place.
+        let work_arena = Bump::new();
+        let declarator_arena = Bump::new();
+        let visited_arena = Bump::new();
+        let mut literal_scratch = Bump::new();
+        let mut work = ArenaVec::with_capacity_in(self.roots.len(), &work_arena);
+        work.extend(
+            self.roots
+                .iter()
+                .copied()
+                .enumerate()
+                .rev()
+                .map(|(ordinal, root)| Work::Root(root, ordinal)),
+        );
+        let mut seen_declarators = ArenaSet::with_hasher_in(FxBuildHasher, &declarator_arena);
+        // Nodes reached through references, keyed by kind and address, with
+        // the order in which each was first visited.
+        let mut visited = ArenaMap::with_hasher_in(FxBuildHasher, &visited_arena);
 
         while let Some(item) = work.pop() {
             match item {
@@ -128,31 +151,29 @@ impl SyntaxTree {
                     | ExternalDeclaration::Error(source) => Self::line(
                         &mut output,
                         0,
-                        &format!("root[{ordinal}] error"),
+                        format_args!("root[{ordinal}] error"),
                         Some(source),
                         context,
                         options,
                     ),
                 },
-                | Work::Declaration(index, indent, role) => {
-                    if !seen.insert((0_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Declaration(declaration, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 0, declaration) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "declaration",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let view = self.declaration(index);
-                    let declaration = view.syntax();
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: declaration{} storage={} type={} qualifiers={} \
                              function-specifiers={}",
                             if declaration.recovered {
@@ -164,7 +185,7 @@ impl SyntaxTree {
                                 .declaration_specifiers
                                 .storage_class
                                 .map_or("none", StorageClass::spelling),
-                            self.type_label(
+                            Self::type_label(
                                 declaration.declaration_specifiers.type_specifiers,
                                 context,
                             ),
@@ -183,8 +204,8 @@ impl SyntaxTree {
                         context,
                         options,
                     );
-                    for init in view.init_declarators().iter().rev() {
-                        work.push(Work::InitDeclarator(init.clone(), indent + 1));
+                    for init in declaration.init_declarators.iter().rev() {
+                        work.push(Work::InitDeclarator(*init, indent + 1));
                     }
                     Self::push_type_details(
                         &mut work,
@@ -193,15 +214,16 @@ impl SyntaxTree {
                     );
                 },
                 | Work::InitDeclarator(init, indent) => {
-                    let name = self
-                        .declarator_identifier(init.declarator)
+                    let name = init
+                        .declarator
+                        .identifier()
                         .map_or("<abstract>", |identifier| {
                             context.string_cache.at(identifier.name)
                         });
                     Self::line(
                         &mut output,
                         indent,
-                        &format!("declarator {name}"),
+                        format_args!("declarator {name}"),
                         Some(init.source_vectors),
                         context,
                         options,
@@ -211,33 +233,33 @@ impl SyntaxTree {
                     }
                     work.push(Work::Declarator(init.declarator, indent + 1, "shape"));
                 },
-                | Work::Function(index, indent, role) => {
-                    if !seen.insert((1_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Function(function, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 1, function) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "function",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let function = self.function_definition(index);
-                    let name = self
-                        .declarator_identifier(function.declarator)
+                    let name = function
+                        .declarator
+                        .identifier()
                         .map_or("<anonymous>", |identifier| {
                             context.string_cache.at(identifier.name)
                         });
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role} {name}{} type={} storage={} qualifiers={} \
                              function-specifiers={}",
                             if function.recovered { " recovered" } else { "" },
-                            self.type_label(
+                            Self::type_label(
                                 function.declaration_specifiers.type_specifiers,
                                 context
                             ),
@@ -261,13 +283,9 @@ impl SyntaxTree {
                         options,
                     );
                     work.push(Work::Statement(function.body, indent + 1, "body"));
-                    for declaration in self
-                        .declaration_indices(function.declaration_list)
-                        .iter()
-                        .rev()
-                    {
+                    for declaration in function.declaration_list.iter().rev() {
                         work.push(Work::Declaration(
-                            *declaration,
+                            declaration,
                             indent + 1,
                             "declaration-list",
                         ));
@@ -284,29 +302,22 @@ impl SyntaxTree {
                     );
                 },
                 | Work::Declarator(declarator, indent, role) => {
-                    let key = (
-                        6_u8,
-                        declarator.kind.start_index(),
-                        declarator.kind.length(),
-                        declarator.pointer.type_qualifiers_list.start_index(),
-                        declarator.pointer.type_qualifiers_list.length(),
-                    );
-                    if !seen.insert(key) {
+                    if !seen_declarators.insert(declarator_key(declarator)) {
                         Self::line(
                             &mut output,
                             indent,
-                            &format!("{role}: declarator (shared)"),
+                            format_args!("{role}: declarator (shared)"),
                             None,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let pointers = self.pointer_qualifiers(declarator.pointer.type_qualifiers_list);
+                    let pointers = declarator.pointer.type_qualifiers_list;
                     Self::line(
                         &mut output,
                         indent,
-                        &format!("{role}: declarator pointer-levels={}", pointers.len()),
+                        format_args!("{role}: declarator pointer-levels={}", pointers.len()),
                         Some(declarator.source_vectors),
                         context,
                         options,
@@ -315,13 +326,16 @@ impl SyntaxTree {
                         Self::line(
                             &mut output,
                             indent + 1,
-                            &format!("pointer {level} qualifiers={}", qualifier_list(*qualifiers)),
+                            format_args!(
+                                "pointer {level} qualifiers={}",
+                                qualifier_list(*qualifiers)
+                            ),
                             None,
                             context,
                             options,
                         );
                     }
-                    for direct in self.direct_declarators(declarator.kind).iter().rev() {
+                    for direct in declarator.kind.iter().rev() {
                         work.push(Work::DirectDeclarator(*direct, indent + 1));
                     }
                 },
@@ -329,8 +343,7 @@ impl SyntaxTree {
                     | DirectDeclarator::Identifier(identifier) => {
                         work.push(Work::Identifier(identifier, indent, "identifier"));
                     },
-                    | DirectDeclarator::Parenthesized(index) => {
-                        let parenthesized = self.parenthesized_declarator(index);
+                    | DirectDeclarator::Parenthesized(parenthesized) => {
                         let declarator = parenthesized.declarator;
                         let delimiters = parenthesized.delimiters;
                         Self::line(
@@ -352,7 +365,7 @@ impl SyntaxTree {
                             context,
                             options,
                         );
-                        for identifier in self.identifiers(parameters).iter().rev() {
+                        for identifier in parameters.iter().rev() {
                             work.push(Work::Identifier(*identifier, indent + 1, "parameter"));
                         }
                     },
@@ -365,7 +378,7 @@ impl SyntaxTree {
                         Self::line(
                             &mut output,
                             indent,
-                            &format!(
+                            format_args!(
                                 "array static={is_static} variable-length={is_pointer} \
                                  qualifiers={}",
                                 qualifier_list(type_qualifiers)
@@ -385,20 +398,20 @@ impl SyntaxTree {
                         Self::line(
                             &mut output,
                             indent,
-                            &format!("function variadic={is_variadic}"),
+                            format_args!("function variadic={is_variadic}"),
                             None,
                             context,
                             options,
                         );
-                        for parameter in self.parameter_declarations(parameter_list).iter().rev() {
-                            work.push(Work::Parameter(parameter.clone(), indent + 1));
+                        for parameter in parameter_list.iter().rev() {
+                            work.push(Work::Parameter(*parameter, indent + 1));
                         }
                     },
                 },
                 | Work::Identifier(identifier, indent, role) => Self::line(
                     &mut output,
                     indent,
-                    &format!("{role} {}", context.string_cache.at(identifier.name)),
+                    format_args!("{role} {}", context.string_cache.at(identifier.name)),
                     Some(identifier.source_vectors),
                     context,
                     options,
@@ -407,9 +420,9 @@ impl SyntaxTree {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "parameter type={} storage={} qualifiers={} function-specifiers={}",
-                            self.type_label(
+                            Self::type_label(
                                 parameter.declaration_specifiers.type_specifiers,
                                 context,
                             ),
@@ -441,11 +454,10 @@ impl SyntaxTree {
                         indent + 1,
                     );
                 },
-                | Work::StructOrUnion(index, indent) => {
-                    if !seen.insert((7_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::StructOrUnion(specifier, indent) => {
+                    if first_visit(&mut visited, 7, specifier).is_some() {
                         continue;
                     }
-                    let specifier = self.struct_or_union_specifier(index);
                     let kind = match specifier.struct_or_union {
                         | StructOrUnion::Struct => "struct",
                         | StructOrUnion::Union => "union",
@@ -456,13 +468,13 @@ impl SyntaxTree {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!("{kind} {name}"),
+                        format_args!("{kind} {name}"),
                         Some(specifier.source_vectors),
                         context,
                         options,
                     );
                     if let Some(declarations) = specifier.struct_declaration_list {
-                        for declaration in self.struct_declarations(declarations).iter().rev() {
+                        for declaration in declarations.iter().rev() {
                             work.push(Work::StructDeclaration(*declaration, indent + 1));
                         }
                     }
@@ -471,20 +483,16 @@ impl SyntaxTree {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "member-declaration type={} qualifiers={}",
-                            self.type_label(declaration.type_specifiers, context),
+                            Self::type_label(declaration.type_specifiers, context),
                             qualifier_list(declaration.type_qualifiers),
                         ),
                         Some(declaration.source_vectors),
                         context,
                         options,
                     );
-                    for declarator in self
-                        .struct_declarators(declaration.struct_declarator_list)
-                        .iter()
-                        .rev()
-                    {
+                    for declarator in declaration.struct_declarator_list.iter().rev() {
                         work.push(Work::StructDeclarator(*declarator, indent + 1));
                     }
                     Self::push_type_details(&mut work, declaration.type_specifiers, indent + 1);
@@ -509,24 +517,23 @@ impl SyntaxTree {
                         work.push(Work::Declarator(declarator, indent + 1, "declarator"));
                     }
                 },
-                | Work::Enum(index, indent) => {
-                    if !seen.insert((8_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Enum(specifier, indent) => {
+                    if first_visit(&mut visited, 8, specifier).is_some() {
                         continue;
                     }
-                    let specifier = self.enum_specifier(index);
                     let name = specifier.name.map_or("<anonymous>", |identifier| {
                         context.string_cache.at(identifier.name)
                     });
                     Self::line(
                         &mut output,
                         indent,
-                        &format!("enum {name}"),
+                        format_args!("enum {name}"),
                         Some(specifier.source_vectors),
                         context,
                         options,
                     );
                     if let Some(enumerators) = specifier.enumeration_list {
-                        for enumerator in self.enumerators(enumerators).iter().rev() {
+                        for enumerator in enumerators.iter().rev() {
                             work.push(Work::Enumerator(*enumerator, indent + 1));
                         }
                     }
@@ -535,7 +542,7 @@ impl SyntaxTree {
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "enumerator {}",
                             context.string_cache.at(enumerator.name.name)
                         ),
@@ -547,24 +554,23 @@ impl SyntaxTree {
                         work.push(Work::Expression(expression.into(), indent + 1, "value"));
                     }
                 },
-                | Work::Statement(index, indent, role) => {
-                    if !seen.insert((2_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Statement(statement, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 2, statement) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "statement",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let statement = self.statement(index);
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: {}{}",
                             Self::statement_label(&statement.kind, context),
                             if statement.recovered {
@@ -577,28 +583,28 @@ impl SyntaxTree {
                         context,
                         options,
                     );
-                    self.push_statement_children(&mut work, &statement.kind, indent + 1);
+                    Self::push_statement_children(&mut work, &statement.kind, indent + 1);
                 },
-                | Work::Expression(index, indent, role) => {
-                    if !seen.insert((3_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Expression(expression, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 3, expression) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "expression",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let expression = self.expression(index);
+                    literal_scratch.reset();
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: {}{}",
-                            Self::expression_label(&expression.kind, context),
+                            Self::expression_label(&expression.kind, context, &literal_scratch),
                             if expression.recovered {
                                 " recovered"
                             } else {
@@ -609,35 +615,33 @@ impl SyntaxTree {
                         context,
                         options,
                     );
-                    self.push_expression_children(&mut work, &expression.kind, indent + 1);
+                    Self::push_expression_children(&mut work, &expression.kind, indent + 1);
                 },
                 | Work::Missing(source, indent, role) => Self::line(
                     &mut output,
                     indent,
-                    &format!("{role}: missing"),
+                    format_args!("{role}: missing"),
                     Some(source),
                     context,
                     options,
                 ),
-                | Work::Initializer(index, indent, role) => {
-                    if !seen.insert((4_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Initializer(initializer, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 4, initializer) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "initializer",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let view = self.initializer(index);
-                    let initializer = view.syntax();
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: {}{}",
                             match initializer.kind {
                                 | InitializerType::AssignmentExpression(_) => {
@@ -659,11 +663,9 @@ impl SyntaxTree {
                         | InitializerType::AssignmentExpression(expression) => work.push(
                             Work::Expression(expression, indent + 1, "assignment-expression"),
                         ),
-                        | InitializerType::InitializerList(_) => {
-                            if let Some(elements) = view.elements() {
-                                for element in elements.iter().rev() {
-                                    work.push(Work::InitializerElement(*element, indent + 1));
-                                }
+                        | InitializerType::InitializerList(list) => {
+                            for element in list.elements.iter().rev() {
+                                work.push(Work::InitializerElement(*element, indent + 1));
                             }
                         },
                     }
@@ -682,15 +684,14 @@ impl SyntaxTree {
                         work.push(Work::Designation(designation, indent + 1));
                     }
                 },
-                | Work::Designation(index, indent) => {
-                    if !seen.insert((9_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::Designation(designation, indent) => {
+                    if first_visit(&mut visited, 9, designation).is_some() {
                         continue;
                     }
-                    let designation = self.designation(index);
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "designation{}",
                             if designation.recovered {
                                 " recovered"
@@ -702,23 +703,24 @@ impl SyntaxTree {
                         context,
                         options,
                     );
-                    for designator in self.designators(designation.designators).iter().rev() {
+                    for designator in designation.designators.iter().rev() {
                         work.push(Work::Designator(*designator, indent + 1));
                     }
                 },
                 | Work::Designator(designator, indent) => {
-                    let label = match designator.kind {
-                        | DesignatorType::Array(_) => "array-designator".to_owned(),
-                        | DesignatorType::Field(identifier) => format!(
+                    let label = fmt::from_fn(|f| match designator.kind {
+                        | DesignatorType::Array(_) => f.write_str("array-designator"),
+                        | DesignatorType::Field(identifier) => write!(
+                            f,
                             "field-designator .{}",
                             context.string_cache.at(identifier.name)
                         ),
-                        | DesignatorType::Error => "error-designator".to_owned(),
-                    };
+                        | DesignatorType::Error => f.write_str("error-designator"),
+                    });
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{label}{}",
                             if designator.recovered {
                                 " recovered"
@@ -734,31 +736,30 @@ impl SyntaxTree {
                         work.push(Work::Expression(expression.into(), indent + 1, "index"));
                     }
                 },
-                | Work::TypeName(index, indent, role) => {
-                    if !seen.insert((5_u8, index.0, 0_u32, 0_u32, 0_u32)) {
+                | Work::TypeName(type_name, indent, role) => {
+                    if let Some(ordinal) = first_visit(&mut visited, 5, type_name) {
                         Self::shared(
                             &mut output,
                             indent,
                             role,
                             "type-name",
-                            index.0,
+                            ordinal,
                             context,
                             options,
                         );
                         continue;
                     }
-                    let type_name = self.type_name(index);
                     Self::line(
                         &mut output,
                         indent,
-                        &format!(
+                        format_args!(
                             "{role}: type-name{} type={} qualifiers={}",
                             if type_name.recovered {
                                 " recovered"
                             } else {
                                 ""
                             },
-                            self.type_label(
+                            Self::type_label(
                                 type_name.declaration_specifiers.type_specifiers,
                                 context,
                             ),
@@ -779,10 +780,14 @@ impl SyntaxTree {
                 },
             }
         }
-        output
+        output.into_str()
     }
 
-    fn push_type_details(work: &mut Vec<Work>, specifiers: TypeSpecifiers, indent: usize) {
+    fn push_type_details(
+        work: &mut ArenaVec<'_, Work<'tu>>,
+        specifiers: TypeSpecifiers<'tu>,
+        indent: usize,
+    ) {
         match specifiers {
             | TypeSpecifiers::StructOrUnion(index) => work.push(Work::StructOrUnion(index, indent)),
             | TypeSpecifiers::Enum(index) => work.push(Work::Enum(index, indent)),
@@ -790,61 +795,39 @@ impl SyntaxTree {
         }
     }
 
-    fn type_label(&self, specifiers: TypeSpecifiers, context: &Context) -> String {
-        match specifiers {
+    fn type_label<'a>(specifiers: TypeSpecifiers<'a>, context: &'a Context<'_>) -> impl Display {
+        fmt::from_fn(move |f| match specifiers {
             | TypeSpecifiers::TypedefName(identifier) => {
-                format!("typedef {}", context.string_cache.at(identifier.name))
+                write!(f, "typedef {}", context.string_cache.at(identifier.name))
             },
-            | TypeSpecifiers::StructOrUnion(index) => {
-                let specifier = self.struct_or_union_specifier(index);
+            | TypeSpecifiers::StructOrUnion(specifier) => {
                 let kind = match specifier.struct_or_union {
                     | StructOrUnion::Struct => "struct",
                     | StructOrUnion::Union => "union",
                 };
-                specifier.identifier.map_or_else(
-                    || format!("{kind} <anonymous>"),
-                    |identifier| format!("{kind} {}", context.string_cache.at(identifier.name)),
-                )
-            },
-            | TypeSpecifiers::Enum(index) => {
-                let specifier = self.enum_specifier(index);
-                specifier.name.map_or_else(
-                    || "enum <anonymous>".to_owned(),
-                    |identifier| format!("enum {}", context.string_cache.at(identifier.name)),
-                )
-            },
-            | _ => specifiers.to_string(),
-        }
-    }
-
-    fn declarator_identifier(&self, mut declarator: Declarator) -> Option<Identifier> {
-        let mut seen = HashSet::new();
-        loop {
-            if !seen.insert((
-                declarator.kind.start_index(),
-                declarator.kind.length(),
-                declarator.pointer.type_qualifiers_list.start_index(),
-                declarator.pointer.type_qualifiers_list.length(),
-            )) {
-                return None;
-            }
-            let mut nested = None;
-            for direct in self.direct_declarators(declarator.kind) {
-                match *direct {
-                    | DirectDeclarator::Identifier(identifier) => return Some(identifier),
-                    | DirectDeclarator::Parenthesized(index) =>
-                        nested = Some(self.parenthesized_declarator(index).declarator),
-                    | _ => {},
+                match specifier.identifier {
+                    | None => write!(f, "{kind} <anonymous>"),
+                    | Some(identifier) =>
+                        write!(f, "{kind} {}", context.string_cache.at(identifier.name)),
                 }
-            }
-            declarator = nested?;
-        }
+            },
+            | TypeSpecifiers::Enum(specifier) => match specifier.name {
+                | None => f.write_str("enum <anonymous>"),
+                | Some(identifier) =>
+                    write!(f, "enum {}", context.string_cache.at(identifier.name)),
+            },
+            | _ => write!(f, "{specifiers}"),
+        })
     }
 
-    fn push_statement_children(&self, work: &mut Vec<Work>, kind: &StatementType, indent: usize) {
+    fn push_statement_children(
+        work: &mut ArenaVec<'_, Work<'tu>>,
+        kind: &StatementType<'tu>,
+        indent: usize,
+    ) {
         match *kind {
-            | StatementType::Compound { items } => {
-                for item in self.block_items(items).iter().rev() {
+            | StatementType::Compound { items } =>
+                for item in items.iter().rev() {
                     match *item {
                         | BlockItem::Declaration(index) => {
                             work.push(Work::Declaration(index, indent, "block-item"));
@@ -853,8 +836,7 @@ impl SyntaxTree {
                             work.push(Work::Statement(index, indent, "block-item"));
                         },
                     }
-                }
-            },
+                },
             | StatementType::Expression(slot) => {
                 Self::push_slot(work, slot, indent, "expression");
             },
@@ -887,12 +869,12 @@ impl SyntaxTree {
                 Self::push_slot(work, condition_expression, indent, "condition");
                 work.push(Work::Statement(body_statement, indent, "body"));
             },
-            | StatementType::For {
+            | StatementType::For(&ForStatement {
                 initializer,
                 condition_expression,
                 iteration_expression,
                 body_statement,
-            } => {
+            }) => {
                 work.push(Work::Statement(body_statement, indent, "body"));
                 if let Some(slot) = iteration_expression {
                     Self::push_slot(work, slot, indent, "iteration");
@@ -936,74 +918,101 @@ impl SyntaxTree {
         }
     }
 
-    fn statement_label(kind: &StatementType, context: &Context) -> String {
-        match kind {
-            | StatementType::Label(identifier, _) => {
-                format!("label {}", context.string_cache.at(identifier.name))
-            },
-            | StatementType::Case(..) => "case".to_owned(),
-            | StatementType::Default(..) => "default".to_owned(),
-            | StatementType::Compound { .. } => "compound".to_owned(),
-            | StatementType::Expression(..) => "expression".to_owned(),
-            | StatementType::If { .. } => "if".to_owned(),
-            | StatementType::Switch { .. } => "switch".to_owned(),
-            | StatementType::While { .. } => "while".to_owned(),
-            | StatementType::DoWhile { .. } => "do-while".to_owned(),
-            | StatementType::For { .. } => "for".to_owned(),
-            | StatementType::Goto(identifier) => {
-                format!("goto {}", context.string_cache.at(identifier.name))
-            },
-            | StatementType::Continue => "continue".to_owned(),
-            | StatementType::Break => "break".to_owned(),
-            | StatementType::Return(..) => "return".to_owned(),
-            | StatementType::Null => "null".to_owned(),
-        }
+    fn statement_label<'a>(kind: &'a StatementType<'tu>, context: &'a Context<'_>) -> impl Display {
+        fmt::from_fn(move |f| {
+            f.write_str(match kind {
+                | StatementType::Label(identifier, _) => {
+                    return write!(f, "label {}", context.string_cache.at(identifier.name));
+                },
+                | StatementType::Goto(identifier) => {
+                    return write!(f, "goto {}", context.string_cache.at(identifier.name));
+                },
+                | StatementType::Case(..) => "case",
+                | StatementType::Default(..) => "default",
+                | StatementType::Compound { .. } => "compound",
+                | StatementType::Expression(..) => "expression",
+                | StatementType::If { .. } => "if",
+                | StatementType::Switch { .. } => "switch",
+                | StatementType::While { .. } => "while",
+                | StatementType::DoWhile { .. } => "do-while",
+                | StatementType::For(_) => "for",
+                | StatementType::Continue => "continue",
+                | StatementType::Break => "break",
+                | StatementType::Return(..) => "return",
+                | StatementType::Null => "null",
+            })
+        })
     }
 
-    fn expression_label(kind: &ExpressionType, context: &Context) -> String {
-        match kind {
-            | ExpressionType::Parenthesized { .. } => "parenthesized".to_owned(),
-            | ExpressionType::Conditional { .. } => "conditional ?:".to_owned(),
-            | ExpressionType::Binary { operator, .. } =>
-                format!("binary {}", binary_operator_spelling(*operator)),
-            | ExpressionType::Unary { operator, .. } =>
-                format!("unary {}", unary_operator_spelling(*operator)),
-            | ExpressionType::Call { .. } => "call".to_owned(),
-            | ExpressionType::DirectMember { member, .. } => {
-                format!("member .{}", context.string_cache.at(member.name))
-            },
-            | ExpressionType::IndirectMember { member, .. } => {
-                format!("member ->{}", context.string_cache.at(member.name))
-            },
-            | ExpressionType::CompoundLiteral { .. } => "compound-literal".to_owned(),
-            | ExpressionType::Identifier(identifier) => {
-                format!("identifier {}", context.string_cache.at(identifier.name))
-            },
-            | ExpressionType::Constant(constant) =>
-                format!("constant {}", constant_label(constant)),
-            | ExpressionType::StringLiteral(string) => match string {
-                | StringTokenType::String(contents) => {
-                    format!("string {}", context.literal_spelling(*contents, false))
+    /// Spells a string literal in `scratch`.
+    fn expression_label<'a>(
+        kind: &'a ExpressionType<'tu>,
+        context: &'a Context<'_>,
+        scratch: &'a Bump,
+    ) -> impl Display {
+        fmt::from_fn(move |f| {
+            f.write_str(match kind {
+                | ExpressionType::Binary { operator, .. } => {
+                    return write!(f, "binary {}", binary_operator_spelling(*operator));
                 },
-                | StringTokenType::WideString(contents) => {
-                    format!("wide-string {}", context.literal_spelling(*contents, true))
+                | ExpressionType::Unary { operator, .. } => {
+                    return write!(f, "unary {}", unary_operator_spelling(*operator));
                 },
-            },
-            | ExpressionType::SizeofType(..) => "sizeof type".to_owned(),
-            | ExpressionType::SizeofExpr(..) => "sizeof expression".to_owned(),
-            | ExpressionType::Cast { .. } => "cast".to_owned(),
-            | ExpressionType::Error => "error-expression".to_owned(),
-        }
+                | ExpressionType::DirectMember { member, .. } => {
+                    return write!(f, "member .{}", context.string_cache.at(member.name));
+                },
+                | ExpressionType::IndirectMember { member, .. } => {
+                    return write!(f, "member ->{}", context.string_cache.at(member.name));
+                },
+                | ExpressionType::Identifier(identifier) => {
+                    return write!(f, "identifier {}", context.string_cache.at(identifier.name));
+                },
+                | ExpressionType::Constant(constant) => {
+                    return write!(f, "constant {}", constant_label(constant));
+                },
+                | ExpressionType::StringLiteral(string) => {
+                    return match string {
+                        | StringTokenType::String(contents) => write!(
+                            f,
+                            "string {}",
+                            context.literal_spelling_in(scratch, scratch, *contents, false)
+                        ),
+                        | StringTokenType::WideString(contents) => write!(
+                            f,
+                            "wide-string {}",
+                            context.literal_spelling_in(scratch, scratch, *contents, true)
+                        ),
+                    };
+                },
+                | ExpressionType::Parenthesized { .. } => "parenthesized",
+                | ExpressionType::Conditional(_) => "conditional ?:",
+                | ExpressionType::Call { .. } => "call",
+                | ExpressionType::CompoundLiteral { .. } => "compound-literal",
+                | ExpressionType::SizeofType(..) => "sizeof type",
+                | ExpressionType::SizeofExpr(..) => "sizeof expression",
+                | ExpressionType::Cast { .. } => "cast",
+                | ExpressionType::Error => "error-expression",
+            })
+        })
     }
 
-    fn push_slot(work: &mut Vec<Work>, slot: ExpressionSlot, indent: usize, role: &'static str) {
+    fn push_slot(
+        work: &mut ArenaVec<'_, Work<'tu>>,
+        slot: ExpressionSlot<'tu>,
+        indent: usize,
+        role: &'static str,
+    ) {
         match slot {
             | ExpressionSlot::Parsed(index) => work.push(Work::Expression(index, indent, role)),
             | ExpressionSlot::Missing(source) => work.push(Work::Missing(source, indent, role)),
         }
     }
 
-    fn push_expression_children(&self, work: &mut Vec<Work>, kind: &ExpressionType, indent: usize) {
+    fn push_expression_children(
+        work: &mut ArenaVec<'_, Work<'tu>>,
+        kind: &ExpressionType<'tu>,
+        indent: usize,
+    ) {
         match kind {
             | ExpressionType::Parenthesized { expression }
             | ExpressionType::Unary {
@@ -1011,33 +1020,33 @@ impl SyntaxTree {
                 ..
             }
             | ExpressionType::SizeofExpr(expression) => {
-                work.push(Work::Expression(*expression, indent, "operand"));
+                work.push(Work::Expression(expression, indent, "operand"));
             },
-            | ExpressionType::Conditional {
+            | ExpressionType::Conditional(ConditionalExpression {
                 condition_expression,
                 then_expression,
                 else_expression,
-            } => {
-                work.push(Work::Expression(*else_expression, indent, "else"));
-                work.push(Work::Expression(*then_expression, indent, "then"));
-                work.push(Work::Expression(*condition_expression, indent, "condition"));
+            }) => {
+                work.push(Work::Expression(else_expression, indent, "else"));
+                work.push(Work::Expression(then_expression, indent, "then"));
+                work.push(Work::Expression(condition_expression, indent, "condition"));
             },
             | ExpressionType::Binary {
                 left_expression,
                 right_expression,
                 ..
             } => {
-                work.push(Work::Expression(*right_expression, indent, "rhs"));
-                work.push(Work::Expression(*left_expression, indent, "lhs"));
+                work.push(Work::Expression(right_expression, indent, "rhs"));
+                work.push(Work::Expression(left_expression, indent, "lhs"));
             },
             | ExpressionType::Call {
                 function_expression,
                 arguments,
             } => {
-                for argument in self.expression_indices(*arguments).iter().rev() {
-                    work.push(Work::Expression(*argument, indent, "argument"));
+                for argument in arguments.iter().rev() {
+                    work.push(Work::Expression(argument, indent, "argument"));
                 }
-                work.push(Work::Expression(*function_expression, indent, "callee"));
+                work.push(Work::Expression(function_expression, indent, "callee"));
             },
             | ExpressionType::DirectMember {
                 base_expression, ..
@@ -1045,24 +1054,24 @@ impl SyntaxTree {
             | ExpressionType::IndirectMember {
                 base_expression, ..
             } => {
-                work.push(Work::Expression(*base_expression, indent, "base"));
+                work.push(Work::Expression(base_expression, indent, "base"));
             },
             | ExpressionType::CompoundLiteral {
                 type_name,
                 initializer,
             } => {
-                work.push(Work::Initializer(*initializer, indent, "initializer"));
-                work.push(Work::TypeName(*type_name, indent, "type"));
+                work.push(Work::Initializer(initializer, indent, "initializer"));
+                work.push(Work::TypeName(type_name, indent, "type"));
             },
             | ExpressionType::Cast {
                 target_type,
                 operand_expression,
             } => {
-                work.push(Work::Expression(*operand_expression, indent, "operand"));
-                work.push(Work::TypeName(*target_type, indent, "target-type"));
+                work.push(Work::Expression(operand_expression, indent, "operand"));
+                work.push(Work::TypeName(target_type, indent, "target-type"));
             },
             | ExpressionType::SizeofType(type_name) => {
-                work.push(Work::TypeName(*type_name, indent, "operand-type"));
+                work.push(Work::TypeName(type_name, indent, "operand-type"));
             },
             | ExpressionType::Identifier(_)
             | ExpressionType::Constant(_)
@@ -1072,18 +1081,18 @@ impl SyntaxTree {
     }
 
     fn shared(
-        output: &mut String,
+        output: &mut ArenaString<'_>,
         indent: usize,
         role: &str,
         kind: &str,
-        index: u32,
-        context: &Context,
+        index: impl Display,
+        context: &Context<'_>,
         options: InspectionOptions,
     ) {
         Self::line(
             output,
             indent,
-            &format!("{role}: {kind}#{index} (shared)"),
+            format_args!("{role}: {kind}#{index} (shared)"),
             None,
             context,
             options,
@@ -1091,18 +1100,20 @@ impl SyntaxTree {
     }
 
     fn line(
-        output: &mut String,
+        output: &mut ArenaString<'_>,
         indent: usize,
-        text: &str,
+        text: impl Display,
         source: Option<SourceVectors>,
-        context: &Context,
+        context: &Context<'_>,
         options: InspectionOptions,
     ) {
-        let _ = write!(output, "{}", "  ".repeat(indent.min(32)));
+        for _ in 0..indent.min(32) {
+            output.push_str("  ");
+        }
         if indent > 32 {
             let _ = write!(output, "[depth={indent}] ");
         }
-        output.push_str(text);
+        let _ = write!(output, "{text}");
         if options.show_locations
             && let Some(source) = source
             && source.length > 0
@@ -1130,21 +1141,25 @@ impl SyntaxTree {
 }
 
 /// Lists qualifiers in C spelling, such as `const volatile`, or `none`.
-fn qualifier_list(qualifiers: TypeQualifiers) -> String {
-    let names: Vec<&str> = [
-        (TypeQualifiers::CONST, "const"),
-        (TypeQualifiers::VOLATILE, "volatile"),
-        (TypeQualifiers::RESTRICT, "restrict"),
-    ]
-    .into_iter()
-    .filter(|&(flag, _)| qualifiers.contains(flag))
-    .map(|(_, name)| name)
-    .collect();
-    if names.is_empty() {
-        "none".to_owned()
-    } else {
-        names.join(" ")
-    }
+fn qualifier_list(qualifiers: TypeQualifiers) -> impl Display {
+    fmt::from_fn(move |f| {
+        let mut names = [
+            (TypeQualifiers::CONST, "const"),
+            (TypeQualifiers::VOLATILE, "volatile"),
+            (TypeQualifiers::RESTRICT, "restrict"),
+        ]
+        .into_iter()
+        .filter(|&(flag, _)| qualifiers.contains(flag))
+        .map(|(_, name)| name);
+        let Some(first) = names.next() else {
+            return f.write_str("none");
+        };
+        f.write_str(first)?;
+        for name in names {
+            write!(f, " {name}")?;
+        }
+        Ok(())
+    })
 }
 
 fn binary_operator_spelling(operator: BinaryOperator) -> &'static str {
@@ -1201,8 +1216,8 @@ fn unary_operator_spelling(operator: UnaryOperator) -> &'static str {
 /// Renders a constant's value and C type. Floating values print exactly:
 /// `float` and `double` as the shortest decimal that round-trips, `long
 /// double` in hexadecimal.
-fn constant_label(constant: &Constant) -> String {
-    match *constant {
+fn constant_label(constant: &Constant) -> impl Display {
+    fmt::from_fn(move |f| match *constant {
         | Constant::Integer(integer) => {
             let (value, type_name) = match integer {
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),
@@ -1214,19 +1229,51 @@ fn constant_label(constant: &Constant) -> String {
                 | IntegerTokenType::UnsignedLongLong(value) =>
                     (i128::from(value.get()), "unsigned long long"),
             };
-            format!("{value} ({type_name})")
+            write!(f, "{value} ({type_name})")
         },
-        | Constant::Float(float) => format!("{float} ({})", float.type_name()),
-        | Constant::Char(CharacterTokenType::Char(c)) =>
-            format!("{} (int)", c_quoted("", '\'', &c.to_string())),
-        | Constant::Char(CharacterTokenType::WideChar(c)) => format!(
-            "{} (wchar_t)",
-            char::from_u32(c).map_or_else(
-                || format!("L\'\\x{c:x}\'"),
-                |c| c_quoted("L", '\'', &c.to_string())
-            )
-        ),
+        | Constant::Float(float) => write!(f, "{float} ({})", float.type_name()),
+        | Constant::Char(CharacterTokenType::Char(c)) => {
+            write_c_quoted(f, "", '\'', c.encode_utf8(&mut [0; 4]))?;
+            f.write_str(" (int)")
+        },
+        | Constant::Char(CharacterTokenType::WideChar(c)) => {
+            match char::from_u32(c) {
+                | Some(c) => write_c_quoted(f, "L", '\'', c.encode_utf8(&mut [0; 4]))?,
+                | None => write!(f, "L\'\\x{c:x}\'")?,
+            }
+            f.write_str(" (wchar_t)")
+        },
         | Constant::Char(CharacterTokenType::MultiChar(value)) =>
-            format!("{value} (int, multi-character)"),
+            write!(f, "{value} (int, multi-character)"),
+    })
+}
+
+/// Records a node reached through a reference. Returns `None` on the first
+/// visit, or the order in which the node was first visited when it is
+/// reached again through another parent.
+fn first_visit<T>(
+    visited: &mut ArenaMap<'_, (u8, usize), usize>,
+    kind: u8,
+    node: &T,
+) -> Option<usize> {
+    let ordinal = visited.len();
+    match visited.entry((kind, std::ptr::from_ref(node).addr())) {
+        | Entry::Occupied(first) => Some(*first.get()),
+        | Entry::Vacant(slot) => {
+            let _ = slot.insert(ordinal);
+            None
+        },
     }
+}
+
+/// Identifies a declarator by its two lists: where each lives in the
+/// translation-unit arena and its length. Every empty list of one kind
+/// shares an address, so declarators with the same empty lists share a key.
+fn declarator_key(declarator: Declarator<'_>) -> (usize, usize, usize, usize) {
+    (
+        declarator.kind.as_ptr().addr(),
+        declarator.kind.len(),
+        declarator.pointer.type_qualifiers_list.as_ptr().addr(),
+        declarator.pointer.type_qualifiers_list.len(),
+    )
 }

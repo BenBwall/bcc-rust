@@ -10,6 +10,7 @@ use super::{
     },
     declaration_syntax::{
         DeclarationSpecifiers,
+        Declarator,
         DirectDeclarator,
         ParameterDeclaration,
     },
@@ -33,16 +34,22 @@ use super::{
     scope::{
         NameClass,
         ScopeKind,
+        list_key,
     },
     syntax::Identifier,
 };
-use crate::translation_phases::{
-    Context,
-    SourceVectors,
-    preprocessing::{
-        OperatorTokenType,
-        Token,
-        TokenType,
+use crate::{
+    translation_phases::{
+        SourceVectors,
+        preprocessing::{
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -58,17 +65,17 @@ use crate::translation_phases::{
     reason = "The flags are independent recovery facts of one parameter list, not a hidden state \
               machine."
 )]
-pub(super) struct ParameterListFrame {
+pub(super) struct ParameterListFrame<'tu, 'p> {
     /// Current prototype/K&R transition.
     phase: ParameterListPhase,
     /// Whether this syntactic position permits a K&R identifier list.
     allow_k_and_r: bool,
     /// Prototype parameters accumulated before arena insertion.
-    pub(super) parameters: Vec<ParameterDeclaration>,
+    pub(super) parameters: ArenaVec<'p, ParameterDeclaration<'tu>>,
     /// K&R identifiers accumulated before arena insertion.
-    pub(super) identifiers: Vec<Identifier>,
+    pub(super) identifiers: ArenaVec<'p, Identifier>,
     /// Specifiers retained while an optional parameter declarator runs.
-    pending_specifiers: Option<DeclarationSpecifiers>,
+    pending_specifiers: Option<DeclarationSpecifiers<'tu>>,
     /// Specifier provenance retained for parameter-source construction.
     pending_source: Option<SourceVectors>,
     /// Whether `...` terminated the prototype parameter list.
@@ -76,7 +83,7 @@ pub(super) struct ParameterListFrame {
     /// Whether variadic recovery may unwind at a later declaration starter.
     can_unwind_variadic_recovery: bool,
     /// Provenance accumulated across the entire parenthesized suffix.
-    pub(super) source_vectors: Vec<SourceVectors>,
+    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     /// Scope depth restored by every parameter-list exit.
     entry_scope_depth: Option<usize>,
     /// Prototype-scope bindings introduced by parameter declarator names.
@@ -122,18 +129,18 @@ pub(super) enum ParameterListPhase {
     FinishPrototype,
 }
 
-impl ParameterListFrame {
-    pub(super) fn new(allow_k_and_r: bool) -> Self {
+impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
+    pub(super) fn new(arena: &'p Bump, allow_k_and_r: bool) -> Self {
         Self {
             phase: ParameterListPhase::Start,
             allow_k_and_r,
-            parameters: Vec::new(),
-            identifiers: Vec::new(),
+            parameters: ArenaVec::new_in(arena),
+            identifiers: ArenaVec::new_in(arena),
             pending_specifiers: None,
             pending_source: None,
             is_variadic: false,
             can_unwind_variadic_recovery: false,
-            source_vectors: Vec::new(),
+            source_vectors: ArenaVec::new_in(arena),
             entry_scope_depth: None,
             parameter_name_bindings: 0,
             diagnosed_mixed_parameter: false,
@@ -150,18 +157,18 @@ impl ParameterListFrame {
     /// `(size_t n, int m)`, a bounded scan of the rest of the list looks for
     /// declaration syntax; without it, `(a b, c)` stays an identifier list with
     /// an omitted comma.
-    fn unknown_type_name_starts_prototype(parser: &mut Parser, context: &mut Context) -> bool {
+    fn unknown_type_name_starts_prototype(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
         /// Tokens examined after two adjacent identifiers before the list is
         /// assumed to be an identifier list.
         const SCAN_LIMIT: usize = 64;
-        let Some(following) = parser.cursor.following(context) else {
+        let Some(following) = parser.cursor.following() else {
             return false;
         };
         match following.kind {
             | TokenType::Operator(OperatorTokenType::Asterisk) => true,
             | TokenType::Identifier => {
                 for index in 1..=SCAN_LIMIT {
-                    let Some(token) = parser.cursor.lookahead(context, index) else {
+                    let Some(token) = parser.cursor.lookahead(index) else {
                         return false;
                     };
                     if parser.declaration_starter(token)
@@ -192,11 +199,10 @@ impl ParameterListFrame {
 
     pub(super) fn step(
         &mut self,
-        parser: &mut Parser,
-        context: &mut Context,
+        parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
-        returned: Option<ParseValue>,
-    ) -> ParseAction {
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
         match self.phase {
             | ParameterListPhase::Start => {
                 debug_assert!(
@@ -215,7 +221,7 @@ impl ParameterListFrame {
                         token.kind == TokenType::Identifier
                             && !parser.scopes.is_typedef(token.contents)
                     })
-                    && !Self::unknown_type_name_starts_prototype(parser, context)
+                    && !Self::unknown_type_name_starts_prototype(parser)
                 {
                     self.phase = ParameterListPhase::KAndRIdentifier;
                 } else {
@@ -230,7 +236,6 @@ impl ParameterListFrame {
                 );
                 let Some(token) = token else {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
                             None,
                         ),
@@ -247,7 +252,6 @@ impl ParameterListFrame {
                 if parser.declaration_starter(token) {
                     if !self.diagnosed_mixed_parameter {
                         parser.report(
-                            context,
                             ParserErrorType::KAndRFunctionDeclaratorMixedWithModernDeclarator,
                             Some(token),
                         );
@@ -271,7 +275,6 @@ impl ParameterListFrame {
                 // Typedef names are declaration starters, handled above.
                 if token.kind != TokenType::Identifier {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
                             Some(token.kind),
                         ),
@@ -301,6 +304,7 @@ impl ParameterListFrame {
                 } else {
                     self.phase = ParameterListPhase::KAndRMixedDeclarator;
                     ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        parser.arena,
                         DeclaratorMode::MaybeAbstract,
                     )))
                 }
@@ -335,7 +339,6 @@ impl ParameterListFrame {
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -345,7 +348,6 @@ impl ParameterListFrame {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
                     None,
                 ),
@@ -360,7 +362,6 @@ impl ParameterListFrame {
                     // next parameter name:
                     // diagnose, then reprocess it as an item.
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -370,7 +371,6 @@ impl ParameterListFrame {
                     ParseAction::Reprocess
                 } else {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -435,6 +435,7 @@ impl ParameterListFrame {
                 } else {
                     self.phase = ParameterListPhase::AwaitDeclarator;
                     ParseAction::Push(ParseFrame::Declarator(DeclaratorFrame::new(
+                        parser.arena,
                         DeclaratorMode::MaybeAbstract,
                     )))
                 }
@@ -447,8 +448,7 @@ impl ParameterListFrame {
                 // Parameter names enter prototype scope as soon as
                 // their declarator completes
                 // and may hide typedefs in later entries.
-                if let Some(identifier) =
-                    declarator.and_then(|declarator| parser.declarator_identifier(declarator))
+                if let Some(identifier) = declarator.and_then(Declarator::identifier)
                     && parser
                         .scopes
                         .publish_reporting_new(identifier.name, NameClass::Ordinary)
@@ -457,7 +457,7 @@ impl ParameterListFrame {
                 }
                 let parameter_source = match (self.pending_source.take(), declarator_source) {
                     | (Some(specifiers), Some(declarator)) =>
-                        context.merge_vectors(specifiers, declarator),
+                        parser.context.merge_vectors(specifiers, declarator),
                     | (Some(specifiers), None) => specifiers,
                     | (None, Some(declarator)) => declarator,
                     | (None, None) => SourceVectors::default(),
@@ -494,7 +494,6 @@ impl ParameterListFrame {
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -504,7 +503,6 @@ impl ParameterListFrame {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
                     None,
                 ),
@@ -517,7 +515,6 @@ impl ParameterListFrame {
                     // omitted comma instead
                     // of consuming it during recovery.
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -527,7 +524,6 @@ impl ParameterListFrame {
                     ParseAction::Reprocess
                 } else {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
                     token.map(|token| token.kind),
                 ),
@@ -558,7 +554,6 @@ impl ParameterListFrame {
                 } else if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let token = token.expect("closing-parenthesis token exists");
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(
                             Some(token.kind),
                         ),
@@ -572,7 +567,6 @@ impl ParameterListFrame {
                     || token.is_none()
                 {
                     parser.report(
-                        context,
                         ParserErrorType::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(
                             token.map(|token| token.kind),
                         ),
@@ -603,7 +597,6 @@ impl ParameterListFrame {
                 {
                     let token = token.expect("unwind token exists");
                     parser.report(
-                context,
                 ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                     token.kind,
                 ),
@@ -616,7 +609,6 @@ impl ParameterListFrame {
                     && parser.declaration_starter(token)
                 {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                     token.kind,
                 ),
@@ -626,7 +618,6 @@ impl ParameterListFrame {
                     ParseAction::Reprocess
                 } else if token.is_none() {
                     parser.report(
-                        context,
                         ParserErrorType::UnexpectedEndOfVariadicFunctionDeclaratorParameterList,
                         None,
                     );
@@ -634,7 +625,6 @@ impl ParameterListFrame {
                     ParseAction::Reprocess
                 } else if let Some(token) = token {
                     parser.report(
-                context,
                 ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
                     token.kind,
                 ),
@@ -666,10 +656,10 @@ impl ParameterListFrame {
                     self.entry_scope_depth
                         .expect("parameter list entered prototype scope"),
                 );
-                let start = parser.append_syntax(&mut self.identifiers);
+                let start = parser.alloc_syntax_list(&mut self.identifiers);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {
                     direct_declarator: DirectDeclarator::KAndRStyleFunction { parameters: start },
-                    source_vectors:    context.merge_vector_list(&self.source_vectors),
+                    source_vectors:    parser.context.merge_vector_list(&self.source_vectors),
                 }))
             },
             | ParameterListPhase::FinishPrototype => {
@@ -687,13 +677,11 @@ impl ParameterListFrame {
                 let entry_scope_depth = self
                     .entry_scope_depth
                     .expect("parameter list entered prototype scope");
-                let start = parser.append_syntax(&mut self.parameters);
+                let start = parser.alloc_syntax_list(&mut self.parameters);
                 if entry_scope_depth == 0
                     && parser.scopes.innermost_binding_count() > self.parameter_name_bindings
                 {
-                    parser
-                        .scopes
-                        .retain_innermost_bindings((start.start_index, start.length));
+                    parser.scopes.retain_innermost_bindings(list_key(&start));
                 }
                 parser.scopes.restore_depth(entry_scope_depth);
                 ParseAction::Reduce(ParseValue::ParameterList(ParameterListResult {
@@ -701,7 +689,7 @@ impl ParameterListFrame {
                         parameter_list: start,
                         is_variadic:    self.is_variadic,
                     },
-                    source_vectors:    context.merge_vector_list(&self.source_vectors),
+                    source_vectors:    parser.context.merge_vector_list(&self.source_vectors),
                 }))
             },
         }

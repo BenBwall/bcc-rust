@@ -1,19 +1,15 @@
 //! The parser driver loop and helpers shared by every grammar frame.
 
 #[cfg(test)]
-use std::fmt::Debug;
-
-#[cfg(test)]
-use super::machine::FrameTraceEvent;
+use super::{
+    FrameTrace,
+    machine::FrameTraceEvent,
+};
 use super::{
     ParsedTranslationUnit,
     Parser,
     ParserLimits,
-    declaration_syntax::{
-        Declarator,
-        DirectDeclarator,
-        TypeSpecifiers,
-    },
+    PreprocessedTranslationUnit,
     errors::{
         ParserError,
         ParserErrorType,
@@ -38,23 +34,19 @@ use super::{
         SynchronizationKind,
         SynchronizationSet,
     },
-    scope::ScopeStack,
+    scope::{
+        LabelScopes,
+        ScopeStack,
+    },
     statement::is_statement_keyword,
     syntax::{
-        DeclarationIndex,
+        ConditionalExpression,
         Expression,
-        ExpressionIndex,
         ExpressionType,
         ExternalDeclaration,
         Identifier,
-        StatementIndex,
-        SyntaxList,
     },
-    syntax_store::{
-        SyntaxStore,
-        SyntaxStoreCheckpoint,
-        SyntaxTree,
-    },
+    syntax_log::TreeNode,
     token_cursor::{
         TokenCursor,
         Upstream,
@@ -79,45 +71,100 @@ use crate::{
             TokenType,
         },
     },
-    util::string_cache::StringCacheId,
+    util::{
+        arena_list::ArenaList,
+        bump::{
+            ArenaVec,
+            Bump,
+        },
+        region_vec::RegionVec,
+    },
 };
 
-impl Parser {
-    /// Creates an idle parser over a preprocessor token source.
-    ///
-    /// C99: the input is the translation unit produced after phase 7 under
-    /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
-    pub(crate) fn new(mut preprocessor: Preprocessor) -> Self {
-        preprocessor.prepare_for_parsing();
-        Self::with_upstream(Upstream::Preprocessor(preprocessor))
-    }
-
+impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// Preprocesses the whole translation unit, then creates an idle parser
     /// over the result. Every preprocessing diagnostic is pending in
     /// `context` before any parser diagnostic.
-    pub(crate) fn after_preprocessing(
-        mut preprocessor: Preprocessor,
-        context: &mut Context,
+    ///
+    /// C99: the input is the translation unit produced after phase 7 under
+    /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
+    #[cfg(test)]
+    pub(crate) fn new(
+        preprocessor: Preprocessor<'tu, '_>,
+        context: &'c mut Context<'tu>,
+        arena: &'p Bump,
     ) -> Self {
-        preprocessor.prepare_for_parsing();
-        Self::with_upstream(Upstream::preprocess_all(preprocessor, context))
+        Self::new_with_config(preprocessor, context, ParserLimits::default(), arena)
     }
 
-    fn with_upstream(upstream: Upstream) -> Self {
+    pub(crate) fn preprocess(
+        preprocessor: Preprocessor<'tu, '_>,
+        context: &mut Context<'tu>,
+    ) -> PreprocessedTranslationUnit {
+        Self::preprocess_with_limit(
+            preprocessor,
+            context,
+            ParserLimits::default().source_segments,
+        )
+    }
+
+    fn preprocess_with_limit(
+        mut preprocessor: Preprocessor<'tu, '_>,
+        context: &mut Context<'tu>,
+        source_segment_limit: usize,
+    ) -> PreprocessedTranslationUnit {
+        preprocessor.prepare_for_parsing();
+        let upstream = Upstream::preprocess_all(preprocessor, context, source_segment_limit);
+        context.release_preprocessor_vectors();
+        PreprocessedTranslationUnit { upstream }
+    }
+
+    /// Creates an idle parser over `preprocessed` that borrows `context` for
+    /// the whole parse. Its syntax tree goes to the context's
+    /// translation-unit arena and its working memory comes from the parse
+    /// arena.
+    pub(crate) fn from_preprocessed(
+        preprocessed: PreprocessedTranslationUnit,
+        context: &'c mut Context<'tu>,
+        arena: &'p Bump,
+    ) -> Self {
+        Self::with_upstream(preprocessed.upstream, context, arena)
+    }
+
+    #[cfg(test)]
+    fn new_with_config(
+        preprocessor: Preprocessor<'tu, '_>,
+        context: &'c mut Context<'tu>,
+        limits: ParserLimits,
+        arena: &'p Bump,
+    ) -> Self {
+        let preprocessed =
+            Self::preprocess_with_limit(preprocessor, context, limits.source_segments);
+        let mut parser = Self::from_preprocessed(preprocessed, context, arena);
+        parser.limits = limits;
+        parser
+    }
+
+    fn with_upstream(upstream: Upstream, context: &'c mut Context<'tu>, arena: &'p Bump) -> Self {
         Self {
             cursor: TokenCursor::new(upstream),
-            frames: Vec::new(),
-            pools: FramePools::default(),
+            arena,
+            tree: context.tu_arena(),
+            context,
+            frames: ArenaVec::new_in(arena),
+            pools: FramePools::new_in(arena),
             retained_frame_nodes: 0,
             returned: None,
-            syntax: SyntaxStore::default(),
+            #[cfg(test)]
+            syntax: super::SyntaxLog::default(),
             syntax_nodes: 0,
-            emitted_roots: Vec::new(),
-            scopes: ScopeStack::default(),
-            label_scopes: Vec::new(),
+            emitted_roots: RegionVec::new(),
+            scopes: ScopeStack::new_in(arena),
+            label_scopes: LabelScopes::new_in(arena),
             func_name: None,
-            switch_scopes: Vec::new(),
-            recovery: RecoveryState::default(),
+            switch_scopes: ArenaVec::new_in(arena),
+            binding_scan: ArenaVec::new_in(arena),
+            recovery: RecoveryState::new_in(arena),
             hard_error_count: 0,
             active_frame: ParseFrameKind::ExternalDeclaration,
             has_external_declaration: false,
@@ -126,16 +173,20 @@ impl Parser {
             limits: ParserLimits::default(),
             resource_limit_reported: false,
             #[cfg(test)]
-            trace: Vec::new(),
+            trace: FrameTrace::new(),
             #[cfg(test)]
             action_budget: None,
         }
     }
 
     #[cfg(test)]
-    pub(super) fn with_limits(mut self, limits: ParserLimits) -> Self {
-        self.limits = limits;
-        self
+    pub(super) fn new_with_limits(
+        preprocessor: Preprocessor<'tu, '_>,
+        context: &'c mut Context<'tu>,
+        limits: ParserLimits,
+        arena: &'p Bump,
+    ) -> Self {
+        Self::new_with_config(preprocessor, context, limits, arena)
     }
 
     #[cfg(test)]
@@ -144,32 +195,19 @@ impl Parser {
         self
     }
 
-    /// Returns the complete arena-backed syntax store for diagnostic output.
-    ///
-    /// External declarations contain compact handles, so the CLI prints this
-    /// view after the item stream to make those handles manually inspectable
-    /// without exposing parser storage as part of the parser interface.
-    #[cfg(test)]
-    pub(crate) fn syntax_debug(&self) -> impl Debug + '_ {
-        &self.syntax
-    }
-
     /// Parses the complete phase-7 input into one source-ordered translation
-    /// unit and transfers the validated syntax arenas to the result.
+    /// unit whose roots and syntax live in the translation-unit arena.
     ///
-    /// Roots already observed through
-    /// [`TranslationPhase::next_item`](crate::translation_phases::TranslationPhase::next_item)
-    /// remain part of the aggregate result so mixing the streaming adapter
-    /// with the owning seam cannot silently produce a suffix-only
-    /// translation unit.
-    pub(crate) fn parse_translation_unit(mut self, context: &mut Context) -> ParsedTranslationUnit {
-        let mut roots = std::mem::take(&mut self.emitted_roots);
-        while let Some(root) = self.drive(context) {
-            roots.push(root);
+    /// Roots already observed through [`Self::next_item`] remain part of the
+    /// aggregate result so mixing the streaming adapter with the owning seam
+    /// cannot silently produce a suffix-only translation unit.
+    pub(crate) fn parse_translation_unit(mut self) -> ParsedTranslationUnit<'tu> {
+        while let Some(root) = self.drive() {
+            self.emitted_roots.push(root);
         }
-        let roots = roots.into_boxed_slice();
-        let syntax = SyntaxTree::new(self.syntax, &roots);
-        ParsedTranslationUnit { roots, syntax }
+        ParsedTranslationUnit {
+            roots: self.emitted_roots,
+        }
     }
 
     /// Runs owned frame actions until one external declaration reduces or EOF
@@ -177,11 +215,18 @@ impl Parser {
     ///
     /// C99: translation-unit is a nonempty sequence of external-declaration
     /// values under §6.9, p. 140; PDF p. 152.
-    pub(super) fn drive(&mut self, context: &mut Context) -> Option<ExternalDeclaration> {
+    pub(super) fn drive(&mut self) -> Option<ExternalDeclaration<'tu>> {
         // A resource failure is terminal: the remaining input is neither
         // fetched nor parsed, so it cannot grow the exhausted storage.
         if self.resource_limit_reported {
             return None;
+        }
+        if let Some(token) = self.cursor.upstream.preprocessing_limit_token.take() {
+            return self.resource_failure_at(
+                ParserResource::SourceSegments,
+                self.limits.source_segments,
+                Some(token),
+            );
         }
         loop {
             #[cfg(test)]
@@ -196,7 +241,7 @@ impl Parser {
                 };
                 self.has_external_declaration = true;
                 self.external_declaration_count += 1;
-                context.discard_completed_macro_locations(
+                self.context.discard_completed_macro_locations(
                     self.cursor.previous.map(|token| token.source_vectors),
                 );
                 return Some(external);
@@ -207,16 +252,15 @@ impl Parser {
             );
 
             if self.frames.is_empty() {
-                if self.cursor.current(context).is_none() {
+                if self.cursor.current().is_none() {
                     if !self.has_external_declaration && !self.reported_empty_translation_unit {
                         self.reported_empty_translation_unit = true;
-                        self.report(context, ParserErrorType::EmptyTranslationUnit, None);
+                        self.report(ParserErrorType::EmptyTranslationUnit, None);
                     }
                     return None;
                 }
                 if self.external_declaration_count >= self.limits.external_declarations {
                     return self.resource_failure(
-                        context,
                         ParserResource::ExternalDeclarations,
                         self.limits.external_declarations,
                     );
@@ -224,17 +268,13 @@ impl Parser {
                 self.push_frame(ParseFrame::ExternalDeclaration(
                     ExternalDeclarationFrame::new(
                         self.hard_error_count,
-                        context.pending_errors.len(),
+                        self.context.pending_errors.len(),
                     ),
                 ));
             }
 
             if self.frames.len() > self.limits.frame_depth {
-                return self.resource_failure(
-                    context,
-                    ParserResource::FrameDepth,
-                    self.limits.frame_depth,
-                );
+                return self.resource_failure(ParserResource::FrameDepth, self.limits.frame_depth);
             }
             // The syntax-node limit was checked after the previous step. Since
             // then only a consumed token, a pushed frame (new frames retain no
@@ -245,17 +285,16 @@ impl Parser {
                 "syntax-node limit holds between steps"
             );
 
-            let token = self.cursor.current(context);
+            let token = self.cursor.current();
             let returned = self.returned.take();
-            let syntax_checkpoint = self.syntax.checkpoint();
             // Step the active frame in place. Frames never inspect the control
             // stack, so it is detached while the frame borrows the parser.
-            let mut frames = std::mem::take(&mut self.frames);
+            let mut frames = std::mem::replace(&mut self.frames, ArenaVec::new_in(self.arena));
             let frame = frames.last_mut().expect("parser frame stack is nonempty");
             let frame_kind = frame.kind();
             self.active_frame = frame_kind;
             let retained_before = frame.retained_node_count();
-            let action = frame.step(self, context, token, returned);
+            let action = frame.step(self, token, returned);
             let retained_after = frame.retained_node_count();
             self.frames = frames;
             self.retained_frame_nodes = self
@@ -263,13 +302,9 @@ impl Parser {
                 .checked_sub(retained_before)
                 .expect("pending syntax count matches the frame stack")
                 .saturating_add(retained_after);
-            if context.source_segment_count() > self.limits.source_segments {
-                self.restore_syntax(syntax_checkpoint);
-                return self.resource_failure(
-                    context,
-                    ParserResource::SourceSegments,
-                    self.limits.source_segments,
-                );
+            if self.context.source_segment_count() > self.limits.source_segments {
+                return self
+                    .resource_failure(ParserResource::SourceSegments, self.limits.source_segments);
             }
 
             #[cfg(test)]
@@ -280,20 +315,21 @@ impl Parser {
                 depth:  self.frames.len(),
             });
 
-            debug_assert_eq!(
+            #[cfg(test)]
+            assert_eq!(
                 self.syntax_nodes,
                 self.syntax.node_count(),
-                "the running syntax-node total matches the arenas"
+                "the running syntax-node total matches the log"
             );
+            // A step that crosses a limit keeps the nodes it allocated: the
+            // translation-unit arena cannot take memory back while
+            // references into it may exist. Parsing stops here, so those
+            // nodes are freed with the arena.
             if self.syntax_nodes.saturating_add(self.retained_frame_nodes)
                 > self.limits.syntax_nodes
             {
-                self.restore_syntax(syntax_checkpoint);
-                return self.resource_failure(
-                    context,
-                    ParserResource::SyntaxNodes,
-                    self.limits.syntax_nodes,
-                );
+                return self
+                    .resource_failure(ParserResource::SyntaxNodes, self.limits.syntax_nodes);
             }
 
             match action {
@@ -302,7 +338,6 @@ impl Parser {
                         self.cursor.consume();
                     } else {
                         self.report(
-                            context,
                             ParserErrorType::ParserFrameConsumedAtEndOfInput(frame_kind),
                             None,
                         );
@@ -311,7 +346,7 @@ impl Parser {
                     self.push_frame(child);
                 },
                 | ParseAction::Reduce(value) => {
-                    let mut frame = self.pop_frame();
+                    let frame = self.pop_frame();
                     frame.reclaim_pooled(&mut self.pools);
                     self.returned = Some(value);
                 },
@@ -329,17 +364,17 @@ impl Parser {
                         #[cfg(test)]
                         {
                             let depth = self.frames.len();
-                            self.recover(context, set, depth)
+                            self.recover(set, depth)
                         }
                         #[cfg(not(test))]
                         {
-                            self.recover(context, set)
+                            self.recover(set)
                         }
                     };
                     self.frames
                         .last_mut()
                         .expect("the recovering frame remains active")
-                        .merge_recovered_sources(context, recovered_source_vectors);
+                        .merge_recovered_sources(self.context, recovered_source_vectors);
                 },
             }
         }
@@ -351,36 +386,58 @@ impl Parser {
     /// Unlike the upstream position, this does not depend on how far the
     /// preprocessor has read ahead, so every preprocessing strategy places
     /// recovered and missing nodes identically.
-    pub(super) fn missing_syntax_source(&mut self, context: &mut Context) -> SourceVectors {
-        if let Some(token) = self.cursor.current(context)
-            && let Some(first) = context.get_source_vectors(token.source_vectors).first()
+    pub(super) fn missing_syntax_source(&mut self) -> SourceVectors {
+        if let Some(token) = self.cursor.current()
+            && let Some(first) = self
+                .context
+                .get_source_vectors(token.source_vectors)
+                .first()
         {
-            let (position, source_file_index) = (first.position(context), first.source_file_index);
-            return context.create_retained_source_vectors(position, source_file_index, 0);
+            let (position, source_file_index) =
+                (first.position(self.context), first.source_file_index);
+            return self
+                .context
+                .create_retained_source_vectors(position, source_file_index, 0);
         }
-        context.create_retained_source_vectors(self.position(context), self.source_file_index(), 0)
+        self.context
+            .create_retained_source_vectors(self.position(), self.source_file_index(), 0)
     }
 
-    /// Adds one node to the syntax arena, counts it toward the node limit,
-    /// and returns its raw handle.
-    pub(super) fn push_syntax<T: 'static>(&mut self, node: T) -> u32 {
+    /// Allocates one node in the translation-unit arena and counts it toward
+    /// the node limit.
+    pub(super) fn alloc_syntax<T: TreeNode<'tu>>(&mut self, node: T) -> &'tu T {
+        let node = &*self.tree.alloc(node);
         self.syntax_nodes += 1;
-        self.syntax.push(node)
+        #[cfg(test)]
+        self.syntax.record(node);
+        node
     }
 
-    /// Moves frame-retained nodes into one syntax list and counts them.
-    pub(super) fn append_syntax<T: 'static>(&mut self, nodes: &mut Vec<T>) -> SyntaxList<T> {
-        self.syntax_nodes += nodes.len();
-        self.syntax.append(nodes)
+    /// Stores the out-of-line part of a node, such as a conditional's three
+    /// operands, in the translation-unit arena. It belongs to its node, so
+    /// it is not counted as a node of its own.
+    pub(super) fn alloc_syntax_part<T: Copy>(&self, part: T) -> &'tu T {
+        self.tree.alloc(part)
     }
 
-    /// Truncates the arenas to `checkpoint` and resynchronizes the total.
-    fn restore_syntax(&mut self, checkpoint: SyntaxStoreCheckpoint) {
-        self.syntax.restore(checkpoint);
-        self.syntax_nodes = self.syntax.node_count();
+    /// Copies frame-retained nodes into one length-prefixed list in the
+    /// translation-unit arena, counts them, and empties `nodes` for reuse.
+    /// An empty list allocates nothing.
+    pub(super) fn alloc_syntax_list<T: TreeNode<'tu> + Copy>(
+        &mut self,
+        nodes: &mut ArenaVec<'_, T>,
+    ) -> ArenaList<'tu, T> {
+        let list = ArenaList::copy_from_slice(self.tree, nodes);
+        nodes.clear();
+        self.syntax_nodes += list.len();
+        #[cfg(test)]
+        for node in list {
+            self.syntax.record(node);
+        }
+        list
     }
 
-    fn push_frame(&mut self, mut frame: ParseFrame) {
+    fn push_frame(&mut self, mut frame: ParseFrame<'tu, 'p>) {
         frame.lend_pooled(&mut self.pools);
         self.retained_frame_nodes = self
             .retained_frame_nodes
@@ -388,7 +445,7 @@ impl Parser {
         self.frames.push(frame);
     }
 
-    fn pop_frame(&mut self) -> ParseFrame {
+    fn pop_frame(&mut self) -> ParseFrame<'tu, 'p> {
         let frame = self.frames.pop().expect("parser frame stack is nonempty");
         self.retained_frame_nodes = self
             .retained_frame_nodes
@@ -399,20 +456,28 @@ impl Parser {
 
     fn resource_failure(
         &mut self,
-        context: &mut Context,
         resource: ParserResource,
         limit: usize,
-    ) -> Option<ExternalDeclaration> {
+    ) -> Option<ExternalDeclaration<'tu>> {
+        self.resource_failure_at(resource, limit, None)
+    }
+
+    fn resource_failure_at(
+        &mut self,
+        resource: ParserResource,
+        limit: usize,
+        token_override: Option<Token>,
+    ) -> Option<ExternalDeclaration<'tu>> {
         if self.resource_limit_reported {
             return None;
         }
         self.resource_limit_reported = true;
         self.has_external_declaration = true;
-        let token = self.cursor.current(context);
+        let token = token_override.or_else(|| self.cursor.current());
         let source_vectors = token.map_or_else(
             || {
-                context.create_retained_source_vectors(
-                    self.position(context),
+                self.context.create_retained_source_vectors(
+                    self.position(),
                     self.source_file_index(),
                     0,
                 )
@@ -420,17 +485,18 @@ impl Parser {
             |token| token.source_vectors,
         );
         self.report(
-            context,
             ParserErrorType::ResourceLimitExceeded { resource, limit },
             token,
         );
         self.cursor.abandon();
-        self.frames.clear();
+        while let Some(frame) = self.frames.pop() {
+            frame.reclaim_pooled(&mut self.pools);
+        }
         self.retained_frame_nodes = 0;
         self.returned = None;
-        self.recovery = RecoveryState::default();
+        self.recovery.abandon();
         self.scopes.restore_depth(0);
-        self.label_scopes.clear();
+        self.label_scopes.exit_all();
         self.switch_scopes.clear();
         Some(ExternalDeclaration::Error(source_vectors))
     }
@@ -443,7 +509,6 @@ impl Parser {
     /// synchronization algorithm is implementation-defined.
     fn recover(
         &mut self,
-        context: &mut Context,
         set: SynchronizationSet,
         #[cfg(test)] depth: usize,
     ) -> Option<SourceVectors> {
@@ -451,7 +516,7 @@ impl Parser {
         let mut consumed_tokens = 0_usize;
         self.recovery.begin(set);
 
-        while let Some(token) = self.cursor.current(context) {
+        while let Some(token) = self.cursor.current() {
             let state = self.recovery.active();
             let recovery_set = state.set;
             let at_top_level = state.parentheses == 0 && state.brackets == 0 && state.braces == 0;
@@ -530,7 +595,7 @@ impl Parser {
                     && at_top_level
                     && !has_pending_conditional_at_depth
                     && token.kind == TokenType::Identifier
-                    && is_operator(self.cursor.following(context), OperatorTokenType::Colon);
+                    && is_operator(self.cursor.following(), OperatorTokenType::Colon);
             let at_statement_body_brace = (matches!(
                 recovery_set.kind,
                 SynchronizationKind::StatementExpression(
@@ -545,7 +610,7 @@ impl Parser {
                     != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
                     || !state.last_closed_parenthesis_was_type_name
                     || state.last_closed_parenthesis_was_sizeof_type_name
-                        && self.cursor.following(context).is_some_and(|following| {
+                        && self.cursor.following().is_some_and(|following| {
                             is_statement_keyword(following.kind)
                                 || following.kind != TokenType::Identifier
                                     && self.declaration_starter(following)
@@ -581,7 +646,7 @@ impl Parser {
                 == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
                 && self
                     .cursor
-                    .following(context)
+                    .following()
                     .is_some_and(|following| self.declaration_starter(following));
             self.recovery.consume(token.kind, opens_type_name);
 
@@ -592,27 +657,30 @@ impl Parser {
                 token: Some(token.kind),
                 depth,
             });
-            self.merge_source(context, &mut source_vectors, token);
+            self.merge_source(&mut source_vectors, token);
             self.cursor.consume();
             consumed_tokens += 1;
         }
-        let stopped_token = self.cursor.current(context);
+        let stopped_token = self.cursor.current();
         let stopped_at = stopped_token.map(|token| token.kind);
-        if let Some(TranslationError::Parsing(error)) = context
+        let ranges = source_vectors.map(|discarded| self.context.diagnostic_slice(&[discarded]));
+        let related = stopped_token.map(|token| {
+            self.context.diagnostic_slice(&[RelatedParserDiagnostic {
+                message:        "parsing resumes here",
+                source_vectors: token.source_vectors,
+            }])
+        });
+        if let Some(TranslationError::Parsing(error)) = self.context
             .pending_errors
             .iter_mut()
             .rev()
             .find(|error| matches!(error, TranslationError::Parsing(error) if error.recovery.is_none()))
         {
-            if let Some(discarded) = source_vectors {
-                error.ranges = vec![discarded].into_boxed_slice();
+            if let Some(ranges) = ranges {
+                error.ranges = ranges;
             }
-            if let Some(stopped_token) = stopped_token {
-                error.related = vec![RelatedParserDiagnostic {
-                    message: "parsing resumes here",
-                    source_vectors: stopped_token.source_vectors,
-                }]
-                .into_boxed_slice();
+            if let Some(related) = related {
+                error.related = related;
             }
             error.recovery = Some(RecoverySummary {
                 owner: set.target,
@@ -630,44 +698,42 @@ impl Parser {
     /// C99: syntax-rule and constraint violations require at least one
     /// diagnostic under §5.1.1.3, p. 11; PDF p. 23: implementations must
     /// “produce at least one diagnostic message”.
-    pub(super) fn report(
-        &mut self,
-        context: &mut Context,
-        error_type: ParserErrorType,
-        token: Option<Token>,
-    ) {
+    pub(super) fn report(&mut self, error_type: ParserErrorType<'tu>, token: Option<Token>) {
         let warning_group = error_type.warning_group();
         if warning_group == Some(ParserWarningGroup::RepeatedSpecifiers)
-            && !context.configuration.repeated_specifier_warnings()
+            && !self.context.configuration.repeated_specifier_warnings()
         {
             return;
         }
         if error_type.severity() == ErrorSeverity::Error && !error_type.leaves_syntax_intact() {
             self.hard_error_count += 1;
         }
-        let found_spelling = token.map(|token| -> Box<str> {
+        let found_spelling = token.map(|token| -> &str {
             match token.kind {
-                | TokenType::String(StringTokenType::String(contents)) =>
-                    context.literal_spelling(contents, false).into(),
-                | TokenType::String(StringTokenType::WideString(contents)) =>
-                    context.literal_spelling(contents, true).into(),
-                | _ => context
-                    .string_cache
-                    .at(token.contents)
-                    .trim_end_matches('\0')
-                    .into(),
+                | TokenType::String(StringTokenType::String(contents)) => self
+                    .context
+                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, false),
+                | TokenType::String(StringTokenType::WideString(contents)) => self
+                    .context
+                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, true),
+                | _ => self.context.diagnostic_text(
+                    self.context
+                        .string_cache
+                        .at(token.contents)
+                        .trim_end_matches('\0'),
+                ),
             }
         });
         let source_vectors = match token {
             | Some(token) => token.source_vectors,
-            | None => self.missing_syntax_source(context),
+            | None => self.missing_syntax_source(),
         };
         let insertion_point = if error_type.expects_terminating_semicolon() {
-            self.semicolon_insertion_point(context, token)
+            self.semicolon_insertion_point(token)
         } else {
             None
         };
-        context.parser_error(ParserError {
+        self.context.parser_error(ParserError {
             code: error_type.code(),
             severity: error_type.severity(),
             warning_group,
@@ -678,11 +744,12 @@ impl Parser {
             insertion_point,
             error_type,
             source_vectors,
-            ranges: Box::new([]),
-            related: Box::new([]),
+            ranges: &mut [],
+            related: &mut [],
             recovery: None,
             consumed_tokens: self.cursor.consumed,
-            ordering_location: context
+            ordering_location: self
+                .context
                 .user_source_end(source_vectors)
                 .map(|location| (location.source_file_index, location.index)),
         });
@@ -690,13 +757,12 @@ impl Parser {
 
     /// Attaches a "missing `;`" suggestion after `source` to the diagnostic
     /// just reported, explaining why the following input was misread.
-    pub(super) fn suggest_semicolon_after(&self, context: &mut Context, source: SourceVectors) {
-        _ = self;
-        let Some(last) = context.user_source_end(source) else {
+    pub(super) fn suggest_semicolon_after(&mut self, source: SourceVectors) {
+        let Some(last) = self.context.user_source_end(source) else {
             return;
         };
         let column = last.column + last.length;
-        let insertion_point = context.create_retained_source_vectors(
+        let insertion_point = self.context.create_retained_source_vectors(
             SourcePosition {
                 index: last.end(),
                 line: last.line,
@@ -705,27 +771,24 @@ impl Parser {
             last.source_file_index,
             0,
         );
-        if let Some(TranslationError::Parsing(error)) = context.pending_errors.back_mut() {
+        let related = self.context.diagnostic_slice(&[RelatedParserDiagnostic {
+            message:        "not a function, so later declarations were read as its parameters",
+            source_vectors: source,
+        }]);
+        if let Some(TranslationError::Parsing(error)) = self.context.pending_errors.back_mut() {
             error.insertion_point = Some(insertion_point);
-            error.related = vec![RelatedParserDiagnostic {
-                message:        "not a function, so later declarations were read as its parameters",
-                source_vectors: source,
-            }]
-            .into_boxed_slice();
+            error.related = related;
         }
     }
 
     /// Returns an empty range just after the previous token when `found`
     /// starts a later line of the same file: the likely place of a missing
     /// `;`.
-    fn semicolon_insertion_point(
-        &self,
-        context: &mut Context,
-        found: Option<Token>,
-    ) -> Option<SourceVectors> {
+    fn semicolon_insertion_point(&mut self, found: Option<Token>) -> Option<SourceVectors> {
         let previous = self.cursor.previous?;
-        let previous = context.user_source_end(previous.source_vectors)?;
-        let next = context
+        let previous = self.context.user_source_end(previous.source_vectors)?;
+        let next = self
+            .context
             .get_source_vectors(found?.source_vectors)
             .first()?
             .clone();
@@ -733,7 +796,7 @@ impl Parser {
             return None;
         }
         let column = previous.column + previous.length;
-        Some(context.create_retained_source_vectors(
+        Some(self.context.create_retained_source_vectors(
             SourcePosition {
                 index: previous.end(),
                 line: previous.line,
@@ -749,18 +812,10 @@ impl Parser {
     /// C99: diagnostics should identify the violation where possible under
     /// §5.1.1.3 and footnote 8, p. 11; PDF p. 23. `SourceVectors` is the
     /// implementation's macro/include provenance mechanism.
-    #[expect(
-        clippy::unused_self,
-        reason = "Source accumulation is a parser-machine operation used by every frame."
-    )]
-    pub(super) fn merge_source(
-        &self,
-        context: &mut Context,
-        existing: &mut Option<SourceVectors>,
-        token: Token,
-    ) {
+    pub(super) fn merge_source(&mut self, existing: &mut Option<SourceVectors>, token: Token) {
         *existing = Some(existing.map_or(token.source_vectors, |source_vectors| {
-            context.merge_vectors(source_vectors, token.source_vectors)
+            self.context
+                .merge_vectors(source_vectors, token.source_vectors)
         }));
     }
 
@@ -829,14 +884,9 @@ impl Parser {
         }
     }
 
-    pub(super) fn declaration_recovery_starts_here(
-        &mut self,
-        context: &mut Context,
-        token: Token,
-    ) -> bool {
+    pub(super) fn declaration_recovery_starts_here(&mut self, token: Token) -> bool {
         self.declaration_starter(token)
-            && (token.kind != TokenType::Identifier
-                || self.typedef_name_continues_specifiers(context))
+            && (token.kind != TokenType::Identifier || self.typedef_name_continues_specifiers())
     }
 
     /// Resolves the declaration-specifier/declarator ambiguity after a visible
@@ -846,24 +896,20 @@ impl Parser {
     /// declarator ambiguity is constrained by §6.7.5.3 paragraph 11,
     /// p. 119; PDF p. 131.
     /// Returns whether the declaration starting at the current token
-    /// declares one of `names`, judged from its first identifiers that are
+    /// declares one of `parameters`, judged from its first identifiers that are
     /// neither typedef names nor tags. Recovery uses this to tell an
     /// old-style parameter declaration from an unrelated declaration that
     /// follows a head missing its `;`. When the scan runs out of lookahead it
     /// answers yes, keeping the definition reading.
-    pub(super) fn next_declaration_declares_one_of(
-        &mut self,
-        context: &mut Context,
-        names: &[StringCacheId],
-    ) -> bool {
+    pub(super) fn next_declaration_declares_one_of(&mut self, parameters: &[Identifier]) -> bool {
         const LOOKAHEAD: usize = 32;
         let mut after_tag_keyword = false;
         let mut depth = 0_usize;
         for index in 0..LOOKAHEAD {
             let token = if index == 0 {
-                self.cursor.current(context)
+                self.cursor.current()
             } else {
-                self.cursor.lookahead(context, index - 1)
+                self.cursor.lookahead(index - 1)
             };
             let Some(token) = token else {
                 return false;
@@ -875,7 +921,9 @@ impl Parser {
                 | TokenType::Identifier => {
                     let tag = std::mem::take(&mut after_tag_keyword);
                     if depth == 0 && !tag && !self.scopes.is_typedef(token.contents) {
-                        return names.contains(&token.contents);
+                        return parameters
+                            .iter()
+                            .any(|parameter| parameter.name == token.contents);
                     }
                 },
                 | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => {
@@ -896,13 +944,13 @@ impl Parser {
         true
     }
 
-    pub(super) fn typedef_name_continues_specifiers(&mut self, context: &mut Context) -> bool {
-        let Some(following) = self.cursor.following(context) else {
+    pub(super) fn typedef_name_continues_specifiers(&mut self) -> bool {
+        let Some(following) = self.cursor.following() else {
             return false;
         };
         following.kind == TokenType::Identifier
             || is_operator(Some(following), OperatorTokenType::Asterisk)
-            || self.parenthesized_declarator_follows_typedef(context)
+            || self.parenthesized_declarator_follows_typedef()
             || self.declaration_starter(following)
     }
 
@@ -912,182 +960,96 @@ impl Parser {
     /// C99: parenthesized direct-declarator and pointer are §6.7.5,
     /// p. 114; PDF p. 126; typedef-name is §6.7.7, pp. 123-124;
     /// PDF pp. 135-136.
-    fn parenthesized_declarator_follows_typedef(&mut self, context: &mut Context) -> bool {
+    fn parenthesized_declarator_follows_typedef(&mut self) -> bool {
         let mut index = 0;
         while is_operator(
-            self.cursor.lookahead(context, index),
+            self.cursor.lookahead(index),
             OperatorTokenType::OpeningParenthesis,
         ) {
             index += 1;
         }
-        is_operator(
-            self.cursor.lookahead(context, index),
-            OperatorTokenType::Asterisk,
-        )
-    }
-
-    /// Finds the identifier declared by nested parenthesized direct
-    /// declarators.
-    ///
-    /// C99: declarator binding is specified by §6.7.5 paragraph 4,
-    /// p. 114; PDF p. 126.
-    pub(super) fn declarator_identifier(&self, declarator: Declarator) -> Option<Identifier> {
-        let mut declarator = declarator;
-        loop {
-            let mut nested = None;
-            for direct in &self.syntax[declarator.kind] {
-                match *direct {
-                    | DirectDeclarator::Identifier(identifier) => return Some(identifier),
-                    | DirectDeclarator::Parenthesized(index) =>
-                        nested = Some(self.syntax[index].declarator),
-                    | _ => {},
-                }
-            }
-            declarator = nested?;
-        }
-    }
-
-    pub(super) fn declaration_head_declarator(
-        &self,
-        declaration: DeclarationIndex,
-    ) -> Option<Declarator> {
-        let [init] = &self.syntax[self.syntax[declaration].init_declarators] else {
-            return None;
-        };
-        init.initializer.is_none().then_some(init.declarator)
-    }
-
-    pub(super) fn declaration_is_definition_head(&self, declaration: DeclarationIndex) -> bool {
-        self.syntax[declaration].is_function_definition_head
-            && self.declaration_head_declarator(declaration).is_some()
-    }
-
-    pub(super) fn declaration_is_meaningful(&self, declaration: DeclarationIndex) -> bool {
-        let declaration = &self.syntax[declaration];
-        let specifiers = declaration.declaration_specifiers;
-        declaration.init_declarators.length() > 0
-            || specifiers.storage_class.is_some()
-            || !specifiers.type_qualifiers.is_empty()
-            || specifiers.type_specifiers != TypeSpecifiers::Empty
-            || specifiers.function_specifiers.is_inline
-    }
-
-    pub(super) fn function_suffix(&self, mut declarator: Declarator) -> Option<DirectDeclarator> {
-        let mut suffix = None;
-        loop {
-            let direct = &self.syntax[declarator.kind];
-            if let Some(candidate) = direct.get(1).copied()
-                && matches!(
-                    candidate,
-                    DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
-                )
-            {
-                suffix = Some(candidate);
-            }
-            let Some(DirectDeclarator::Parenthesized(index)) = direct.first() else {
-                return suffix;
-            };
-            declarator = self.syntax[*index].declarator;
-        }
-    }
-
-    pub(super) fn collect_type_specifier_bindings(
-        &self,
-        type_specifiers: TypeSpecifiers,
-        names: &mut Vec<StringCacheId>,
-    ) {
-        let mut pending = vec![type_specifiers];
-        while let Some(type_specifiers) = pending.pop() {
-            match type_specifiers {
-                | TypeSpecifiers::Enum(index) => {
-                    if let Some(enumeration_list) = self.syntax[index].enumeration_list {
-                        names.extend(
-                            self.syntax[enumeration_list]
-                                .iter()
-                                .map(|enumerator| enumerator.name.name),
-                        );
-                    }
-                },
-                | TypeSpecifiers::StructOrUnion(index) => {
-                    if let Some(declarations) = self.syntax[index].struct_declaration_list {
-                        pending.extend(
-                            self.syntax[declarations]
-                                .iter()
-                                .map(|declaration| declaration.type_specifiers),
-                        );
-                    }
-                },
-                | _ => {},
-            }
-        }
-    }
-
-    pub(super) fn statement_source(&self, index: StatementIndex) -> SourceVectors {
-        self.syntax[index].source_vectors
+        is_operator(self.cursor.lookahead(index), OperatorTokenType::Asterisk)
     }
 
     pub(super) fn store_expression(
         &mut self,
-        kind: ExpressionType,
+        kind: ExpressionType<'tu>,
         source_vectors: SourceVectors,
         operator_source_vectors: Option<SourceVectors>,
         recovered: bool,
-    ) -> ExpressionIndex {
-        let recovered = recovered || self.expression_children_recovered(&kind);
-        ExpressionIndex(self.push_syntax(Expression {
+    ) -> &'tu Expression<'tu> {
+        let recovered = recovered || Self::expression_children_recovered(&kind);
+        self.alloc_syntax(Expression {
             kind,
             source_vectors,
             operator_source_vectors,
             recovered,
-        }))
+        })
     }
 
-    fn expression_children_recovered(&self, kind: &ExpressionType) -> bool {
-        let expression_recovered = |index: ExpressionIndex| self.syntax[index].recovered;
+    /// Marks `expression` as recovered. Tree nodes never change, so a copy
+    /// that says so takes its place; the copy is not a new node.
+    pub(super) fn mark_expression_recovered(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+    ) -> &'tu Expression<'tu> {
+        if expression.recovered {
+            return expression;
+        }
+        let marked = &*self.tree.alloc(Expression {
+            recovered: true,
+            ..*expression
+        });
+        #[cfg(test)]
+        self.syntax.replace_expression(expression, marked);
+        marked
+    }
+
+    fn expression_children_recovered(kind: &ExpressionType<'tu>) -> bool {
+        let expression_recovered = |expression: &Expression<'_>| expression.recovered;
         match kind {
             | ExpressionType::Parenthesized { expression }
             | ExpressionType::Unary {
                 operand_expression: expression,
                 ..
             }
-            | ExpressionType::SizeofExpr(expression) => expression_recovered(*expression),
-            | ExpressionType::Conditional {
+            | ExpressionType::SizeofExpr(expression) => expression_recovered(expression),
+            | ExpressionType::Conditional(ConditionalExpression {
                 condition_expression,
                 then_expression,
                 else_expression,
-            } =>
-                expression_recovered(*condition_expression)
-                    || expression_recovered(*then_expression)
-                    || expression_recovered(*else_expression),
+            }) =>
+                expression_recovered(condition_expression)
+                    || expression_recovered(then_expression)
+                    || expression_recovered(else_expression),
             | ExpressionType::Binary {
                 left_expression,
                 right_expression,
                 ..
-            } => expression_recovered(*left_expression) || expression_recovered(*right_expression),
+            } => expression_recovered(left_expression) || expression_recovered(right_expression),
             | ExpressionType::Call {
                 function_expression,
                 arguments,
             } =>
-                expression_recovered(*function_expression)
-                    || self.syntax[*arguments]
+                expression_recovered(function_expression)
+                    || arguments
                         .iter()
-                        .copied()
-                        .any(expression_recovered),
+                        .any(|argument| expression_recovered(argument)),
             | ExpressionType::DirectMember {
                 base_expression, ..
             }
             | ExpressionType::IndirectMember {
                 base_expression, ..
-            } => expression_recovered(*base_expression),
+            } => expression_recovered(base_expression),
             | ExpressionType::CompoundLiteral {
                 type_name,
                 initializer,
-            } => self.syntax[*type_name].recovered || self.syntax[*initializer].recovered,
-            | ExpressionType::SizeofType(type_name) => self.syntax[*type_name].recovered,
+            } => type_name.recovered || initializer.recovered,
+            | ExpressionType::SizeofType(type_name) => type_name.recovered,
             | ExpressionType::Cast {
                 target_type,
                 operand_expression,
-            } => self.syntax[*target_type].recovered || expression_recovered(*operand_expression),
+            } => target_type.recovered || expression_recovered(operand_expression),
             | ExpressionType::Error => true,
             | ExpressionType::Identifier(..)
             | ExpressionType::Constant(..)

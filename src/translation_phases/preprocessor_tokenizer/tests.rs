@@ -1,5 +1,8 @@
-//! Differential tests: the batch lexing strategy must be observably identical
-//! to the streaming one, token for token and diagnostic for diagnostic.
+//! Lexer and preprocessor regression tests. Most compare every observable
+//! effect of a scripted walk (tokens, provenance, positions, and rendered
+//! diagnostics) with a snapshot under `tests/fixtures/lexing/`; run with
+//! `BLESS=1` to rewrite them. The snapshots were first produced by the
+//! on-demand lexer, the differential oracle the batch lexer replaced.
 
 use std::path::{
     Path,
@@ -9,7 +12,7 @@ use std::path::{
 use proptest::prelude::*;
 
 use super::{
-    LexingStrategy,
+    LexedFiles,
     TokenSource,
 };
 use crate::{
@@ -37,7 +40,7 @@ use crate::{
 };
 
 /// Renders every pending diagnostic while its provenance is still live.
-fn drain_diagnostics(context: &mut Context, events: &mut Vec<String>) {
+fn drain_diagnostics(context: &mut Context<'_>, events: &mut Vec<String>) {
     while let Some(error) = context.pop_pending_error() {
         let source = error.source_vectors(context);
         let rendered = Renderer::new(RenderColor::Plain)
@@ -53,8 +56,6 @@ fn drain_diagnostics(context: &mut Context, events: &mut Vec<String>) {
 #[derive(Clone, Debug)]
 enum Step {
     Next,
-    /// Reads the next token as an `#include` operand.
-    NextHeader,
     Save,
     /// Rewinds to the most recent saved position.
     Restore,
@@ -64,45 +65,43 @@ enum Step {
 
 /// Applies `steps` and then reads to the end, recording every observable
 /// effect.
-fn walk(source: &str, strategy: LexingStrategy, steps: &[Step]) -> Vec<String> {
-    let mut context = Context::new();
-    context.set_lexing_strategy(strategy);
-    let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
+fn walk(source: &str, steps: &[Step]) -> Vec<String> {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let file = context.intern_source_file(Path::new("<test>"));
     let source = SharedString::from(source.to_owned());
-    context.record_source_text(file, source.clone());
-    let mut tokens = TokenSource::new(&mut context, file, source);
+    context.record_source_text(file, &source);
+    // Lexing takes the rest of its arena, so it gets one of its own, as in
+    // the preprocessor.
+    let pp = crate::util::bump::Bump::new();
+    let mut tokens = TokenSource::new(&mut context, &pp, file, &source);
     let mut saved: Vec<SourcePosition> = Vec::new();
     let mut events = Vec::new();
-    let read = |tokens: &mut TokenSource, context: &mut Context, events: &mut Vec<String>| {
-        let token = tokens.next_item(context);
-        drain_diagnostics(context, events);
-        events.push(match token {
-            | Some(token) => format!(
-                "{:?} {:?} {:?} include={}",
-                token.kind,
-                context.string_cache.at(token.contents),
-                context.get_source_vectors(token.source_vectors),
-                context.is_tokenizing_include_string(),
-            ),
-            | None => "end".to_owned(),
-        });
-        events.push(format!("at {:?}", tokens.position(context)));
-        token.is_some()
-    };
+    let read =
+        |tokens: &mut TokenSource<'_>, context: &mut Context<'_>, events: &mut Vec<String>| {
+            let token = tokens.next_item(context);
+            drain_diagnostics(context, events);
+            events.push(match token {
+                | Some(token) => format!(
+                    "{:?} {:?} {:?}",
+                    token.kind,
+                    context.string_cache.at(token.contents),
+                    context.get_source_vectors(token.source_vectors),
+                ),
+                | None => "end".to_owned(),
+            });
+            events.push(format!("at {:?}", tokens.position(context)));
+            token.is_some()
+        };
     for step in steps {
         match step {
             | Step::Next => _ = read(&mut tokens, &mut context, &mut events),
-            | Step::NextHeader => {
-                context.set_is_tokenizing_include_string(true);
-                _ = read(&mut tokens, &mut context, &mut events);
-                context.set_is_tokenizing_include_string(false);
-            },
             | Step::Save => saved.push(tokens.position(&context)),
             | Step::Restore =>
                 if let Some(&position) = saved.last() {
-                    tokens.set_position(&mut context, position);
+                    tokens.set_position(position);
                 },
-            | Step::SetLine(line) => tokens.set_line(&mut context, *line),
+            | Step::SetLine(line) => tokens.set_line(&context, *line),
         }
     }
     let mut remaining = 0;
@@ -113,14 +112,78 @@ fn walk(source: &str, strategy: LexingStrategy, steps: &[Step]) -> Vec<String> {
     events
 }
 
-fn assert_same_tokens(source: &str, steps: &[Step]) {
-    let streaming = walk(source, LexingStrategy::Streaming, steps);
-    let batch = walk(source, LexingStrategy::Batch, steps);
-    pretty_assertions::assert_eq!(streaming, batch, "source: {source:?}, steps: {steps:?}");
+/// The recorded effects of every case in one test, compared with
+/// `tests/fixtures/lexing/<name>.snap`.
+struct Snapshot {
+    name:   &'static str,
+    events: String,
+}
+
+impl Snapshot {
+    fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            events: String::new(),
+        }
+    }
+
+    fn record(&mut self, case: &str, events: &[String]) {
+        self.events.push_str("=== ");
+        self.events.push_str(case);
+        self.events.push('\n');
+        for event in events {
+            self.events.push_str(event);
+            self.events.push('\n');
+        }
+    }
+
+    /// Records walking `source` with `steps` and then to its end.
+    fn walk(&mut self, source: &str, steps: &[Step]) {
+        let events = walk(source, steps);
+        self.record(&format!("{source:?} {steps:?}"), &events);
+    }
+
+    /// Records preprocessing `source`, with paths under `directory` spelled
+    /// relative to it so the snapshot does not depend on the checkout.
+    fn preprocess(&mut self, source: &str, path: &Path, include_directory: Option<&Path>) {
+        let mut events = preprocess(source, path, include_directory);
+        if let Some(directory) = include_directory {
+            let spelled = directory.display().to_string();
+            let escaped = spelled.replace('\\', "\\\\");
+            for event in &mut events {
+                *event = event
+                    .replace(&escaped, "test-programs")
+                    .replace(&spelled, "test-programs")
+                    .replace("test-programs\\\\", "test-programs/")
+                    .replace("test-programs\\", "test-programs/");
+            }
+        }
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        self.record(&format!("{name} {source:?}"), &events);
+    }
+
+    fn finish(self) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/lexing")
+            .join(format!("{}.snap", self.name));
+        if std::env::var_os("BLESS").is_some_and(|value| value == "1") {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, &self.events).unwrap();
+            return;
+        }
+        let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("{}: {error}; run with BLESS=1 to create it", path.display())
+        });
+        pretty_assertions::assert_eq!(expected, self.events, "{}", path.display());
+    }
 }
 
 #[test]
-fn ordinary_tokens_match() {
+fn ordinary_tokens() {
+    let mut snapshot = Snapshot::new("ordinary_tokens");
     for source in [
         "int x = 42;\n",
         "a+=b->c<<=d>>=e...f.5e+3 1.e-2 0x1P-4 .x\n",
@@ -132,12 +195,14 @@ fn ordinary_tokens_match() {
         "",
         "\n\n\n",
     ] {
-        assert_same_tokens(source, &[]);
+        snapshot.walk(source, &[]);
     }
+    snapshot.finish();
 }
 
 #[test]
-fn comments_match() {
+fn comments() {
+    let mut snapshot = Snapshot::new("comments");
     for source in [
         "a /* b */ c // d\ne\n",
         "#define X 1 // comment\nX\n",
@@ -151,12 +216,14 @@ fn comments_match() {
         "a ??/\n// trigraph spliced comment\nb\n",
         "/*??/\n",
     ] {
-        assert_same_tokens(source, &[]);
+        snapshot.walk(source, &[]);
     }
+    snapshot.finish();
 }
 
 #[test]
-fn phase_one_and_two_rewrites_match() {
+fn phase_one_and_two_rewrites() {
+    let mut snapshot = Snapshot::new("phase_one_and_two_rewrites");
     for source in [
         "??=define ??( ??) ??< ??> ??' ??! ??- ??/ ???= ?? ?\n",
         "ab\\\ncd \\\r\nef\\\rgh\n",
@@ -170,12 +237,14 @@ fn phase_one_and_two_rewrites_match() {
         "a ??/ b\n",
         "/**/1e\\\n",
     ] {
-        assert_same_tokens(source, &[]);
+        snapshot.walk(source, &[]);
     }
+    snapshot.finish();
 }
 
 #[test]
-fn literal_errors_and_missing_newlines_match() {
+fn literal_errors_and_missing_newlines() {
+    let mut snapshot = Snapshot::new("literal_errors_and_missing_newlines");
     for source in [
         "\"unterminated\nx\n",
         "'unterminated\nx\n",
@@ -190,18 +259,20 @@ fn literal_errors_and_missing_newlines_match() {
         "#include <a.h>",
         "#include \"a.h\"",
     ] {
-        assert_same_tokens(source, &[]);
+        snapshot.walk(source, &[]);
     }
+    snapshot.finish();
 }
 
 #[test]
-fn header_names_match_in_include_mode() {
+fn include_operands() {
+    let mut snapshot = Snapshot::new("include_operands");
     let steps = [
         Step::Next,
         Step::Next,
-        Step::NextHeader,
-        Step::NextHeader,
+        Step::Save,
         Step::Next,
+        Step::Restore,
     ];
     for source in [
         "#include <stdio.h>\n",
@@ -213,15 +284,16 @@ fn header_names_match_in_include_mode() {
         "#  include<a.h>\n",
         "#include <a.h>",
     ] {
-        assert_same_tokens(source, &steps);
+        snapshot.walk(source, &steps);
     }
-    // A header name in a skipped group is read as ordinary tokens.
-    assert_same_tokens("#include <a'b.h>\n", &[]);
+    snapshot.walk("#include <a'b.h>\n", &[]);
+    snapshot.finish();
 }
 
 #[test]
-fn rewinds_and_line_renumbering_match() {
-    assert_same_tokens(
+fn rewinds_and_line_renumbering() {
+    let mut snapshot = Snapshot::new("rewinds_and_line_renumbering");
+    snapshot.walk(
         "a b\\\nc d\n",
         &[
             Step::Next,
@@ -232,7 +304,7 @@ fn rewinds_and_line_renumbering_match() {
             Step::Next,
         ],
     );
-    assert_same_tokens(
+    snapshot.walk(
         "#line 100\nx\ny\n",
         &[
             Step::Next,
@@ -248,10 +320,10 @@ fn rewinds_and_line_renumbering_match() {
         ],
     );
     // Rewinding onto the supplied final newline after reading it must not
-    // supply it again, and a header name lexed through to the end of input
-    // must still be followed by it.
-    assert_same_tokens("", &[Step::Next, Step::SetLine(1)]);
-    assert_same_tokens("0<>", &[Step::Next, Step::NextHeader, Step::SetLine(1)]);
+    // supply it again.
+    snapshot.walk("", &[Step::Next, Step::SetLine(1)]);
+    snapshot.walk("0<>", &[Step::Next, Step::Next, Step::SetLine(1)]);
+    snapshot.finish();
 }
 
 fn fragment() -> impl Strategy<Value = &'static str> {
@@ -266,7 +338,6 @@ fn fragment() -> impl Strategy<Value = &'static str> {
 fn step() -> impl Strategy<Value = Step> {
     prop_oneof![
         4 => Just(Step::Next),
-        1 => Just(Step::NextHeader),
         1 => Just(Step::Save),
         1 => Just(Step::Restore),
         1 => (1u32..50).prop_map(Step::SetLine),
@@ -277,78 +348,74 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(3000))]
 
     #[test]
-    fn random_sources_lex_identically(
+    fn random_sources_lex_to_their_end(
         fragments in proptest::collection::vec(fragment(), 0..40),
+        tail in prop::sample::select(vec!["", "\n", "\\\n", "??/\n", "\\\r\n"]),
         steps in proptest::collection::vec(step(), 0..12),
     ) {
-        let source = fragments.concat();
-        let streaming = walk(&source, LexingStrategy::Streaming, &steps);
-        let batch = walk(&source, LexingStrategy::Batch, &steps);
-        prop_assert_eq!(streaming, batch, "source: {:?}, steps: {:?}", source, steps);
+        // Rewinds must land on entry boundaries (a debug assertion), and the
+        // walk must reach the end of input.
+        let source = fragments.concat() + tail;
+        let events = walk(&source, &steps);
+        prop_assert!(events.last().is_some_and(|event| event.starts_with("at ")));
     }
 }
 
 /// Runs phases 1 through 6 and records every parser-facing token and
 /// diagnostic.
-fn preprocess(
-    source: &str,
-    path: &Path,
-    include_directory: Option<&Path>,
-    strategy: LexingStrategy,
-) -> Vec<String> {
-    let mut context = Context::new();
-    context.set_lexing_strategy(strategy);
+fn preprocess(source: &str, path: &Path, include_directory: Option<&Path>) -> Vec<String> {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
     let directories: SharedVec<PathBuf> = include_directory
         .map(|directory| vec![directory.to_owned()])
         .unwrap_or_default()
         .into();
+    let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         path.into(),
-        source.to_owned().into(),
+        source,
         directories.clone(),
         directories,
     );
     let mut events = Vec::new();
-    loop {
-        let token = preprocessor.next_item(&mut context);
-        drain_diagnostics(&mut context, &mut events);
-        let Some(token) = token else {
-            break;
-        };
+    preprocessor.for_each_item(&mut context, |context, token| {
+        drain_diagnostics(context, &mut events);
         events.push(format!(
             "{} {:?}",
-            describe_token(token, &context),
+            describe_token(token, context, &crate::util::bump::Bump::new()),
             context.get_source_vectors(token.source_vectors)
         ));
-    }
+    });
+    drain_diagnostics(&mut context, &mut events);
     events
 }
 
-fn assert_same_preprocessing(source: &str, path: &Path, include_directory: Option<&Path>) {
-    let streaming = preprocess(source, path, include_directory, LexingStrategy::Streaming);
-    let batch = preprocess(source, path, include_directory, LexingStrategy::Batch);
-    pretty_assertions::assert_eq!(streaming, batch, "source: {source:?}");
-}
-
 #[test]
-fn test_programs_preprocess_identically() {
+fn test_programs() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-programs");
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(&directory)
+        .expect("test-programs is readable")
+        .map(|entry| entry.expect("directory entries are readable").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "c"))
+        .collect();
+    paths.sort();
+    let mut snapshot = Snapshot::new("test_programs");
     let mut checked = 0;
-    for entry in std::fs::read_dir(&directory).expect("test-programs is readable") {
-        let path = entry.expect("directory entries are readable").path();
-        if path.extension().is_some_and(|extension| extension == "c") {
-            let source =
-                crate::util::read_to_string_lossy(&path).expect("test program is readable");
-            assert_same_preprocessing(&source, &path, Some(&directory));
-            checked += 1;
-        }
+    for path in paths {
+        let bytes = std::fs::read(&path).expect("test program is readable");
+        let source = String::from_utf8_lossy(&bytes);
+        snapshot.preprocess(&source, &path, Some(&directory));
+        checked += 1;
     }
+    snapshot.finish();
     assert!(checked > 10, "the test-program corpus must be found");
 }
 
 #[test]
-fn directives_and_macros_preprocess_identically() {
+fn directives_and_macros() {
+    let mut snapshot = Snapshot::new("directives_and_macros");
     for source in [
         "#define F(x, y) x ## y + #x\nF(a, b) F(, 1) F(\"s\", 'c')\n",
         "#define G(...) [__VA_ARGS__]\nG() G(1, (2, 3), 4)\n",
@@ -371,8 +438,9 @@ fn directives_and_macros_preprocess_identically() {
         "#if 1\n",
         "#endif\n",
     ] {
-        assert_same_preprocessing(source, Path::new("<test>"), None);
+        snapshot.preprocess(source, Path::new("<test>"), None);
     }
+    snapshot.finish();
 }
 
 fn program_line() -> impl Strategy<Value = &'static str> {
@@ -419,7 +487,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(500))]
 
     #[test]
-    fn random_programs_preprocess_identically(
+    fn random_programs_preprocess_to_their_end(
         lines in proptest::collection::vec(program_line(), 0..16),
         crlf in any::<bool>(),
         final_newline in any::<bool>(),
@@ -428,45 +496,46 @@ proptest! {
         if final_newline {
             source.push('\n');
         }
-        let streaming = preprocess(&source, Path::new("<test>"), None, LexingStrategy::Streaming);
-        let batch = preprocess(&source, Path::new("<test>"), None, LexingStrategy::Batch);
-        prop_assert_eq!(streaming, batch, "source: {:?}", source);
+        let events = preprocess(&source, Path::new("<test>"), None);
+        prop_assert!(!events.iter().any(|event| event.contains("panicked")));
     }
 }
 
 #[test]
 fn physically_empty_source_has_no_missing_final_newline() {
-    for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
-        let mut context = Context::new();
-        context.set_lexing_strategy(strategy);
-        let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
-        let source = SharedString::from(String::new());
-        context.record_source_text(file, source.clone());
-        let mut tokens = TokenSource::new(&mut context, file, source);
-        assert!(tokens.next_item(&mut context).is_none(), "{strategy:?}");
-        assert!(context.take_pending_errors().is_empty(), "{strategy:?}");
-    }
-    assert_same_tokens("", &[]);
+    let mut snapshot = Snapshot::new("physically_empty_source_has_no_missing_final_newline");
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let file = context.intern_source_file(Path::new("<test>"));
+    let source = SharedString::from(String::new());
+    context.record_source_text(file, &source);
+    let pp = crate::util::bump::Bump::new();
+    let mut tokens = TokenSource::new(&mut context, &pp, file, &source);
+    assert!(tokens.next_item(&mut context).is_none(), "");
+    assert!(context.take_pending_errors().is_empty(), "");
+    snapshot.walk("", &[]);
+    snapshot.finish();
 }
 
 #[test]
 fn source_emptied_by_splicing_reports_escaped_final_newline() {
+    let mut snapshot = Snapshot::new("source_emptied_by_splicing_reports_escaped_final_newline");
     for source in ["\\\n", "??/\n", "\\\r\n", "\\\n\\\n"] {
-        for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
-            let events = walk(source, strategy, &[]);
-            assert!(
-                events
-                    .iter()
-                    .any(|event| event.contains("final newline is escaped")),
-                "{source:?}, {strategy:?}: {events:#?}",
-            );
-        }
-        assert_same_tokens(source, &[]);
+        let events = walk(source, &[]);
+        assert!(
+            events
+                .iter()
+                .any(|event| event.contains("final newline is escaped")),
+            "{source:?}, {events:#?}",
+        );
+        snapshot.walk(source, &[]);
     }
+    snapshot.finish();
 }
 
 #[test]
 fn unterminated_block_comments_report_the_actual_opener() {
+    let mut snapshot = Snapshot::new("unterminated_block_comments_report_the_actual_opener");
     for (source, index, line, column) in [
         ("/* broken\n", 0, 1, 1),
         ("  /* broken\n", 2, 1, 3),
@@ -478,48 +547,49 @@ fn unterminated_block_comments_report_the_actual_opener() {
         ("/* broken\\\n", 0, 1, 1),
         ("/*", 0, 1, 1),
     ] {
-        for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
-            let mut context = Context::new();
-            context.set_lexing_strategy(strategy);
-            let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
-            let text = SharedString::from(source.to_owned());
-            context.record_source_text(file, text.clone());
-            let mut tokens = TokenSource::new(&mut context, file, text);
-            let mut spellings = Vec::new();
-            while let Some(token) = tokens.next_item(&mut context) {
-                spellings.push(context.string_cache.at(token.contents).to_owned());
-            }
-            let errors = context.take_pending_errors();
-            let comments: Vec<_> = errors
-                .iter()
-                .filter_map(|error| match error {
-                    | TranslationError::PreprocessorTokenizining(error)
-                        if error.to_string() == "unterminated block comment" =>
-                        Some(error),
-                    | _ => None,
-                })
-                .collect();
-            assert_eq!(comments.len(), 1, "{source:?}, {strategy:?}: {errors:#?}");
-            let start = SourcePosition {
-                index,
-                line,
-                column,
-            };
-            assert_eq!(
-                comments[0].source_vector,
-                SourceVector::new(start, file, source.len() - index),
-                "{source:?}, {strategy:?}",
-            );
-            if source.starts_with("int") {
-                assert!(spellings.iter().any(|spelling| spelling == "sentinel"));
-            }
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let file = context.intern_source_file(Path::new("<test>"));
+        let text = SharedString::from(source.to_owned());
+        context.record_source_text(file, &text);
+        let pp = crate::util::bump::Bump::new();
+        let mut tokens = TokenSource::new(&mut context, &pp, file, &text);
+        let mut spellings = Vec::new();
+        while let Some(token) = tokens.next_item(&mut context) {
+            spellings.push(context.string_cache.at(token.contents).to_owned());
         }
-        assert_same_tokens(source, &[]);
+        let errors = context.take_pending_errors();
+        let comments: Vec<_> = errors
+            .iter()
+            .filter_map(|error| match error {
+                | TranslationError::PreprocessorTokenizining(error)
+                    if error.to_string() == "unterminated block comment" =>
+                    Some(error),
+                | _ => None,
+            })
+            .collect();
+        assert_eq!(comments.len(), 1, "{source:?}, {errors:#?}");
+        let start = SourcePosition {
+            index,
+            line,
+            column,
+        };
+        assert_eq!(
+            comments[0].source_vector,
+            SourceVector::new(start, file, source.len() - index),
+            "{source:?}",
+        );
+        if source.starts_with("int") {
+            assert!(spellings.iter().any(|spelling| spelling == "sentinel"));
+        }
+        snapshot.walk(source, &[]);
     }
+    snapshot.finish();
 }
 
 #[test]
 fn terminal_spliced_newlines_report_the_actual_last_splice() {
+    let mut snapshot = Snapshot::new("terminal_spliced_newlines_report_the_actual_last_splice");
     for (source, index, line, column, length) in [
         ("\n\\\n", 1, 2, 1, 2),
         ("\n??/\n", 1, 2, 1, 4),
@@ -532,41 +602,40 @@ fn terminal_spliced_newlines_report_the_actual_last_splice() {
         ("\n\\\n\\\n", 3, 3, 1, 2),
         ("é\\\n", 2, 1, 2, 2),
     ] {
-        for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
-            let mut context = Context::new();
-            context.set_lexing_strategy(strategy);
-            let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
-            let text = SharedString::from(source.to_owned());
-            context.record_source_text(file, text.clone());
-            let mut tokens = TokenSource::new(&mut context, file, text);
-            while tokens.next_item(&mut context).is_some() {}
-            let errors = context.take_pending_errors();
-            assert_eq!(errors.len(), 1, "{source:?}: {strategy:?}: {errors:#?}");
-            let source_vectors = errors[0].source_vectors(&mut context);
-            assert_eq!(
-                context.get_source_vectors(source_vectors),
-                &[SourceVector::new(
-                    SourcePosition {
-                        index,
-                        line,
-                        column
-                    },
-                    file,
-                    length,
-                )]
-            );
-            assert_eq!(errors[0].to_string(), "final newline is escaped");
-            assert!(tokens.next_item(&mut context).is_none());
-            assert!(tokens.next_item(&mut context).is_none());
-            assert!(
-                context.take_pending_errors().is_empty(),
-                "repeated EOF warns again"
-            );
-        }
-        assert_same_tokens(source, &[]);
-        assert_same_tokens(source, &[Step::Save, Step::Next, Step::Restore, Step::Next]);
-        assert_same_tokens(source, &[Step::Next, Step::Save, Step::Next, Step::Restore]);
-        assert_same_tokens(
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let file = context.intern_source_file(Path::new("<test>"));
+        let text = SharedString::from(source.to_owned());
+        context.record_source_text(file, &text);
+        let pp = crate::util::bump::Bump::new();
+        let mut tokens = TokenSource::new(&mut context, &pp, file, &text);
+        while tokens.next_item(&mut context).is_some() {}
+        let errors = context.take_pending_errors();
+        assert_eq!(errors.len(), 1, "{source:?}: {errors:#?}");
+        let source_vectors = errors[0].source_vectors(&mut context);
+        assert_eq!(
+            context.get_source_vectors(source_vectors),
+            &[SourceVector::new(
+                SourcePosition {
+                    index,
+                    line,
+                    column
+                },
+                file,
+                length,
+            )]
+        );
+        assert_eq!(errors[0].to_string(), "final newline is escaped");
+        assert!(tokens.next_item(&mut context).is_none());
+        assert!(tokens.next_item(&mut context).is_none());
+        assert!(
+            context.take_pending_errors().is_empty(),
+            "repeated EOF warns again"
+        );
+        snapshot.walk(source, &[]);
+        snapshot.walk(source, &[Step::Save, Step::Next, Step::Restore, Step::Next]);
+        snapshot.walk(source, &[Step::Next, Step::Save, Step::Next, Step::Restore]);
+        snapshot.walk(
             source,
             &[
                 Step::SetLine(90),
@@ -578,46 +647,117 @@ fn terminal_spliced_newlines_report_the_actual_last_splice() {
             ],
         );
     }
+    snapshot.finish();
 }
 
 #[test]
 fn terminal_splice_warning_is_deferred_until_the_tail_is_read() {
     // '\n' is already a complete token; batch construction must stay silent.
-    for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
-        let mut context = Context::new();
-        context.set_lexing_strategy(strategy);
-        let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
-        let text = SharedString::from("\n\\\n".to_owned());
-        context.record_source_text(file, text.clone());
-        let mut tokens = TokenSource::new(&mut context, file, text);
-        assert!(context.take_pending_errors().is_empty());
-        let first = tokens.next_item(&mut context).unwrap();
-        assert_eq!(context.string_cache.at(first.contents), "\n");
-        assert!(context.take_pending_errors().is_empty());
-        // The prior logical LF stays one token; EOF warns without adding one.
-        assert!(tokens.next_item(&mut context).is_none());
-        assert_eq!(context.take_pending_errors().len(), 1);
-    }
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let file = context.intern_source_file(Path::new("<test>"));
+    let text = SharedString::from("\n\\\n".to_owned());
+    context.record_source_text(file, &text);
+    let pp = crate::util::bump::Bump::new();
+    let mut tokens = TokenSource::new(&mut context, &pp, file, &text);
+    assert!(context.take_pending_errors().is_empty());
+    let first = tokens.next_item(&mut context).unwrap();
+    assert_eq!(context.string_cache.at(first.contents), "\n");
+    assert!(context.take_pending_errors().is_empty());
+    // The prior logical LF stays one token; EOF warns without adding one.
+    assert!(tokens.next_item(&mut context).is_none());
+    assert_eq!(context.take_pending_errors().len(), 1);
 }
 
 #[test]
 fn cloned_terminal_splice_cursors_keep_independent_warning_state() {
     for source in ["\n\\\n", "word\\\n"] {
-        for strategy in [LexingStrategy::Streaming, LexingStrategy::Batch] {
-            let mut context = Context::new();
-            context.set_lexing_strategy(strategy);
-            let file = context.intern_source_file(PathBuf::from("<test>").into_boxed_path());
-            let text = SharedString::from(source.to_owned());
-            context.record_source_text(file, text.clone());
-            let mut original = TokenSource::new(&mut context, file, text);
-            let mut cloned = original.clone();
-            while original.next_item(&mut context).is_some() {}
-            assert_eq!(context.take_pending_errors().len(), 1);
-            while cloned.next_item(&mut context).is_some() {}
-            assert_eq!(context.take_pending_errors().len(), 1);
-            assert!(original.next_item(&mut context).is_none());
-            assert!(cloned.next_item(&mut context).is_none());
-            assert!(context.take_pending_errors().is_empty());
-        }
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let file = context.intern_source_file(Path::new("<test>"));
+        let text = SharedString::from(source.to_owned());
+        context.record_source_text(file, &text);
+        let pp = crate::util::bump::Bump::new();
+        let mut original = TokenSource::new(&mut context, &pp, file, &text);
+        let mut cloned = original.clone();
+        while original.next_item(&mut context).is_some() {}
+        assert_eq!(context.take_pending_errors().len(), 1);
+        while cloned.next_item(&mut context).is_some() {}
+        assert_eq!(context.take_pending_errors().len(), 1);
+        assert!(original.next_item(&mut context).is_none());
+        assert!(cloned.next_item(&mut context).is_none());
+        assert!(context.take_pending_errors().is_empty());
     }
+}
+
+#[test]
+fn persisted_sources_resume_where_their_cursor_stood() {
+    let spellings = |source: &mut TokenSource<'_>, context: &mut Context<'_>| {
+        let mut spellings = Vec::new();
+        while let Some(token) = source.next_item(context) {
+            spellings.push(context.string_cache.at(token.contents).to_owned());
+        }
+        spellings
+    };
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let file = context.intern_source_file(Path::new("<test>"));
+    let text = "a b\nc\n";
+    context.record_source_text(file, text);
+    let pp = crate::util::bump::Bump::new();
+    let mut files = LexedFiles::new_in(&pp);
+
+    // A registered file is shared rather than copied.
+    let mut opened = files.open(&mut context, file, text);
+    assert!(opened.next_item(&mut context).is_some());
+    assert_eq!(files.persist(&opened), opened);
+
+    // A file lexed elsewhere is copied with its reading state.
+    let scratch = crate::util::bump::Bump::new();
+    let mut temporary = TokenSource::new(&mut context, &scratch, file, text);
+    assert!(temporary.next_item(&mut context).is_some());
+    let mut persisted = files.persist(&temporary);
+    assert_ne!(persisted, temporary);
+    let expected = spellings(&mut temporary, &mut context);
+    drop(scratch);
+    assert_eq!(spellings(&mut persisted, &mut context), expected);
+    assert_eq!(expected, [" ", "b", "\n", "c", "\n"]);
+}
+
+#[test]
+fn lexed_files_grow_in_place_and_keep_exact_storage() {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let file = context.intern_source_file(Path::new("<test>"));
+    // One entry per byte, three times the up-front estimate.
+    let text = "a+b;\n".repeat(4096);
+    let pp = crate::util::bump::Bump::new();
+    let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
+    assert_eq!(lexed.len(), text.len());
+    // Exactly the 17-byte packed entries: growing left no copies behind,
+    // and the unused capacity went back to the arena.
+    assert_eq!(pp.used(), 17 * text.len());
+    assert!(pp.high_water() < 2 * pp.used());
+}
+
+#[test]
+fn lexing_commits_the_entries_written_not_a_capacity() {
+    use crate::util::vm::MAX_COMMIT_STEP;
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let file = context.intern_source_file(Path::new("<test>"));
+    // Over five mebibytes of entries, far past any one commit step.
+    let text = "a+b;\n".repeat(64 * 1024);
+    let pp = crate::util::bump::Bump::new();
+    let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
+    assert_eq!(lexed.len(), text.len());
+    assert_eq!(pp.used(), 17 * text.len());
+    assert_eq!(pp.high_water(), pp.used());
+    // Commit followed the entries as they were written, at most one step
+    // ahead; a doubling capacity would have committed up to twice as much.
+    assert!(
+        pp.committed() <= pp.used() + MAX_COMMIT_STEP,
+        "{}",
+        pp.committed()
+    );
 }

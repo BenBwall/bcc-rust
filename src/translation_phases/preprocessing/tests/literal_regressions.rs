@@ -3,9 +3,8 @@
 
 use std::path::PathBuf;
 
-use super::strategies::assert_strategies_agree;
+use super::Preprocessor;
 use crate::{
-    pipeline::PreprocessingStrategy,
     translation_phases::{
         Context,
         GetSourceVectors,
@@ -25,12 +24,6 @@ use crate::{
     },
 };
 
-const STRATEGIES: [PreprocessingStrategy; 3] = [
-    PreprocessingStrategy::Streaming,
-    PreprocessingStrategy::BatchLexing,
-    PreprocessingStrategy::Batch,
-];
-
 #[derive(Debug)]
 struct Observation {
     integers:   Vec<IntegerTokenType>,
@@ -40,7 +33,7 @@ struct Observation {
     errors:     Vec<(String, Vec<SourceVector>)>,
 }
 
-fn record_token(token: Token, context: &Context, observation: &mut Observation) {
+fn record_token(token: Token, context: &Context<'_>, observation: &mut Observation) {
     observation
         .spellings
         .push(context.string_cache.at(token.contents).to_owned());
@@ -50,16 +43,14 @@ fn record_token(token: Token, context: &Context, observation: &mut Observation) 
         | TokenType::String(StringTokenType::String(contents)) => observation.strings.push((
             false,
             context
-                .literal_text(contents, false)
-                .as_deref()
+                .literal_text_in(context.tu_arena(), contents, false)
                 .expect("UTF-8 test literal")
                 .to_owned(),
         )),
         | TokenType::String(StringTokenType::WideString(contents)) => observation.strings.push((
             true,
             context
-                .literal_text(contents, true)
-                .as_deref()
+                .literal_text_in(context.tu_arena(), contents, true)
                 .expect("UTF-8 test literal")
                 .to_owned(),
         )),
@@ -67,7 +58,7 @@ fn record_token(token: Token, context: &Context, observation: &mut Observation) 
     }
 }
 
-fn record_errors(context: &mut Context, observation: &mut Observation) {
+fn record_errors(context: &mut Context<'_>, observation: &mut Observation) {
     while let Some(error) = context.pop_pending_error() {
         let sources = error.source_vectors(context);
         let kind = match error {
@@ -80,12 +71,15 @@ fn record_errors(context: &mut Context, observation: &mut Observation) {
     }
 }
 
-fn observe(source: &str, strategy: PreprocessingStrategy) -> Observation {
-    let mut context = Context::new();
-    let mut preprocessor = strategy.preprocessor(
+fn observe(source: &str) -> Observation {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
         &mut context,
         PathBuf::from("<literal regressions>").into_boxed_path(),
-        source.to_owned().into(),
+        source,
         SharedVec::default(),
         SharedVec::default(),
     );
@@ -96,19 +90,10 @@ fn observe(source: &str, strategy: PreprocessingStrategy) -> Observation {
         spellings:  Vec::new(),
         errors:     Vec::new(),
     };
-    if strategy == PreprocessingStrategy::Batch {
-        let tokens = preprocessor.preprocess_all(&mut context);
-        record_errors(&mut context, &mut observation);
-        for token in tokens {
-            record_token(token, &context, &mut observation);
-        }
-    } else {
-        loop {
-            let token = preprocessor.next_iterator_item(&mut context);
-            record_errors(&mut context, &mut observation);
-            let Some(token) = token else { break };
-            record_token(token, &context, &mut observation);
-        }
+    let tokens = preprocessor.preprocess_all(&mut context);
+    record_errors(&mut context, &mut observation);
+    for token in tokens {
+        record_token(token, &context, &mut observation);
     }
     observation
 }
@@ -128,16 +113,10 @@ fn integer_unsigned_and_long_suffix_cases_are_independent() {
         ] {
             for suffix in suffixes {
                 let source = format!("{prefix}{suffix}; after\n");
-                assert_strategies_agree(&source);
-                for strategy in STRATEGIES {
-                    let actual = observe(&source, strategy);
-                    assert!(
-                        actual.errors.is_empty(),
-                        "{strategy:?}: {source:?}: {actual:#?}"
-                    );
-                    assert_eq!(actual.integers, [expected], "{strategy:?}: {source:?}");
-                    assert_eq!(actual.spellings.last().unwrap(), "after");
-                }
+                let actual = observe(&source);
+                assert!(actual.errors.is_empty(), "{source:?}: {actual:#?}");
+                assert_eq!(actual.integers, [expected], "{source:?}");
+                assert_eq!(actual.spellings.last().unwrap(), "after");
             }
         }
     }
@@ -147,17 +126,10 @@ fn integer_unsigned_and_long_suffix_cases_are_independent() {
 fn mixed_case_long_long_suffix_is_still_invalid() {
     for suffix in ["lL", "Ll", "ulL", "uLl", "UlL", "ULl", "lLu", "LlU"] {
         let source = format!("1{suffix}; after\n");
-        assert_strategies_agree(&source);
-        for strategy in STRATEGIES {
-            let actual = observe(&source, strategy);
-            assert_eq!(
-                actual.errors.len(),
-                1,
-                "{strategy:?}: {source:?}: {actual:#?}"
-            );
-            assert_eq!(actual.errors[0].0, "InvalidDecimalIntegerLiteral");
-            assert_eq!(actual.spellings.last().unwrap(), "after");
-        }
+        let actual = observe(&source);
+        assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+        assert_eq!(actual.errors[0].0, "InvalidDecimalIntegerLiteral");
+        assert_eq!(actual.spellings.last().unwrap(), "after");
     }
 }
 
@@ -165,21 +137,14 @@ fn mixed_case_long_long_suffix_is_still_invalid() {
 fn hexadecimal_integer_prefix_requires_a_digit_before_the_suffix() {
     for spelling in ["0x", "0X", "0xu", "0xL", "0xLL", "0xul", "0xULL", "0XUL"] {
         let source = format!("{spelling}; after\n");
-        assert_strategies_agree(&source);
-        for strategy in STRATEGIES {
-            let actual = observe(&source, strategy);
-            assert_eq!(
-                actual.errors.len(),
-                1,
-                "{strategy:?}: {source:?}: {actual:#?}"
-            );
-            assert_eq!(actual.errors[0].0, "InvalidHexadecimalIntegerLiteral");
-            assert_eq!(
-                actual.errors[0].1[0].length,
-                u32::try_from(spelling.len()).unwrap()
-            );
-            assert_eq!(actual.spellings.last().unwrap(), "after");
-        }
+        let actual = observe(&source);
+        assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+        assert_eq!(actual.errors[0].0, "InvalidHexadecimalIntegerLiteral");
+        assert_eq!(
+            actual.errors[0].1[0].length,
+            u32::try_from(spelling.len()).unwrap()
+        );
+        assert_eq!(actual.spellings.last().unwrap(), "after");
     }
     // The leading octal zero counts as a digit even though conversion starts at
     // index 1.
@@ -187,15 +152,9 @@ fn hexadecimal_integer_prefix_requires_a_digit_before_the_suffix() {
         "0", "0u", "0L", "0LL", "0UL", "0ULL", "0x0", "0x0UL", "0X0ULL",
     ] {
         let source = format!("{spelling}; after\n");
-        assert_strategies_agree(&source);
-        for strategy in STRATEGIES {
-            let actual = observe(&source, strategy);
-            assert!(
-                actual.errors.is_empty(),
-                "{strategy:?}: {source:?}: {actual:#?}"
-            );
-            assert_eq!(i128::from(actual.integers[0]), 0);
-        }
+        let actual = observe(&source);
+        assert!(actual.errors.is_empty(), "{source:?}: {actual:#?}");
+        assert_eq!(i128::from(actual.integers[0]), 0);
     }
 }
 
@@ -205,34 +164,21 @@ fn hexadecimal_escape_requires_at_least_one_digit() {
         for (contents, recovery) in [("\\x", ""), ("\\xg", "g"), ("a\\xz", "az")] {
             let literal = format!("{prefix}\"{contents}\"");
             let source = format!("{literal}; after\n");
-            assert_strategies_agree(&source);
-            for strategy in STRATEGIES {
-                let actual = observe(&source, strategy);
-                assert_eq!(
-                    actual.errors.len(),
-                    1,
-                    "{strategy:?}: {source:?}: {actual:#?}"
-                );
-                assert_eq!(actual.errors[0].0, "InvalidHexEscapeSequence");
-                assert_eq!(
-                    actual.errors[0].1[0].length,
-                    u32::try_from(literal.len()).unwrap()
-                );
-                assert_eq!(actual.strings, [(prefix == "L", recovery.to_owned())]);
-                assert_eq!(actual.spellings.last().unwrap(), "after");
-            }
+            let actual = observe(&source);
+            assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+            assert_eq!(actual.errors[0].0, "InvalidHexEscapeSequence");
+            assert_eq!(
+                actual.errors[0].1[0].length,
+                u32::try_from(literal.len()).unwrap()
+            );
+            assert_eq!(actual.strings, [(prefix == "L", recovery.to_owned())]);
+            assert_eq!(actual.spellings.last().unwrap(), "after");
         }
         for (escape, expected) in [("\\x0", "\0"), ("\\x41", "A"), ("\\x41g", "Ag")] {
             let source = format!("{prefix}\"{escape}\"; after\n");
-            assert_strategies_agree(&source);
-            for strategy in STRATEGIES {
-                let actual = observe(&source, strategy);
-                assert!(
-                    actual.errors.is_empty(),
-                    "{strategy:?}: {source:?}: {actual:#?}"
-                );
-                assert_eq!(actual.strings, [(prefix == "L", expected.to_owned())]);
-            }
+            let actual = observe(&source);
+            assert!(actual.errors.is_empty(), "{source:?}: {actual:#?}");
+            assert_eq!(actual.strings, [(prefix == "L", expected.to_owned())]);
         }
     }
 }
@@ -252,22 +198,15 @@ fn universal_character_names_reject_forbidden_low_code_points() {
             // Extra valid character avoids an empty-character recovery cascade.
             let literal = format!("{prefix}\"a{escape}z\"");
             let source = format!("{literal}; after\n");
-            assert_strategies_agree(&source);
-            for strategy in STRATEGIES {
-                let actual = observe(&source, strategy);
-                assert_eq!(
-                    actual.errors.len(),
-                    1,
-                    "{strategy:?}: {source:?}: {actual:#?}"
-                );
-                assert_eq!(actual.errors[0].0, error);
-                assert_eq!(
-                    actual.errors[0].1[0].length,
-                    u32::try_from(literal.len()).unwrap()
-                );
-                assert_eq!(actual.strings, [(prefix == "L", "az".to_owned())]);
-                assert_eq!(actual.spellings.last().unwrap(), "after");
-            }
+            let actual = observe(&source);
+            assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+            assert_eq!(actual.errors[0].0, error);
+            assert_eq!(
+                actual.errors[0].1[0].length,
+                u32::try_from(literal.len()).unwrap()
+            );
+            assert_eq!(actual.strings, [(prefix == "L", "az".to_owned())]);
+            assert_eq!(actual.spellings.last().unwrap(), "after");
         }
     }
 }
@@ -288,15 +227,9 @@ fn universal_character_name_exceptions_and_nonbasic_characters_are_valid() {
     ] {
         for prefix in ["", "L"] {
             let source = format!("{prefix}\"{escape}\"; after\n");
-            assert_strategies_agree(&source);
-            for strategy in STRATEGIES {
-                let actual = observe(&source, strategy);
-                assert!(
-                    actual.errors.is_empty(),
-                    "{strategy:?}: {source:?}: {actual:#?}"
-                );
-                assert_eq!(actual.strings, [(prefix == "L", expected.to_owned())]);
-            }
+            let actual = observe(&source);
+            assert!(actual.errors.is_empty(), "{source:?}: {actual:#?}");
+            assert_eq!(actual.strings, [(prefix == "L", expected.to_owned())]);
         }
     }
 }
@@ -308,18 +241,11 @@ fn incomplete_universal_character_names_have_one_primary_diagnostic() {
         ("\\U1", "LargeUnicodeEscapeSequenceTooSmall"),
     ] {
         let source = format!("\"a{escape}z\"; after\n");
-        assert_strategies_agree(&source);
-        for strategy in STRATEGIES {
-            let actual = observe(&source, strategy);
-            assert_eq!(
-                actual.errors.len(),
-                1,
-                "{strategy:?}: {source:?}: {actual:#?}"
-            );
-            assert_eq!(actual.errors[0].0, error);
-            assert_eq!(actual.strings, [(false, "az".to_owned())]);
-            assert_eq!(actual.spellings.last().unwrap(), "after");
-        }
+        let actual = observe(&source);
+        assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+        assert_eq!(actual.errors[0].0, error);
+        assert_eq!(actual.strings, [(false, "az".to_owned())]);
+        assert_eq!(actual.spellings.last().unwrap(), "after");
     }
 }
 
@@ -334,25 +260,18 @@ fn invalid_character_escapes_preserve_another_valid_character() {
             // Retain 'a' so rejection does not produce a secondary
             // empty-character error.
             let source = format!("{prefix}'a{escape}'; after\n");
-            assert_strategies_agree(&source);
-            for strategy in STRATEGIES {
-                let actual = observe(&source, strategy);
-                assert_eq!(
-                    actual.errors.len(),
-                    1,
-                    "{strategy:?}: {source:?}: {actual:#?}"
-                );
-                assert_eq!(actual.errors[0].0, error);
-                assert_eq!(
-                    actual.characters,
-                    [if prefix == "L" {
-                        CharacterTokenType::WideChar(u32::from('a'))
-                    } else {
-                        CharacterTokenType::Char('a')
-                    }]
-                );
-                assert_eq!(actual.spellings.last().unwrap(), "after");
-            }
+            let actual = observe(&source);
+            assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+            assert_eq!(actual.errors[0].0, error);
+            assert_eq!(
+                actual.characters,
+                [if prefix == "L" {
+                    CharacterTokenType::WideChar(u32::from('a'))
+                } else {
+                    CharacterTokenType::Char('a')
+                }]
+            );
+            assert_eq!(actual.spellings.last().unwrap(), "after");
         }
     }
 }
@@ -372,22 +291,16 @@ fn valid_character_escape_controls_cover_narrow_and_wide_literals() {
     ] {
         for prefix in ["", "L"] {
             let source = format!("{prefix}'{escape}'; after\n");
-            assert_strategies_agree(&source);
-            for strategy in STRATEGIES {
-                let actual = observe(&source, strategy);
-                assert!(
-                    actual.errors.is_empty(),
-                    "{strategy:?}: {source:?}: {actual:#?}"
-                );
-                assert_eq!(
-                    actual.characters,
-                    [if prefix == "L" {
-                        CharacterTokenType::WideChar(u32::from(expected))
-                    } else {
-                        CharacterTokenType::Char(expected)
-                    }]
-                );
-            }
+            let actual = observe(&source);
+            assert!(actual.errors.is_empty(), "{source:?}: {actual:#?}");
+            assert_eq!(
+                actual.characters,
+                [if prefix == "L" {
+                    CharacterTokenType::WideChar(u32::from(expected))
+                } else {
+                    CharacterTokenType::Char(expected)
+                }]
+            );
         }
     }
 }
@@ -407,29 +320,22 @@ fn failed_character_escapes_have_one_primary_diagnostic() {
         for prefix in ["", "L"] {
             let literal = format!("{prefix}'{escape}'");
             let source = format!("{literal}; after\n");
-            assert_strategies_agree(&source);
-            for strategy in STRATEGIES {
-                let actual = observe(&source, strategy);
-                assert_eq!(
-                    actual.errors.len(),
-                    1,
-                    "{strategy:?}: {source:?}: {actual:#?}"
-                );
-                assert_eq!(actual.errors[0].0, error);
-                assert_eq!(
-                    actual.errors[0].1[0].length,
-                    u32::try_from(literal.len()).unwrap()
-                );
-                assert_eq!(
-                    actual.characters,
-                    [if prefix == "L" {
-                        CharacterTokenType::WideChar(u32::from('\0'))
-                    } else {
-                        CharacterTokenType::Char('\0')
-                    }]
-                );
-                assert_eq!(actual.spellings.last().unwrap(), "after");
-            }
+            let actual = observe(&source);
+            assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+            assert_eq!(actual.errors[0].0, error);
+            assert_eq!(
+                actual.errors[0].1[0].length,
+                u32::try_from(literal.len()).unwrap()
+            );
+            assert_eq!(
+                actual.characters,
+                [if prefix == "L" {
+                    CharacterTokenType::WideChar(u32::from('\0'))
+                } else {
+                    CharacterTokenType::Char('\0')
+                }]
+            );
+            assert_eq!(actual.spellings.last().unwrap(), "after");
         }
     }
 }
@@ -438,16 +344,9 @@ fn failed_character_escapes_have_one_primary_diagnostic() {
 fn truly_empty_character_constants_still_diagnose() {
     for prefix in ["", "L"] {
         let source = format!("{prefix}''; after\n");
-        assert_strategies_agree(&source);
-        for strategy in STRATEGIES {
-            let actual = observe(&source, strategy);
-            assert_eq!(
-                actual.errors.len(),
-                1,
-                "{strategy:?}: {source:?}: {actual:#?}"
-            );
-            assert_eq!(actual.errors[0].0, "MultiCharacterLiteralsUnsupported");
-            assert_eq!(actual.spellings.last().unwrap(), "after");
-        }
+        let actual = observe(&source);
+        assert_eq!(actual.errors.len(), 1, "{source:?}: {actual:#?}");
+        assert_eq!(actual.errors[0].0, "MultiCharacterLiteralsUnsupported");
+        assert_eq!(actual.spellings.last().unwrap(), "after");
     }
 }
