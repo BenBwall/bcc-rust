@@ -516,6 +516,27 @@ mod measurements {
         assert_no_allocations("feature source", summary, &allocations);
     }
 
+    /// Recovery paths also belong to the zero-global-allocation contract.
+    #[test]
+    fn compiling_malformed_sources_allocates_only_from_arenas() {
+        for (name, source) in [
+            ("parser recovery", "int x = ;\nint y;\n"),
+            ("preprocessor recovery", "#if (1 + )\n#endif\nint y;\n"),
+        ] {
+            let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
+            assert!(summary.diagnostics > 0, "{name}: expected diagnostics");
+            assert!(
+                summary.external_declarations > 0,
+                "{name}: lost the following declaration"
+            );
+            assert_eq!(
+                allocations.calls, 0,
+                "{name}: {} global allocations ({} bytes) outside the arenas",
+                allocations.calls, allocations.bytes
+            );
+        }
+    }
+
     /// A translation unit split over files on disk: a header found beside
     /// the main file, one in a subdirectory, and a `#pragma once` header
     /// included twice.
