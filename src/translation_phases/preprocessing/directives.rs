@@ -40,6 +40,7 @@ use crate::{
             LogicalCharacter,
             PreprocessorToken,
             PreprocessorTokenType,
+            TokenSource,
             logical_characters,
             position_after,
         },
@@ -1010,6 +1011,22 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         self.current_is_newline = true;
     }
 
+    /// Defines an object-like or function-like macro.
+    ///
+    /// C99: the `# define` forms of §6.10 paragraph 1, p. 146; PDF p. 158,
+    /// and §6.10.3 paragraphs 1-3 and 5-10, pp. 151-152; PDF pp. 163-164. A
+    /// `(` with no whitespace before it (`lparen`) makes the macro
+    /// function-like. A redefinition must match the old definition
+    /// (paragraph 2), and a predefined name may not be redefined (§6.10.8
+    /// paragraph 4, p. 161; PDF p. 173).
+    ///
+    /// Missing whitespace after an object-like macro's name (§6.10.3
+    /// paragraph 3) and `__VA_ARGS__` outside a variadic macro's replacement
+    /// list (paragraph 5) draw warnings and keep the definition. A duplicate
+    /// parameter name (paragraph 6) or `##` at either end of the replacement
+    /// list (§6.10.3.3 paragraph 1, p. 154; PDF p. 166) is an error that
+    /// discards the definition, as GCC does, so its uses do not expand into
+    /// further errors.
     fn parse_define_directive(&mut self, _directive: PreprocessorToken) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
@@ -1032,7 +1049,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .get(&name.identifier_id(self.context))
             .cloned();
         let tokenizer = self.tokenizer.clone();
-        let old_tokenizer = match old_definition {
+        let mut old_tokenizer = match old_definition {
             | None => None,
             | Some(ref v) => match v {
                 | MacroDefinition::FunctionLike { tokenizer, .. }
@@ -1052,33 +1069,47 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 },
             },
         };
+        // C99 §6.10.3p5: `__VA_ARGS__` is not a macro name.
+        self.check_va_args_use(name);
         // A function-like definition requires '(' immediately after its name.
-        // The probe may consume the directive's newline when the replacement
-        // list is empty; remember that so the next line is not skipped too.
-        let mut line_ended = false;
-        let opening_paren = match self.tokenizer.next_item(self.context) {
-            | Some(
-                token @ PreprocessorToken {
-                    kind: PreprocessorTokenType::OpeningParenthesis,
-                    ..
-                },
-            ) => Some(token),
-            | Some(token) => {
-                line_ended = token.kind == PreprocessorTokenType::Newline;
-                None
-            },
-            | None => {
-                line_ended = true;
+        let probe = self.tokenizer.next_item(self.context);
+        match probe {
+            | Some(PreprocessorToken {
+                kind: PreprocessorTokenType::OpeningParenthesis,
+                ..
+            }) => {},
+            // C99 §6.10.3p3: whitespace separates an object-like macro's name
+            // from its replacement list. Without it the tokens are still the
+            // replacement list, as in GCC and Clang.
+            | Some(token)
+                if !matches!(
+                    token.kind,
+                    PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
+                ) =>
                 self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
-                        "parsing macro definition",
+                    error_type:     PreprocessorErrorType::MissingWhitespaceAfterMacroName(
+                        self.context
+                            .diagnostic_text(self.context.string_cache.at(name.contents)),
                     ),
-                    source_vectors: name.source_vectors,
-                });
-                None
-            },
-        };
-        if opening_paren.is_some() {
+                    source_vectors: token.source_vectors,
+                }),
+            | Some(_) => {},
+            | None => self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
+                    "parsing macro definition",
+                ),
+                source_vectors: name.source_vectors,
+            }),
+        }
+        // A definition that breaks a constraint whose meaning C99 leaves open
+        // is discarded rather than guessed at.
+        let mut is_valid = true;
+        // Collected in the expansion arena; the definition keeps a copy.
+        let mut argument_names = ArenaVec::new_in(self.scratch);
+        let mut is_variadic = false;
+        let is_function_like =
+            probe.is_some_and(|token| token.kind == PreprocessorTokenType::OpeningParenthesis);
+        let (body, first) = if is_function_like {
             if old_definition.as_ref().is_some_and(|d| match d {
                 | MacroDefinition::ObjectLike { .. } => true,
                 | MacroDefinition::FunctionLike { .. } => false,
@@ -1095,9 +1126,6 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     source_vectors: name.source_vectors,
                 });
             }
-            // Collected in the expansion arena; the definition keeps a copy.
-            let mut argument_names = ArenaVec::new_in(self.scratch);
-            let mut is_variadic = false;
             loop {
                 let Some(name_or_ellipsis) = self.expect_token_from_previous_phase::<true>(
                     |_, t| {
@@ -1131,7 +1159,22 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 if name_or_ellipsis.kind == PreprocessorTokenType::Ellipsis {
                     is_variadic = true;
                 } else if name_or_ellipsis.kind.is_identifier() {
-                    argument_names.push(name_or_ellipsis.identifier_id(self.context));
+                    // C99 §6.10.3p5: `__VA_ARGS__` is not a parameter name.
+                    self.check_va_args_use(name_or_ellipsis);
+                    let parameter = name_or_ellipsis.identifier_id(self.context);
+                    // C99 §6.10.3p6: each parameter is declared once.
+                    if argument_names.contains(&parameter) {
+                        self.context.preprocessor_error(PreprocessorError {
+                            error_type:     PreprocessorErrorType::DuplicateMacroParameter(
+                                self.context.diagnostic_text(
+                                    self.context.string_cache.at(name_or_ellipsis.contents),
+                                ),
+                            ),
+                            source_vectors: name_or_ellipsis.source_vectors,
+                        });
+                        is_valid = false;
+                    }
+                    argument_names.push(parameter);
                 } else if name_or_ellipsis.kind == PreprocessorTokenType::ClosingParenthesis {
                     break;
                 }
@@ -1150,15 +1193,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     break;
                 }
             }
-            let tokenizer = self.tokenizer.clone();
-            _ = self.state.macro_definitions.insert(
-                name.identifier_id(self.context),
-                MacroDefinition::FunctionLike {
-                    tokenizer: self.state.lexed_files.persist(&tokenizer),
-                    argument_names: self.state.arena.alloc_slice_copy(&argument_names),
-                    is_variadic,
-                },
-            );
+            (self.tokenizer.clone(), None)
         } else {
             if old_definition.as_ref().is_some_and(|d| match d {
                 | MacroDefinition::ObjectLike { .. } => false,
@@ -1176,114 +1211,141 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     source_vectors: name.source_vectors,
                 });
             }
-            _ = self.state.macro_definitions.insert(
-                name.identifier_id(self.context),
-                MacroDefinition::ObjectLike {
-                    tokenizer: self.state.lexed_files.persist(&tokenizer),
-                },
-            );
+            // The probe already read the replacement list's first token.
+            (tokenizer, probe)
+        };
+        let (list_is_valid, lists_match) =
+            self.read_replacement_list(first, is_variadic, old_tokenizer.as_mut());
+        if !(is_valid && list_is_valid) {
+            self.last_was_newline = true;
+            self.current_is_newline = true;
+            return;
         }
-        let mut last = Option::<PreprocessorToken>::None;
-        if let Some(mut old_tokenizer) = old_tokenizer {
-            // Compare replacement lists body to body, and parameter lists
-            // separately (C99 §6.10.3p2).
-            let (mut new_tokenizer, parameters_match) = match (
-                self.state
-                    .macro_definitions
-                    .get(&name.identifier_id(self.context)),
-                &old_definition,
-            ) {
-                | (
-                    Some(MacroDefinition::FunctionLike {
-                        tokenizer,
-                        argument_names,
-                        is_variadic,
-                    }),
-                    Some(MacroDefinition::FunctionLike {
-                        argument_names: old_argument_names,
-                        is_variadic: old_is_variadic,
-                        ..
-                    }),
-                ) => (
-                    tokenizer.clone(),
-                    argument_names == old_argument_names && is_variadic == old_is_variadic,
+        // C99 §6.10.3p2: a redefinition repeats the parameters and the
+        // replacement list.
+        let parameters_match = match &old_definition {
+            | Some(MacroDefinition::FunctionLike {
+                argument_names: old_argument_names,
+                is_variadic: old_is_variadic,
+                ..
+            }) if is_function_like =>
+                argument_names[..] == old_argument_names[..] && is_variadic == *old_is_variadic,
+            | _ => true,
+        };
+        if old_tokenizer.is_some() && !(parameters_match && lists_match) {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
+                    self.context
+                        .diagnostic_text(self.context.string_cache.at(name.contents)),
                 ),
-                | (
-                    Some(
-                        MacroDefinition::FunctionLike { tokenizer, .. }
-                        | MacroDefinition::ObjectLike { tokenizer },
-                    ),
-                    _,
-                ) => (tokenizer.clone(), true),
-                | _ => (tokenizer, true),
-            };
-            let mut error_has_been_generated = false;
-            if !parameters_match {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
-                        self.context
-                            .diagnostic_text(self.context.string_cache.at(name.contents)),
-                    ),
-                    source_vectors: name.source_vectors,
-                });
-                error_has_been_generated = true;
-            }
-            loop {
-                let old_next = old_tokenizer.next_item(self.context);
-                let new_next = new_tokenizer.next_item(self.context);
-                if let Some(t) = new_next.as_ref()
-                    && t.kind == PreprocessorTokenType::HashHash
-                    && last.is_none()
-                {
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type:
-                            PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator,
-                        source_vectors: t.source_vectors,
-                    });
-                }
-                if !same_replacement_token(self.context, old_next.as_ref(), new_next.as_ref())
-                    && !error_has_been_generated
-                {
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type:
-                            PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
-                                self.context
-                                    .diagnostic_text(self.context.string_cache.at(name.contents)),
-                            ),
-                        source_vectors: name.source_vectors,
-                    });
-                    error_has_been_generated = true;
-                }
-                if !new_next
-                    .as_ref()
-                    .is_some_and(|t| t.kind != PreprocessorTokenType::Newline)
-                {
-                    if last
-                        .as_ref()
-                        .is_some_and(|t| t.kind == PreprocessorTokenType::HashHash)
-                    {
-                        self.context.preprocessor_error(PreprocessorError {
-                            error_type:
-                                PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
-                            source_vectors: last.unwrap().source_vectors,
-                        });
-                    }
-                    break;
-                }
-                last = new_next;
-            }
+                source_vectors: name.source_vectors,
+            });
         }
-        if !line_ended {
-            loop {
-                match self.tokenizer.next_item(self.context) {
-                    | Some(token) if token.kind == PreprocessorTokenType::Newline => break,
-                    | None => break,
-                    | Some(_) => continue,
-                }
+        let tokenizer = self.state.lexed_files.persist(&body);
+        let definition = if is_function_like {
+            MacroDefinition::FunctionLike {
+                tokenizer,
+                argument_names: self.state.arena.alloc_slice_copy(&argument_names),
+                is_variadic,
             }
-        }
+        } else {
+            MacroDefinition::ObjectLike { tokenizer }
+        };
+        _ = self
+            .state
+            .macro_definitions
+            .insert(name.identifier_id(self.context), definition);
         self.last_was_newline = true;
         self.current_is_newline = true;
+    }
+
+    /// Reads a `#define` directive's replacement list through its new-line,
+    /// starting with `first` when the caller has already read that token.
+    /// Returns whether the list is valid where an invalid one discards the
+    /// definition, and whether it matches the replacement list that `old`
+    /// reads, if any.
+    ///
+    /// The list is read once, by the directive's own tokenizer, so the
+    /// diagnostics recorded while lexing it are reported once.
+    ///
+    /// C99: `##` shall not begin or end a replacement list, §6.10.3.3
+    /// paragraph 1, p. 154; PDF p. 166; `__VA_ARGS__` shall occur only in
+    /// that of a variadic macro, §6.10.3 paragraph 5, p. 151; PDF p. 163; and
+    /// lists match under paragraph 1, p. 151; PDF p. 163.
+    fn read_replacement_list(
+        &mut self,
+        mut first: Option<PreprocessorToken>,
+        is_variadic: bool,
+        mut old: Option<&mut TokenSource<'_>>,
+    ) -> (bool, bool) {
+        let mut lists_match = true;
+        let mut first_operand = None;
+        let mut last_operand = None;
+        let mut operands = 0usize;
+        loop {
+            let next = match first.take() {
+                | Some(token) => Some(token),
+                | None => self.tokenizer.next_item(self.context),
+            };
+            if lists_match && let Some(old) = old.as_deref_mut() {
+                let old_next = old.next_item(self.context);
+                lists_match =
+                    same_replacement_token(self.context, old_next.as_ref(), next.as_ref());
+            }
+            let Some(token) = next.filter(|token| token.kind != PreprocessorTokenType::Newline)
+            else {
+                break;
+            };
+            if token.kind == PreprocessorTokenType::Whitespace {
+                continue;
+            }
+            if !is_variadic {
+                self.check_va_args_use(token);
+            }
+            _ = first_operand.get_or_insert(token);
+            last_operand = Some(token);
+            operands += 1;
+        }
+        let mut is_valid = true;
+        if let Some(token) = first_operand.filter(|t| t.kind == PreprocessorTokenType::HashHash) {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator,
+                source_vectors: token.source_vectors,
+            });
+            is_valid = false;
+        }
+        // A lone `##` is reported once, as the start of the list.
+        if let Some(token) = last_operand.filter(|t| t.kind == PreprocessorTokenType::HashHash)
+            && operands > 1
+        {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::MissingRightHandSideOfHashHashOperator,
+                source_vectors: token.source_vectors,
+            });
+            is_valid = false;
+        }
+        (is_valid, lists_match)
+    }
+
+    /// Warns when `token`, read in a `#define` directive, is `__VA_ARGS__`
+    /// where it may not appear; the caller allows a variadic macro's
+    /// replacement list.
+    ///
+    /// C99: §6.10.3 paragraph 5, p. 151; PDF p. 163.
+    fn check_va_args_use(&mut self, token: PreprocessorToken) {
+        if token.kind.is_identifier()
+            && self
+                .context
+                .string_cache
+                .at(token.identifier_id(self.context))
+                .trim_end_matches('\0')
+                == "__VA_ARGS__"
+        {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::VaArgsOutsideVariadicMacro,
+                source_vectors: token.source_vectors,
+            });
+        }
     }
 
     /// Ends a macro definition; a name that is not a macro is ignored.

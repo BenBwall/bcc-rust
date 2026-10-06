@@ -1,2 +1,3 @@
-#define F(a)##a
-int value = F(2);
+#define hash_hash # ## #
+int value;
+hash_hash

@@ -402,3 +402,114 @@ fn failed_cross_frame_lookahead_prescans_each_argument_once() {
         assert_eq!(tokens, "F 1 after");
     });
 }
+
+#[track_caller]
+fn assert_only_error(
+    source: &str,
+    expected: &str,
+    is_expected: impl Fn(&PreprocessorErrorType<'_>) -> bool,
+) {
+    with_expansion(source, |actual, errors| {
+        assert_eq!(actual, expected, "{source:?}");
+        assert!(
+            matches!(
+                errors,
+                [TranslationError::Preprocessing(PreprocessorError { error_type, .. })]
+                    if is_expected(error_type)
+            ),
+            "{source:?}: {errors:#?}"
+        );
+    });
+}
+
+#[test]
+fn object_like_macro_name_needs_following_whitespace() {
+    // C99 §6.10.3p3. The definition is kept, as in GCC and Clang.
+    for (source, expected, name) in [
+        ("#define A+1\nA\n", "+ 1", "A"),
+        ("#define S\"s\"\nS\n", "\"s\"", "S"),
+    ] {
+        assert_only_error(source, expected, |error| {
+            matches!(
+                error,
+                PreprocessorErrorType::MissingWhitespaceAfterMacroName(found) if *found == name
+            )
+        });
+    }
+    // A comment is whitespace, and an empty list needs none.
+    assert_expansion("#define B/**/+1\nB\n", "+ 1");
+    assert_expansion("#define E\n#define T\t1\nE T\n", "1");
+}
+
+#[test]
+fn va_args_outside_a_variadic_replacement_list_is_diagnosed() {
+    // C99 §6.10.3p5. The identifier stays ordinary and the macro defined.
+    for (source, expected) in [
+        ("#define F(x) x __VA_ARGS__\nF(1)\n", "1 __VA_ARGS__"),
+        ("#define G __VA_ARGS__\nG\n", "__VA_ARGS__"),
+        ("#define __VA_ARGS__ 1\n__VA_ARGS__\n", "1"),
+        ("#define H(__VA_ARGS__) 2\nH(0)\n", "2"),
+    ] {
+        assert_only_error(source, expected, |error| {
+            matches!(error, PreprocessorErrorType::VaArgsOutsideVariadicMacro)
+        });
+    }
+    assert_expansion("#define V(x, ...) x __VA_ARGS__\nV(1, 2, 3)\n", "1 2 , 3");
+}
+
+#[test]
+fn duplicate_macro_parameter_discards_the_definition() {
+    // C99 §6.10.3p6.
+    assert_only_error(
+        "#define PAIR(a, b, a) a\nPAIR(1, 2, 3)\n",
+        "PAIR ( 1 , 2 , 3 )",
+        |error| matches!(error, PreprocessorErrorType::DuplicateMacroParameter("a")),
+    );
+}
+
+#[test]
+fn hash_hash_at_either_end_of_a_new_definition_discards_it() {
+    // C99 §6.10.3.3p1, for first definitions as well as redefinitions. A
+    // discarded redefinition leaves the old definition in effect.
+    let left = |error: &PreprocessorErrorType<'_>| {
+        matches!(
+            error,
+            PreprocessorErrorType::MissingLeftHandSideOfHashHashOperator
+        )
+    };
+    let right = |error: &PreprocessorErrorType<'_>| {
+        matches!(
+            error,
+            PreprocessorErrorType::MissingRightHandSideOfHashHashOperator
+        )
+    };
+    assert_only_error("#define P ## x\nP\n", "P", left);
+    assert_only_error("#define P  ##  x\nP\n", "P", left);
+    assert_only_error("#define P ##\nP\n", "P", left);
+    assert_only_error("#define P(a) ## a\nP(1)\n", "P ( 1 )", left);
+    assert_only_error("#define P x\n#define P ## x\nP\n", "x", left);
+    assert_only_error("#define P x ##\nP\n", "P", right);
+    assert_only_error("#define P(a) a ##   \nP(1)\n", "P ( 1 )", right);
+    assert_expansion("#define P(a, b) a ## b\nP(x, y)\n", "xy");
+}
+
+#[test]
+fn definition_on_an_unterminated_last_line_reports_the_missing_newline_once() {
+    // Each `#define` reads its line once, so the end-of-file diagnostic is
+    // not repeated by its checks or by a redefinition's comparison.
+    for source in [
+        "#define A 1",
+        "#define A 1\n#define A 1",
+        "#define F(x) x",
+        "#define F(x) x\n#define F(x) x",
+        "#define A ##",
+    ] {
+        with_expansion(source, |_, errors| {
+            let missing_newlines = errors
+                .iter()
+                .filter(|error| matches!(error, TranslationError::InitialProcessing(_)))
+                .count();
+            assert_eq!(missing_newlines, 1, "{source:?}: {errors:#?}");
+        });
+    }
+}

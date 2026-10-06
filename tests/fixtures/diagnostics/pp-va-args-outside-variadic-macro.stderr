@@ -1,0 +1,9 @@
+warning: `__VA_ARGS__` can only appear in the replacement list of a variadic macro
+ --> pp-va-args-outside-variadic-macro.c:1:21
+  |
+1 | #define FIRST(x) x, __VA_ARGS__
+  |                     ^^^^^^^^^^^ not in a variadic macro's replacement list
+  |
+  = note: C99 §6.10.3p5: `__VA_ARGS__` is reserved for macros whose parameters end in `...`
+
+1 warning generated.

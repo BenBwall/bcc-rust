@@ -138,6 +138,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
             | PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(..)
             | PreprocessorErrorType::VariadicMacroMustBeLastParameter(..)
+            | PreprocessorErrorType::DuplicateMacroParameter(..)
             | PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(..)
             | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(..)
             | PreprocessorErrorType::ExpectedIdentifierInUndefDirective(..)
@@ -223,6 +224,8 @@ impl GetSeverity for PreprocessorError<'_> {
                 },
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
+            | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
+            | PreprocessorErrorType::VaArgsOutsideVariadicMacro
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
             | PreprocessorErrorType::FloatConstantOutOfRange { .. }
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -348,6 +351,22 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173. The rule is not a
     /// constraint, so this is a warning, like a redefinition.
     UndefinitionOfBuiltInMacro(&'tu str),
+    /// An object-like macro whose replacement list follows its name with no
+    /// whitespace between. The definition is kept, as GCC and Clang do.
+    ///
+    /// C99: §6.10.3 paragraph 3, p. 151; PDF p. 163.
+    MissingWhitespaceAfterMacroName(&'tu str),
+    /// `__VA_ARGS__` in a `#define` other than in the replacement list of a
+    /// variadic macro. It is kept as an ordinary identifier, so this is a
+    /// warning, as in GCC.
+    ///
+    /// C99: §6.10.3 paragraph 5, p. 151; PDF p. 163.
+    VaArgsOutsideVariadicMacro,
+    /// A function-like macro that names one parameter twice. The definition
+    /// is discarded.
+    ///
+    /// C99: §6.10.3 paragraph 6, p. 151; PDF p. 163.
+    DuplicateMacroParameter(&'tu str),
     UndefinedIdentifierInPreprocessorExpression(&'tu str),
     ExpectedIncludeStringOrAngleBracketString(PreprocessorTokenType),
     /// A header name containing one of the sequences C99 §6.4.7p3 leaves
@@ -798,6 +817,26 @@ impl PreprocessorErrorType<'_> {
             ))
             .label("predefined by the implementation")
             .note("C99 §6.10.8p4: predefined macro names shall not be undefined"),
+            | Self::MissingWhitespaceAfterMacroName(name) => new(format_in!(
+                arena,
+                "missing whitespace after the macro name `{name}`"
+            ))
+            .label("the replacement list starts here")
+            .note(
+                "C99 §6.10.3p3: an object-like macro's name and replacement list are separated by \
+                 whitespace",
+            ),
+            | Self::VaArgsOutsideVariadicMacro =>
+                new("`__VA_ARGS__` can only appear in the replacement list of a variadic macro")
+                    .label("not in a variadic macro's replacement list")
+                    .note(
+                        "C99 §6.10.3p5: `__VA_ARGS__` is reserved for macros whose parameters end \
+                         in `...`",
+                    ),
+            | Self::DuplicateMacroParameter(name) =>
+                new(format_in!(arena, "duplicate macro parameter `{name}`"))
+                    .label("already a parameter of this macro")
+                    .note("C99 §6.10.3p6: parameter names must be unique; the macro is not defined"),
             | Self::UndefinedIdentifierInPreprocessorExpression(name) => new(format_in!(
                 arena,
                 "`{name}` is not defined; it evaluates to 0"

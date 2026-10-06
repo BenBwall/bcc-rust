@@ -1,0 +1,9 @@
+error: duplicate macro parameter `a`
+ --> pp-duplicate-macro-parameter.c:1:17
+  |
+1 | #define PAIR(a, a) a
+  |                 ^ already a parameter of this macro
+  |
+  = note: C99 §6.10.3p6: parameter names must be unique; the macro is not defined
+
+1 error generated.

@@ -1,0 +1,9 @@
+warning: missing whitespace after the macro name `VALUE`
+ --> pp-missing-whitespace-after-macro-name.c:1:14
+  |
+1 | #define VALUE+1
+  |              ^ the replacement list starts here
+  |
+  = note: C99 §6.10.3p3: an object-like macro's name and replacement list are separated by whitespace
+
+1 warning generated.

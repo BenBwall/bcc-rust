@@ -44,7 +44,6 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | [Extra pragma tokens](pp-extra-tokens-after-pragma-once.stderr) | The extra-token diagnostic names and labels `once` instead of `extra`. |
 | [Pragma switch](pp-missing-on-off-switch-in-s-t-d-c-pragma.stderr) | Name `FP_CONTRACT` as the pragma requiring a switch, rather than saying the switch belongs after `MAYBE`. |
 | [System header lookup](pp-header-not-found-system.stderr) | Distinguish an empty search-path list from an absolute header path. |
-| [Invalid macro replacement list](pp-cannot-use-hash-hash-after-function-like-macro-call.stderr) | Diagnose `##` at the start of the definition's replacement list, rather than describing pasting onto an invocation. Check fresh definitions as well as redefinitions. |
 | [Left shift](pp-left-shift-overflow.stderr), [right shift](pp-right-shift-overflow.stderr) | Describe an invalid shift count separately from an overflowing result. |
 | [Preprocessor arithmetic](pp-binary-minus-overflow.stderr) | Correct the N1256 replacement/arithmetic citation from §6.10.1p3 to §6.10.1p4 across the evaluator's notes. |
 | [Angle-header newline](tokenizer-angle-header-newline.stderr), [angle-header EOF](tokenizer-angle-header-eof.stderr), [quoted-header EOF](tokenizer-quoted-header-eof.stderr) | The missing closing `>` or `"` is diagnosed at the absent delimiter, but the lookup of the partial name still reports a missing header; review whether that lookup should run. Angle EOF also reports an unexpected end of file in the directive, which quoted EOF no longer does; review whether it is redundant beside the missing `>`. |
@@ -58,7 +57,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **226 C inputs and 226 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **131/137 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
+There are **229 C inputs and 229 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **134/140 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -175,7 +174,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `HeaderNotFound` | rendered | [pp-header-not-found-system.c](pp-header-not-found-system.c), [pp-header-not-found.c](pp-header-not-found.c), [pp-header-not-found-backslash.c](pp-header-not-found-backslash.c), [pp-unterminated-header-name-quoted.c](pp-unterminated-header-name-quoted.c), [tokenizer-angle-header-eof.c](tokenizer-angle-header-eof.c), [tokenizer-angle-header-newline.c](tokenizer-angle-header-newline.c) |
 | `HeaderFileInaccessible` | environment-dependent; not covered | Requires a discovered header whose subsequent read fails, such as a permissions/sharing violation or filesystem race. A normal checked-in C/header pair cannot establish that condition portably; the OS error wording is also host-dependent. |
 | `HashHashUsedOutsideOfMacro` | rendered | [pp-hash-hash-used-outside-of-macro.c](pp-hash-hash-used-outside-of-macro.c) |
-| `CannotUseHashHashAfterFunctionLikeMacroCall` | rendered | [pp-cannot-use-hash-hash-after-function-like-macro-call.c](pp-cannot-use-hash-hash-after-function-like-macro-call.c) |
+| `CannotUseHashHashAfterFunctionLikeMacroCall` | rendered | [pp-cannot-use-hash-hash-after-function-like-macro-call.c](pp-cannot-use-hash-hash-after-function-like-macro-call.c). A `##` at either end of a replacement list is now rejected with its definition, so the remaining trigger is a `##` that pasting `#` and `#` creates (C99 §6.10.3.3p4); the message's "invocation" wording does not fit it. |
 | `InvalidEscapeSequence` | rendered | [pp-invalid-escape-sequence.c](pp-invalid-escape-sequence.c) |
 | `UnterminatedEscapeSequence` | reached; folded | [pp-unterminated-escape-sequence.c](pp-unterminated-escape-sequence.c) |
 | `InvalidHexEscapeSequence` | rendered | [pp-invalid-hex-escape-sequence.c](pp-invalid-hex-escape-sequence.c) |
@@ -191,14 +190,17 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `RedefinitionOfObjectLikeMacroAsFunctionLikeMacro` | rendered | [pp-redefinition-of-object-like-macro-as-function-like-macro.c](pp-redefinition-of-object-like-macro-as-function-like-macro.c) |
 | `ExpectedIdentifierInMacroDefinition` | rendered | [pp-expected-identifier-in-macro-definition.c](pp-expected-identifier-in-macro-definition.c) |
 | `VariadicMacroMustBeLastParameter` | rendered | [pp-variadic-macro-must-be-last-parameter.c](pp-variadic-macro-must-be-last-parameter.c) |
+| `DuplicateMacroParameter` | rendered | [pp-duplicate-macro-parameter.c](pp-duplicate-macro-parameter.c) |
+| `MissingWhitespaceAfterMacroName` | rendered | [pp-missing-whitespace-after-macro-name.c](pp-missing-whitespace-after-macro-name.c) |
+| `VaArgsOutsideVariadicMacro` | rendered | [pp-va-args-outside-variadic-macro.c](pp-va-args-outside-variadic-macro.c) |
 | `ExpectedCommaOrClosingParenthesisInMacroDefinition` | rendered | [pp-expected-comma-or-closing-parenthesis-in-macro-definition.c](pp-expected-comma-or-closing-parenthesis-in-macro-definition.c) |
 | `MacroRedefinedWithDifferentDefinition` | rendered | [pp-macro-redefined-with-different-definition.c](pp-macro-redefined-with-different-definition.c) |
 | `ExpectedIdentifierInUndefDirective` | rendered | [pp-expected-identifier-in-undef-directive.c](pp-expected-identifier-in-undef-directive.c) |
 | `ExpectedNewlineAfterUndefDirective` | rendered | [pp-expected-newline-after-undef-directive.c](pp-expected-newline-after-undef-directive.c) |
 | `HashOperatorMustBeFollowedByAMacroArgument` | rendered | [pp-hash-operator-must-be-followed-by-a-macro-argument.c](pp-hash-operator-must-be-followed-by-a-macro-argument.c) |
 | `IdentifierNotMacroArgumentAfterHashOperator` | rendered | [pp-identifier-not-macro-argument-after-hash-operator.c](pp-identifier-not-macro-argument-after-hash-operator.c) |
-| `MissingRightHandSideOfHashHashOperator` | rendered | [pp-missing-right-hand-side-of-hash-hash-operator.c](pp-missing-right-hand-side-of-hash-hash-operator.c) |
-| `MissingLeftHandSideOfHashHashOperator` | rendered | [pp-missing-left-hand-side-of-hash-hash-operator.c](pp-missing-left-hand-side-of-hash-hash-operator.c) |
+| `MissingRightHandSideOfHashHashOperator` | rendered | [pp-missing-right-hand-side-of-hash-hash-operator.c](pp-missing-right-hand-side-of-hash-hash-operator.c), a first definition and its identical redefinition |
+| `MissingLeftHandSideOfHashHashOperator` | rendered | [pp-missing-left-hand-side-of-hash-hash-operator.c](pp-missing-left-hand-side-of-hash-hash-operator.c), a first definition and its identical redefinition |
 | `TokenMergingError` | rendered | [pp-token-merging-error.c](pp-token-merging-error.c) |
 | `MissingNumberInLineDirective` | rendered | [pp-missing-number-in-line-directive.c](pp-missing-number-in-line-directive.c) |
 | `MissingNewlineAfterLineDirective` | rendered | [pp-missing-newline-after-line-directive.c](pp-missing-newline-after-line-directive.c) |
