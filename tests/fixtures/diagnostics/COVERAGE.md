@@ -58,7 +58,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **223 C inputs and 223 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **128/134 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
+There are **225 C inputs and 225 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **130/136 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -203,6 +203,8 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `MissingNewlineAfterLineDirective` | rendered | [pp-missing-newline-after-line-directive.c](pp-missing-newline-after-line-directive.c) |
 | `LineDirectiveIsNotASimpleDigitSequence` | rendered | [pp-line-directive-is-not-a-simple-digit-sequence.c](pp-line-directive-is-not-a-simple-digit-sequence.c), [pp-line-directive-suffix-panic.c](pp-line-directive-suffix-panic.c) |
 | `LineDirectiveNumberTooLarge` | rendered | [pp-line-directive-number-too-large.c](pp-line-directive-number-too-large.c) |
+| `LineDirectiveNumberZero` | rendered | [pp-line-directive-number-zero.c](pp-line-directive-number-zero.c) |
+| `WideStringInLineDirective` | rendered | [pp-wide-string-in-line-directive.c](pp-wide-string-in-line-directive.c) |
 | `MissingOpeningParenthesisInPragmaOperator` | rendered | [pp-missing-opening-parenthesis-in-pragma-operator.c](pp-missing-opening-parenthesis-in-pragma-operator.c) |
 | `MissingClosingParenthesisInPragmaOperator` | rendered | [pp-missing-closing-parenthesis-in-pragma-operator.c](pp-missing-closing-parenthesis-in-pragma-operator.c) |
 | `MissingStringLiteralInPragmaOperator` | rendered | [pp-missing-string-literal-in-pragma-operator.c](pp-missing-string-literal-in-pragma-operator.c) |

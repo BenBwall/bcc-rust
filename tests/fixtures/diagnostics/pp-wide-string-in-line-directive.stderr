@@ -1,0 +1,10 @@
+error: `#line` file name is a wide string literal
+ --> pp-wide-string-in-line-directive.c:1:10
+  |
+1 | #line 10 L"logical.c"
+  |          ^^^^^^^^^^^^ not a character string literal
+  |
+  = note: C99 §6.10.4p1: the file name of `#line` shall be a character string literal
+  = help: remove the `L` prefix
+
+1 error generated.

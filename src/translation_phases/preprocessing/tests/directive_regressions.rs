@@ -25,6 +25,10 @@ use super::{
     TokenType,
     TranslationError,
 };
+use crate::translation_phases::{
+    ErrorSeverity,
+    GetSeverity,
+};
 #[derive(Debug)]
 struct TemporaryHeaders(PathBuf);
 
@@ -821,5 +825,82 @@ fn terminal_include_variants_stay_in_their_source_file() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn line_number_zero_is_diagnosed_and_ignored() {
+    // C99 §6.10.4p3: zero is out of range. Like a number that is too large,
+    // it is ignored, while a file name in the same directive still applies.
+    with_directive_tokens_at_path(
+        "#line 0\n__LINE__\n#line 00 \"named.c\"\n__LINE__\n",
+        Path::new("main.c"),
+        |tokens, context| {
+            assert_eq!(
+                tokens.iter().map(|token| token.kind).collect::<Vec<_>>(),
+                [
+                    TokenType::Integer(IntegerTokenType::Int(2)),
+                    TokenType::Integer(IntegerTokenType::Int(4)),
+                ]
+            );
+            let vector = context.first_source_vector(tokens[1].source_vectors);
+            assert_eq!(
+                context.get_source_file(vector.source_file_index),
+                Path::new("named.c")
+            );
+            let errors = context.take_pending_errors();
+            let [
+                TranslationError::Preprocessing(first),
+                TranslationError::Preprocessing(second),
+            ] = errors.as_slice()
+            else {
+                panic!("{errors:#?}");
+            };
+            assert!(matches!(
+                first.error_type,
+                PreprocessorErrorType::LineDirectiveNumberZero("0")
+            ));
+            assert!(matches!(
+                second.error_type,
+                PreprocessorErrorType::LineDirectiveNumberZero("00")
+            ));
+            assert_eq!(first.severity(), ErrorSeverity::Warning);
+        },
+    );
+}
+
+#[test]
+fn wide_line_file_name_is_diagnosed_and_ignored() {
+    // C99 §6.10.4p1: the file name must be a character string literal. The
+    // line number still applies.
+    for source in [
+        "#line 10 L\"logical.c\"\n__LINE__\n",
+        "#define NAME L\"logical.c\"\n#line 10 NAME\n__LINE__\n",
+    ] {
+        with_directive_tokens_at_path(source, Path::new("main.c"), |tokens, context| {
+            assert_eq!(
+                tokens.iter().map(|token| token.kind).collect::<Vec<_>>(),
+                [TokenType::Integer(IntegerTokenType::Int(10))],
+                "{source:?}"
+            );
+            let vector = context.first_source_vector(tokens[0].source_vectors);
+            assert_eq!(
+                context.get_source_file(vector.source_file_index),
+                Path::new("main.c"),
+                "{source:?}"
+            );
+            let errors = context.take_pending_errors();
+            let [TranslationError::Preprocessing(error)] = errors.as_slice() else {
+                panic!("{source:?}: {errors:#?}");
+            };
+            assert!(
+                matches!(
+                    error.error_type,
+                    PreprocessorErrorType::WideStringInLineDirective
+                ),
+                "{source:?}: {error:#?}"
+            );
+            assert_eq!(error.severity(), ErrorSeverity::Error);
+        });
     }
 }

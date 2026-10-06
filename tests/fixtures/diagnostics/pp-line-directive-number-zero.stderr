@@ -1,0 +1,9 @@
+warning: line number 0 is out of range
+ --> pp-line-directive-number-zero.c:1:7
+  |
+1 | #line 0
+  |       ^ zero
+  |
+  = note: C99 §6.10.4p3: the line number must be at least 1
+
+1 warning generated.

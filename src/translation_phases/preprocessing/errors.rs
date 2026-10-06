@@ -149,6 +149,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::TokenMergingError(..)
             | PreprocessorErrorType::MissingNumberInLineDirective(..)
             | PreprocessorErrorType::MissingNewlineAfterLineDirective(..)
+            | PreprocessorErrorType::WideStringInLineDirective
             | PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingStringLiteralInPragmaOperator(..)
@@ -231,6 +232,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::HashMustBeFollowedByIdentifier
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
             | PreprocessorErrorType::LineDirectiveNumberTooLarge(..)
+            | PreprocessorErrorType::LineDirectiveNumberZero(..)
             | PreprocessorErrorType::UnknownPragmaDirective
             | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
@@ -394,6 +396,15 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     MissingNewlineAfterLineDirective(PreprocessorTokenType),
     LineDirectiveIsNotASimpleDigitSequence,
     LineDirectiveNumberTooLarge(&'tu str),
+    /// A `#line` number that specifies zero, which is undefined; the line
+    /// number is ignored.
+    ///
+    /// C99: §6.10.4 paragraph 3, p. 158; PDF p. 170.
+    LineDirectiveNumberZero(&'tu str),
+    /// A wide string literal as the `#line` file name; the name is ignored.
+    ///
+    /// C99: §6.10.4 paragraph 1, p. 158; PDF p. 170.
+    WideStringInLineDirective,
     MissingOpeningParenthesisInPragmaOperator(PreprocessorTokenType),
     MissingClosingParenthesisInPragmaOperator(PreprocessorTokenType),
     MissingStringLiteralInPragmaOperator(PreprocessorTokenType),
@@ -1050,6 +1061,14 @@ impl PreprocessorErrorType<'_> {
                 new(format_in!(arena, "line number {number} is out of range"))
                     .label("too large")
                     .note("C99 §6.10.4p3: the line number must be at most 2147483647"),
+            | Self::LineDirectiveNumberZero(number) =>
+                new(format_in!(arena, "line number {number} is out of range"))
+                    .label("zero")
+                    .note("C99 §6.10.4p3: the line number must be at least 1"),
+            | Self::WideStringInLineDirective => new("`#line` file name is a wide string literal")
+                .label("not a character string literal")
+                .note("C99 §6.10.4p1: the file name of `#line` shall be a character string literal")
+                .help("remove the `L` prefix"),
             | Self::MissingOpeningParenthesisInPragmaOperator(kind) => new(format_in!(
                 arena,
                 "expected `(` after `_Pragma`, found {}",
