@@ -54,8 +54,11 @@ use crate::{
     },
 };
 
-/// Maximum live header depth, excluding the main source file. C99 §5.2.4.1
-/// requires support for at least 15 nested included files.
+/// Maximum live header depth, excluding the main source file. This is a
+/// recursion guard for unguarded/self-including headers: it bounds the work
+/// before diagnosing the include and continuing with the caller. The 200
+/// levels leave substantial headroom above C99 §5.2.4.1's required 15 while
+/// keeping a runaway include chain finite.
 const MAX_INCLUDE_NESTING: usize = 200;
 
 /// Compares one position of two macro definitions under C99 §6.10.3p2: the
@@ -254,10 +257,6 @@ fn header_name_from_source<'a>(
 #[expect(
     clippy::needless_continue,
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
-)]
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "Integer literal values are range-checked before narrowing."
 )]
 #[expect(
     clippy::while_let_loop,
@@ -813,8 +812,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 },
             }
         }
-        let source_vectors =
-            SourceVectors::new(start_index, self.context.source_vectors.0.len() as u32);
+        let end = u32::try_from(self.context.source_vectors.0.len())
+            .expect("preprocessor source arena exceeds u32::MAX vectors");
+        let source_vectors = SourceVectors::new(start_index, end);
         let name = contents.into_str();
         let invalid = invalid_header_sequence(name, true).map(|(offset, sequence)| {
             let (range, token_source, token_offset) = token_spans

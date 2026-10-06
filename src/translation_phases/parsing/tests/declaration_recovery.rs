@@ -1539,7 +1539,7 @@ fn malformed_and_eof_paths_terminate_with_source_backed_diagnostics() {
                     .any(|error| expected_diagnostic(&error.error_type)),
                 "missing expected parser diagnostic for {source:?}: {errors:#?}"
             );
-            assert!(errors.iter().all(|error| error.source_vectors.length > 0));
+            assert!(errors.iter().all(|error| error.source_vectors.length() > 0));
         });
     }
 

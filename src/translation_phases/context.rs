@@ -46,7 +46,6 @@ use crate::{
             StringCache,
             StringCacheId,
         },
-        vector_slice::UsizeExt,
     },
 };
 
@@ -302,9 +301,11 @@ impl<'tu> ExpansionSites<'tu> {
 
     fn site_id(&mut self, site: SourceVector) -> u32 {
         if self.ends.last() == Some(&site) {
-            return (self.ends.len() - 1).to_u32();
+            return u32::try_from(self.ends.len() - 1)
+                .expect("macro expansion site index exceeds u32::MAX");
         }
-        let id = self.ends.len().to_u32();
+        let id =
+            u32::try_from(self.ends.len()).expect("macro expansion site index exceeds u32::MAX");
         self.ends.push(site);
         id
     }
@@ -420,22 +421,22 @@ impl<'tu> Context<'tu> {
     }
 
     pub(crate) fn record_expansion_end(&mut self, source: SourceVectors, site: SourceVector) {
-        if source.length != 0 {
+        if source.length() != 0 {
             let (arena, start) = SourceArena::decode(source);
             let sites = &mut self.expansion_sites[arena as usize];
             let id = sites.site_id(site);
-            sites.insert(start + source.length - 1, id);
+            sites.insert(start + source.length() - 1, id);
         }
     }
 
     /// Where a source range ends in the user's input, before macro expansion.
     pub(crate) fn user_source_end(&self, source: SourceVectors) -> Option<SourceVector> {
-        if source.length == 0 {
+        if source.length() == 0 {
             return None;
         }
         let (arena, start) = SourceArena::decode(source);
         self.expansion_sites[arena as usize]
-            .get(start + source.length - 1)
+            .get(start + source.length() - 1)
             .map(|id| self.expansion_sites[arena as usize].ends[id as usize].clone())
             .or_else(|| self.get_source_vectors(source).last().cloned())
     }
@@ -455,11 +456,11 @@ impl<'tu> Context<'tu> {
         }
         self.expansion_sites[SourceArena::Retained as usize].clear();
         if let Some(previous) = previous
-            && previous.length != 0
+            && previous.length() != 0
         {
             let (arena, start) = SourceArena::decode(previous);
             if arena == SourceArena::ParserTokens {
-                self.expansion_sites[arena as usize].discard_before(start + previous.length - 1);
+                self.expansion_sites[arena as usize].discard_before(start + previous.length() - 1);
             }
         }
     }
@@ -579,28 +580,30 @@ impl<'tu> Context<'tu> {
         source_file_index: u32,
         length: usize,
     ) -> u32 {
-        let index = self.source_vectors.0.len().to_u32();
-        assert!(index < SourceArena::INDEX_MASK, "source arena overflow");
+        let (index, _) = Self::checked_source_append(
+            SourceArena::Preprocessor,
+            self.source_vectors.0.len(),
+            self.source_vectors.0.len(),
+            1,
+        );
         self.source_vectors
             .0
             .push(SourceVector::new(start_position, source_file_index, length));
         index
     }
 
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "We already checked that it is in range before casting"
-    )]
     pub(crate) fn duplicate_source_vectors(
         self_source_vectors: &mut RegionVec<SourceVector>,
         source_vectors: SourceVectors,
     ) -> u32 {
-        let end = u32::try_from(source_vectors.length as usize + self_source_vectors.len())
-            .expect("overflow in duplicate_source_vectors");
-        assert!(end <= SourceArena::INDEX_MASK, "source arena overflow");
-        let start_index = self_source_vectors.len() as u32;
+        let (start_index, _) = Self::checked_source_append(
+            SourceArena::Preprocessor,
+            self_source_vectors.len(),
+            self_source_vectors.len(),
+            source_vectors.length() as usize,
+        );
         let start = source_vectors.start_index();
-        for i in start..start + source_vectors.length {
+        for i in start..start + source_vectors.length() {
             self_source_vectors.push(self_source_vectors[i as usize].clone());
         }
         start_index
@@ -608,9 +611,14 @@ impl<'tu> Context<'tu> {
 
     /// Copies owned provenance back into the preprocessor arena.
     pub(crate) fn push_source_vectors(&mut self, vectors: &[SourceVector]) -> SourceVectors {
-        let start = self.source_vectors.0.len().to_u32();
+        let (start, end) = Self::checked_source_append(
+            SourceArena::Preprocessor,
+            self.source_vectors.0.len(),
+            self.source_vectors.0.len(),
+            vectors.len(),
+        );
         self.source_vectors.0.extend_from_slice(vectors);
-        SourceArena::Preprocessor.encode(start, self.source_vectors.0.len().to_u32())
+        SourceArena::Preprocessor.encode(start, end)
     }
 
     pub(crate) fn create_source_vectors(
@@ -636,10 +644,10 @@ impl<'tu> Context<'tu> {
     /// dropped. Keeping it would break adjacency, so every enclosing node of
     /// recovered syntax would copy its whole provenance again.
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
-        if v1.length == 0 {
+        if v1.length() == 0 {
             return v2;
         }
-        if v2.length == 0 {
+        if v2.length() == 0 {
             return v1;
         }
         if self.is_parser_anchor(v2) && !self.is_parser_anchor(v1) {
@@ -650,20 +658,32 @@ impl<'tu> Context<'tu> {
         }
         let (arena1, start1) = SourceArena::decode(v1);
         let (arena2, start2) = SourceArena::decode(v2);
-        let end1 = start1 + v1.length;
+        let end1 = start1 + v1.length();
         if arena1 == arena2 && end1 == start2 {
-            return arena1.encode(start1, start2 + v2.length);
+            return arena1.encode(start1, start2 + v2.length());
         }
         let target = Self::merge_target(arena1 == SourceArena::Preprocessor && arena2 == arena1);
-        let start = if arena1 == target && end1 as usize == self.arena(target).len() {
-            start1
+        let current_len = self.arena(target).len();
+        let extend_left = arena1 == target && end1 as usize == current_len;
+        let range_start = if extend_left {
+            start1 as usize
         } else {
-            let start = self.arena(target).len().to_u32();
-            self.copy_into(target, v1);
-            start
+            current_len
         };
+        let additional = if extend_left {
+            v2.length() as usize
+        } else {
+            (v1.length() as usize)
+                .checked_add(v2.length() as usize)
+                .expect("merged source range length overflow")
+        };
+        let (start, end) =
+            Self::checked_source_append(target, range_start, current_len, additional);
+        if !extend_left {
+            self.copy_into(target, v1);
+        }
         self.copy_into(target, v2);
-        target.encode(start, self.arena(target).len().to_u32())
+        target.encode(start, end)
     }
 
     /// Joins an ordered list of exact source segments in one allocation.
@@ -677,6 +697,7 @@ impl<'tu> Context<'tu> {
         let mut kept = anchors;
         let mut first = None;
         let mut end = 0;
+        let mut copied_length = 0usize;
         let mut contiguous = true;
         let mut all_preprocessor = true;
         for &source in sources {
@@ -691,8 +712,11 @@ impl<'tu> Context<'tu> {
                 | Some(_) => contiguous = false,
             }
             end = start
-                .checked_add(source.length)
+                .checked_add(source.length())
                 .expect("source range overflow");
+            copied_length = copied_length
+                .checked_add(source.length() as usize)
+                .expect("merged source range length overflow");
         }
         let Some((first_arena, first_start)) = first else {
             return SourceVectors::default();
@@ -701,20 +725,25 @@ impl<'tu> Context<'tu> {
             return first_arena.encode(first_start, end);
         }
         let target = Self::merge_target(all_preprocessor);
-        let start = self.arena(target).len().to_u32();
+        let (start, end) = Self::checked_source_append(
+            target,
+            self.arena(target).len(),
+            self.arena(target).len(),
+            copied_length,
+        );
         let mut kept = anchors;
         for &source in sources {
             if kept.keeps(self, source) {
                 self.copy_into(target, source);
             }
         }
-        target.encode(start, self.arena(target).len().to_u32())
+        target.encode(start, end)
     }
 
     /// Whether `source` only marks where the parser found syntax missing: a
     /// zero-width location the parser created in the retained arena.
     fn is_parser_anchor(&self, source: SourceVectors) -> bool {
-        source.length != 0
+        source.length() != 0
             && SourceArena::decode(source).0 == SourceArena::Retained
             && self
                 .get_source_vectors(source)
@@ -733,14 +762,19 @@ impl<'tu> Context<'tu> {
     /// provenance once, so provenance of consecutive tokens is adjacent and
     /// survives [`Self::compact_preprocessor_vectors`].
     pub(crate) fn retain_token_source(&mut self, source_vectors: SourceVectors) -> SourceVectors {
-        if source_vectors.length == 0
+        if source_vectors.length() == 0
             || SourceArena::decode(source_vectors).0 != SourceArena::Preprocessor
         {
             return source_vectors;
         }
-        let start = self.parser_token_vectors.len().to_u32();
+        let (start, end) = Self::checked_source_append(
+            SourceArena::ParserTokens,
+            self.parser_token_vectors.len(),
+            self.parser_token_vectors.len(),
+            source_vectors.length() as usize,
+        );
         self.copy_into(SourceArena::ParserTokens, source_vectors);
-        SourceArena::ParserTokens.encode(start, self.parser_token_vectors.len().to_u32())
+        SourceArena::ParserTokens.encode(start, end)
     }
 
     /// Creates a location in the retained arena, which preprocessor-arena
@@ -751,10 +785,15 @@ impl<'tu> Context<'tu> {
         source_file_index: u32,
         length: usize,
     ) -> SourceVectors {
-        let start = self.retained_vectors.len().to_u32();
+        let (start, end) = Self::checked_source_append(
+            SourceArena::Retained,
+            self.retained_vectors.len(),
+            self.retained_vectors.len(),
+            1,
+        );
         self.retained_vectors
             .push(SourceVector::new(start_position, source_file_index, length));
-        SourceArena::Retained.encode(start, self.retained_vectors.len().to_u32())
+        SourceArena::Retained.encode(start, end)
     }
 
     /// Discards the preprocessor provenance arena once nothing but pending
@@ -790,19 +829,29 @@ impl<'tu> Context<'tu> {
     /// Copies a preprocessor-arena range into the retained arena; other
     /// ranges are returned unchanged.
     fn retain_preprocessor_range(&mut self, source_vectors: SourceVectors) -> SourceVectors {
-        if source_vectors.length == 0
+        if source_vectors.length() == 0
             || SourceArena::decode(source_vectors).0 != SourceArena::Preprocessor
         {
             return source_vectors;
         }
-        let start = self.retained_vectors.len().to_u32();
+        let (start, end) = Self::checked_source_append(
+            SourceArena::Retained,
+            self.retained_vectors.len(),
+            self.retained_vectors.len(),
+            source_vectors.length() as usize,
+        );
         self.copy_into(SourceArena::Retained, source_vectors);
-        SourceArena::Retained.encode(start, self.retained_vectors.len().to_u32())
+        SourceArena::Retained.encode(start, end)
     }
 
     /// Total vectors retained by every provenance arena.
     pub(crate) fn source_segment_count(&self) -> usize {
-        self.source_vectors.0.len() + self.parser_token_vectors.len() + self.retained_vectors.len()
+        self.source_vectors
+            .0
+            .len()
+            .checked_add(self.parser_token_vectors.len())
+            .and_then(|count| count.checked_add(self.retained_vectors.len()))
+            .expect("source segment count overflow")
     }
 
     fn merge_target(all_preprocessor: bool) -> SourceArena {
@@ -811,6 +860,36 @@ impl<'tu> Context<'tu> {
         } else {
             SourceArena::Retained
         }
+    }
+
+    /// Checks representational limits before any vectors or expansion sites
+    /// are appended. An encoded range cannot start at the final `u32` index.
+    fn checked_source_append(
+        arena: SourceArena,
+        range_start: usize,
+        current_len: usize,
+        additional: usize,
+    ) -> (u32, u32) {
+        let end = current_len
+            .checked_add(additional)
+            .unwrap_or_else(|| panic!("{arena:?} source arena length overflows usize"));
+        let end = u32::try_from(end)
+            .unwrap_or_else(|_| panic!("{arena:?} source arena exceeds u32::MAX vectors"));
+        let range_start = u32::try_from(range_start)
+            .unwrap_or_else(|_| panic!("{arena:?} source range start exceeds u32::MAX"));
+        assert!(
+            range_start < u32::MAX,
+            "{arena:?} source range cannot start at index u32::MAX"
+        );
+        assert!(
+            range_start as usize <= current_len,
+            "{arena:?} source range starts beyond the arena end"
+        );
+        assert!(
+            end - range_start <= SourceVectors::MAX_LENGTH,
+            "{arena:?} source range exceeds the 30-bit length limit"
+        );
+        (range_start, end)
     }
 
     fn arena(&self, arena: SourceArena) -> &[SourceVector] {
@@ -823,12 +902,19 @@ impl<'tu> Context<'tu> {
 
     /// Appends the vectors of `source` to `target`.
     fn copy_into(&mut self, target: SourceArena, source: SourceVectors) {
+        let (_, end) = Self::checked_source_append(
+            target,
+            self.arena(target).len(),
+            self.arena(target).len(),
+            source.length() as usize,
+        );
         let (arena, start) = SourceArena::decode(source);
-        let range = start as usize..(start + source.length) as usize;
-        if source.length != 0
-            && let Some(site) = self.expansion_sites[arena as usize].get(start + source.length - 1)
+        let range = start as usize..(start + source.length()) as usize;
+        if source.length() != 0
+            && let Some(site) =
+                self.expansion_sites[arena as usize].get(start + source.length() - 1)
         {
-            let end = self.arena(target).len().to_u32() + source.length - 1;
+            let end = end - 1;
             let site = if arena == target {
                 site
             } else {
@@ -972,12 +1058,12 @@ impl<'tu> Context<'tu> {
     }
 
     pub(crate) fn get_source_vectors(&self, source_vectors: SourceVectors) -> &[SourceVector] {
-        if source_vectors.length == 0 {
+        if source_vectors.length() == 0 {
             return &[];
         }
         let (arena, start) = SourceArena::decode(source_vectors);
         let start = start as usize;
-        &self.arena(arena)[start..start + source_vectors.length as usize]
+        &self.arena(arena)[start..start + source_vectors.length() as usize]
     }
 
     pub(super) fn first_source_vector(&self, source_vectors: SourceVectors) -> &SourceVector {
@@ -1129,7 +1215,7 @@ impl MergeAnchors {
                 .then(|| {
                     sources
                         .iter()
-                        .find(|source| source.length != 0 && !context.is_parser_anchor(**source))
+                        .find(|source| source.length() != 0 && !context.is_parser_anchor(**source))
                         .copied()
                 })
                 .flatten(),
@@ -1139,7 +1225,7 @@ impl MergeAnchors {
 
     /// Whether the next range in order, `source`, is kept.
     fn keeps(&mut self, context: &Context<'_>, source: SourceVectors) -> bool {
-        if source.length == 0 {
+        if source.length() == 0 {
             return false;
         }
         if !self.any {
@@ -1171,6 +1257,58 @@ mod tests {
         SourceArena,
         SourceVector,
     };
+
+    #[test]
+    fn source_arena_accepts_the_last_representable_vector() {
+        assert_eq!(
+            Context::checked_source_append(
+                SourceArena::Preprocessor,
+                u32::MAX as usize - 1,
+                u32::MAX as usize - 1,
+                1,
+            ),
+            (u32::MAX - 1, u32::MAX)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Preprocessor source arena exceeds u32::MAX vectors")]
+    fn source_arena_rejects_append_after_u32_max_vectors() {
+        _ = Context::checked_source_append(
+            SourceArena::Preprocessor,
+            u32::MAX as usize,
+            u32::MAX as usize,
+            1,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Retained source arena length overflows usize")]
+    fn source_arena_rejects_usize_overflow() {
+        _ = Context::checked_source_append(SourceArena::Retained, 0, usize::MAX, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Retained source range exceeds the 30-bit length limit")]
+    fn source_arena_rejects_a_range_longer_than_thirty_bits() {
+        _ = Context::checked_source_append(
+            SourceArena::Retained,
+            0,
+            crate::translation_phases::provenance::SourceVectors::MAX_LENGTH as usize,
+            1,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "ParserTokens source range cannot start at index u32::MAX")]
+    fn source_arena_rejects_a_range_starting_at_u32_max() {
+        _ = Context::checked_source_append(
+            SourceArena::ParserTokens,
+            u32::MAX as usize,
+            u32::MAX as usize,
+            0,
+        );
+    }
 
     #[test]
     fn source_line_indices_are_lazy_reused_and_replaced_with_the_text() {

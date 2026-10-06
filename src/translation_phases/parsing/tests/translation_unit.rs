@@ -398,7 +398,7 @@ proptest! {
             prop_assert!(parsed.parser.switch_scopes.is_empty());
             for error in &parsed.errors {
                 let vectors = error.source_vectors(parsed.parser.context);
-                prop_assert!(vectors.length > 0 || source.is_empty());
+                prop_assert!(vectors.length() > 0 || source.is_empty());
             }
             Ok(())
         })?;

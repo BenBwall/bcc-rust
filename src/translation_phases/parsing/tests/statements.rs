@@ -1560,7 +1560,7 @@ fn malformed_statement_delimiters_recover_the_body_and_next_file_item() {
             assert!(parsed.parser.scopes.nested_scopes.is_empty());
             assert!(parsed.parser.label_scopes.is_empty());
             assert!(parsed.errors.iter().all(|error| match error {
-                | TranslationError::Parsing(error) => error.source_vectors.length > 0,
+                | TranslationError::Parsing(error) => error.source_vectors.length() > 0,
                 | _ => true,
             }));
         });
@@ -1636,7 +1636,7 @@ fn premature_eof_unwinds_every_phase_03_frame_family() {
             );
             assert!(parsed.errors.iter().all(|error| match error {
                 | TranslationError::Parsing(error) => {
-                    error.source_vectors.length > 0
+                    error.source_vectors.length() > 0
                         && !matches!(
                             error.error_type,
                             ParserErrorType::ParserFrameConsumedAtEndOfInput(_)

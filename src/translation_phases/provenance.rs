@@ -56,12 +56,17 @@ impl SourceVector {
         source_file_index: u32,
         length: usize,
     ) -> Self {
+        let index = source_offset(start_position.index);
+        let length = source_offset(length);
+        _ = index
+            .checked_add(length)
+            .expect("source vector end exceeds u32::MAX");
         Self {
-            index: source_offset(start_position.index),
+            index,
             column: start_position.column,
             line: start_position.line,
             source_file_index,
-            length: source_offset(length),
+            length,
         }
     }
 
@@ -152,7 +157,7 @@ impl Display for SourceVectorStack {
 }
 
 /// Storage that a [`SourceVectors`] range indexes, encoded in the two high bits
-/// of its `start_index`.
+/// of its length word. The start index retains all 32 bits.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum SourceArena {
     /// Vectors produced by initial processing, tokenization, and
@@ -169,24 +174,83 @@ pub(super) enum SourceArena {
 }
 
 impl SourceArena {
-    const INDEX_BITS: u32 = 30;
-    pub(super) const INDEX_MASK: u32 = (1 << Self::INDEX_BITS) - 1;
-
     #[inline(always)]
     pub(super) fn decode(source_vectors: SourceVectors) -> (Self, u32) {
-        let arena = match source_vectors.start_index() >> Self::INDEX_BITS {
+        let arena = match source_vectors.arena_tag() {
             | 0 => Self::Preprocessor,
             | 1 => Self::ParserTokens,
             | 2 => Self::Retained,
-            | _ => unreachable!("empty source ranges carry no arena"),
+            | _ => unreachable!("invalid source arena tag"),
         };
-        (arena, source_vectors.start_index() & Self::INDEX_MASK)
+        (arena, source_vectors.start_index())
     }
 
     #[inline(always)]
     pub(super) fn encode(self, start: u32, end: u32) -> SourceVectors {
-        assert!(end <= Self::INDEX_MASK, "source arena overflow");
-        let tag = (self as u32) << Self::INDEX_BITS;
-        SourceVectors::new(tag | start, tag | end)
+        SourceVectors::with_arena_tag(start, end, self as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SourceArena,
+        SourcePosition,
+        SourceVector,
+        SourceVectors,
+    };
+
+    #[test]
+    fn source_vector_can_end_at_the_last_u32_offset() {
+        let vector = SourceVector::new(
+            SourcePosition {
+                index: u32::MAX as usize - 1,
+                ..SourcePosition::default()
+            },
+            0,
+            1,
+        );
+        assert_eq!(vector.end(), u32::MAX as usize);
+    }
+
+    #[test]
+    #[should_panic(expected = "source vector end exceeds u32::MAX")]
+    fn source_vector_rejects_an_unrepresentable_end() {
+        _ = SourceVector::new(
+            SourcePosition {
+                index: u32::MAX as usize,
+                ..SourcePosition::default()
+            },
+            0,
+            1,
+        );
+    }
+
+    #[test]
+    fn arena_tags_leave_the_full_source_index_available() {
+        for arena in [
+            SourceArena::Preprocessor,
+            SourceArena::ParserTokens,
+            SourceArena::Retained,
+        ] {
+            let range = arena.encode(u32::MAX - 1, u32::MAX);
+            assert_eq!(range.length(), 1);
+            assert_eq!(SourceArena::decode(range), (arena, u32::MAX - 1));
+        }
+    }
+
+    #[test]
+    fn source_range_length_uses_thirty_bits() {
+        let range = SourceArena::Retained.encode(0, SourceVectors::MAX_LENGTH);
+        assert_eq!(range.length(), SourceVectors::MAX_LENGTH);
+        assert_eq!(SourceArena::decode(range), (SourceArena::Retained, 0));
+        assert_eq!(size_of::<SourceVectors>(), 8);
+        assert_eq!(size_of::<Option<SourceVectors>>(), 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "source range length overflow")]
+    fn source_range_rejects_a_length_beyond_thirty_bits() {
+        _ = SourceArena::Retained.encode(0, SourceVectors::MAX_LENGTH + 1);
     }
 }

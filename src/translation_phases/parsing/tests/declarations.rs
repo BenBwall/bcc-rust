@@ -416,7 +416,7 @@ fn union_kind_and_enum_arena_slice_are_correct() {
                     .parser
                     .syntax
                     .iter::<Enumerator<'_>>()
-                    .all(|enumerator| enumerator.source_vectors.length > 0)
+                    .all(|enumerator| enumerator.source_vectors.length() > 0)
             );
             assert!(
                 parsed
@@ -431,7 +431,7 @@ fn union_kind_and_enum_arena_slice_are_correct() {
                             .iter::<StructDeclarator<'_>>()
                             .map(|declarator| declarator.source_vectors)
                     )
-                    .all(|source_vectors| source_vectors.length > 0)
+                    .all(|source_vectors| source_vectors.length() > 0)
             );
         },
     );

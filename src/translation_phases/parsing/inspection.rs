@@ -1116,7 +1116,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         let _ = write!(output, "{text}");
         if options.show_locations
             && let Some(source) = source
-            && source.length > 0
+            && source.length() > 0
         {
             let position = source.position(context);
             // The main file is interned first; anything else names its file

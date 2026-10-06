@@ -1313,7 +1313,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | ExpressionSlot::Parsed(index) => index.source_vectors,
             | ExpressionSlot::Missing(source) => source,
         };
-        if source.length > 0 {
+        if source.length() > 0 {
             self.source_vectors = Some(
                 self.source_vectors
                     .map_or(source, |existing| context.merge_vectors(existing, source)),
@@ -1330,7 +1330,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | ConstantExpressionSlot::Parsed(index) => index.expression().source_vectors,
             | ConstantExpressionSlot::Missing(source) => source,
         };
-        if source.length > 0 {
+        if source.length() > 0 {
             self.source_vectors = Some(
                 self.source_vectors
                     .map_or(source, |existing| context.merge_vectors(existing, source)),

@@ -852,7 +852,7 @@ fn phase_05_syntax_facts_preserve_absence_and_identifier_provenance() {
             }
             assert_ne!(identifiers, []);
             for identifier in identifiers {
-                assert!(identifier.source_vectors.length > 0, "{identifier:?}");
+                assert!(identifier.source_vectors.length() > 0, "{identifier:?}");
                 assert_eq!(
                     sourced_text(parsed, identifier.source_vectors),
                     parsed.parser.context.string_cache.at(identifier.name)

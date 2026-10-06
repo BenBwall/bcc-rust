@@ -1854,9 +1854,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
 
     fn push_error(&mut self, parser: &mut Parser<'_, 'tu, 'p>, anchor: Option<Token>) {
         let source_vectors = match anchor {
-            | Some(token) if token.source_vectors.length != 0 => {
+            | Some(token) if token.source_vectors.length() != 0 => {
                 let mut combined = SourceVectors::default();
-                for index in 0..token.source_vectors.length as usize {
+                for index in 0..token.source_vectors.length() as usize {
                     // Creating an anchor appends to the retained provenance,
                     // so the token's vectors are read again each time.
                     let source = &parser.context.get_source_vectors(token.source_vectors)[index];

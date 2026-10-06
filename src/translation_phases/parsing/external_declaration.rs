@@ -108,7 +108,7 @@ impl<'tu, 'p> ExternalDeclarationFrame {
                 if parser.hard_error_count > self.starting_error_count {
                     if !declaration.is_meaningful() {
                         let declaration_source = declaration.source_vectors;
-                        let source = if declaration_source.length == 0 {
+                        let source = if declaration_source.length() == 0 {
                             token.map_or(declaration_source, |token| token.source_vectors)
                         } else {
                             declaration_source

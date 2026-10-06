@@ -243,7 +243,7 @@ fn parser_diagnostics_expose_structured_context_and_fifo_recovery() {
             first.found,
             Some(TokenType::Operator(OperatorTokenType::ClosingCurlyBrace))
         );
-        assert!(first.source_vectors.length > 0);
+        assert!(first.source_vectors.length() > 0);
         assert!(first.recovery.is_some());
         assert_eq!(first.ranges, []);
         assert_eq!(first.related.len(), 1);
