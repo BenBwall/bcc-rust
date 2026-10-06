@@ -164,13 +164,13 @@ fn written_header_names_keep_their_source_text() {
     let headers = Headers::new();
     headers.write(Path::new("a b.h"), "spaced");
     headers.write(Path::new("plain.h"), "plain");
-    for source in [
-        "#include \"a b.h\"\nafter\n",
-        "#include <a b.h>\nafter\n",
-        "#  include<a b.h>\nafter\n",
-        "#include \"plain.h\"\nafter\n",
-        "#include <pl\\\nain.h>\nafter\n",
-        "??=include \"plain.h\"\nafter\n",
+    for (source, expected_header) in [
+        ("#include \"a b.h\"\nafter\n", "spaced"),
+        ("#include <a b.h>\nafter\n", "spaced"),
+        ("#  include<a b.h>\nafter\n", "spaced"),
+        ("#include \"plain.h\"\nafter\n", "plain"),
+        ("#include <pl\\\nain.h>\nafter\n", "plain"),
+        ("??=include \"plain.h\"\nafter\n", "plain"),
     ] {
         let directory = SharedVec::from(vec![headers.0.clone()]);
         let tu = crate::util::bump::Bump::new();
@@ -191,6 +191,7 @@ fn written_header_names_keep_their_source_text() {
         let errors = context.take_pending_errors();
         assert!(errors.is_empty(), "{source:?}: {errors:#?}");
         assert_eq!(identifiers.len(), 2, "{source:?}: {identifiers:?}");
+        assert_eq!(identifiers[0], expected_header, "{source:?}");
         assert_eq!(identifiers[1], "after", "{source:?}");
     }
 }
