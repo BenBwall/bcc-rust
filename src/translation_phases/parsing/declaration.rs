@@ -194,17 +194,22 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 self.declaration_specifiers = Some(specifiers);
                 self.source_vectors.push(specifiers.source_vectors);
                 // A bare `;` completes the grammar's optional
-                // init-declarator-list. A typedef is the exception: it
-                // must still introduce a name,
-                // so retain the tree but diagnose it.
+                // init-declarator-list. A typedef without one names no type,
+                // so retain the tree but diagnose it. C99 §6.7p2 asks only
+                // for a declarator, a tag, or enumeration members, so
+                // `typedef struct s { int m; };` is valid and only warned
+                // about; `typedef int;` declares nothing. Other empty
+                // declarations (`int;`) are left to semantic analysis.
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     if specifiers.storage_class == Some(StorageClass::Typedef) {
-                        parser.report(
+                        let error = if specifiers.type_specifiers.may_declare_tag_or_enumerators() {
+                            ParserErrorType::TypedefDeclaresNoName
+                        } else {
                             ParserErrorType::ExpectedDeclaratorInTypedef(
                                 token.map(|token| token.kind),
-                            ),
-                            token,
-                        );
+                            )
+                        };
+                        parser.report(error, token);
                     }
                     if let Some(token) = token {
                         self.source_vectors.push(token.source_vectors);

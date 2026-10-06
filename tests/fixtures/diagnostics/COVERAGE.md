@@ -58,7 +58,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **222 C inputs and 222 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **128/134 preprocessor**, and **64/73 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 60 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
+There are **223 C inputs and 223 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **128/134 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -245,6 +245,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `DuplicateDefaultLabel` | rendered | [parser-duplicate-default-label.c](parser-duplicate-default-label.c) |
 | `ExpectedWhileAfterDoBody` | rendered | [parser-expected-while-after-do-body.c](parser-expected-while-after-do-body.c) |
 | `ExpectedDeclaratorInTypedef` | rendered | [parser-expected-declarator-in-typedef.c](parser-expected-declarator-in-typedef.c) |
+| `TypedefDeclaresNoName` | rendered | [parser-typedef-declares-no-name.c](parser-typedef-declares-no-name.c) |
 | `ExpectedDeclaratorInDeclaration` | reached; folded | [parser-expected-declarator-in-declaration-include.c](parser-expected-declarator-in-declaration-include.c), [parser-expected-declarator-in-declaration.c](parser-expected-declarator-in-declaration.c) |
 | `ExpectedDeclarationContinuationAfterDeclarator` | rendered | [parser-expected-declaration-continuation-after-declarator-long-double.c](parser-expected-declaration-continuation-after-declarator-long-double.c), [parser-expected-declaration-continuation-after-declarator-missing-semicolon.c](parser-expected-declaration-continuation-after-declarator-missing-semicolon.c), [parser-expected-declaration-continuation-after-declarator-tab.c](parser-expected-declaration-continuation-after-declarator-tab.c), [parser-expected-declaration-continuation-after-declarator.c](parser-expected-declaration-continuation-after-declarator.c) |
 | `UnexpectedEndBeforeDeclarationSpecifier` | believed unreachable from normal dispatch | Owners only push declaration-specifier parsing after recognizing a declaration starter, or after a token has already been consumed. EOF without a starter is handled by the owner; EOF after consumed specifiers uses UnexpectedEndBeforeTypeSpecifier. |

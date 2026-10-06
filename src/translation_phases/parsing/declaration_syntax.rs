@@ -928,6 +928,23 @@ impl<'tu> Declarator<'tu> {
 }
 
 impl TypeSpecifiers<'_> {
+    /// Whether a declaration of these specifiers alone can declare something:
+    /// a tag, or the constants of an enumeration body.
+    ///
+    /// C99: §6.7 paragraph 2, p. 97; PDF p. 109. A tagged struct or union
+    /// specifier declares its tag unless another declaration of the tag is
+    /// visible (§6.7.2.3 paragraphs 6-9, pp. 106-107; PDF pp. 118-119),
+    /// which syntax parsing does not track, so it is taken to declare one.
+    /// An `enum identifier` without a body never declares its tag
+    /// (paragraphs 3 and 9).
+    pub(super) fn may_declare_tag_or_enumerators(self) -> bool {
+        match self {
+            | TypeSpecifiers::StructOrUnion(specifier) => specifier.identifier.is_some(),
+            | TypeSpecifiers::Enum(specifier) => specifier.enumeration_list.is_some(),
+            | _ => false,
+        }
+    }
+
     /// Passes `bind` the ordinary identifiers these specifiers declare, the
     /// enumeration constants of nested enum bodies. `pending` is empty scan
     /// storage, reused across calls and left empty.

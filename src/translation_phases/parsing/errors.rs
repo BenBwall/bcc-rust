@@ -399,6 +399,12 @@ pub(crate) enum ParserErrorType<'tu> {
     /// C99: §6.7, p. 97; PDF p. 109; §6.7.7, pp. 123-124;
     /// PDF pp. 135-136.
     ExpectedDeclaratorInTypedef(Option<TokenType>),
+    /// A typedef declaration without declarators whose specifiers declare a
+    /// tag or enumeration constants. It satisfies the constraint, but the
+    /// `typedef` names nothing, so this is a warning, as in GCC.
+    /// C99: §6.7 paragraph 2, p. 97; PDF p. 109; §6.7.7 paragraph 3, p. 123;
+    /// PDF p. 135.
+    TypedefDeclaresNoName,
     /// A declaration required a named declarator but none could be parsed.
     /// C99: §6.7, p. 97; PDF p. 109.
     ExpectedDeclaratorInDeclaration(Option<TokenType>),
@@ -673,7 +679,8 @@ impl GetSeverity for ParserErrorType<'_> {
             | Self::ConstSpecifiedTwice
             | Self::VolatileSpecifiedTwice
             | Self::RestrictSpecifiedTwice
-            | Self::InlineSpecifiedTwice => ErrorSeverity::Warning,
+            | Self::InlineSpecifiedTwice
+            | Self::TypedefDeclaresNoName => ErrorSeverity::Warning,
         }
     }
 }
@@ -746,7 +753,8 @@ impl ParserErrorType<'_> {
             | Self::ConstSpecifiedTwice
             | Self::VolatileSpecifiedTwice
             | Self::RestrictSpecifiedTwice
-            | Self::InlineSpecifiedTwice => ParserDiagnosticCode::Quality,
+            | Self::InlineSpecifiedTwice
+            | Self::TypedefDeclaresNoName => ParserDiagnosticCode::Quality,
             | Self::StorageClassRedefinition(..)
             | Self::StaticSpecifiedTwice
             | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
@@ -886,6 +894,7 @@ impl ParserErrorType<'_> {
             | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
             | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
             | Self::EmptyStructDeclarator
+            | Self::TypedefDeclaresNoName
             | Self::DuplicateDefaultLabel => ExpectedSyntax::None,
         }
     }
@@ -1062,6 +1071,10 @@ impl ParserErrorType<'_> {
             | Self::ExpectedDeclaratorInTypedef(token) =>
                 expected_with_label("a name for the typedef", "expected an identifier", *token)
                     .note("a `typedef` declaration must name the type it defines"),
+            | Self::TypedefDeclaresNoName => new("`typedef` declares no type name")
+                .label("no name follows the type")
+                .note("C99 §6.7p2: the declaration still declares its tag or enumeration constants")
+                .help("name the type before `;`, or remove `typedef`"),
             | Self::ExpectedDeclaratorInDeclaration(token) =>
                 expected_with_label("a declarator", "expected a name to declare", *token),
             | Self::ExpectedDeclarationContinuationAfterDeclarator(token, continuation) => {

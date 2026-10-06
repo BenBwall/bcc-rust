@@ -367,3 +367,77 @@ fn eof_delimiter_diagnostics_have_structured_expectations() {
         ExpectedSyntax::OwnedDelimiter
     );
 }
+
+#[test]
+fn typedef_that_declares_only_a_tag_is_a_warning() {
+    // C99 §6.7p2 is satisfied by a tag or enumeration constants, so these
+    // declarations are valid; their `typedef` names nothing.
+    for source in [
+        "typedef struct s { int m; };\nstruct s value;\n",
+        "typedef struct s;\nstruct s *value;\n",
+        "typedef union u { int m; };\nunion u value;\n",
+        "typedef enum { A, B };\nint value = B;\n",
+        "typedef enum e { C };\nenum e value;\n",
+    ] {
+        with_parse(source, |parsed| {
+            let [TranslationError::Parsing(warning)] = parsed.errors.as_slice() else {
+                panic!("{source:?}: {:#?}", parsed.errors);
+            };
+            assert_eq!(
+                warning.error_type,
+                ParserErrorType::TypedefDeclaresNoName,
+                "{source:?}"
+            );
+            assert_eq!(warning.severity, ErrorSeverity::Warning, "{source:?}");
+            assert_eq!(warning.code, ParserDiagnosticCode::Quality, "{source:?}");
+            assert_eq!(
+                sourced_text(parsed, warning.source_vectors),
+                ";",
+                "{source:?}"
+            );
+            assert!(
+                matches!(
+                    parsed.items.as_slice(),
+                    [
+                        ExternalDeclaration::Declaration(_),
+                        ExternalDeclaration::Declaration(_)
+                    ]
+                ),
+                "{source:?}: {:#?}",
+                parsed.items
+            );
+        });
+    }
+}
+
+#[test]
+fn typedef_that_declares_nothing_is_an_error() {
+    // An untagged struct body or a bare `enum identifier` declares no tag
+    // (C99 §6.7.2.3p3, p6), so the constraint of §6.7p2 is violated.
+    for source in [
+        "typedef int;\nint value;\n",
+        "typedef struct { int m; };\nint value;\n",
+        "enum e { A };\ntypedef enum e;\nint value;\n",
+    ] {
+        with_parse(source, |parsed| {
+            let errors = parser_errors(parsed).collect::<Vec<_>>();
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [ParserErrorType::ExpectedDeclaratorInTypedef(Some(
+                        TokenType::Operator(OperatorTokenType::Semicolon)
+                    ))]
+                ),
+                "{source:?}: {errors:#?}"
+            );
+            assert!(
+                matches!(
+                    parsed.items.last(),
+                    Some(ExternalDeclaration::Declaration(_))
+                ),
+                "{source:?}: {:#?}",
+                parsed.items
+            );
+        });
+    }
+}

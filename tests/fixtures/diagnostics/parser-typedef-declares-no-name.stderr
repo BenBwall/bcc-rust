@@ -1,0 +1,10 @@
+warning: `typedef` declares no type name
+ --> parser-typedef-declares-no-name.c:1:32
+  |
+1 | typedef struct point { int x; };
+  |                                ^ no name follows the type
+  |
+  = note: C99 §6.7p2: the declaration still declares its tag or enumeration constants
+  = help: name the type before `;`, or remove `typedef`
+
+1 warning generated.
