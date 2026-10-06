@@ -1,5 +1,13 @@
 //! Non-recursive C language parser and its arena-backed syntax model.
 //!
+//! This is the syntax-analysis half of translation phase 7 (§5.1.1.2
+//! paragraph 1, p. 10; PDF p. 22): the converted tokens of one translation
+//! unit are parsed against the phrase-structure grammar of §6.5-§6.9,
+//! pp. 67-144; PDF pp. 79-156, summarized in §A.2, pp. 409-416;
+//! PDF pp. 421-428. Semantic analysis, the other half of phase 7, is not
+//! implemented; constraints are checked here only where the grammar or a
+//! frame needs them.
+//!
 //! [`Parser`] is a stack machine: [`ParseFrame`] values own resumable grammar
 //! productions, return typed [`ParseValue`] children, and ask the driver to
 //! consume, push, reduce, reprocess, or recover through
@@ -149,12 +157,22 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     /// The finished vector becomes the parsed unit's, without a copy.
     emitted_roots: RegionVec<ExternalDeclaration<'tu>>,
     /// Parser-visible ordinary-name classification used for typedef ambiguity.
+    ///
+    /// C99: scopes are §6.2.1, pp. 29-30; PDF pp. 41-42; typedef-name is
+    /// §6.7.7 paragraph 1, p. 123; PDF p. 135.
     scopes: ScopeStack<'p>,
     /// Function-local label namespaces, independent of ordinary identifiers.
+    ///
+    /// C99: labels have function scope (§6.2.1 paragraph 3, p. 29; PDF p. 41)
+    /// and their own name space (§6.2.3 paragraph 1, p. 31; PDF p. 43).
     label_scopes: LabelScopes<'p>,
     /// Interned `__func__`, predeclared in every function body.
+    ///
+    /// C99: §6.4.2.2 paragraph 1, p. 52; PDF p. 64.
     func_name: Option<StringCacheId>,
     /// Active switch contexts used to associate `case` and `default` labels.
+    ///
+    /// C99: §6.8.4.2 paragraph 3, p. 134; PDF p. 146.
     switch_scopes: ArenaVec<'p, SwitchScope>,
     /// Scan storage for the nested specifiers whose enumeration constants a
     /// function definition's parameters declare, reused by every definition.
@@ -185,10 +203,20 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
 
 /// Fully preprocessed parser input. The preprocessor can be dropped before
 /// parser working memory is created.
+///
+/// C99: the output of translation phases 1-6 for one translation unit
+/// (§5.1.1.1, p. 9; PDF p. 21; §5.1.1.2 paragraph 1, pp. 9-10;
+/// PDF pp. 21-22).
 pub(crate) struct PreprocessedTranslationUnit {
     upstream: token_cursor::Upstream,
 }
 
+/// Catchable ceilings on parser resources.
+///
+/// C99: §5.2.4.1, pp. 20-21; PDF pp. 32-33 sets only minimums, and its
+/// footnote 13, p. 20; PDF p. 32 asks implementations to avoid fixed
+/// translation limits. The defaults are therefore representation bounds,
+/// not grammar limits.
 #[derive(Debug, Clone, Copy)]
 struct ParserLimits {
     external_declarations: usize,
@@ -221,6 +249,8 @@ impl Default for ParserLimits {
 ///
 /// This is the shared boundary for callers, inspection, tests, and the future
 /// semantic-analysis phase. Parser-machine state is deliberately not exposed.
+///
+/// C99: `translation-unit`, §6.9 paragraph 1, p. 140; PDF p. 152.
 #[derive(Debug)]
 pub(crate) struct ParsedTranslationUnit<'tu> {
     roots: RegionVec<ExternalDeclaration<'tu>>,

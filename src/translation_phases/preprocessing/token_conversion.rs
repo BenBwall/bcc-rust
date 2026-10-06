@@ -1,4 +1,18 @@
 //! Conversion of preprocessing tokens into parser tokens.
+//!
+//! C99: translation phases 5-7, §5.1.1.2 paragraph 1 items 5-7, p. 10; PDF
+//! p. 22. Phase 5 decodes the escape sequences of character constants and
+//! string literals (§6.4.4.4, pp. 59-61; PDF pp. 71-73); phase 6
+//! concatenates adjacent string literals (§6.4.5 paragraph 4, p. 62; PDF
+//! p. 74); phase 7 converts each preprocessing token into a token, which
+//! must have the lexical form of one (§6.4 paragraph 2, p. 49; PDF p. 61).
+//! Identifiers become keywords where they can (§6.4.2.1 paragraph 4, p. 51;
+//! PDF p. 63), and pp-numbers become integer or floating constants (§6.4.8
+//! paragraph 4, p. 65; PDF p. 77).
+//!
+//! Source characters map to the execution character set as UTF-8: a narrow
+//! literal holds UTF-8 bytes and a wide one Unicode code points. The mapping
+//! is implementation-defined (§6.4.4.4 paragraph 2, p. 60; PDF p. 72).
 
 use super::{
     Expander,
@@ -106,6 +120,12 @@ impl<'pp> LiteralScratch<'pp> {
 }
 
 impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
+    /// Joins `first` with the string literals that follow it. The result is
+    /// wide if any part is. Escapes were decoded per literal beforehand, so
+    /// `"\x12" "3"` holds two characters.
+    ///
+    /// C99: §6.4.5 paragraph 4, p. 62; PDF p. 74, and paragraph 7, p. 63;
+    /// PDF p. 75.
     pub(super) fn concatenate_adjacent_strings(&mut self, first: Token) -> Token {
         let TokenType::String(first_kind) = first.kind else {
             return first;
@@ -425,6 +445,10 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         )
     }
 
+    /// Converts a floating pp-number to the type its suffix names.
+    ///
+    /// C99: §6.4.4.2 paragraphs 1-4, pp. 57-58; PDF pp. 69-70. A value its
+    /// type cannot represent violates §6.4.4 paragraph 2, p. 54; PDF p. 66.
     #[inline(always)]
     fn parse_float(
         &mut self,
@@ -483,6 +507,17 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
 
     /// Appends the units `token` spells to `units`, which start empty, and
     /// returns whether an escape sequence was invalid.
+    ///
+    /// C99: phase 5, §5.1.1.2 paragraph 1 item 5, p. 10; PDF p. 22, and
+    /// `escape-sequence`, §6.4.4.4 paragraphs 1 and 3-8, pp. 59-60; PDF
+    /// pp. 71-72. An octal escape takes at most three digits and a hex escape
+    /// all that follow (paragraph 7). A narrow octal or hex escape must fit
+    /// in an 8-bit `unsigned char` (paragraph 9, p. 61; PDF p. 73), and a
+    /// wide one in 32 bits. A universal character name needs exactly 4 or 8
+    /// digits and must not name a surrogate or a character below U+00A0 other
+    /// than `$`, `@`, and `` ` `` (§6.4.3 paragraphs 1-2, p. 53; PDF p. 65).
+    /// Any other character after `\` requires a diagnostic (footnote 65,
+    /// p. 60; PDF p. 72).
     fn eval_escape_sequences(
         context: &mut Context<'_>,
         token: PreprocessorToken,
@@ -645,6 +680,9 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         }
     }
 
+    /// Decodes a character or wide string literal.
+    ///
+    /// C99: §6.4.5 paragraphs 1-3, p. 62; PDF p. 74.
     fn parse_string(&mut self, token: PreprocessorToken) -> StringTokenType {
         let mut units = self.state.literal_scratch.take_units();
         _ = Self::eval_escape_sequences(self.context, token, &mut units);
@@ -677,6 +715,13 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
     }
 
     /// The value of a character constant whose units are `units`.
+    ///
+    /// C99: §6.4.4.4 paragraphs 10-11, p. 61; PDF p. 73. A narrow constant
+    /// whose character takes several UTF-8 bytes, or that has several
+    /// characters, gets an implementation-defined multi-character value. A
+    /// wide constant with more than one character, also
+    /// implementation-defined, is rejected. An empty constant does not match
+    /// `c-char-sequence` (paragraph 1, p. 59; PDF p. 71).
     fn character_value(
         context: &mut Context<'_>,
         token: PreprocessorToken,
@@ -728,6 +773,14 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         }
     }
 
+    /// Converts one preprocessing token into a token, or returns `None` for
+    /// one that is not passed on: a new-line, a directive that `#` begins,
+    /// or a token in no token's lexical form, which is diagnosed. A name
+    /// whose macro was being replaced is an ordinary identifier again, since
+    /// macros mean nothing after phase 4 (§6.10.3.5 paragraph 1, p. 155; PDF
+    /// p. 167).
+    ///
+    /// C99: §6.4 paragraphs 2-3, p. 49; PDF p. 61.
     pub(super) fn map_preprocessor_token(&mut self, token: PreprocessorToken) -> Option<Token> {
         Some(match token.kind {
             | PreprocessorTokenType::Other => {
@@ -894,6 +947,8 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                 Self::build_operator_token(token, OperatorTokenType::ExclamationMark),
             | PreprocessorTokenType::Ellipsis =>
                 Self::build_operator_token(token, OperatorTokenType::Ellipsis),
+            // `##` is a punctuator (C99 §6.4.6p1) that only replacement
+            // lists give a meaning (§6.10.3.3).
             | PreprocessorTokenType::HashHash => {
                 let error_type = if matches!(
                     self.tokenizer_stack.last(),

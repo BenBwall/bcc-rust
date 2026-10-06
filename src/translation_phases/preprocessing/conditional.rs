@@ -1,4 +1,12 @@
 //! Conditional inclusion and skipping of excluded groups.
+//!
+//! C99: the `if-section` grammar of §6.10 paragraph 1, p. 145; PDF p. 157
+//! (also §A.3, pp. 416-417; PDF pp. 428-429), and conditional inclusion,
+//! §6.10.1 paragraphs 3-6, pp. 148-149; PDF pp. 160-161. The controlling
+//! expressions of `#if` and `#elif` are evaluated in `expression`.
+//!
+//! Nesting depth is not limited; §5.2.4.1 paragraph 1, p. 20; PDF p. 32
+//! requires at least 63 levels.
 
 use std::{
     fmt::Debug,
@@ -27,6 +35,9 @@ use crate::{
 };
 
 /// One source-file-local conditional, including whether its final arm began.
+///
+/// C99: `if-section`, §6.10 paragraph 1, p. 145; PDF p. 157: an `if-group`,
+/// any `elif-groups`, at most one `else-group`, and an `endif-line`.
 #[derive(Debug)]
 pub(super) struct ConditionalGroup<'pp> {
     pub(super) source: &'pp [SourceVector],
@@ -48,6 +59,9 @@ impl<'pp> ConditionalGroup<'pp> {
 }
 
 /// How far [`Expander::skip_over_dead_code`] skips.
+///
+/// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161: only the first group whose
+/// condition is true is processed, else the `#else` group if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SkipMode {
     /// A group whose condition was false: stop at the matching `#elif` whose
@@ -80,6 +94,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     ///
     /// `at_line_start` says whether the directive that started the skip has
     /// already consumed its terminating newline.
+    ///
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161, and the relaxed syntax
+    /// of skipped groups, §6.10 paragraph 4, p. 147; PDF p. 159.
     fn skip_over_dead_code(&mut self, mut at_line_start: bool, mode: SkipMode) {
         let depth = self.state.open_conditionals.len();
         self.context.set_ignore_tokenizer_errors(true);
@@ -169,6 +186,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         self.current_is_newline = true;
     }
 
+    /// Opens a conditional and processes its group when the controlling
+    /// expression is nonzero.
+    ///
+    /// C99: §6.10.1 paragraph 3, p. 148; PDF p. 160.
     pub(super) fn parse_if_directive(&mut self, directive: PreprocessorToken) {
         self.state.open_conditionals.push(ConditionalGroup::new(
             self.state.arena,
@@ -185,6 +206,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
 
     /// `#elif` and `#else` reached while translating a group end that group:
     /// the rest of the conditional is skipped through its `#endif`.
+    ///
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161. The skipped `#elif`'s
+    /// expression is not evaluated.
     pub(super) fn parse_elif_directive(&mut self, directive: PreprocessorToken) {
         self.skip_remaining_groups(
             directive,
@@ -220,6 +244,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         self.skip_over_dead_code(is_else, SkipMode::ToEndif);
     }
 
+    /// Whether an `#elif` or `#else` may follow the arms already seen: none
+    /// may follow the `else-group`.
+    ///
+    /// C99: `if-section`, §6.10 paragraph 1, p. 145; PDF p. 157.
     fn check_conditional_arm(&mut self, directive: PreprocessorToken, is_else: bool) -> bool {
         let Some(group) = self.state.open_conditionals.last_mut() else {
             return false;
@@ -239,6 +267,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         true
     }
 
+    /// Ends an `#else` or `#endif` line, which takes no tokens.
+    ///
+    /// C99: §6.10 paragraph 1, p. 145; PDF p. 157, and footnote 147, p. 149;
+    /// PDF p. 161.
     fn finish_conditional_directive(&mut self, name: &'static str) {
         if let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             && token.kind != PreprocessorTokenType::Newline
@@ -275,6 +307,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
 
     /// Handles `#ifdef` (`wants_defined`) and `#ifndef`. A missing macro name
     /// is diagnosed and the group is skipped, as GCC and Clang do.
+    ///
+    /// C99: §6.10.1 paragraph 5, pp. 148-149; PDF pp. 160-161: the same
+    /// tests as `#if defined identifier` and `#if !defined identifier`.
     fn parse_macro_test_directive(&mut self, directive: PreprocessorToken, wants_defined: bool) {
         self.state.open_conditionals.push(ConditionalGroup::new(
             self.state.arena,

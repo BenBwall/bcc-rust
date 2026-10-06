@@ -1,4 +1,23 @@
 //! Declaration-specifier frame and specifier classification helpers.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `declaration-specifiers` (C99: §6.7 paragraph 1, p. 97; PDF p. 109) and
+//! `specifier-qualifier-list` (§6.7.2.1 paragraph 1, p. 101; PDF p. 113)
+//! over the specifier families of §6.7.1 storage-class specifiers, p. 98;
+//! PDF p. 110; §6.7.2 type specifiers, pp. 99-100; PDF pp. 111-112; §6.7.3
+//! type qualifiers, p. 108; PDF p. 120; and §6.7.4 function specifiers,
+//! p. 112; PDF p. 124; summarized in §A.2.2, pp. 411-413; PDF pp. 423-425.
+//!
+//! Diagnosed here: more than one storage-class specifier (§6.7.1
+//! paragraph 2, p. 98; PDF p. 110); a type-specifier list outside the sets
+//! of §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112, including an empty
+//! one; storage-class and function specifiers in a specifier-qualifier list;
+//! and, as warnings only, repeated qualifiers and `inline`, which C99 accepts
+//! (§6.7.3 paragraph 4, p. 108; PDF p. 120; §6.7.4 paragraph 5, p. 112;
+//! PDF p. 124). A typedef-name is a type specifier only while the scope stack
+//! classifies the identifier as one (§6.7.7, p. 123; PDF p. 135). Every other
+//! §6.7.1-§6.7.4 constraint and the meaning of the specifiers are left to
+//! semantic analysis.
 
 use std::fmt::Debug;
 
@@ -36,7 +55,9 @@ use crate::translation_phases::{
 /// Grammar context controlling which specifier families are legal.
 ///
 /// C99: declaration-specifiers are §6.7, p. 97; PDF p. 109, while
-/// specifier-qualifier-list is §6.7.2.1, p. 101; PDF p. 113.
+/// specifier-qualifier-list is §6.7.2.1, p. 101; PDF p. 113. A type name
+/// takes a specifier-qualifier-list too, §6.7.6 paragraph 1, p. 122;
+/// PDF p. 134.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SpecifierMode {
     /// Full declaration specifiers, including storage and function specifiers.
@@ -84,8 +105,9 @@ pub(super) struct DeclarationSpecifiersFrame<'tu> {
 
 /// Child-wait states used while collecting declaration specifiers.
 ///
-/// C99: the child alternatives are type-specifiers from §6.7.2,
-/// pp. 99-100; PDF pp. 111-112.
+/// C99: the child alternatives are the `struct-or-union-specifier` and
+/// `enum-specifier` type specifiers of §6.7.2 paragraph 1, p. 99;
+/// PDF p. 111.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DeclarationSpecifiersPhase {
     /// Consume primitive, storage, qualifier, function, and typedef specifiers.
@@ -237,6 +259,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                 self.consumed = true;
                 return ParseAction::Consume;
             }
+            // C99 §6.7.1p2: at most one storage-class specifier.
             if self.storage_seen {
                 parser.report(
                     ParserErrorType::StorageClassRedefinition(
@@ -297,6 +320,11 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             return ParseAction::Consume;
         }
 
+        // C99 §6.7.7p1: a typedef-name is an identifier the scope stack
+        // currently binds as a typedef. §6.7.2p2 allows no other type
+        // specifier beside it, so once a type is present the identifier is
+        // normally the declarator, which may redeclare the name in an inner
+        // scope (§6.2.1p4).
         if token.kind == TokenType::Identifier
             && parser.scopes.is_typedef(token.contents)
             && (self.mode == SpecifierMode::TypeName
@@ -323,6 +351,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         // with either. Diagnose it once as an unknown type name and let the
         // rest of the declaration follow, instead of misreading it as an
         // implicit-`int` name and then rejecting what comes after it.
+        // C99 has no implicit `int` (§6.7.2p2).
         if token.kind == TokenType::Identifier
             && self.mode != SpecifierMode::TypeName
             && self.specifiers.type_specifiers == TypeSpecifiers::Empty
@@ -346,6 +375,8 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         // missing mandatory component. One diagnostic per missing piece: a
         // bare identifier is a name lacking its type, while any other token
         // means no declaration started here at all.
+        // C99 §6.7.2p2: at least one type specifier in each declaration,
+        // struct declaration, and type name.
         if !self.consumed && token.kind != TokenType::Identifier {
             parser.report(
                 ParserErrorType::EmptyDeclarationSpecifiers(token.kind),
@@ -384,6 +415,11 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         }
     }
 
+    /// Folds one primitive type-specifier keyword into the accumulated set,
+    /// diagnosing a list that leaves the sets of §6.7.2 paragraph 2.
+    ///
+    /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112. The keywords may
+    /// appear in any order, intermixed with other specifiers.
     fn apply_type_specifier(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
@@ -453,7 +489,9 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
 
 /// Classifies one storage-class-specifier keyword.
 ///
-/// C99: §6.7.1, p. 98; PDF p. 110.
+/// C99: §6.7.1 paragraph 1, p. 98; PDF p. 110. `typedef` is a storage-class
+/// specifier for syntactic convenience only (paragraph 3, p. 98;
+/// PDF p. 110).
 pub(super) fn storage_class(token: TokenType) -> Option<StorageClass> {
     match token {
         | TokenType::Keyword(KeywordTokenType::Auto) => Some(StorageClass::Auto),
@@ -467,7 +505,7 @@ pub(super) fn storage_class(token: TokenType) -> Option<StorageClass> {
 
 /// Classifies one type-qualifier keyword.
 ///
-/// C99: §6.7.3, p. 108; PDF p. 120.
+/// C99: §6.7.3 paragraph 1, p. 108; PDF p. 120.
 pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
     match token {
         | TokenType::Keyword(KeywordTokenType::Const) => Some(TypeQualifiers::CONST),
@@ -477,6 +515,9 @@ pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
     }
 }
 
+/// Warns about a qualifier repeated in one list. C99 §6.7.3 paragraph 4,
+/// p. 108; PDF p. 120, makes the repetition harmless, so this is a quality
+/// diagnostic, not a constraint.
 pub(super) fn report_duplicate_type_qualifier(
     parser: &mut Parser<'_, '_, '_>,
     token: Token,
@@ -495,7 +536,9 @@ pub(super) fn report_duplicate_type_qualifier(
 ///
 /// C99: normative type-specifiers are §6.7.2, pp. 99-100; PDF pp. 111-112.
 /// `_Imaginary` comes from the keyword inventory in §6.4.1, p. 50; PDF p. 62
-/// and is retained here only for the existing extension path.
+/// and is retained here only for the existing extension path. It is reserved
+/// for imaginary types (§6.4.1 paragraph 2, p. 50; PDF p. 62), which only
+/// informative annex G specifies; the frame rejects it.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum PrimitiveTypeSpecifier {
     Signed,

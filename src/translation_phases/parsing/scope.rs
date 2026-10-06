@@ -1,4 +1,20 @@
 //! Ordinary-identifier scopes used for typedef-sensitive parsing.
+//!
+//! Translation phase 7 (§5.1.1.2, p. 10; PDF p. 22) needs to know, at each
+//! identifier, whether it names a typedef: a `typedef-name` is an identifier
+//! (C99: §6.7.7 paragraph 1, p. 123; PDF p. 135) that shares the ordinary
+//! name space (paragraph 3, p. 123; PDF p. 135). This module tracks that one
+//! fact over the scopes of §6.2.1, pp. 29-30; PDF pp. 41-42 (file, block,
+//! and function prototype; labels' function scope is separate) and keeps
+//! function-local label and `switch` state for the statement frames.
+//!
+//! Tags and members live in their own name spaces (§6.2.3 paragraph 1,
+//! p. 31; PDF p. 43) and never change typedef classification, so they are
+//! not tracked. Linkage (§6.2.2, pp. 30-31; PDF pp. 42-43), redeclaration
+//! constraints (§6.7 paragraph 3, p. 97; PDF p. 109), and what each
+//! identifier denotes are left to semantic analysis. Scopes nest through the
+//! arena stack, so the minimums of 127 nested blocks and 511 block-scope
+//! identifiers (§5.2.4.1, pp. 20-21; PDF pp. 32-33) impose no fixed ceiling.
 
 use std::fmt::Debug;
 
@@ -18,6 +34,9 @@ use crate::util::{
 /// Parser-visible classification in C's ordinary-identifier namespace.
 ///
 /// C99: scopes and namespaces are §6.2.1-§6.2.3, pp. 29-31; PDF pp. 41-43.
+/// Ordinary identifiers are those declared in ordinary declarators or as
+/// enumeration constants (§6.2.3 paragraph 1, p. 31; PDF p. 43); a typedef
+/// name is one of them (§6.7.7 paragraph 3, p. 123; PDF p. 135).
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(super) enum NameClass {
     /// Identifier currently denotes a typedef name.
@@ -27,12 +46,27 @@ pub(super) enum NameClass {
 }
 
 /// Kind of parser-visible scope whose lifetime is owned by one frame.
+///
+/// C99: the scope kinds of §6.2.1 paragraphs 2 and 4, pp. 29-30;
+/// PDF pp. 41-42.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(super) enum ScopeKind {
+    /// The block scope of a function definition's parameters, which lasts
+    /// until the end of the body (§6.2.1 paragraph 4, p. 29; PDF p. 41;
+    /// §6.9.1 paragraph 9, p. 142; PDF p. 154). Labels' function scope
+    /// (§6.2.1 paragraph 3, p. 29; PDF p. 41) is tracked by [`LabelScopes`].
     Function,
+    /// Function prototype scope, ending with the function declarator
+    /// (§6.2.1 paragraph 4, p. 30; PDF p. 42).
     FunctionPrototype,
+    /// The block scope of a compound statement (§6.2.1 paragraph 4, p. 29;
+    /// PDF p. 41; §6.8.2 paragraph 2, p. 132; PDF p. 144).
     Block,
+    /// The block a selection statement forms (§6.8.4 paragraph 3, p. 133;
+    /// PDF p. 145).
     ImplicitSelection,
+    /// The block an iteration statement forms (§6.8.5 paragraph 5, p. 135;
+    /// PDF p. 147).
     ImplicitIteration,
 }
 
@@ -141,6 +175,9 @@ impl<'p> ScopeStack<'p> {
     }
 
     /// Tests the innermost visible ordinary-name binding for typedef status.
+    ///
+    /// C99: an inner declaration hides an outer one of the same name space
+    /// (§6.2.1 paragraph 4, p. 30; PDF p. 42).
     pub(super) fn is_typedef(&self, name: StringCacheId) -> bool {
         if !self.nested_scopes.is_empty() {
             #[cfg(test)]
@@ -268,8 +305,8 @@ impl<'p> ScopeStack<'p> {
     /// republish them in its own scope.
     ///
     /// C99: identifiers declared in a function definition's parameter
-    /// declarations have block scope ending with the body, §6.2.1p4, p. 30;
-    /// PDF p. 42.
+    /// declarations have block scope ending with the body, §6.2.1p4, p. 29;
+    /// PDF p. 41.
     pub(super) fn retain_innermost_bindings(&mut self, key: (usize, usize)) {
         let Some(scope) = self.nested_scopes.last() else {
             return;
@@ -321,6 +358,12 @@ fn file_scope_index(name: StringCacheId) -> usize {
 }
 
 /// Labels defined and referenced in one function body.
+///
+/// C99: label names have function scope (§6.2.1 paragraph 3, p. 29;
+/// PDF p. 41) and their own name space (§6.2.3 paragraph 1, p. 31;
+/// PDF p. 43). The sets only record names; uniqueness (§6.8.1 paragraph 3,
+/// p. 132; PDF p. 144) and `goto` targets (§6.8.6.1 paragraph 1, p. 137;
+/// PDF p. 149) are not diagnosed from them.
 #[derive(Debug)]
 pub(super) struct LabelScope<'p> {
     pub(super) definitions: ArenaSet<'p, StringCacheId>,
@@ -380,6 +423,10 @@ impl<'p> LabelScopes<'p> {
     }
 }
 
+/// State of one enclosing `switch` body.
+///
+/// C99: a `switch` has at most one `default` label (§6.8.4.2 paragraph 3,
+/// p. 134; PDF p. 146), diagnosed by the statement frame.
 #[derive(Debug, Default)]
 pub(super) struct SwitchScope {
     pub(super) has_default: bool,

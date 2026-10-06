@@ -1,3 +1,10 @@
+//! Preprocessing-token formation in translation phase 3.
+//!
+//! C99: §5.1.1.2p3, p. 10; PDF p. 22; lexical categories and maximal munch are
+//! §6.4p1-4, pp. 49-50; PDF pp. 61-62. This lexer does not form header-name
+//! tokens; `#include` handling interprets their source spelling in phase 4
+//! (§6.4p4, p. 50; PDF p. 62; §6.4.7, pp. 64-65; PDF pp. 76-77).
+
 mod batch;
 mod replay;
 #[cfg(test)]
@@ -51,13 +58,28 @@ use crate::{
     },
 };
 
+/// Phase-3 lexical failures and partial tokens.
+/// C99: §5.1.1.2p3, p. 10; PDF p. 22; §6.4p2-3, p. 49; PDF p. 61; §6.4.9p1-2,
+/// p. 66; PDF p. 78.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum PreprocessorTokenizerErrorType {
+    /// An other preprocessing token cannot become a phase-7 token.
+    /// C99: §6.4p2-3, p. 49; PDF p. 61.
     UnknownToken,
+    /// A source file ends in a partial comment.
+    /// C99: §5.1.1.2p3, p. 10; PDF p. 22.
     UnterminatedBlockComment,
+    /// A source file ends in a partial `character-constant`.
+    /// C99: §5.1.1.2p3, p. 10; PDF p. 22; §6.4.4.4p1, p. 59; PDF p. 71.
     UnterminatedCharacter,
+    /// A source file ends in a partial `string-literal`.
+    /// C99: §5.1.1.2p3, p. 10; PDF p. 22; §6.4.5p1, p. 62; PDF p. 74.
     UnterminatedString,
+    /// A new-line cannot occur in a `c-char`.
+    /// C99: §6.4.4.4p1, p. 59; PDF p. 71.
     NewlineInCharacter,
+    /// A new-line cannot occur in an `s-char`.
+    /// C99: §6.4.5p1, p. 62; PDF p. 74.
     NewlineInString,
 }
 
@@ -297,18 +319,23 @@ impl ToDiagnostic for PreprocessorTokenizerError {
     }
 }
 
+/// Phase-3 preprocessing-token categories plus phase-4 internal markers.
+/// C99: §6.4p1-3, p. 49; PDF p. 61; placemarkers §6.10.3.3, p. 154; PDF p. 166.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum PreprocessorTokenType {
-    // Literals
+    // Identifiers: C99 §6.4.2.1p1, p. 51; PDF p. 63.
     Identifier,
     /// Suppressed during rescan; remains unavailable in later rescans
-    /// (6.10.3.4p2).
+    /// C99: §6.10.3.4p2, p. 155; PDF p. 167.
     UnavailableIdentifier,
     /// Canonical identity is in contents; this payload preserves source
     /// spelling.
     UniversalIdentifier,
     UnavailableUniversalIdentifier,
+    // `pp-number`: C99 §6.4.8p1, p. 65; PDF p. 77.
     Number,
+    // Quoted preprocessing tokens: C99 §6.4.5p1, p. 62; PDF p. 74;
+    // §6.4.4.4p1, p. 59; PDF p. 71.
     String,
     Character,
 
@@ -316,21 +343,28 @@ pub(crate) enum PreprocessorTokenType {
     /// (C99 §6.4p3). It can be discarded or stringified in phase 4.
     Other,
 
+    // Stringification: C99 §6.10.3.2p2, p. 153; PDF p. 165.
     // Expanded from hash operator
     GeneratedString,
     WideGeneratedString,
 
+    // Placemarkers are internal to phase 4: C99 §6.10.3.3p2,
+    // p. 154; PDF p. 166.
     // Generated when a macro argument generated no tokens
     Placeholder,
 
+    // Phase-3 whitespace: C99 §5.1.1.2p3, p. 10; PDF p. 22.
     // Whitespace
     Newline,
     Whitespace,
 
-    // Keywords
+    // The `defined` operator: C99 §6.10.1p1, pp. 147-148;
+    // PDF pp. 159-160.
+    // Phase-4 conditional operator
     Defined,
 
-    // Punctuation
+    // Punctuation: C99 §6.4.6p1, p. 63; PDF p. 75; digraphs
+    // §6.4.6p3, p. 64; PDF p. 76.
     // In order of appearance in the C99 standard.
     OpeningSquareBracket,
     ClosingSquareBracket,

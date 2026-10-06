@@ -1,4 +1,21 @@
 //! Enum specifier frame.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `enum-specifier`, `enumerator-list`, and `enumerator` (C99: §6.7.2.2
+//! paragraph 1, p. 105; PDF p. 117; §A.2.2, p. 413; PDF p. 425), with the
+//! tag forms of §6.7.2.3, pp. 106-107; PDF pp. 118-119.
+//!
+//! Each enumeration constant enters the ordinary name space as soon as its
+//! enumerator ends (§6.2.1 paragraph 7, p. 30; PDF p. 42; §6.2.3
+//! paragraph 1, p. 31; PDF p. 43), so it can hide a typedef name in later
+//! tokens. Diagnosed here: a malformed list, including an empty one, which
+//! the grammar does not allow. Left to semantic analysis: the value
+//! constraint and value assignment of §6.7.2.2 paragraphs 2-3, p. 105;
+//! PDF p. 117, the compatible integer type of paragraph 4, p. 105;
+//! PDF p. 117 (implementation-defined), and the tag constraints of §6.7.2.3
+//! paragraphs 1-3, p. 106; PDF p. 118. Enumerators accumulate in arena
+//! storage, so the 1023-constant minimum (§5.2.4.1, p. 21; PDF p. 33)
+//! imposes no fixed ceiling.
 
 use std::fmt::Debug;
 
@@ -54,7 +71,8 @@ use crate::{
 /// comma, and optional explicit values.
 ///
 /// C99: enumeration specifiers and enumerators are §6.7.2.2,
-/// pp. 105-107; PDF pp. 117-119.
+/// pp. 105-106; PDF pp. 117-118; tags are §6.7.2.3, pp. 106-107;
+/// PDF pp. 118-119.
 #[derive(Debug)]
 pub(super) struct EnumSpecifierFrame<'tu, 'p> {
     /// Current tag/enumerator transition.
@@ -83,7 +101,7 @@ pub(super) struct EnumSpecifierFrame<'tu, 'p> {
 
 /// State transitions for an enum tag and enumerator list.
 ///
-/// C99: §6.7.2.2, pp. 105-107; PDF pp. 117-119.
+/// C99: §6.7.2.2 paragraph 1, p. 105; PDF p. 117.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum EnumPhase {
     /// Consume the `enum` keyword.
@@ -170,6 +188,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::EnumeratorOrClose;
                     ParseAction::Consume
                 } else {
+                    // C99 §6.7.2.2p1: `enum` takes a tag, a list, or both.
                     parser.report(
                         ParserErrorType::EnumSpecifierWithoutNameAndBody(
                             token.map(|token| token.kind),
@@ -202,6 +221,8 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 );
                 // This state is also reached after a comma, which is why `}`
                 // accepts the standard's optional trailing-comma form.
+                // C99 §6.7.2.2p1: an enumerator-list has at least one
+                // enumerator, so `{}` is diagnosed.
                 if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
                     let token = token.expect("closing-curly-brace token exists");
                     if self.enumerators.is_empty()
@@ -547,6 +568,8 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
             });
             // Enumeration constants join the ordinary identifier namespace as
             // soon as their enumerator completes, affecting later values.
+            // C99 §6.2.1p7: the scope begins after the defining enumerator,
+            // so `A = A` reads an outer `A`.
             parser.scopes.publish(name.name, NameClass::Ordinary);
         }
     }

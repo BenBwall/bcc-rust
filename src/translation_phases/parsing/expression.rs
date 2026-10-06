@@ -1,4 +1,33 @@
 //! Expression frame and its Double-E precedence reducer.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of every
+//! expression production. C99: §6.5, pp. 67-94; PDF pp. 79-106; §A.2.1,
+//! pp. 409-411; PDF pp. 421-423:
+//!
+//! - `primary-expression`: §6.5.1, p. 69; PDF p. 81.
+//! - `postfix-expression` and `argument-expression-list`: §6.5.2, pp. 69-70;
+//!   PDF pp. 81-82, including compound literals (§6.5.2.5, p. 75; PDF p. 87).
+//! - `unary-expression`, including `sizeof`: §6.5.3, p. 78; PDF p. 90.
+//! - `cast-expression`: §6.5.4, p. 81; PDF p. 93.
+//! - The binary levels §6.5.5-§6.5.14, pp. 82-89; PDF pp. 94-101, reduced by
+//!   precedence (see `expression_operators`).
+//! - `conditional-expression`: §6.5.15, p. 90; PDF p. 102.
+//! - `assignment-expression`: §6.5.16, p. 91; PDF p. 103.
+//! - `expression` (comma): §6.5.17, p. 94; PDF p. 106.
+//! - `constant-expression`: §6.6 paragraph 1, p. 95; PDF p. 107.
+//!
+//! Whether `(` opens a `type-name` or a parenthesized expression depends on
+//! whether the next identifier is a visible `typedef-name` (§6.7.7
+//! paragraph 1, p. 123; PDF p. 135). Parenthesized subexpressions nest
+//! through frames, so the 63-level minimum of §5.2.4.1, p. 20; PDF p. 32
+//! imposes no fixed ceiling.
+//!
+//! Only syntax is checked. Every expression constraint and semantic rule
+//! belongs to semantic analysis: declared identifiers (§6.5.1 paragraph 2
+//! and footnote 79, p. 69; PDF p. 81), operand types in the constraints of
+//! §6.5.2.1-§6.5.16.2, modifiable-lvalue assignment operands (§6.5.16
+//! paragraph 2, p. 91; PDF p. 103), and the constant-expression constraints
+//! and kinds of §6.6 paragraphs 3-10, pp. 95-96; PDF pp. 107-108.
 
 use std::fmt::Debug;
 
@@ -60,6 +89,16 @@ use crate::{
     },
 };
 
+/// The expression nonterminal a frame parses, which bounds the operators it
+/// may absorb.
+///
+/// C99: `Expression` is `expression` (§6.5.17 paragraph 1, p. 94;
+/// PDF p. 106); `AssignmentExpression` is `assignment-expression` (§6.5.16
+/// paragraph 1, p. 91; PDF p. 103); `ConstantExpression` is
+/// `constant-expression`, syntactically a `conditional-expression` (§6.6
+/// paragraph 1, p. 95; PDF p. 107); `CastExpression` is `cast-expression`
+/// (§6.5.4 paragraph 1, p. 81; PDF p. 93); `UnaryExpression` is
+/// `unary-expression` (§6.5.3 paragraph 1, p. 78; PDF p. 90).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ExpressionMode {
     Expression,
@@ -75,6 +114,16 @@ pub(super) enum ExpressionParserState {
     Operator,
 }
 
+/// The enclosing production that owns the token ending this expression.
+///
+/// C99: `Statement` covers the expressions of §6.8.1-§6.8.6, pp. 131-136;
+/// PDF pp. 143-148; `Argument` is `argument-expression-list` (§6.5.2,
+/// p. 70; PDF p. 82); `Initializer` and `Designator` are `initializer` and
+/// `designator` (§6.7.8 paragraph 1, p. 125; PDF p. 137); `ArrayBound` is an
+/// array declarator's size (§6.7.5 paragraph 1, p. 114; PDF p. 126);
+/// `StructMember` is a bit-field width (§6.7.2.1 paragraph 1, p. 101;
+/// PDF p. 113); `Enumerator` is an enumerator value (§6.7.2.2 paragraph 1,
+/// p. 105; PDF p. 117).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ExpressionBoundary {
     Statement(ExpressionTerminator),
@@ -88,6 +137,10 @@ pub(super) enum ExpressionBoundary {
     Designator,
 }
 
+/// One parsed operand and the grammar categories it still belongs to: a
+/// `unary-expression` may be an assignment's left operand (§6.5.16
+/// paragraph 1, p. 91; PDF p. 103), and only a `postfix-expression` takes a
+/// postfix suffix (§6.5.2 paragraph 1, p. 69; PDF p. 81).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ExpressionOperand<'tu> {
     expression:         &'tu Expression<'tu>,
@@ -95,6 +148,11 @@ pub(super) struct ExpressionOperand<'tu> {
     postfix_expression: bool,
 }
 
+/// Resumable expression production: an operand/operator stack pair
+/// reduced by precedence, with child frames for delimited operands.
+///
+/// C99: §6.5, pp. 67-94; PDF pp. 79-106; precedence and associativity
+/// follow §6.5 paragraph 3 and footnote 74, p. 67; PDF p. 79.
 #[derive(Debug)]
 pub(super) struct ExpressionFrame<'tu, 'p> {
     mode:                  ExpressionMode,
@@ -116,6 +174,9 @@ pub(super) struct ExpressionFrame<'tu, 'p> {
 
 /// Arguments and provenance of the postfix call an expression frame is
 /// building.
+///
+/// C99: `postfix-expression ( argument-expression-list(opt) )`, §6.5.2,
+/// pp. 69-70; PDF pp. 81-82; function calls §6.5.2.2, p. 71; PDF p. 83.
 #[derive(Debug)]
 pub(super) struct CallState<'tu, 'p> {
     pub(super) arguments: ArenaVec<'p, &'tu Expression<'tu>>,
@@ -133,6 +194,12 @@ impl<'p> CallState<'_, 'p> {
     }
 }
 
+/// Resumable positions inside one expression. `*Grouped` is
+/// `( expression )` (§6.5.1); `*Subscript`, `Call*`, and `ExpectMember` are
+/// postfix suffixes (§6.5.2); `*Prefix` and `Sizeof*` are unary operators
+/// (§6.5.3); `*TypeName`, `*CompoundLiteral`, and `*CastOperand` follow a
+/// parenthesized `type-name` (§6.5.2.5, §6.5.3, §6.5.4); `*Conditional*`
+/// is `? :` (§6.5.15).
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ExpressionPhase<'tu> {
     Parse,
@@ -171,6 +238,15 @@ pub(super) enum ExpressionPhase<'tu> {
     SkipStray(usize),
 }
 
+/// What a parenthesized `type-name` in operand position introduces.
+///
+/// C99: `Cast` is `( type-name ) cast-expression` (§6.5.4 paragraph 1,
+/// p. 81; PDF p. 93) or a compound literal; `Sizeof` is
+/// `sizeof ( type-name )` (§6.5.3 paragraph 1, p. 78; PDF p. 90) or
+/// `sizeof` applied to a compound literal; `UnaryCompoundLiteral` is the
+/// `unary-expression` operand of `++`, `--`, or `sizeof`, which cannot be a
+/// cast and so must be a compound literal (§6.5.2 paragraph 1, p. 69;
+/// PDF p. 81).
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TypeNameUse {
     Cast,
@@ -305,7 +381,7 @@ const PARENTHESIZED_BRACE_GROUP_LOOKAHEAD: usize = 4096;
 
 /// Returns whether the brace group starting at the current `{` closes within
 /// reach and is followed directly by `)`, as in a GNU statement expression
-/// `({ ... })`.
+/// `({ ... })`. bcc-rust does not implement that extension.
 ///
 /// C99: a `{` cannot start a primary expression (§6.5.1, p. 69; PDF p. 81),
 /// so the whole group is skipped as one diagnosed operand (§5.1.1.3, p. 11;
@@ -504,6 +580,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 return ParseAction::Consume;
             },
             | ExpressionPhase::PushGrouped(opening) => {
+                // C99 §6.5.1p1: `( expression )`.
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitGrouped(opening);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
@@ -555,6 +632,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 };
             },
             | ExpressionPhase::PushSubscript(base, opening) => {
+                // C99 §6.5.2p1: `postfix-expression [ expression ]`.
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitSubscript(base, opening);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
@@ -630,6 +708,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 return ParseAction::Reprocess;
             },
             | ExpressionPhase::PushCallArgument(base) => {
+                // C99 §6.5.2p1: each argument is an `assignment-expression`,
+                // so a top-level comma separates arguments.
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitCallArgument(base);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
@@ -698,6 +778,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 };
             },
             | ExpressionPhase::ExpectMember(base, indirect, operator_source) => {
+                // C99 §6.5.2p1: `.` and `->` take an `identifier`.
                 debug_assert!(returned.is_none());
                 let Some(member_token) = token.filter(|token| token.kind == TokenType::Identifier)
                 else {
@@ -768,6 +849,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 return ParseAction::Reprocess;
             },
             | ExpressionPhase::SizeofStart(sizeof_source) => {
+                // C99 §6.5.3p1: `sizeof ( type-name )` when a type name
+                // follows `(`, otherwise `sizeof unary-expression`.
                 debug_assert!(returned.is_none());
                 if let Some(opening) = token
                     && opening.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
@@ -841,6 +924,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                     );
                     false
                 };
+                // C99 §6.5.2p1: `( type-name ) {` begins a compound literal.
                 let starts_compound_literal = consume
                     && parser.cursor.following().is_some_and(|following| {
                         following.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
@@ -940,6 +1024,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 return ParseAction::Reprocess;
             },
             | ExpressionPhase::PushCastOperand(type_name, type_source) => {
+                // C99 §6.5.4p1: `( type-name ) cast-expression`.
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitCastOperand(type_name, type_source);
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
@@ -968,6 +1053,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 return ParseAction::Reprocess;
             },
             | ExpressionPhase::PushConditionalMiddle => {
+                // C99 §6.5.15p1: the middle operand is a full `expression`.
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitConditionalMiddle;
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
@@ -1023,6 +1109,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 return ParseAction::Reprocess;
             },
             | ExpressionPhase::PushConditionalElse => {
+                // C99 §6.5.15p1: the last operand is a
+                // `conditional-expression`, parsed in constant-expression
+                // mode (§6.6p1), so assignment and comma end it.
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitConditionalElse;
                 return ParseAction::Push(ParseFrame::Expression(self.nested(
@@ -1302,6 +1391,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 self.phase = ExpressionPhase::RecoverUnexpectedBrace(1, source);
                 return ParseAction::Consume;
             }
+            // C99 §6.5.2p1: a postfix suffix applies only to a
+            // `postfix-expression`.
             if is_postfix_starter(token.kind)
                 && !self
                     .operands
@@ -1370,6 +1461,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 },
                 | _ => {},
             }
+            // C99 §6.5.15p1: `?` follows a `logical-OR-expression`, so every
+            // tighter operator (levels below 13) reduces first.
             if token.kind == TokenType::Operator(OperatorTokenType::QuestionMark)
                 && !matches!(
                     self.mode,
@@ -1388,6 +1481,10 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 self.phase = ExpressionPhase::PushConditionalMiddle;
                 return ParseAction::Consume;
             }
+            // C99: only `expression` absorbs a comma (§6.5.17p1), a
+            // `constant-expression` takes no assignment (§6.6p1), and a
+            // cast or unary operand takes no binary operator (§6.5.3p1,
+            // §6.5.4p1).
             if let Some(operator) = binary_operator(token.kind)
                 && !(operator == BinaryOperator::Comma && self.mode != ExpressionMode::Expression)
                 && !(is_assignment_operator(operator)
@@ -1407,6 +1504,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 }) {
                     self.reduce_one(parser);
                 }
+                // C99 §6.5.16p1: the left operand of an assignment operator
+                // is a `unary-expression`.
                 if is_assignment_operator(operator)
                     && !self
                         .operands
@@ -1508,6 +1607,10 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// Returns whether the current `(` opens a type name: a type-name starter
     /// follows, or a storage-class or `inline` keyword that a type-name frame
     /// diagnoses as not allowed before one, as in `(static int)x`.
+    ///
+    /// C99: a `type-name` begins with a `specifier-qualifier-list` (§6.7.6
+    /// paragraph 1, p. 122; PDF p. 134), and an identifier starts one only
+    /// as a visible `typedef-name` (§6.7.7 paragraph 1, p. 123; PDF p. 135).
     fn parenthesized_type_name_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
         let Some(following) = parser.cursor.following() else {
             return false;
@@ -1629,6 +1732,13 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         }
     }
 
+    /// Returns whether the token ends this expression in operator position.
+    ///
+    /// C99: a cast or unary operand ends before any binary operator (§6.5.3
+    /// paragraph 1, p. 78; PDF p. 90; §6.5.4 paragraph 1, p. 81; PDF p. 93);
+    /// an `assignment-expression` ends before a comma (§6.5.16 paragraph 1,
+    /// p. 91; PDF p. 103); a `constant-expression` ends before a comma or an
+    /// assignment operator (§6.6 paragraph 1, p. 95; PDF p. 107).
     fn is_boundary(&self, token: Option<TokenType>) -> bool {
         let Some(token) = token else {
             return true;
@@ -1899,6 +2009,10 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         self.stray_error_operand = false;
     }
 
+    /// Reduces every pending operator and returns the expression, typed as a
+    /// `constant-expression` (§6.6 paragraph 1, p. 95; PDF p. 107) in that
+    /// mode. Whether it is in fact constant (§6.6 paragraphs 3-10, pp. 95-96;
+    /// PDF pp. 107-108) is left to semantic analysis.
     fn finish(&mut self, parser: &mut Parser<'_, 'tu, 'p>) -> ParseAction<'tu, 'p> {
         while !self.operators.is_empty() {
             self.reduce_one(parser);

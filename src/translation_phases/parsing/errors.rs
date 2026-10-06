@@ -1,4 +1,12 @@
 //! Parser diagnostics and their rendering.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2 paragraph 1, p. 10;
+//! PDF p. 22) must produce at least one diagnostic for every syntax-rule or
+//! constraint violation in a translation unit (§5.1.1.3 paragraph 1, p. 11;
+//! PDF p. 23). Their form is implementation-defined; bcc-rust renders each
+//! as a structured message with source provenance. Diagnostics the standard
+//! does not require, such as repeated qualifiers, are warnings (footnote 8,
+//! p. 11; PDF p. 23 lets an implementation emit any number).
 
 use std::fmt::{
     self,
@@ -42,13 +50,24 @@ use crate::{
 /// C99: the diagnostic requirement is §5.1.1.3, p. 11; PDF p. 23.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum ParserDiagnosticCode {
+    /// Violation of a syntax rule (§5.1.1.3 paragraph 1, p. 11; PDF p. 23).
     Syntax,
+    /// Violation of a Constraints paragraph (§5.1.1.3 paragraph 1, p. 11;
+    /// PDF p. 23; constraint is defined in §3.8, p. 5; PDF p. 17).
     Constraint,
+    /// A diagnostic C99 does not require (footnote 8, p. 11; PDF p. 23).
     Quality,
+    /// A bcc-rust bug, not a property of the input.
     InternalInvariant,
+    /// A bcc-rust resource ceiling; see `ParserResource`.
     ResourceLimit,
 }
 
+/// A parser resource with a catchable ceiling.
+///
+/// C99: §5.2.4.1, pp. 20-21; PDF pp. 32-33 sets minimum translation limits
+/// only, and footnote 13, p. 20; PDF p. 32 asks implementations to avoid
+/// fixed ones, so these ceilings are representation bounds.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum ParserResource {
     ExternalDeclarations,
@@ -81,12 +100,16 @@ pub(crate) enum ExpectedSyntax {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum DeclarationPlace {
     /// A file-scope external declaration.
+    /// C99: §6.9 paragraph 1, p. 140; PDF p. 152.
     External,
     /// A block-item declaration.
+    /// C99: §6.8.2 paragraph 1, p. 132; PDF p. 144.
     Block,
     /// The declaration clause of a `for` statement.
+    /// C99: §6.8.5 paragraph 1, p. 135; PDF p. 147.
     ForInitializer,
     /// A declaration in an old-style function's declaration list.
+    /// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
     OldStyleParameter,
 }
 
@@ -348,6 +371,8 @@ pub(crate) enum ParserErrorType<'tu> {
     /// C99: §6.9, p. 140; PDF p. 152.
     EmptyTranslationUnit,
     /// A configured, catchable parser resource ceiling was exceeded.
+    /// C99: an implementation limit, not a rule of the standard; see
+    /// §5.2.4.1 and footnote 13, p. 20; PDF p. 32.
     ResourceLimitExceeded {
         resource: ParserResource,
         limit:    usize,
@@ -356,44 +381,71 @@ pub(crate) enum ParserErrorType<'tu> {
     /// C99: implementation guard supporting §5.1.1.3, p. 11; PDF p. 23.
     ParserFrameConsumedAtEndOfInput(ParseFrameKind),
     /// A function-definition head was not followed by its compound body.
+    /// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
     ExpectedFunctionBody(Option<TokenType>),
     /// A declaration list followed a prototype-style function declarator.
     /// C99: §6.9.1 paragraph 5, p. 141; PDF p. 153.
     DeclarationListAfterParameterTypeList,
     /// A compound statement did not begin with `{`.
+    /// C99: §6.8.2 paragraph 1, p. 132; PDF p. 144.
     ExpectedOpeningCurlyBraceInCompoundStatement(Option<TokenType>),
     /// A compound statement did not end with `}`.
+    /// C99: §6.8.2 paragraph 1, p. 132; PDF p. 144.
     ExpectedClosingCurlyBraceInCompoundStatement(Option<TokenType>),
     /// No valid statement production began at the current token.
+    /// C99: §6.8 paragraph 1, p. 131; PDF p. 143.
     ExpectedStatement(Option<TokenType>),
     /// `goto` was not followed by an identifier.
+    /// C99: §6.8.6 paragraph 1, p. 136; PDF p. 148.
     ExpectedGotoLabel(Option<TokenType>),
-    /// A required statement expression was absent.
+    /// A required expression or operator was absent; the string names the
+    /// position.
+    /// C99: statement expressions are §6.8.1-§6.8.6, pp. 131-136;
+    /// PDF pp. 143-148; operands and operators are §6.5, pp. 67-94;
+    /// PDF pp. 79-106; a postfix suffix needs a postfix-expression and a
+    /// compound literal its brace list (§6.5.2 paragraph 1, p. 69;
+    /// PDF p. 81); an assignment's left operand is a unary-expression
+    /// (§6.5.16 paragraph 1, p. 91; PDF p. 103).
     ExpectedStatementExpression(&'static str, Option<TokenType>),
     /// `.` or `->` was not followed by a member identifier.
-    /// C99: postfix member access is §6.5.2.3, pp. 73-74; PDF pp. 85-86.
+    /// C99: `postfix-expression . identifier` is §6.5.2 paragraph 1, p. 69;
+    /// PDF p. 81; member access is §6.5.2.3, pp. 72-73; PDF pp. 84-85.
     ExpectedMemberIdentifier(Option<TokenType>),
     /// A postfix subscript omitted its closing `]`.
-    /// C99: §6.5.2.1, p. 73; PDF p. 85.
+    /// C99: §6.5.2 paragraph 1, p. 69; PDF p. 81; §6.5.2.1, p. 70;
+    /// PDF p. 82.
     ExpectedClosingSquareBracketInSubscript(Option<TokenType>),
     /// An array designator omitted its closing `]`.
     /// C99: §6.7.8, p. 125; PDF p. 137.
     ExpectedClosingSquareBracketInArrayDesignator(Option<TokenType>),
     /// A brace-enclosed initializer list omitted its closing `}`.
+    /// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
     ExpectedClosingCurlyBraceInInitializerList(Option<TokenType>),
     /// A designator list omitted its required `=`.
+    /// C99: `designation` is §6.7.8 paragraph 1, p. 125; PDF p. 137.
     ExpectedEqualsAfterInitializerDesignation(Option<TokenType>),
     /// A statement header omitted its opening parenthesis.
+    /// C99: §6.8.4 paragraph 1, p. 133; PDF p. 145; §6.8.5 paragraph 1,
+    /// p. 135; PDF p. 147.
     ExpectedOpeningParenthesisInStatement(&'static str, Option<TokenType>),
-    /// A statement header omitted its closing parenthesis.
+    /// A statement header, grouped expression, call, or parenthesized type
+    /// name omitted its closing parenthesis.
+    /// C99: §6.8.4 paragraph 1, p. 133; PDF p. 145; §6.8.5 paragraph 1,
+    /// p. 135; PDF p. 147; §6.5.1-§6.5.4, pp. 69-81; PDF pp. 81-93.
     ExpectedClosingParenthesisInStatement(&'static str, Option<TokenType>),
     /// A statement omitted its owned semicolon.
+    /// C99: §6.8.3 paragraph 1, p. 132; PDF p. 144; §6.8.5 paragraph 1,
+    /// p. 135; PDF p. 147; §6.8.6 paragraph 1, p. 136; PDF p. 148.
     ExpectedSemicolonInStatement(&'static str, Option<TokenType>),
-    /// A label omitted its owned colon.
+    /// A label or conditional expression omitted its colon.
+    /// C99: §6.8.1 paragraph 1, p. 131; PDF p. 143; §6.5.15 paragraph 1,
+    /// p. 90; PDF p. 102.
     ExpectedColonInLabel(&'static str, Option<TokenType>),
     /// A switch body contained more than one `default` label.
+    /// C99: §6.8.4.2 paragraph 3, p. 134; PDF p. 146.
     DuplicateDefaultLabel,
     /// A `do` body was not followed by `while`.
+    /// C99: §6.8.5 paragraph 1, p. 135; PDF p. 147.
     ExpectedWhileAfterDoBody(Option<TokenType>),
     /// A typedef declaration ended before naming its typedef.
     /// C99: §6.7, p. 97; PDF p. 109; §6.7.7, pp. 123-124;
@@ -450,7 +502,7 @@ pub(crate) enum ParserErrorType<'tu> {
     /// p. 114; PDF p. 126.
     ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(Option<TokenType>),
     /// A function-call argument was not followed by `,` or `)`.
-    /// C99: argument-expression-list is §6.5.2, p. 69; PDF p. 81.
+    /// C99: argument-expression-list is §6.5.2, p. 70; PDF p. 82.
     ExpectedCommaOrClosingParenthesisInFunctionCall(Option<TokenType>),
     /// Struct/union child was entered without its owning keyword.
     /// C99: §6.7.2.1, p. 101; PDF p. 113.
@@ -507,7 +559,7 @@ pub(crate) enum ParserErrorType<'tu> {
     /// same behavior as one occurrence; this diagnostic is therefore a warning.
     RestrictSpecifiedTwice,
     /// `inline` occurred more than once in declaration specifiers.
-    /// C99: inline is specified by §6.7.4, p. 113; PDF p. 125. The warning is
+    /// C99: inline is specified by §6.7.4, p. 112; PDF p. 124. The warning is
     /// an implementation quality diagnostic, not a required C99 diagnostic.
     InlineSpecifiedTwice,
     /// `static` occurred more than once in an array declarator.
@@ -530,8 +582,11 @@ pub(crate) enum ParserErrorType<'tu> {
     /// pp. 99-100; PDF pp. 111-112.
     TypeSpecifierSpecifiedTwice(TokenType),
     /// `_Imaginary` is reserved but is not a normative C99 type specifier.
-    /// C99: keyword inventory §6.4.1, p. 50; type-specifiers §6.7.2,
-    /// pp. 99-100; PDF pp. 62 and 111-112.
+    /// C99: keyword inventory §6.4.1, p. 50; PDF p. 62; type-specifiers
+    /// §6.7.2, pp. 99-100; PDF pp. 111-112. §6.4.1 paragraph 2 and
+    /// footnote 59, p. 50; PDF p. 62 reserve it for imaginary types, which
+    /// only the informative Annex G describes; bcc-rust does not implement
+    /// them.
     UnsupportedImaginaryTypeSpecifier,
     /// More than two `long` keywords occurred in one type.
     /// C99: the permitted specifier sets are §6.7.2 paragraph 2,
@@ -746,6 +801,9 @@ const SPECIFIER_COMBINATIONS_NOTE: &str =
     "C99 §6.7.2p2 lists every valid combination of type specifiers";
 
 impl ParserErrorType<'_> {
+    /// Classifies the diagnostic: `Constraint` for a rule stated in a
+    /// Constraints paragraph, `Syntax` for a grammar violation, both required
+    /// by §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
     pub(super) fn code(&self) -> ParserDiagnosticCode {
         match self {
             | Self::ResourceLimitExceeded { .. } => ParserDiagnosticCode::ResourceLimit,

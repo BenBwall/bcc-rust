@@ -1,4 +1,11 @@
 //! Parser-machine frames, actions, and values exchanged between frames.
+//!
+//! Infrastructure for translation phase 7 syntax analysis (§5.1.1.2
+//! paragraph 1, p. 10; PDF p. 22). Each frame family owns one group of
+//! clause-6 productions (§6.5-§6.9, pp. 67-144; PDF pp. 79-156); the
+//! explicit stack replaces grammar recursion, so nesting depth is bounded
+//! by memory rather than by the minimums of §5.2.4.1, pp. 20-21;
+//! PDF pp. 32-33.
 
 use std::fmt::Debug;
 
@@ -132,8 +139,8 @@ pub(super) enum ParseAction<'tu, 'p> {
 
 /// Typed value returned by a completed child frame.
 ///
-/// C99: values correspond to completed nonterminals from §6.7-§6.9,
-/// pp. 97-144; PDF pp. 109-156. Typed returns are an implementation mechanism.
+/// C99: values correspond to completed nonterminals from §6.5-§6.9,
+/// pp. 67-144; PDF pp. 79-156. Typed returns are an implementation mechanism.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ParseValue<'tu> {
     /// Result of a declaration-specifier child.
@@ -202,8 +209,8 @@ pub(super) struct InitializerResult<'tu> {
 
 /// Sum type for every grammar frame currently implemented by the parser.
 ///
-/// C99: the represented grammar families currently cover declarations through
-/// external definitions, §6.7-§6.9, pp. 97-144; PDF pp. 109-156.
+/// C99: the represented grammar families cover expressions through external
+/// definitions, §6.5-§6.9, pp. 67-144; PDF pp. 79-156.
 #[derive(Debug)]
 pub(super) enum ParseFrame<'tu, 'p> {
     ExternalDeclaration(ExternalDeclarationFrame),

@@ -1,4 +1,23 @@
 //! Struct and union specifier frame.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `struct-or-union-specifier`, `struct-declaration-list`,
+//! `struct-declaration`, `struct-declarator-list`, and `struct-declarator`
+//! (C99: §6.7.2.1 paragraph 1, p. 101; PDF p. 113; §A.2.2, p. 412;
+//! PDF p. 424), with the tag forms of §6.7.2.3, pp. 106-107;
+//! PDF pp. 118-119.
+//!
+//! Tags and members have their own name spaces (§6.2.3 paragraph 1, p. 31;
+//! PDF p. 43), so neither touches the scope stack. Diagnosed here: syntax
+//! the grammar rejects, including an empty member list and a member
+//! declaration without a declarator, which C99 does not allow. Left to
+//! semantic analysis: the member constraints of §6.7.2.1 paragraphs 2-4,
+//! p. 101; PDF p. 113, the named-member and layout rules of paragraphs 7-16,
+//! pp. 102-103; PDF pp. 114-115, and the tag constraints of §6.7.2.3
+//! paragraphs 1-2, p. 106; PDF p. 118. Members and nested bodies accumulate
+//! through arena storage and the frame stack, so the minimums of 1023
+//! members and 63 nested definitions (§5.2.4.1, p. 21; PDF p. 33) impose no
+//! fixed ceiling.
 
 use std::fmt::Debug;
 
@@ -199,6 +218,8 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Consume
                 } else {
+                    // C99 §6.7.2.1p1: `struct` and `union` take a tag, a
+                    // body, or both.
                     parser.report(
                         ParserErrorType::StructOrUnionSpecifierWithoutNameAndBody(
                             token.map(|token| token.kind),
@@ -232,6 +253,8 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 // specifier-qualifier-list child for the next member.
                 if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
                     let token = token.expect("closing-curly-brace token exists");
+                    // C99 §6.7.2.1p1: a struct-declaration-list has at least
+                    // one struct-declaration.
                     if self.declarations.is_empty() {
                         parser.report(
                             ParserErrorType::ExpectedStructDeclarationBeforeClosingCurlyBrace,
@@ -265,6 +288,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 self.member_source = Some(specifiers.source_vectors);
                 // A leading colon is the unnamed-bit-field alternative; it
                 // deliberately bypasses the named declarator child.
+                // C99 §6.7.2.1p1 and p11.
                 if is_operator(token, OperatorTokenType::Colon) {
                     let token = token.expect("colon token exists");
                     parser.merge_source(&mut self.member_source, token);
@@ -273,6 +297,8 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     self.phase = StructOrUnionPhase::PushBitFieldWidth;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    // C99 §6.7.2.1p1: a struct-declaration needs a
+                    // struct-declarator-list; C99 has no anonymous members.
                     parser.report(ParserErrorType::EmptyStructDeclarator, token);
                     let token = token.expect("semicolon token exists");
                     parser.merge_source(&mut self.member_source, token);

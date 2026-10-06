@@ -1,4 +1,18 @@
 //! Translation-unit level frame dispatching external declarations.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of one
+//! `external-declaration` of a `translation-unit` (C99: §6.9 paragraph 1,
+//! p. 140; PDF p. 152; §A.2.4, p. 416; PDF p. 428). Both alternatives begin
+//! with `declaration-specifiers` and usually a declarator, so the frame
+//! parses a declaration and turns it into a `function-definition` (§6.9.1
+//! paragraph 1, p. 141; PDF p. 153) when a body or declaration list follows
+//! its sole declarator.
+//!
+//! The constraints of §6.9 paragraphs 2-3 (no `auto` or `register`; at most
+//! one external definition of an internal-linkage identifier), p. 140;
+//! PDF p. 152, and the external-definition semantics of paragraph 5,
+//! p. 140; PDF p. 152, and §6.9.2, pp. 143-144; PDF pp. 155-156, are left to
+//! semantic analysis.
 
 use std::fmt::Debug;
 
@@ -35,6 +49,7 @@ use crate::translation_phases::{
 /// recovered external-declaration item.
 ///
 /// C99: external-declaration is specified by §6.9, p. 140; PDF p. 152.
+/// Its file-scope position is §6.9 paragraph 4, p. 140; PDF p. 152.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ExternalDeclarationFrame {
     /// Current root-frame transition.
@@ -92,6 +107,8 @@ impl<'tu, 'p> ExternalDeclarationFrame {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("declaration frame returned an unexpected value: {returned:?}");
                 };
+                // C99 §6.9.1p1: `declaration-specifiers declarator
+                // declaration-list? compound-statement`.
                 let is_definition = declaration.is_definition_head()
                     && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                         || token.is_some_and(|token| parser.declaration_starter(token)));

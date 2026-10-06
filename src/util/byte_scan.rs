@@ -1,4 +1,8 @@
-//! Byte-class scans for the lexer.
+//! Byte-class scans for the lexer in translation phases 1-3.
+//!
+//! C99: §5.1.1.2p1, p. 9; PDF p. 21; §5.1.1.2p2-3, p. 10; PDF p. 22. The
+//! vectorized scans are implementation plumbing for the character and
+//! preprocessing-token rules.
 //!
 //! Every scan answers "how many leading bytes belong to a class?" or "where
 //! is the first byte of a class?". With the nightly-only `portable-simd`
@@ -71,6 +75,7 @@ macro_rules! byte_class {
 
 byte_class!(
     /// ASCII identifier characters: `[A-Za-z0-9_]`.
+    /// C99: `identifier` §6.4.2.1p1, p. 51; PDF p. 63.
     Identifier,
     b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_',
     |bytes| {
@@ -82,6 +87,7 @@ byte_class!(
 byte_class!(
     /// ASCII preprocessing-number body characters other than exponent
     /// signs: `[A-Za-z0-9_.]`.
+    /// C99: `pp-number` §6.4.8p1, p. 65; PDF p. 77.
     NumberBody,
     b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.',
     |bytes| {
@@ -96,6 +102,7 @@ byte_class!(
 byte_class!(
     /// Whitespace that does not end a line: space, tab, vertical tab, and
     /// form feed.
+    /// C99: preprocessing-token whitespace §6.4p3, p. 49; PDF p. 61.
     HorizontalSpace,
     b' ' | b'\t' | b'\x0b' | b'\x0c',
     |bytes| bytes.simd_eq(splat(b' '))
@@ -105,6 +112,8 @@ byte_class!(
 byte_class!(
     /// Bytes that translation phases 1 and 2 may rewrite: the start of a
     /// trigraph, of a line splice, or of a carriage-return line ending.
+    /// C99: §5.1.1.2p1-2, pp. 9-10; PDF pp. 21-22; trigraphs §5.2.1.1p1, p. 18;
+    /// PDF p. 30.
     Phase2Special,
     b'\\' | b'?' | b'\r',
     |bytes| bytes.simd_eq(splat(b'\\')) | bytes.simd_eq(splat(b'?')) | bytes.simd_eq(splat(b'\r'))
@@ -112,6 +121,8 @@ byte_class!(
 
 byte_class!(
     /// Bytes that end a string or character literal body in spliced text.
+    /// C99: `character-constant` §6.4.4.4p1, p. 59; PDF p. 71; `string-literal`
+    /// §6.4.5p1, p. 62; PDF p. 74.
     LiteralBreak,
     b'\\' | b'\n' | b'"' | b'\'',
     |bytes| {
@@ -124,6 +135,7 @@ byte_class!(
 
 byte_class!(
     /// Bytes that may end a block comment or a line in spliced text.
+    /// C99: §6.4.9p1-2, p. 66; PDF p. 78.
     BlockCommentBreak,
     b'*' | b'\n',
     |bytes| bytes.simd_eq(splat(b'*')) | bytes.simd_eq(splat(b'\n'))

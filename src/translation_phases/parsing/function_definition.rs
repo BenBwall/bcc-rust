@@ -1,4 +1,21 @@
 //! Function-definition frame.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `function-definition` and the old-style `declaration-list` (C99: §6.9.1
+//! paragraph 1, p. 141; PDF p. 153; §A.2.4, p. 416; PDF p. 428), after the
+//! external-declaration frame has parsed the head.
+//!
+//! The frame opens the parameters' block scope, which lasts until the end of
+//! the body (§6.2.1 paragraph 4, p. 29; PDF p. 41; §6.9.1 paragraph 9,
+//! p. 142; PDF p. 154), and a label name space with function scope (§6.2.1
+//! paragraph 3, p. 29; PDF p. 41). Diagnosed here: a declaration list after
+//! a parameter type list (§6.9.1 paragraph 5, p. 141; PDF p. 153) and a
+//! missing body. Left to semantic analysis: that the declarator has function
+//! type (paragraph 2), the return type (paragraph 3), the storage class
+//! (paragraph 4), named parameters (paragraph 5), and the declaration-list
+//! constraints of paragraph 6, all p. 141; PDF p. 153; and the parameter
+//! adjustments and types of paragraph 7, p. 142; PDF p. 154. Old-style
+//! definitions are obsolescent (§6.11.7, p. 163; PDF p. 175) but accepted.
 
 use std::fmt::Debug;
 
@@ -50,6 +67,10 @@ use crate::{
     },
 };
 
+/// Parses the optional declaration list and the body that follow a
+/// function-definition head.
+///
+/// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
 #[derive(Debug)]
 pub(super) struct FunctionDefinitionFrame<'tu, 'p> {
     phase: FunctionDefinitionPhase,
@@ -65,6 +86,9 @@ pub(super) struct FunctionDefinitionFrame<'tu, 'p> {
     suggested_missing_semicolon: bool,
 }
 
+/// State transitions for [`FunctionDefinitionFrame`].
+///
+/// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum FunctionDefinitionPhase {
     Start,
@@ -155,6 +179,8 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                                 }
                             }
                         },
+                        // C99 §6.9.1p6: the identifier list names the
+                        // parameters the declaration list then declares.
                         | DirectDeclarator::KAndRStyleFunction { parameters } => {
                             if parameters.is_empty() {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
@@ -185,6 +211,8 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                         .head_declarator()
                         .and_then(Declarator::function_suffix)
                         .is_some_and(|suffix| matches!(suffix, DirectDeclarator::Function { .. }));
+                    // C99 §6.9.1p5: no declaration list follows a parameter
+                    // type list.
                     if has_parameter_type_list && !self.diagnosed_prototype_declaration_list {
                         self.diagnosed_prototype_declaration_list = true;
                         parser.report(

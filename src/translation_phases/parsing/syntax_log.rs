@@ -1,5 +1,9 @@
 //! The node kinds the parser allocates in the translation-unit arena, and a
 //! test-only log of every allocated node by kind.
+//!
+//! Infrastructure for the syntax tree that translation phase 7 builds
+//! (§5.1.1.2 paragraph 1, p. 10; PDF p. 22). It encodes no rule of the
+//! standard.
 
 use super::{
     declaration_syntax::{

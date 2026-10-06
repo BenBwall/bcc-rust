@@ -1,5 +1,9 @@
 //! Whole-file lexing: translation phases 1 through 3.
 //!
+//! C99: §5.1.1.2p1, p. 9; PDF p. 21; §5.1.1.2p2-3, p. 10; PDF p. 22. Trigraphs
+//! follow §5.2.1.1p1, p. 18; PDF p. 30; preprocessing-token boundaries follow
+//! §6.4p1-4, pp. 49-50; PDF pp. 61-62.
+//!
 //! Translation phases 1 and 2 run over the entire buffer first: one
 //! vectorized scan finds every byte that could start a trigraph, a line
 //! splice, or a carriage return, so a buffer without any is lexed in place
@@ -12,7 +16,8 @@
 //! newline supplied for a file without a final one is consumed by whichever
 //! token first looks at the end of input, and a final newline escaped by a
 //! line splice is reported once each time the end of input is read after a
-//! real character.
+//! real character. Non-newline whitespace is collapsed to one space, the
+//! implementation-defined choice in §5.1.1.2p3, p. 10; PDF p. 22.
 
 use std::ops::Range;
 
@@ -60,6 +65,9 @@ struct Remap {
     kind:  RemapKind,
 }
 
+/// Accepts LF, CRLF, and CR as physical end-of-line indicators.
+/// C99: phase-1 mapping is implementation-defined, §5.1.1.2p1, p. 9; PDF p. 21;
+/// source new-lines §5.2.1p3, p. 17; PDF p. 29.
 fn line_ending_length(bytes: &[u8]) -> Option<usize> {
     match bytes {
         | [b'\r', b'\n', ..] => Some(2),
@@ -68,6 +76,8 @@ fn line_ending_length(bytes: &[u8]) -> Option<usize> {
     }
 }
 
+/// Maps the nine trigraph suffixes to their source characters.
+/// C99: §5.2.1.1p1, p. 18; PDF p. 30.
 fn trigraph_replacement(byte: u8) -> Option<char> {
     Some(match byte {
         | b'=' => '#',
@@ -85,6 +95,7 @@ fn trigraph_replacement(byte: u8) -> Option<char> {
 
 /// One character after translation phases 1 and 2, with the source bytes
 /// that spell it.
+/// C99: §5.1.1.2p1-2, pp. 9-10; PDF pp. 21-22.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LogicalCharacter {
     pub(crate) character: char,
@@ -95,9 +106,9 @@ pub(crate) struct LogicalCharacter {
 }
 
 /// The characters that `source[range]` spells once trigraphs are replaced
-/// and line splices deleted (C99 §5.1.1.2p1, phases 1 and 2). The range must
-/// not end inside a trigraph or a line splice; token spans never do. The
-/// characters are collected in `arena`.
+/// and line splices deleted. The range must not end inside a trigraph or
+/// line splice; token spans never do. The characters are collected in `arena`.
+/// C99: §5.1.1.2p1, p. 9; PDF p. 21; §5.1.1.2p2, p. 10; PDF p. 22.
 pub(crate) fn logical_characters<'a>(
     arena: &'a Bump,
     source: &str,
@@ -163,6 +174,8 @@ pub(crate) fn position_after(source: &str, from: SourcePosition, to: usize) -> S
 /// replaced, line endings become `'\n'`, and line splices are deleted. The
 /// returned remaps record every place where spliced and original offsets stop
 /// advancing together. A buffer that needs changes is copied into `scratch`.
+/// C99: §5.1.1.2p1-2, pp. 9-10; PDF pp. 21-22; trigraph mapping §5.2.1.1p1,
+/// p. 18; PDF p. 30.
 fn splice<'a>(source: &'a str, scratch: &'a Bump) -> (&'a str, &'a [Remap]) {
     let bytes = source.as_bytes();
     let mut special = byte_scan::find_phase2_special(bytes);
@@ -379,6 +392,7 @@ enum LexDiagnostic {
 
 /// One lexed entry: a preprocessing token, or whitespace or a comment
 /// (`kind` is `None`), and where it starts.
+/// C99: phase-3 decomposition §5.1.1.2p3, p. 10; PDF p. 22.
 ///
 /// Packed, so an entry costs the 17 bytes its fields need. Fields are read
 /// by value only, through the accessors.
@@ -429,6 +443,8 @@ impl Entry {
 /// pages are committed as entries are written. The finished file keeps its
 /// length and gives the rest back: a file costs one exact-size array,
 /// written once, and holds no storage of its own.
+/// C99: preprocessing-token formation §5.1.1.2p3, p. 10; PDF p. 22; lexical
+/// categories §6.4p1-3, p. 49; PDF p. 61.
 pub(super) struct LexedFile<'a> {
     pub(super) source_file_index: u32,
     /// The file's index in the preprocessor's registry of opened files, if
@@ -514,6 +530,7 @@ impl<'arena> LexingFile<'arena, '_> {
 impl<'a> LexedFile<'a> {
     /// Runs translation phases 1 through 3 over all of `source`, keeping the
     /// result in `arena`.
+    /// C99: §5.1.1.2p1-3, pp. 9-10; PDF pp. 21-22.
     ///
     /// Lexing's temporary storage (text that phases 1 and 2 change, side
     /// tables until they are copied beside the entries, and canonical UCN
@@ -961,6 +978,9 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
     }
 
     /// Lexes the token starting with `byte` at `start`.
+    /// C99: maximal munch §6.4p4, p. 50; PDF p. 62; `preprocessing-token`
+    /// §6.4p1, p. 49; PDF p. 61. Header names are deferred to `#include`
+    /// handling (§6.4.7, pp. 64-65; PDF pp. 76-77).
     fn lex_token(&mut self, start: usize, position: SourcePosition, byte: u8) -> Lexed {
         use PreprocessorTokenType as T;
         match byte {
@@ -1078,6 +1098,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
 
     /// A one-character punctuator, or a two-character one when the next
     /// character is listed.
+    /// C99: `punctuator` §6.4.6p1, p. 63; PDF p. 75.
     fn one_of(
         &mut self,
         start: usize,
@@ -1110,6 +1131,9 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         )
     }
 
+    /// Recognizes `identifier` spellings and the phase-4 `defined` operator.
+    /// C99: §6.4.2.1p1, p. 51; PDF p. 63; §6.10.1p1, pp. 147-148;
+    /// PDF pp. 159-160.
     fn lex_identifier(&mut self, start: usize, mut end: usize) -> Lexed {
         end += byte_scan::identifier_run(&self.bytes[end..]);
         if matches!(self.peek(end), Some(b'\\' | 0x80..)) {
@@ -1123,6 +1147,9 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         self.spelled(start, end, kind)
     }
 
+    /// Extends `identifier` across UCNs and accepted multibyte characters.
+    /// C99: §6.4.2.1p1-3, p. 51; PDF p. 63; UCN form §6.4.3p1, p. 53;
+    /// PDF p. 65.
     #[cold]
     fn lex_extended_identifier(&mut self, start: usize, mut end: usize) -> Lexed {
         let mut universal = false;
@@ -1155,6 +1182,9 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         token
     }
 
+    /// Extends a `pp-number`, including exponent sign and identifier suffix.
+    /// C99: §6.4.8p1-4, p. 65; PDF p. 77; maximal munch §6.4p4, p. 50;
+    /// PDF p. 62.
     fn lex_number(&mut self, start: usize, mut end: usize) -> Lexed {
         loop {
             let run = byte_scan::number_run(&self.bytes[end..]);
@@ -1193,6 +1223,8 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
     }
 
     /// Continues a whitespace token from `end`; comments join it.
+    /// C99: comment replacement and whitespace choice §5.1.1.2p3, p. 10;
+    /// PDF p. 22; comments §6.4.9p1-2, p. 66; PDF p. 78.
     fn lex_whitespace(&mut self, mut end: usize) -> Lexed {
         loop {
             end += byte_scan::horizontal_space_run(&self.bytes[end..]);
@@ -1211,6 +1243,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
     }
 
     /// Returns the offset of the line ending that ends a `//` comment.
+    /// C99: §6.4.9p2, p. 66; PDF p. 78.
     fn skip_line_comment(&mut self, body: usize) -> usize {
         let end = body + byte_scan::find_line_feed(&self.bytes[body..]);
         _ = self.peek(end);
@@ -1219,6 +1252,8 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
 
     /// Returns the offset after the `*/` that ends a block comment, or the
     /// end of input.
+    /// C99: §6.4.9p1, p. 66; PDF p. 78; partial-comment constraint §5.1.1.2p3,
+    /// p. 10; PDF p. 22.
     fn skip_block_comment(&mut self, mut end: usize) -> usize {
         let body = end;
         loop {
@@ -1251,6 +1286,9 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
     }
 
     /// Lexes a string or character literal whose body starts at `body`.
+    /// C99: `character-constant` and `escape-sequence` §6.4.4.4p1, p. 59;
+    /// PDF p. 71; `string-literal` §6.4.5p1, p. 62; PDF p. 74. Escape validity
+    /// and value are checked after lexing.
     fn lex_quoted(
         &mut self,
         start: usize,

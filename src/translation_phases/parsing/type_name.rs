@@ -1,4 +1,13 @@
 //! Type-name frame used by casts, `sizeof`, and compound literals.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `type-name` (C99: §6.7.6 paragraph 1, p. 122; PDF p. 134; §A.2.2,
+//! p. 414; PDF p. 426): a `specifier-qualifier-list` followed by an optional
+//! `abstract-declarator`. A type name is a declaration that omits the
+//! identifier (paragraph 2, p. 122; PDF p. 134). Its users are casts
+//! (§6.5.4, p. 81; PDF p. 93), `sizeof` (§6.5.3.4, p. 80; PDF p. 92), and
+//! compound literals (§6.5.2.5, p. 75; PDF p. 87). The type it names is left
+//! to semantic analysis.
 
 use std::fmt::Debug;
 
@@ -29,6 +38,9 @@ use crate::translation_phases::preprocessing::{
     TokenType,
 };
 
+/// Parses one type name.
+///
+/// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct TypeNameFrame<'tu> {
     phase:                  TypeNamePhase<'tu>,
@@ -36,6 +48,9 @@ pub(super) struct TypeNameFrame<'tu> {
     starting_error_count:   usize,
 }
 
+/// State transitions for [`TypeNameFrame`].
+///
+/// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TypeNamePhase<'tu> {
     Start,
@@ -118,6 +133,10 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
     }
 }
 
+/// Whether `token` can begin an `abstract-declarator`: `pointer`, `(`, or
+/// `[`.
+///
+/// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
 fn is_abstract_declarator_starter(token: TokenType) -> bool {
     matches!(
         token,

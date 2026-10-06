@@ -1,4 +1,7 @@
-//! C99 6.4.2.1 and Annex D (N1256 pp. 440-441): identifier UCNs.
+//! Identifier universal character names in phase-3 preprocessing tokens.
+//!
+//! C99: §6.4.2.1p3, p. 51; PDF p. 63; §6.4.3p1-4, p. 53; PDF p. 65; the
+//! permitted ranges are Annex D, pp. 440-441; PDF pp. 452-453.
 use super::{
     Context,
     PreprocessorTokenType,
@@ -9,6 +12,9 @@ use crate::util::bump::{
     Bump,
 };
 
+/// Decodes a `universal-character-name` valid in an identifier.
+/// C99: §6.4.3p1-2, p. 53; PDF p. 65; identifier ranges §6.4.2.1p3, p. 51;
+/// PDF p. 63; Annex D, pp. 440-441; PDF pp. 452-453.
 pub(super) fn decode(text: &str, first: bool) -> Option<(char, usize)> {
     let digits = match text.as_bytes() {
         | [b'\\', b'u', ..] => 4,
@@ -281,6 +287,8 @@ pub(super) fn decode(text: &str, first: bool) -> Option<(char, usize)> {
 
 /// Records the canonical spelling of the identifier spelled `raw`, built in
 /// `scratch`.
+/// C99: identifier UCN identity §6.4.2.1p1-3, p. 51; PDF p. 63; §6.4.3p4,
+/// p. 53; PDF p. 65.
 pub(crate) fn identifier(
     context: &mut Context<'_>,
     scratch: &Bump,

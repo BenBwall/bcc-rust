@@ -1,4 +1,7 @@
 //! Replay of preprocessing tokens that phase 4 already produced.
+//!
+//! C99: translation phase 4 §5.1.1.2p4, p. 10; PDF p. 22; macro rescanning
+//! §6.10.3.4p2, p. 155; PDF p. 167.
 
 use super::{
     PreprocessorToken,

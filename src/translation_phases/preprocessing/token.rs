@@ -1,4 +1,14 @@
 //! Tokens produced for the parser.
+//!
+//! These are the tokens of translation phase 7: keywords, identifiers,
+//! constants, string literals, and punctuators. C99: §5.1.1.2 paragraph 1
+//! item 7, p. 10; PDF p. 22, and the `token` categories of §6.4 paragraphs
+//! 1 and 3, p. 49; PDF p. 61 (also §A.1.1, p. 403; PDF p. 415).
+//!
+//! Types and values assume an LP64 target: `int` has 32 bits, `long` and
+//! `long long` have 64, and `char` has 8. Those widths are
+//! implementation-defined (§5.2.4.2.1 paragraph 1, pp. 21-22; PDF
+//! pp. 33-34).
 
 use std::fmt::{
     Debug,
@@ -30,6 +40,9 @@ pub(crate) enum SignedIntegerLiteralType {
     LongLong,
 }
 
+/// An unsigned type an integer constant can have.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 #[expect(
     clippy::enum_variant_names,
@@ -41,6 +54,10 @@ pub(crate) enum UnsignedIntegerLiteralType {
     UnsignedLongLong,
 }
 
+/// An `integer-suffix`; `u` and `l` may come in either order and case,
+/// but `ll` and `LL` may not mix cases.
+///
+/// C99: §6.4.4.1 paragraph 1, p. 55; PDF p. 67.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum IntegerSuffix {
     Unsigned,
@@ -50,6 +67,9 @@ pub(crate) enum IntegerSuffix {
     UnsignedLongLong,
 }
 
+/// A phase-7 `token`, with its spelling and provenance.
+///
+/// C99: §6.4 paragraph 1, p. 49; PDF p. 61.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Token {
     pub(crate) kind:           TokenType,
@@ -73,6 +93,10 @@ impl GetSourceVectors for Token {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 /// 8-byte values are [`Packed`] so tokens and constants stay 4-byte aligned.
+///
+/// An `integer-constant` with the type its value and suffix give it.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
 pub(crate) enum IntegerTokenType {
     Int(i32),
     Long(Packed<i64>),
@@ -94,6 +118,10 @@ impl From<IntegerTokenType> for i128 {
     }
 }
 
+/// A `floating-constant`: `double` unsuffixed, `float` with `f` or `F`, and
+/// `long double` with `l` or `L`.
+///
+/// C99: §6.4.4.2 paragraph 4, p. 58; PDF p. 70.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum FloatTokenType {
     Float(f32),
@@ -122,6 +150,9 @@ impl Display for FloatTokenType {
     }
 }
 
+/// A `keyword`.
+///
+/// C99: §6.4.1 paragraph 1, p. 50; PDF p. 62.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum KeywordTokenType {
     Auto,
@@ -163,6 +194,11 @@ pub(crate) enum KeywordTokenType {
     Imaginary,
 }
 
+/// A `punctuator`. Digraphs map to the punctuators they behave as (§6.4.6
+/// paragraph 3, p. 64; PDF p. 76). `#` and `##` are absent: no phase-7
+/// grammar uses them, so they never become tokens.
+///
+/// C99: §6.4.6 paragraph 1, p. 63; PDF p. 75.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum OperatorTokenType {
     Plus,
@@ -219,26 +255,46 @@ pub(crate) struct LiteralId(pub(crate) u32);
 
 /// Preserve numeric execution codes separately from source characters. This
 /// also retains their meaning when phase 6 concatenates narrow/wide literals.
+///
+/// C99: a unit is one element after phase-5 conversion, §5.1.1.2 paragraph 1
+/// item 5, p. 10; PDF p. 22. `Numeric` is the value of an octal or
+/// hexadecimal escape, §6.4.4.4 paragraphs 5-6, p. 60; PDF p. 72.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum LiteralUnit {
     Character(char),
     Numeric(u32),
 }
 
+/// A character or wide `string-literal`, decoded into literal units.
+///
+/// C99: §6.4.5 paragraphs 1-2, p. 62; PDF p. 74.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum StringTokenType {
     String(LiteralId),
     WideString(LiteralId),
 }
 
+/// A `character-constant` and its value.
+///
+/// C99: §6.4.4.4 paragraphs 1-2, pp. 59-60; PDF pp. 71-72, with values from
+/// paragraphs 10-11, p. 61; PDF p. 73.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum CharacterTokenType {
+    /// A narrow constant of one byte, held as that byte.
     Char(char),
     WideChar(u32),
     /// Packed integer value of an ordinary multi-character constant.
+    ///
+    /// The value is implementation-defined (§6.4.4.4 paragraph 10): each
+    /// byte is shifted in after the ones before it, as GCC does.
     MultiChar(i32),
 }
 
+/// The value `#if` gives a character constant. A one-byte narrow constant is
+/// never negative here, which C99 leaves implementation-defined (§6.10.1
+/// paragraph 4, p. 148; PDF p. 160). Whether plain `char` is signed in
+/// phase 7 (§6.2.5 paragraph 15, p. 35; PDF p. 47) is left to semantic
+/// analysis.
 impl From<CharacterTokenType> for i64 {
     fn from(v: CharacterTokenType) -> Self {
         match v {
@@ -249,6 +305,10 @@ impl From<CharacterTokenType> for i64 {
     }
 }
 
+/// The category of a phase-7 token.
+///
+/// C99: §6.4 paragraph 3, p. 49; PDF p. 61. An `enumeration-constant` is an
+/// identifier until declarations are analyzed (§6.4.4.3, p. 59; PDF p. 71).
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum TokenType {
     Integer(IntegerTokenType),
@@ -310,6 +370,9 @@ impl KeywordTokenType {
 
     /// Only identifiers are classified here, after preprocessing has finished.
     /// No cache access or string comparison is needed for ordinary identifiers.
+    ///
+    /// C99: a token that could be a keyword or an identifier is a keyword,
+    /// §6.4.2.1 paragraph 4, p. 51; PDF p. 63.
     pub(crate) fn from_cache_id(id: StringCacheId) -> Option<Self> {
         Self::ALL.get((id.to_u32() - 1) as usize).copied()
     }

@@ -1,4 +1,12 @@
 //! Preprocessor diagnostics and their rendering.
+//!
+//! These diagnose translation phases 4-7 as far as the preprocessor carries
+//! them. C99 requires a diagnostic for every violated syntax rule or
+//! constraint (§5.1.1.3 paragraph 1, p. 11; PDF p. 23); the other variants
+//! report undefined behavior, recovery, or extensions that the extension
+//! policy governs (§4 paragraph 6, p. 7; PDF p. 19). Each variant's comment
+//! names the clause it comes from, and the rendered notes cite clauses in
+//! the compact `C99 §6.10.3p2:` form.
 
 use std::{
     fmt::{
@@ -251,16 +259,34 @@ impl GetSeverity for PreprocessorError<'_> {
 
 #[derive(Debug)]
 pub(crate) enum PreprocessorErrorType<'tu> {
+    /// A pp-number with `0x` that is not a `hexadecimal-floating-constant`.
+    ///
+    /// C99: §6.4 paragraph 2, p. 49; PDF p. 61, and §6.4.4.2 paragraph 1,
+    /// p. 57; PDF p. 69.
     InvalidHexadecimalFloatLiteral,
+    /// A pp-number that is not a `decimal-floating-constant`.
+    ///
+    /// C99: §6.4 paragraph 2, p. 49; PDF p. 61, and §6.4.4.2 paragraphs 1-2,
+    /// pp. 57-58; PDF pp. 69-70.
     InvalidDecimalFloatLiteral,
+    /// A floating constant outside its type's range.
+    ///
+    /// C99: §6.4.4 paragraph 2, p. 54; PDF p. 66.
     FloatConstantOutOfRange {
         type_name: &'static str,
         error:     FloatRangeError,
     },
+    // C99: a pp-number that is not an `integer-constant`, §6.4 paragraph 2,
+    // p. 49; PDF p. 61, and §6.4.4.1 paragraph 1, pp. 54-55; PDF pp. 66-67.
     InvalidHexadecimalIntegerLiteral,
+    /// Binary constants are an extension (§4p6); C99 has none.
     InvalidBinaryIntegerLiteral,
     InvalidOctalIntegerLiteral,
     InvalidDecimalIntegerLiteral,
+    /// An integer constant beyond 64 bits, which no type can represent.
+    ///
+    /// C99: §6.4.4.1 paragraph 6, p. 56; PDF p. 68, and §6.4.4 paragraph 2,
+    /// p. 54; PDF p. 66.
     IntegerLiteralOverflow,
     ForcedSignedToUnsignedConversion {
         from: SignedIntegerLiteralType,
@@ -274,9 +300,23 @@ pub(crate) enum PreprocessorErrorType<'tu> {
         from: SignedIntegerLiteralType,
         to:   SignedIntegerLiteralType,
     },
+    /// A `#` that does not start a line.
+    ///
+    /// C99: §6.10 paragraph 2, p. 146; PDF p. 158.
     HashMustBeFirstCharacterOnLine,
+    /// A `#` followed by neither a directive name nor a new-line: a
+    /// `non-directive`, which C99 gives no meaning.
+    ///
+    /// C99: §6.10 paragraph 1, p. 146; PDF p. 158.
     HashMustBeFollowedByIdentifier,
+    /// A `non-directive` whose name is not a directive name.
+    ///
+    /// C99: §6.10 paragraphs 1 and 3, pp. 146-147; PDF pp. 158-159.
     UnknownDirective,
+    // C99: the `#if` expression is a `constant-expression`, §6.10.1
+    // paragraph 1, p. 147; PDF p. 159, and §6.6 paragraph 1, p. 95; PDF
+    // p. 107, whose operators take the operands that the syntax of §6.5,
+    // pp. 67-94; PDF pp. 79-106, gives them.
     EmptyParenthesesInPreprocessorExpression,
     UnaryPlusWithoutOperand,
     UnaryMinusWithoutOperand,
@@ -300,14 +340,23 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     BitwiseOrWithoutRhs,
     LogicalAndWithoutRhs,
     LogicalOrWithoutRhs,
+    // C99: `conditional-expression`, §6.5.15 paragraph 1, p. 90; PDF p. 102.
     TernaryOperatorWithoutMhs,
     TernaryOperatorWithoutColon,
     TernaryOperatorWithoutRhs,
     ColonWithoutMatchingQuestionMark,
+    /// An evaluated comma operator, an extension under the policy.
+    ///
+    /// C99: §6.6 paragraph 3, p. 95; PDF p. 107.
     CommaOperatorInPreprocessorExpression(ExtensionPolicy),
     BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(PreprocessorExpressionOperator),
+    // C99: a zero divisor is undefined, §6.5.5 paragraph 5, p. 82; PDF p. 94.
     DivideByZero,
     ModuloByZero,
+    // C99: a constant expression must stay in its type's range, §6.6
+    // paragraph 4, p. 95; PDF p. 107, in `intmax_t` or `uintmax_t`, §6.10.1
+    // paragraph 4, p. 148; PDF p. 160. Shift counts: §6.5.7 paragraph 3,
+    // p. 84; PDF p. 96.
     UnaryMinusOverflow,
     BinaryPlusOverflow,
     BinaryMinusOverflow,
@@ -316,35 +365,61 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ModuloOverflow,
     LeftShiftOverflow,
     RightShiftOverflow,
+    /// C99: `( expression )`, §6.5.1 paragraph 1, p. 69; PDF p. 81.
     UnterminatedOpeningParenthesisInPreprocessorExpression,
     TildeInsteadOfBinaryOperatorInPreprocessorExpression,
     ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression,
+    /// C99: a constant expression has no function call, §6.6 paragraph 3,
+    /// p. 95; PDF p. 107.
     FunctionCallOperatorNotSupportedInPreprocessorExpression,
     DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression,
+    // C99: the `#if` expression is an integer constant expression, §6.10.1
+    // paragraph 1, p. 147; PDF p. 159, and §6.6 paragraph 6, p. 95; PDF
+    // p. 107, with no addresses.
     AddressOfOperatorNotSupportedInPreprocessorExpression,
     DereferenceOperatorNotSupportedInPreprocessorExpression,
     ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(PreprocessorExpressionOperator),
     NumberInsteadOfBinaryOperatorInPreprocessorExpression,
     IdentifierInsteadOfBinaryOperatorInPreprocessorExpression,
     CharacterInsteadOfBinaryOperatorInPreprocessorExpression,
+    /// C99: §6.10.1 paragraph 1, p. 147; PDF p. 159.
     UnexpectedTokenInPreprocessorExpression(PreprocessorTokenType),
+    /// A preprocessing token with no token's lexical form.
+    ///
+    /// C99: §6.4 paragraph 2, p. 49; PDF p. 61.
     UnexpectedTokenAtPhase7(PreprocessorTokenType),
+    /// C99: floating constants appear in an integer constant expression only
+    /// as cast operands, §6.6 paragraph 6, p. 95; PDF p. 107, and `#if` has
+    /// no casts, §6.10.1 paragraph 1, p. 147; PDF p. 159.
     FloatInsteadOfIntegerInPreprocessorExpression,
     ExpectedBinaryOperatorInPreprocessorExpression,
+    // C99: `defined identifier` or `defined ( identifier )`, §6.10.1
+    // paragraph 1, p. 148; PDF p. 160.
     MissingOpeningParenthesisOrIdentifierInDefinedDirective(PreprocessorTokenType),
     MissingIdentifierInDefinedDirective(PreprocessorTokenType),
     MissingClosingParenthesisInDefinedDirective(PreprocessorTokenType),
+    // C99: `# if constant-expression` and `# elif constant-expression`,
+    // §6.10 paragraph 1, p. 145; PDF p. 157.
     NoConditionInIfDirective,
     NoConditionInElifDirective,
+    // C99: an `if-section` opens with an `if-group`, may hold one
+    // `else-group` last, and closes with an `endif-line`, §6.10 paragraph 1,
+    // p. 145; PDF p. 157.
     MoreIfDirectivesThanEndifDirectives,
     MoreEndifDirectivesThanIfDirectives,
     ElifDirectiveWithoutIfDirective,
     ElseDirectiveWithoutIfDirective,
     ConditionalArmAfterElse(&'static str),
+    /// C99: `# else new-line` and `# endif new-line`, §6.10 paragraph 1,
+    /// p. 145; PDF p. 157, and footnote 147, p. 149; PDF p. 161.
     ExtraTokensAfterConditionalDirective(&'static str),
+    // C99: `# ifdef identifier new-line`, §6.10 paragraph 1, p. 145; PDF
+    // p. 157.
     ExpectedIdentifierInIfdefDirective(PreprocessorTokenType),
     ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
+    /// C99: `# define identifier`, §6.10 paragraph 1, p. 146; PDF p. 158.
     ExpectedIdentifierInDefineDirective(PreprocessorTokenType),
+    /// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
     RedefinitionOfBuiltInMacro(&'tu str),
     /// `#undef` of a predefined macro name, which stays defined.
     ///
@@ -367,56 +442,108 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.10.3 paragraph 6, p. 151; PDF p. 163.
     DuplicateMacroParameter(&'tu str),
+    /// An identifier that `#if` replaces with 0, worth a warning.
+    ///
+    /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
     UndefinedIdentifierInPreprocessorExpression(&'tu str),
+    /// C99: §6.10.2 paragraph 4, p. 150; PDF p. 162.
     ExpectedIncludeStringOrAngleBracketString(PreprocessorTokenType),
     /// A header name containing one of the sequences C99 §6.4.7p3 leaves
     /// undefined there: `'`, `\`, `"`, `//`, or `/*`.
+    ///
+    /// C99: §6.4.7 paragraph 3, pp. 64-65; PDF pp. 76-77.
     InvalidCharacterInHeaderName(&'static str),
     /// A header name without its closing `>` or `"`.
+    ///
+    /// C99: `header-name`, §6.4.7 paragraph 1, p. 64; PDF p. 76.
     UnterminatedHeaderName(char),
     /// A `\` in a `"…"` header name, accepted as a path character by the
     /// backslash extension.
+    ///
+    /// C99: undefined by §6.4.7 paragraph 3, pp. 64-65; PDF pp. 76-77; the
+    /// extension is permitted by §4 paragraph 6, p. 7; PDF p. 19.
     BackslashInQuotedHeaderName(ExtensionPolicy),
     UnexpectedEndOfInput(&'static str),
+    /// C99: §6.10.3 paragraph 4, p. 151; PDF p. 163.
     WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
         expected: usize,
         found:    usize,
     },
     /// A variadic macro invocation that supplies no argument for `...`.
+    ///
+    /// C99: §6.10.3 paragraph 4, p. 151; PDF p. 163, requires one; omitting
+    /// it is an extension under the policy.
     MissingVariadicArgument(ExtensionPolicy),
+    // C99: a `#include` must name a header or source file that can be
+    // processed, §6.10.2 paragraph 1, p. 149; PDF p. 161.
     HeaderNotFound {
         name:             &'tu str,
         is_system_header: bool,
         searched:         &'tu [&'tu Path],
     },
     HeaderFileInaccessible(&'tu str),
+    /// C99: the nesting limit is implementation-defined, §6.10.2 paragraph 6,
+    /// p. 150; PDF p. 162, and at least 15, §5.2.4.1 paragraph 1, p. 21; PDF
+    /// p. 33.
     IncludeNestingLimitExceeded(usize),
+    // C99: `##` is a punctuator, §6.4.6 paragraph 1, p. 63; PDF p. 75, that
+    // only a replacement list gives a meaning, §6.10.3.3, p. 154; PDF p. 166.
     HashHashUsedOutsideOfMacro,
     CannotUseHashHashAfterFunctionLikeMacroCall,
+    /// A `\` followed by a character that begins no escape sequence.
+    ///
+    /// C99: §6.4.4.4 paragraph 1 and footnote 65, pp. 59-60; PDF pp. 71-72.
     InvalidEscapeSequence,
+    /// A `#line` file name that is not a path; how names map to files is the
+    /// implementation's.
+    ///
+    /// C99: §6.10.4 paragraph 4, p. 158; PDF p. 170.
     InvalidLineFilename,
+    // C99: `escape-sequence`, §6.4.4.4 paragraph 1, p. 59; PDF p. 71.
     UnterminatedEscapeSequence,
     InvalidHexEscapeSequence,
+    // C99: §6.4.4.4 paragraph 9, p. 61; PDF p. 73.
     HexEscapeSequenceTooLarge,
     OctalEscapeSequenceTooLarge,
+    // C99: `universal-character-name` and its constraint, §6.4.3 paragraphs
+    // 1-2, p. 53; PDF p. 65.
     InvalidSmallUnicodeEscapeSequence,
     SmallUnicodeEscapeSequenceTooShort,
     InvalidLargeUnicodeEscapeSequence,
     LargeUnicodeEscapeSequenceTooSmall,
+    /// An empty character constant, which matches no `c-char-sequence`, or a
+    /// wide one with several characters, whose implementation-defined value
+    /// bcc does not assign.
+    ///
+    /// C99: §6.4.4.4 paragraphs 1 and 11, pp. 59-61; PDF pp. 71-73.
     MultiCharacterLiteralsUnsupported,
+    // C99: §6.10.3 paragraph 2, p. 151; PDF p. 163.
     RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(&'tu str),
     RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(&'tu str),
+    // C99: the `# define` forms with `identifier-list` and `...`, §6.10
+    // paragraph 1, p. 146; PDF p. 158.
     ExpectedIdentifierInMacroDefinition(PreprocessorTokenType),
     VariadicMacroMustBeLastParameter(&'tu str),
     ExpectedCommaOrClosingParenthesisInMacroDefinition(PreprocessorTokenType),
+    /// C99: §6.10.3 paragraphs 1-2, p. 151; PDF p. 163.
     MacroRedefinedWithDifferentDefinition(&'tu str),
+    // C99: `# undef identifier new-line`, §6.10 paragraph 1, p. 146; PDF
+    // p. 158.
     ExpectedIdentifierInUndefDirective(PreprocessorTokenType),
     ExpectedNewlineAfterUndefDirective(PreprocessorTokenType),
+    // C99: §6.10.3.2 paragraph 1, p. 153; PDF p. 165.
     HashOperatorMustBeFollowedByAMacroArgument(PreprocessorTokenType),
     IdentifierNotMacroArgumentAfterHashOperator(&'tu str),
+    // C99: §6.10.3.3 paragraph 1, p. 154; PDF p. 166.
     MissingRightHandSideOfHashHashOperator,
     MissingLeftHandSideOfHashHashOperator,
+    /// A paste whose result is not one preprocessing token, which is
+    /// undefined.
+    ///
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.
     TokenMergingError(&'tu str, &'tu str),
+    // C99: `# line digit-sequence "s-char-sequence(opt)" new-line`, after
+    // macro replacement, §6.10.4 paragraphs 3-5, p. 158; PDF p. 170.
     MissingNumberInLineDirective(PreprocessorTokenType),
     MissingNewlineAfterLineDirective(PreprocessorTokenType),
     LineDirectiveIsNotASimpleDigitSequence,
@@ -430,20 +557,38 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.10.4 paragraph 1, p. 158; PDF p. 170.
     WideStringInLineDirective,
+    // C99: `_Pragma ( string-literal )`, §6.10.9 paragraph 1, p. 161; PDF
+    // p. 173.
     MissingOpeningParenthesisInPragmaOperator(PreprocessorTokenType),
     MissingClosingParenthesisInPragmaOperator(PreprocessorTokenType),
     MissingStringLiteralInPragmaOperator(PreprocessorTokenType),
+    /// A pragma bcc does not recognize, which is ignored.
+    ///
+    /// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
     UnknownPragmaDirective,
+    /// C99: §6.10.6 paragraph 2, p. 159; PDF p. 171.
     UnknownPragmaSTDCArgument(&'tu str),
+    // C99: `#pragma once` is an implementation-defined pragma, §6.10.6
+    // paragraph 1, p. 159; PDF p. 171.
     ExtraTokensAfterPragmaOnce(PreprocessorTokenType),
+    /// C99: §6.10.9 paragraph 1, p. 161; PDF p. 173.
     ExtraTokensAfterPragmaOperator,
+    /// C99: after replacement the directive must match `# include
+    /// <h-char-sequence>` or `# include "q-char-sequence"`, §6.10.2
+    /// paragraph 4, p. 150; PDF p. 162.
     ExtraTokensAfterIncludeDirective,
+    // C99: `# ifdef identifier new-line`, §6.10 paragraph 1, p. 145; PDF
+    // p. 157.
     ExtraTokensAfterIfdefDirective,
     ExtraTokensAfterIfndefDirective,
+    // C99: `#pragma STDC` takes a pragma name and an `on-off-switch`,
+    // §6.10.6 paragraph 2, p. 159; PDF p. 171.
     STDCPragmaDirectiveWithoutArgument,
     STDCPragmaDirectiveWithoutOnOffSwitch,
     MissingOnOffSwitchInSTDCPragma(&'tu str),
     PragmaOnceInNonHeader,
+    /// C99: §6.10.5 paragraph 1, p. 159; PDF p. 171; translation fails,
+    /// §4 paragraph 4, p. 7; PDF p. 19.
     ErrorDirective(&'tu str),
 }
 

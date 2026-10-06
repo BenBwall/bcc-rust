@@ -1,4 +1,7 @@
 //! Source positions, source-vector provenance ranges, and their arenas.
+//!
+//! Provenance carries locations across translation phases 1-7 (§5.1.1.2,
+//! pp. 9-10; PDF pp. 21-22).
 
 use std::{
     fmt::{

@@ -1,4 +1,20 @@
 //! Declaration frame: specifiers, init-declarator lists, and terminators.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `declaration`, `init-declarator-list`, and `init-declarator` (C99: §6.7
+//! paragraph 1, p. 97; PDF p. 109; §A.2.2, p. 411; PDF p. 423) at file
+//! scope, in blocks, in `for` clauses, and in old-style parameter
+//! declaration lists. The frame also recognizes a declaration-shaped prefix
+//! that heads a `function-definition` (§6.9.1 paragraph 1, p. 141;
+//! PDF p. 153) and hands it to the external-declaration frame.
+//!
+//! Each declarator's identifier enters scope as soon as the declarator ends
+//! (§6.2.1 paragraph 7, p. 30; PDF p. 42), as a typedef name under a
+//! `typedef` specifier (§6.7.7 paragraph 3, p. 123; PDF p. 135). A typedef
+//! without declarators is checked against the constraint of §6.7 paragraph
+//! 2, p. 97; PDF p. 109; the rest of paragraphs 2-4, the definition
+//! semantics of paragraph 5, p. 97; PDF p. 109, and the completeness rule of
+//! paragraph 7, p. 98; PDF p. 110, are left to semantic analysis.
 
 use std::fmt::Debug;
 
@@ -81,11 +97,20 @@ pub(super) struct DeclarationFrame<'tu, 'p> {
     is_function_definition_head: bool,
 }
 
+/// Where a declaration appears, which decides how it may end and what it
+/// may hand off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DeclarationContext {
+    /// An `external-declaration`: C99 §6.9 paragraph 1, p. 140; PDF p. 152.
     External,
+    /// A `block-item`: C99 §6.8.2 paragraph 1, p. 132; PDF p. 144.
     Block,
+    /// The declaration clause of `for`: C99 §6.8.5 paragraph 1, p. 135;
+    /// PDF p. 147. Its storage-class constraint (paragraph 3, p. 135;
+    /// PDF p. 147) is left to semantic analysis.
     ForInitializer,
+    /// One declaration of a function definition's `declaration-list`: C99
+    /// §6.9.1 paragraph 1, p. 141; PDF p. 153.
     OldStyleParameter,
 }
 
@@ -254,6 +279,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 // before its initializer or a
                 // later comma-separated declarator. Publish
                 // now so typedef shadowing affects the very next token.
+                // C99 §6.2.1p7; typedef names share the ordinary name space
+                // (§6.7.7p3).
                 if let Some(identifier) = declarator.identifier() {
                     let class = if self.declaration_specifiers.is_some_and(|specifiers| {
                         specifiers.storage_class == Some(StorageClass::Typedef)
@@ -352,7 +379,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 // that declarator denotes a
                 // function type, and whether its form
                 // permits a declaration-list, are separate C
-                // constraints.
+                // constraints (C99 §6.9.1p2 and p5-6).
                 if is_operator(token, OperatorTokenType::Comma) {
                     if let Some(token) = token {
                         self.source_vectors.push(token.source_vectors);

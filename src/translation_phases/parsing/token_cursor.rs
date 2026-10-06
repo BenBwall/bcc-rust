@@ -1,4 +1,9 @@
 //! The parser's view of the preprocessed token array.
+//!
+//! Infrastructure for translation phase 7 (§5.1.1.2 paragraph 1, p. 10;
+//! PDF p. 22): the array holds the phase-6 output of the whole translation
+//! unit, and the parser reads it as tokens (§6.4 paragraphs 1-3, p. 49;
+//! PDF p. 61).
 
 use crate::{
     translation_phases::{
@@ -67,7 +72,7 @@ impl GetSourceFileIndex for Upstream {
 /// changes `current`.
 ///
 /// C99: this cursor consumes the phase-7 token stream described by §5.1.1.2,
-/// phases 6-7, pp. 9-10; PDF pp. 21-22. Token categories are specified by
+/// phases 6-7, p. 10; PDF p. 22. Token categories are specified by
 /// §6.4, pp. 49-50; PDF pp. 61-62.
 pub(super) struct TokenCursor {
     /// The preprocessed token array.

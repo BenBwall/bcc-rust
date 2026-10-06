@@ -1,3 +1,9 @@
+//! Translation-time floating-constant conversion in phase 7.
+//!
+//! C99: §5.1.1.2p7, p. 10; PDF p. 22; `floating-constant` §6.4.4.2p1-7,
+//! pp. 57-58; PDF pp. 69-70. Conversion uses the host `strtof`, `strtod`, and
+//! `strtold` interfaces (§7.20.1.3p1-10, pp. 308-310; PDF pp. 320-322).
+
 use std::{
     ffi::c_char,
     fmt::{
@@ -67,6 +73,7 @@ impl LongDouble {
 /// `0x1.8p+0`. The digits come from exact arithmetic rather than the C
 /// library's `printf`, so the text is the same on every host that shares a
 /// `long double` format.
+/// C99: hexadecimal `floating-constant` §6.4.4.2p1-3, pp. 57-58; PDF pp. 69-70.
 impl Display for LongDouble {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut buffer = [0_u8; LONG_DOUBLE_HEX_CAPACITY];
@@ -102,19 +109,30 @@ enum FloatClass {
 ///
 /// Range errors are derived from the converted value and the spelling
 /// instead of `errno`, whose underflow behavior is implementation-defined
-/// (C99 §7.20.1.3p10) and whose storage differs between C runtimes.
+/// (C99 §7.20.1.3p10, p. 310; PDF p. 322) and whose storage
+/// differs between C runtimes. Conversion range follows
+/// §6.4.4.2p3, p. 58; PDF p. 70.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum FloatRangeError {
     /// The magnitude exceeds the largest finite value; it becomes infinity.
+    /// C99: §7.20.1.3p10, p. 310; PDF p. 322.
     Overflow,
     /// A nonzero constant is smaller than the least subnormal; it becomes
     /// zero.
+    /// C99: §7.20.1.3p10, p. 310; PDF p. 322.
     Underflow,
 }
 
+/// A phase-7 `floating-constant` rejected by conversion or range checks.
+/// C99: §6.4.4.2p1-5, pp. 57-58; PDF pp. 69-70; §7.20.1.3p2-10, pp. 308-310;
+/// PDF pp. 320-322.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum ParseFloatError {
+    /// The spelling fails the `floating-constant` grammar.
+    /// C99: §6.4.4.2p1, p. 57; PDF p. 69.
     Invalid(FloatTokenType),
+    /// The host conversion reports an unrepresentable magnitude.
+    /// C99: §7.20.1.3p10, p. 310; PDF p. 322.
     OutOfRange(FloatTokenType, FloatRangeError),
 }
 
@@ -123,6 +141,7 @@ pub(crate) enum ParseFloatError {
 ///
 /// Only digits of the constant's base count, so a suffix such as the `f` of
 /// an exponent-free `0.0f` is not mistaken for a hexadecimal digit.
+/// C99: `floating-constant` significand §6.4.4.2p1-3, pp. 57-58; PDF pp. 69-70.
 fn significand_is_nonzero(spelling: &str) -> bool {
     let (digits, exponent_markers, is_digit): (&str, &[char], fn(&char) -> bool) = match spelling
         .strip_prefix("0x")
@@ -135,6 +154,8 @@ fn significand_is_nonzero(spelling: &str) -> bool {
     significand.chars().any(|c| is_digit(&c) && c != '0')
 }
 
+/// Classifies overflow and underflow after host conversion.
+/// C99: §7.20.1.3p10, p. 310; PDF p. 322.
 fn range_error(class: FloatClass, spelling: &str) -> Option<FloatRangeError> {
     match class {
         | FloatClass::Infinite => Some(FloatRangeError::Overflow),
@@ -157,6 +178,7 @@ fn class_of(value: f64) -> FloatClass {
 
 /// Checks that the C conversion stopped exactly `suffix_bytes` before the
 /// terminating NUL, i.e. that the whole spelling was consumed.
+/// C99: `strtod` end pointer §7.20.1.3p4, pp. 308-309; PDF pp. 320-321.
 fn consumed_whole_spelling(s: &str, endptr: *const c_char, suffix_bytes: usize) -> bool {
     let expected = s.len() - 1 - suffix_bytes;
     endptr.addr() == s.as_ptr().addr() + expected
@@ -164,6 +186,8 @@ fn consumed_whole_spelling(s: &str, endptr: *const c_char, suffix_bytes: usize) 
 
 /// Converts a NUL-terminated `long double` constant spelling (with its `L`
 /// suffix) to the host `long double`.
+/// C99: type suffix §6.4.4.2p4, p. 58; PDF p. 70; `strtold` §7.20.1.3p1-4,
+/// pp. 308-309; PDF pp. 320-321.
 pub(crate) fn string_to_long_double(s: &str) -> Result<LongDouble, ParseFloatError> {
     assert!(
         s.ends_with('\0'),
@@ -192,6 +216,8 @@ pub(crate) fn string_to_long_double(s: &str) -> Result<LongDouble, ParseFloatErr
 }
 
 /// Converts a NUL-terminated unsuffixed `double` constant spelling.
+/// C99: unsuffixed type §6.4.4.2p4, p. 58; PDF p. 70; `strtod` §7.20.1.3p1-4,
+/// pp. 308-309; PDF pp. 320-321.
 pub(crate) fn string_to_double(s: &str) -> Result<f64, ParseFloatError> {
     assert!(
         s.ends_with('\0'),
@@ -216,6 +242,8 @@ pub(crate) fn string_to_double(s: &str) -> Result<f64, ParseFloatError> {
 
 /// Converts a NUL-terminated `float` constant spelling (with its `f`
 /// suffix).
+/// C99: type suffix §6.4.4.2p4, p. 58; PDF p. 70; `strtof` §7.20.1.3p1-4,
+/// pp. 308-309; PDF pp. 320-321.
 pub(crate) fn string_to_float(s: &str) -> Result<f32, ParseFloatError> {
     assert!(
         s.ends_with('\0'),

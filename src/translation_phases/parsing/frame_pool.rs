@@ -10,6 +10,9 @@
 //! boxed frames and boxed per-frame state are recycled the same way. The
 //! spares never outnumber the most that were lent at once, so this storage is
 //! bounded by nesting depth and the longest lists, not by input length.
+//!
+//! Infrastructure for translation phase 7 syntax analysis (§5.1.1.2
+//! paragraph 1, p. 10; PDF p. 22). It encodes no rule of the standard.
 
 use std::{
     cell::Cell,

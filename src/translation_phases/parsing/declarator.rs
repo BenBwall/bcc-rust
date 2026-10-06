@@ -1,4 +1,23 @@
 //! Declarator frame for concrete and abstract declarators.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `declarator`, `direct-declarator`, `pointer`, and `type-qualifier-list`
+//! (C99: §6.7.5 paragraph 1, p. 114; PDF p. 126) with the pointer, array, and
+//! function derivations of §6.7.5.1-§6.7.5.3, pp. 115-121; PDF pp. 127-133,
+//! and of `abstract-declarator` and `direct-abstract-declarator` (§6.7.6
+//! paragraph 1, p. 122; PDF p. 134); summarized in §A.2.2, pp. 413-414;
+//! PDF pp. 425-426. Parameter lists belong to the parameter-list frame.
+//!
+//! Diagnosed here: array suffixes outside the four §6.7.5 paragraph 1 forms
+//! and qualifiers before an abstract `[*]` (§6.7.6 paragraph 1). Left to
+//! semantic analysis: the array constraints of §6.7.5.2 paragraphs 1-2,
+//! p. 116; PDF p. 128 (including where `static` and qualifiers may appear),
+//! the return-type constraint of §6.7.5.3 paragraph 1, p. 118; PDF p. 130,
+//! and the type each derivation specifies. Pointer levels and parenthesized
+//! declarators nest through the frame stack, so the minimums of 12
+//! declarators and 63 parenthesized-declarator levels (§5.2.4.1, p. 20;
+//! PDF p. 32; §6.7.5 paragraph 7, p. 115; PDF p. 127) impose no fixed
+//! ceiling.
 
 use std::{
     cell::Cell,
@@ -151,6 +170,11 @@ pub(super) enum DeclaratorPhase {
     /// Push a nested declarator after `(`.
     PushNested,
     /// Disambiguate an abstract `(` as grouping or a function suffix.
+    ///
+    /// C99: empty parentheses in a type name are a function declarator, not
+    /// grouping, §6.7.6 footnote 128, p. 122; PDF p. 134; an identifier that
+    /// could be a typedef name or a parameter name is taken as a typedef
+    /// name, §6.7.5.3 paragraph 11, p. 119; PDF p. 131.
     ClassifyAbstractParenthesis,
     /// Receive a nested parenthesized declarator.
     AwaitNested,
@@ -159,12 +183,19 @@ pub(super) enum DeclaratorPhase {
     /// Consume zero or more array/function suffixes.
     Suffix,
     /// Parse array qualifiers, `static`, `*`, or an optional bound.
+    ///
+    /// C99: the four array suffix forms of §6.7.5 paragraph 1, p. 114;
+    /// PDF p. 126, and §6.7.6 paragraph 1, p. 122; PDF p. 134.
     Array,
     /// Require the closing bracket of an expression-free array suffix.
     ArrayExpectClose,
     /// Receive and close an array-bound expression.
     AwaitArrayBound,
     /// Decide whether a function suffix is empty, K&R, or prototype-style.
+    ///
+    /// C99: `( parameter-type-list )` and `( identifier-list? )`, §6.7.5
+    /// paragraph 1, p. 114; PDF p. 126; abstract declarators take only
+    /// `( parameter-type-list? )`, §6.7.6 paragraph 1, p. 122; PDF p. 134.
     FunctionStart,
     /// Receive a parameter-list child.
     AwaitParameterList,
@@ -228,6 +259,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if let Some(token) = token
                     && let Some(qualifier) = type_qualifier(token.kind)
                 {
+                    // C99 §6.7.3p4: a repeated qualifier is harmless; warn.
                     if self.mode != DeclaratorMode::Abstract
                         && self.current_qualifiers.contains(qualifier)
                     {
@@ -295,6 +327,8 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     self.phase = DeclaratorPhase::Suffix;
                     return ParseAction::Reprocess;
                 }
+                // C99 §6.7.5p1: a direct-declarator starts with an identifier
+                // or `(`.
                 if self.mode == DeclaratorMode::Named {
                     parser.report(
                 ParserErrorType::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(
@@ -426,6 +460,8 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     {
                         report_duplicate_type_qualifier(parser, token, qualifier);
                     }
+                    // C99 §6.7.5p1: qualifiers go before or after `static`,
+                    // not both.
                     if self.array_is_static && self.array_qualifiers_before_static {
                         parser.report(
                     ParserErrorType::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator,
@@ -463,6 +499,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     Some(token),
                 );
                     }
+                    // C99 §6.7.5p1: the `[*]` form takes no `static`.
                     if self.array_is_static {
                         parser.report(
                             ParserErrorType::BothStaticAndPointerInArrayDirectDeclarator,
@@ -476,6 +513,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 }
                 if is_operator(token, OperatorTokenType::ClosingSquareBracket) {
                     let token = token.expect("closing-square-bracket token exists");
+                    // C99 §6.7.5p1: both `static` forms require a bound.
                     if self.array_is_static {
                         parser.report(
                     ParserErrorType::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator,
@@ -735,13 +773,12 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         ))
     }
 
-    /// Creates the declarator nested inside this one's `(`, sharing the
-    /// chain flag through which it reports an identifier. Abstract
-    /// declarators never declare one, so they take no flag.
     /// Completes the parenthesized declarator waiting for its `)` and stores
     /// it, with the `)` among its delimiters when present.
     ///
-    /// C99: parenthesized direct-declarator is §6.7.5, p. 114; PDF p. 126.
+    /// C99: parenthesized direct-declarator is §6.7.5, p. 114; PDF p. 126;
+    /// it binds as the unparenthesized declarator, paragraph 6, p. 115;
+    /// PDF p. 127.
     fn close_nested(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
@@ -776,6 +813,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         }
     }
 
+    /// Creates the declarator nested inside this one's `(`, sharing the
+    /// chain flag through which it reports an identifier. Abstract
+    /// declarators never declare one, so they take no flag.
     fn nested_frame(&mut self, parser: &mut Parser<'_, 'tu, 'p>) -> Self {
         let mut nested = Self::new(parser.arena, self.mode);
         if self.mode != DeclaratorMode::Abstract {

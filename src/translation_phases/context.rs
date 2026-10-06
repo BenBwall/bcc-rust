@@ -1,5 +1,8 @@
 //! Translation context shared by every phase: configuration, provenance
 //! arenas, interned strings, source files, and pending diagnostics.
+//!
+//! It connects translation phases 1-7 (§5.1.1.2, pp. 9-10; PDF pp. 21-22)
+//! and holds the diagnostics they report (§5.1.1.3p1, p. 11; PDF p. 23).
 
 use std::{
     cell::OnceCell,

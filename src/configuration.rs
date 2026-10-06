@@ -1,3 +1,8 @@
+//! C99 mode and extension settings for translation phases 1-7.
+//!
+//! C99: §5.1.1.2, pp. 9-10; PDF pp. 21-22. Extensions are accepted as §4p6,
+//! p. 7; PDF p. 19 permits.
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum CStandard {
     C99,

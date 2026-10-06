@@ -1,4 +1,13 @@
 //! Operator classification and precedence tables for expressions.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22). C99
+//! states operator precedence only through the grammar of §6.5: precedence
+//! follows the order of its major subclauses, highest first, and each
+//! subclause's syntax gives its associativity (§6.5 paragraph 3 and
+//! footnote 74, p. 67; PDF p. 79). The tables below flatten that grammar
+//! (§6.5.1-§6.5.17, pp. 69-94; PDF pp. 81-106; §A.2.1, pp. 409-411;
+//! PDF pp. 421-423) for the expression frame's Double-E reducer. Levels 1
+//! and 2 (postfix, unary, and cast) are recognized by the frame itself.
 
 use std::fmt::Debug;
 
@@ -21,6 +30,12 @@ use crate::translation_phases::{
     },
 };
 
+/// A pending operator on the expression frame's operator stack.
+///
+/// `Question` marks a `?` whose middle operand is still being parsed;
+/// `Conditional` holds the finished middle operand of
+/// `logical-OR-expression ? expression : conditional-expression`.
+/// C99: §6.5.15 paragraph 1, p. 90; PDF p. 102.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum LanguageExpressionOperator<'tu> {
     Binary {
@@ -38,6 +53,10 @@ pub(super) enum LanguageExpressionOperator<'tu> {
 }
 
 impl LanguageExpressionOperator<'_> {
+    /// Binding level, lower binding tighter. The conditional operator is
+    /// level 13, between `logical-OR-expression` and
+    /// `assignment-expression`.
+    /// C99: §6.5.15, p. 90; PDF p. 102.
     pub(super) fn precedence(self) -> u32 {
         match self {
             | Self::Binary { operator, .. } => binary_operator_precedence(operator),
@@ -45,6 +64,11 @@ impl LanguageExpressionOperator<'_> {
         }
     }
 
+    /// Assignment and the conditional operator group right to left: their
+    /// right operands are `assignment-expression` and
+    /// `conditional-expression` again.
+    /// C99: §6.5.15 paragraph 1, p. 90; PDF p. 102; §6.5.16 paragraph 1,
+    /// p. 91; PDF p. 103.
     fn is_right_associative(self) -> bool {
         matches!(
             self,
@@ -68,6 +92,20 @@ pub(super) fn is_operator(token: Option<Token>, operator: OperatorTokenType) -> 
     token.is_some_and(|token| token.kind == TokenType::Operator(operator))
 }
 
+/// Binding level of each binary operator, lower binding tighter, numbered
+/// in the order of §6.5's subclauses (footnote 74, p. 67; PDF p. 79).
+///
+/// C99: level 3 `multiplicative-expression` §6.5.5, p. 82; PDF p. 94;
+/// 4 `additive-expression` §6.5.6, p. 82; PDF p. 94; 5 `shift-expression`
+/// §6.5.7, p. 84; PDF p. 96; 6 `relational-expression` §6.5.8, p. 85;
+/// PDF p. 97; 7 `equality-expression` §6.5.9, p. 86; PDF p. 98;
+/// 8 `AND-expression` §6.5.10, p. 87; PDF p. 99; 9 `exclusive-OR-expression`
+/// §6.5.11, p. 88; PDF p. 100; 10 `inclusive-OR-expression` §6.5.12, p. 88;
+/// PDF p. 100; 11 `logical-AND-expression` §6.5.13, p. 89; PDF p. 101;
+/// 12 `logical-OR-expression` §6.5.14, p. 89; PDF p. 101;
+/// 14 `assignment-expression` §6.5.16, p. 91; PDF p. 103; 15 `expression`
+/// (comma) §6.5.17, p. 94; PDF p. 106. Subscripting is a postfix operator
+/// (level 1, §6.5.2, p. 69; PDF p. 81) that the frame builds directly.
 fn binary_operator_precedence(operator: BinaryOperator) -> u32 {
     match operator {
         | BinaryOperator::Multiplication | BinaryOperator::Division | BinaryOperator::Modulo => 3,
@@ -99,6 +137,11 @@ fn binary_operator_precedence(operator: BinaryOperator) -> u32 {
     }
 }
 
+/// Maps a punctuator to the binary, assignment, or comma operator it spells.
+///
+/// C99: operators of §6.5.5-§6.5.14, pp. 82-89; PDF pp. 94-101;
+/// `assignment-operator` §6.5.16 paragraph 1, p. 91; PDF p. 103; comma
+/// §6.5.17 paragraph 1, p. 94; PDF p. 106.
 pub(super) fn binary_operator(token: TokenType) -> Option<BinaryOperator> {
     let operator = match token {
         | TokenType::Operator(OperatorTokenType::Asterisk) => BinaryOperator::Multiplication,
@@ -145,6 +188,11 @@ pub(super) fn binary_operator(token: TokenType) -> Option<BinaryOperator> {
     Some(operator)
 }
 
+/// Maps a prefix punctuator to its unary operator and the operand mode the
+/// grammar requires: `++` and `--` take a `unary-expression`, while each
+/// `unary-operator` takes a `cast-expression`.
+///
+/// C99: §6.5.3 paragraph 1, p. 78; PDF p. 90.
 pub(super) fn prefix_operator(token: TokenType) -> Option<(UnaryOperator, ExpressionMode)> {
     let (operator, mode) = match token {
         | TokenType::Operator(OperatorTokenType::PlusPlus) =>
@@ -168,6 +216,11 @@ pub(super) fn prefix_operator(token: TokenType) -> Option<(UnaryOperator, Expres
     Some((operator, mode))
 }
 
+/// Returns whether a token can begin a `unary-expression`: a
+/// `primary-expression` token, `sizeof`, `(`, or a prefix operator.
+///
+/// C99: §6.5.1 paragraph 1, p. 69; PDF p. 81; §6.5.3 paragraph 1, p. 78;
+/// PDF p. 90.
 pub(super) fn is_expression_operand_starter(token: TokenType) -> bool {
     matches!(
         token,
@@ -181,6 +234,10 @@ pub(super) fn is_expression_operand_starter(token: TokenType) -> bool {
     ) || prefix_operator(token).is_some()
 }
 
+/// Returns whether a token begins a `postfix-expression` suffix: `[`, `(`,
+/// `.`, `->`, `++`, or `--`.
+///
+/// C99: §6.5.2 paragraph 1, p. 69; PDF p. 81.
 pub(super) fn is_postfix_starter(token: TokenType) -> bool {
     matches!(
         token,
@@ -195,6 +252,13 @@ pub(super) fn is_postfix_starter(token: TokenType) -> bool {
     )
 }
 
+/// Returns whether `*` is directly followed by `]`, the variable-length
+/// array marker `[ * ]` of a `direct-declarator` or
+/// `direct-abstract-declarator`, rather than a multiplication or
+/// indirection.
+///
+/// C99: §6.7.5 paragraph 1, p. 114; PDF p. 126; §6.7.6 paragraph 1,
+/// p. 122; PDF p. 134.
 pub(super) fn is_array_pointer_marker(
     parser: &mut Parser<'_, '_, '_>,
     token: Option<Token>,
@@ -206,6 +270,9 @@ pub(super) fn is_array_pointer_marker(
         )
 }
 
+/// Returns whether an operator is an `assignment-operator`.
+///
+/// C99: §6.5.16 paragraph 1, p. 91; PDF p. 103.
 pub(super) fn is_assignment_operator(operator: BinaryOperator) -> bool {
     matches!(
         operator,

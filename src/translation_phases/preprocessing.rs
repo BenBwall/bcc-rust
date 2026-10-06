@@ -1,6 +1,20 @@
 //! C99 preprocessing (translation phase 4) and the token-level work that
 //! follows it: escape-sequence evaluation, adjacent string-literal
 //! concatenation, and conversion of preprocessing tokens into parser tokens.
+//!
+//! C99: translation phases 4-7, §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
+//! Phase 4 is the preprocessing directives of §6.10, pp. 145-162; PDF
+//! pp. 157-174 (grammar summary §A.3, pp. 416-418; PDF pp. 428-430):
+//! directive recognition (`directives`), conditional inclusion (`conditional`,
+//! `expression`), and macro replacement (`driver`, `macro_expansion`).
+//! Phase 5 escape-sequence conversion, phase 6 string-literal concatenation
+//! (§6.4.5 paragraph 4, p. 62; PDF p. 74), and the phase-7 conversion of each
+//! preprocessing token into a token (§6.4 paragraphs 2-3, p. 49; PDF p. 61)
+//! live in `token_conversion`, with the resulting tokens in `token`.
+//!
+//! Phases 1-3 belong to `initial_processing` and `preprocessor_tokenizer`.
+//! The rest of phase 7, syntactic and semantic analysis, belongs to the
+//! parser and later work.
 
 mod conditional;
 mod directives;
@@ -88,6 +102,12 @@ use crate::{
     },
 };
 
+/// The names defined before the first line is read.
+///
+/// C99: §6.10.8 paragraph 1, p. 160; PDF p. 172. None of the conditionally
+/// defined names of §6.10.8 paragraph 2, p. 161; PDF p. 173, is defined.
+/// `_Pragma` is an operator (§6.10.9, p. 161; PDF p. 173), not a macro; it
+/// is registered here so that rescanning recognizes it.
 const PREDEFINED_MACRO_NAMES: [&str; 9] = [
     "__LINE__",
     "__FILE__",
@@ -170,6 +190,10 @@ struct Resting<'tu, 'pp> {
 }
 
 /// Translation phases 4 through 6 over one translation unit.
+///
+/// C99: §5.1.1.2 paragraph 1 items 4-6, p. 10; PDF p. 22. Each preprocessing
+/// token that survives phase 4 is converted to a token here as well, ahead of
+/// the phase-7 analysis the parser performs.
 ///
 /// Macro expansion working memory comes from an expansion arena. It is reset
 /// at points where no expansion is active, so per-invocation data does not
@@ -629,6 +653,11 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
         }
     }
 
+    /// Returns the next phase-7 token, executing directives on the way.
+    /// Conditionals still open at the end of input lack the `endif-line`
+    /// that ends each `if-section`.
+    ///
+    /// C99: §6.10 paragraph 1, p. 145; PDF p. 157.
     fn next_parser_token(&mut self) -> Option<Token> {
         self.context
             .append_pending_errors(self.pending_parser_errors.drain(..));
@@ -690,6 +719,8 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
 impl Expander<'_, '_, '_, '_> {
     /// Returns the next phase-6 token, with adjacent string literals
     /// concatenated.
+    ///
+    /// C99: §5.1.1.2 paragraph 1 item 6, p. 10; PDF p. 22.
     pub(crate) fn next_item(&mut self) -> Option<Token> {
         let token = self.next_parser_token()?;
         Some(self.concatenate_adjacent_strings(token))

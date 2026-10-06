@@ -1,5 +1,29 @@
 # Contributing
 
+## Citing the C standard
+
+Compiler code says which part of the C standard it implements. The reference is
+the repository's [`c-spec.pdf`](c-spec.pdf), WG14/N1256 (ISO/IEC 9899:TC3: C99
+with Technical Corrigenda 1-3).
+
+- Every module under `src/translation_phases/` opens with a `//!` comment that
+  names the translation phases and clauses it implements, and where its
+  responsibility stops (for example, a constraint left to semantic analysis).
+- A type, frame, function, or diagnostic that implements a specific grammar
+  production, constraint, semantic rule, translation limit, or
+  implementation-defined choice carries a `C99:` line in its doc comment. Mark
+  extensions and implementation-defined choices as such.
+- Doc comments give the clause, the printed page, and the 1-based PDF page of
+  the cited text (PDF page = printed page + 12):
+
+  ```rust
+  /// C99: §6.8.4.1, p. 133; PDF p. 145.
+  /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112.
+  ```
+
+- Inline comments and diagnostic notes may use the compact form
+  `C99 §6.7.6p1:`.
+
 ## Commit messages
 
 Enable the repository's commit-message hook after cloning.

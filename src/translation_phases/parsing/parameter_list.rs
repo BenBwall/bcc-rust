@@ -1,4 +1,23 @@
 //! Parameter-type-list and identifier-list frame.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of the
+//! contents of a function declarator's parentheses: `parameter-type-list`,
+//! `parameter-list`, `parameter-declaration`, and `identifier-list` (C99:
+//! §6.7.5 paragraph 1, p. 114; PDF p. 126; §A.2.2, pp. 413-414;
+//! PDF pp. 425-426), with the function-declarator rules of §6.7.5.3,
+//! pp. 118-121; PDF pp. 130-133.
+//!
+//! The list opens function prototype scope (§6.2.1 paragraph 4, p. 30;
+//! PDF p. 42); a file-level list keeps the bindings a later definition body
+//! needs. An identifier that could be a typedef name or a parameter name is
+//! taken as a typedef name (§6.7.5.3 paragraph 11, p. 119; PDF p. 131).
+//! Left to semantic analysis: the storage-class constraint of paragraph 2
+//! and the empty-list rule of paragraph 3, p. 118; PDF p. 130; the `(void)`
+//! special case of paragraph 10 and the adjustments of paragraphs 7-8,
+//! p. 119; PDF p. 131. Empty and identifier-list forms are obsolescent
+//! (§6.11.6-§6.11.7, p. 163; PDF p. 175) but accepted. Parameters accumulate
+//! in arena storage, so the 127-parameter minimum (§5.2.4.1, p. 21;
+//! PDF p. 33) imposes no fixed ceiling.
 
 use std::fmt::Debug;
 
@@ -58,7 +77,9 @@ use crate::{
 ///
 /// C99: parameter-type-list, parameter-list, parameter-declaration, and
 /// identifier-list are §6.7.5, p. 114; PDF p. 126; function declarator rules
-/// are §6.7.5.3, pp. 118-121; PDF pp. 130-133.
+/// are §6.7.5.3, pp. 118-121; PDF pp. 130-133. Only a named declarator may
+/// take an identifier list; abstract ones take `parameter-type-list?`
+/// (§6.7.6 paragraph 1, p. 122; PDF p. 134).
 #[derive(Debug)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -101,6 +122,9 @@ pub(super) struct ParameterListFrame<'tu, 'p> {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ParameterListPhase {
     /// Enter prototype scope and select K&R versus prototype syntax.
+    ///
+    /// C99: a visible typedef name selects a parameter declaration
+    /// (§6.7.5.3 paragraph 11, p. 119; PDF p. 131).
     Start,
     /// Consume one K&R parameter identifier.
     KAndRIdentifier,
@@ -120,6 +144,9 @@ pub(super) enum ParameterListPhase {
     /// Require `,` or `)` after a prototype parameter.
     PrototypeSeparator,
     /// Parse `...` or the next parameter after a comma.
+    ///
+    /// C99: `parameter-list , ...` (§6.7.5 paragraph 1, p. 114; PDF p. 126;
+    /// §6.7.5.3 paragraph 9, p. 119; PDF p. 131).
     AfterComma,
     /// Require `)` immediately after `...`.
     ExpectCloseAfterEllipsis,
@@ -246,9 +273,11 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 };
                 // Once identifier-list syntax is selected, a
                 // declaration starter cannot silently switch dialects
-                // mid-list. Diagnose the list once, then parse each such
-                // parameter declaration whole and discard it, so its
-                // declarator name is not mistaken for the next identifier.
+                // mid-list (C99 §6.7.5p1: an identifier-list holds only
+                // identifiers and commas). Diagnose the list once, then
+                // parse each such parameter declaration whole and discard
+                // it, so its declarator name is not mistaken for the next
+                // identifier.
                 if parser.declaration_starter(token) {
                     if !self.diagnosed_mixed_parameter {
                         parser.report(
@@ -448,6 +477,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 // Parameter names enter prototype scope as soon as
                 // their declarator completes
                 // and may hide typedefs in later entries.
+                // C99 §6.2.1p4 and p7.
                 if let Some(identifier) = declarator.and_then(Declarator::identifier)
                     && parser
                         .scopes

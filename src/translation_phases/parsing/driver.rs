@@ -1,4 +1,15 @@
 //! The parser driver loop and helpers shared by every grammar frame.
+//!
+//! Translation phase 7 (§5.1.1.2 paragraph 1, p. 10; PDF p. 22): the driver
+//! takes the converted tokens of one translation unit (§5.1.1.1, p. 9;
+//! PDF p. 21) and steps the frame machine until each `external-declaration`
+//! of `translation-unit` reduces (§6.9 paragraph 1, p. 140; PDF p. 152).
+//! It emits the diagnostics §5.1.1.3, p. 11; PDF p. 23 requires and
+//! resynchronizes after them. Grammar nesting lives on an explicit frame
+//! stack, so no nesting minimum of §5.2.4.1, p. 20; PDF p. 32 becomes a
+//! recursion limit; footnote 13 there asks implementations to avoid fixed
+//! translation limits, and the remaining resource ceilings are
+//! representation bounds only.
 
 #[cfg(test)]
 use super::{
@@ -86,8 +97,9 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// over the result. Every preprocessing diagnostic is pending in
     /// `context` before any parser diagnostic.
     ///
-    /// C99: the input is the translation unit produced after phase 7 under
-    /// §5.1.1.1-§5.1.1.2, pp. 9-10; PDF pp. 21-22.
+    /// C99: the input is the translation unit (§5.1.1.1, p. 9; PDF p. 21)
+    /// left by phases 1-6, whose preprocessing tokens phase 7 converts to
+    /// tokens (§5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22).
     #[cfg(test)]
     pub(crate) fn new(
         preprocessor: Preprocessor<'tu, '_>,
@@ -256,6 +268,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             );
 
             if self.frames.is_empty() {
+                // C99 §6.9p1: `translation-unit` needs at least one
+                // `external-declaration`.
                 if self.cursor.current().is_none() {
                     if !self.has_external_declaration && !self.reported_empty_translation_unit {
                         self.reported_empty_translation_unit = true;
@@ -523,8 +537,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// its owning frame can safely resume.
     ///
     /// C99: continued translation after a required diagnostic is permitted by
-    /// §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23. The exact
-    /// synchronization algorithm is implementation-defined.
+    /// §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23. C99 does not
+    /// specify how an implementation resynchronizes.
     fn recover(
         &mut self,
         set: SynchronizationSet,
@@ -840,8 +854,12 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// Reports whether `token` can begin declaration specifiers in the current
     /// typedef environment.
     ///
-    /// C99: declaration-specifiers are §6.7, p. 97; PDF p. 109; typedef-name
-    /// is a type-specifier under §6.7.2, p. 99; PDF p. 111.
+    /// C99: declaration-specifiers are §6.7, p. 97; PDF p. 109, built from
+    /// storage-class specifiers (§6.7.1, p. 98; PDF p. 110), type specifiers
+    /// (§6.7.2, p. 99; PDF p. 111), type qualifiers (§6.7.3, p. 108;
+    /// PDF p. 120), and `inline` (§6.7.4, p. 112; PDF p. 124); typedef-name
+    /// is a type-specifier under §6.7.2, p. 99; PDF p. 111. `_Imaginary` is
+    /// accepted here so the specifier frame can diagnose it.
     pub(super) fn declaration_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(
@@ -875,6 +893,12 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }
     }
 
+    /// Reports whether `token` can begin a `type-name`: a type specifier or
+    /// qualifier, or a visible typedef name.
+    ///
+    /// C99: a `type-name` begins with a `specifier-qualifier-list` (§6.7.6
+    /// paragraph 1, p. 122; PDF p. 134; §6.7.2.1 paragraph 1, p. 101;
+    /// PDF p. 113).
     pub(super) fn type_name_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(
@@ -907,12 +931,6 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             && (token.kind != TokenType::Identifier || self.typedef_name_continues_specifiers())
     }
 
-    /// Resolves the declaration-specifier/declarator ambiguity after a visible
-    /// typedef name using buffered lookahead.
-    ///
-    /// C99: typedef-name is §6.7.7, pp. 123-124; PDF pp. 135-136, and its
-    /// declarator ambiguity is constrained by §6.7.5.3 paragraph 11,
-    /// p. 119; PDF p. 131.
     /// Returns whether the declaration starting at the current token
     /// declares one of `parameters`, judged from its first identifiers that are
     /// neither typedef names nor tags. Recovery uses this to tell an
@@ -962,6 +980,12 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         true
     }
 
+    /// Resolves the declaration-specifier/declarator ambiguity after a visible
+    /// typedef name using buffered lookahead.
+    ///
+    /// C99: typedef-name is §6.7.7, pp. 123-124; PDF pp. 135-136, and its
+    /// declarator ambiguity is constrained by §6.7.5.3 paragraph 11,
+    /// p. 119; PDF p. 131.
     pub(super) fn typedef_name_continues_specifiers(&mut self) -> bool {
         let Some(following) = self.cursor.following() else {
             return false;

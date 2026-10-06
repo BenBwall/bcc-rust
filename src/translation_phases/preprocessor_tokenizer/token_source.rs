@@ -1,5 +1,8 @@
 //! The preprocessing-token source that phase 4 reads: a lexed source file
 //! or replayed tokens.
+//!
+//! C99: phase-3 token formation §5.1.1.2p3 and phase-4 macro expansion
+//! §5.1.1.2p4, p. 10; PDF p. 22.
 
 use std::fmt::{
     Debug,
@@ -33,6 +36,7 @@ use crate::{
 /// A cloneable, rewindable stream of preprocessing tokens over one source
 /// buffer. Phase 4 keeps one per source file, macro replacement list, and
 /// macro argument.
+/// C99: §5.1.1.2p3-4, p. 10; PDF p. 22.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TokenSource<'a> {
     /// A source buffer, lexed completely when it was opened.
@@ -50,6 +54,7 @@ impl Default for TokenSource<'_> {
 impl<'a> TokenSource<'a> {
     /// Lexes all of `source` (translation phases 1 through 3) into `arena`
     /// and opens it.
+    /// C99: §5.1.1.2p1-3, pp. 9-10; PDF pp. 21-22.
     pub(crate) fn new(
         context: &mut Context<'_>,
         arena: &'a Bump,
@@ -146,6 +151,8 @@ impl TranslationPhase<'_> for TokenSource<'_> {
 /// Reading an entry reports its diagnostics and records its provenance, as
 /// lexing it would. Phase 4 only ever rewinds to positions it read, which are
 /// entry boundaries.
+/// C99: phase-3 token formation and phase-4 consumption §5.1.1.2p3-4, p. 10;
+/// PDF p. 22.
 #[derive(Clone)]
 #[expect(
     clippy::struct_excessive_bools,

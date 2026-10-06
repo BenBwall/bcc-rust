@@ -1,4 +1,17 @@
 //! Initializer and designation frame.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `initializer`, `initializer-list`, `designation`, `designator-list`, and
+//! `designator` (C99: §6.7.8 paragraph 1, p. 125; PDF p. 137; §A.2.2,
+//! pp. 414-415; PDF pp. 426-427), for init-declarators and for the braced
+//! list of a compound literal (§6.5.2.5 paragraph 4, p. 75; PDF p. 87).
+//!
+//! Diagnosed here: syntax the grammar rejects, including an empty `{}`,
+//! which C99 does not allow. Left to semantic analysis: the constraints of
+//! §6.7.8 paragraphs 2-7, p. 125; PDF p. 137, and the current-object,
+//! ordering, and implicit-initialization semantics of paragraphs 8-23,
+//! pp. 126-128; PDF pp. 138-140. Elements and nested lists accumulate in
+//! arena storage and the frame stack, so no fixed nesting ceiling applies.
 
 use std::fmt::Debug;
 
@@ -59,6 +72,10 @@ use crate::{
     },
 };
 
+/// Parses one `initializer`: an `assignment-expression` or a braced
+/// `initializer-list` with an optional trailing comma.
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
 #[derive(Debug)]
 pub(super) struct InitializerFrame<'tu, 'p> {
     phase: InitializerPhase<'tu>,
@@ -79,6 +96,9 @@ pub(super) struct InitializerFrame<'tu, 'p> {
 
 /// Designators and provenance of the designation preceding one initializer
 /// element.
+///
+/// C99: `designation` and `designator-list`, §6.7.8 paragraph 1, p. 125;
+/// PDF p. 137.
 #[derive(Debug)]
 pub(super) struct DesignationState<'tu, 'p> {
     pub(super) current_designators:    ArenaVec<'p, Designator<'tu>>,
@@ -91,6 +111,9 @@ pub(super) struct DesignationState<'tu, 'p> {
 }
 
 /// Recovery state for an array designator whose `]` was not where expected.
+///
+/// C99: the designator form is `[ constant-expression ]`, §6.7.8
+/// paragraph 1, p. 125; PDF p. 137.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SynchronizedDesignator<'tu> {
     expression:              ConstantExpression<'tu>,
@@ -126,6 +149,9 @@ impl<'p> DesignationState<'_, 'p> {
     }
 }
 
+/// State transitions for [`InitializerFrame`].
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum InitializerPhase<'tu> {
     Start,
@@ -235,6 +261,8 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 if let Some(close) = token
                     && close.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
                 {
+                    // C99 §6.7.8p1: an initializer-list has at least one
+                    // initializer; `{}` is not C99.
                     if self.elements.is_empty() {
                         parser.report(
                             ParserErrorType::ExpectedStatementExpression(
@@ -546,6 +574,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 let consume = if let Some(equals) = token
                     && equals.kind == TokenType::Operator(OperatorTokenType::Equals)
                 {
+                    // C99 §6.7.8p1: designation is `designator-list =`.
                     self.designation_state().designation_equals_source_vectors =
                         Some(equals.source_vectors);
                     self.merge_designation_source(parser.context, equals.source_vectors);
@@ -632,6 +661,8 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             },
             | InitializerPhase::Separator => {
                 debug_assert!(returned.is_none());
+                // C99 §6.7.8p1: `,` continues the list, and a `,` before `}`
+                // is the trailing-comma form.
                 if let Some(comma) = token
                     && comma.kind == TokenType::Operator(OperatorTokenType::Comma)
                 {

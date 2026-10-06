@@ -1,4 +1,9 @@
 //! Deterministic, source-oriented syntax-tree inspection.
+//!
+//! Renders the syntax tree that translation phase 7 builds (§5.1.1.2
+//! paragraph 1, p. 10; PDF p. 22) for the inspection CLI and tests. The
+//! output format is bcc-rust's own; it encodes no rule of the standard
+//! beyond the constant types it prints.
 
 use std::fmt::{
     self,
@@ -1216,6 +1221,11 @@ fn unary_operator_spelling(operator: UnaryOperator) -> &'static str {
 /// Renders a constant's value and C type. Floating values print exactly:
 /// `float` and `double` as the shortest decimal that round-trips, `long
 /// double` in hexadecimal.
+///
+/// C99: integer constant types follow §6.4.4.1 paragraph 5, p. 55;
+/// PDF p. 67; a character constant has type `int` and a wide one `wchar_t`
+/// (§6.4.4.4 paragraphs 10-11, p. 61; PDF p. 73), and a multi-character
+/// constant's value is implementation-defined (§6.4.4.4 paragraph 10).
 fn constant_label(constant: &Constant) -> impl Display {
     fmt::from_fn(move |f| match *constant {
         | Constant::Integer(integer) => {

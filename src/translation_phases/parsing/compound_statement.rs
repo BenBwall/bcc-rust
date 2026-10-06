@@ -1,4 +1,15 @@
 //! Compound-statement frame.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `compound-statement`, `block-item-list`, and `block-item`.
+//! C99: §6.8.2, p. 132; PDF p. 144; §A.2.3, p. 415; PDF p. 427.
+//!
+//! A compound statement is a block (§6.8.2 paragraph 2, p. 132; PDF p. 144),
+//! so the frame opens a block scope whose identifiers end at its `}`
+//! (§6.2.1 paragraph 4, p. 29; PDF p. 41). Blocks nest through the frame
+//! stack, not recursion, so the 127-level minimum of §5.2.4.1, p. 20;
+//! PDF p. 32 imposes no fixed ceiling. Declaration semantics and
+//! constraints belong to semantic analysis.
 
 use std::fmt::Debug;
 
@@ -41,6 +52,12 @@ use crate::{
     },
 };
 
+/// Resumable `compound-statement`: `{ block-item-list(opt) }`, where each
+/// `block-item` is a `declaration` or a `statement`.
+///
+/// C99: §6.8.2, p. 132; PDF p. 144. A function body predeclares `__func__`
+/// as if declared just after its `{` under §6.4.2.2 paragraph 1, p. 52;
+/// PDF p. 64.
 #[derive(Debug)]
 pub(super) struct CompoundStatementFrame<'tu, 'p> {
     phase:                     CompoundStatementPhase,
@@ -125,6 +142,9 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                     self.phase = CompoundStatementPhase::Finish;
                     ParseAction::Reprocess
                 } else {
+                    // C99 §6.8.1p1: `identifier :` begins a labeled
+                    // statement even when the identifier names a typedef;
+                    // labels have their own name space (§6.2.3p1).
                     let is_label = token.is_some_and(|token| token.kind == TokenType::Identifier)
                         && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
                     if !is_label && token.is_some_and(|token| parser.declaration_starter(token)) {

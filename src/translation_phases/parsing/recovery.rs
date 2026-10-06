@@ -1,4 +1,11 @@
 //! Synchronization sets and delimiter tracking for syntax recovery.
+//!
+//! Serves translation phase 7 (§5.1.1.2 paragraph 1, p. 10; PDF p. 22).
+//! C99 requires at least one diagnostic for each syntax-rule or constraint
+//! violation (§5.1.1.3 paragraph 1, p. 11; PDF p. 23) and lets translation
+//! continue afterwards (footnote 8, p. 11; PDF p. 23), but does not specify
+//! how a parser resynchronizes. The stop tokens here come from the
+//! delimiters and terminators of the productions they recover.
 
 use std::fmt::Debug;
 
@@ -29,6 +36,16 @@ pub(super) struct SynchronizationSet {
     pub(super) target: ParseFrameKind,
 }
 
+/// The token a statement-owned expression ends at.
+///
+/// C99: `Semicolon` ends an `expression-statement` or `return` operand
+/// (§6.8.3 paragraph 1, p. 132; PDF p. 144; §6.8.6 paragraph 1, p. 136;
+/// PDF p. 148); `ForSemicolon` ends the first two `for` clauses (§6.8.5
+/// paragraph 1, p. 135; PDF p. 147); `ClosingParenthesis` ends a
+/// controlling expression (§6.8.4 paragraph 1, p. 133; PDF p. 145; §6.8.5
+/// paragraph 1, p. 135; PDF p. 147); `Colon` ends a `case` expression
+/// (§6.8.1 paragraph 1, p. 131; PDF p. 143) or a conditional's middle
+/// operand (§6.5.15 paragraph 1, p. 90; PDF p. 102).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ExpressionTerminator {
     Semicolon,
@@ -39,8 +56,8 @@ pub(super) enum ExpressionTerminator {
 
 /// Selects the grammar-specific boundary rules used during recovery.
 ///
-/// C99: boundaries are derived from the productions in §6.7-§6.9,
-/// pp. 97-144; PDF pp. 109-156; recovery itself is implementation-defined.
+/// C99: boundaries are derived from the productions in §6.5-§6.9,
+/// pp. 67-144; PDF pp. 79-156; C99 does not specify recovery itself.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum SynchronizationKind {
     /// Stop before a declarator separator, terminator, or enclosing brace.
@@ -88,7 +105,9 @@ pub(super) struct RecoveryState<'p> {
     arena:             &'p Bump,
 }
 
-/// Delimiter depth at which a conditional question mark was consumed.
+/// Delimiter depth at which a conditional question mark was consumed, so a
+/// scan does not mistake the `:` of `? :` (§6.5.15 paragraph 1, p. 90;
+/// PDF p. 102) for a label or `case` colon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DelimiterDepth {
     pub(super) parentheses: usize,

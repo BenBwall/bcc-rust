@@ -1,4 +1,36 @@
 //! Statement frame covering every C99 statement family.
+//!
+//! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of
+//! `statement` and its alternatives. C99: §6.8, pp. 131-139; PDF
+//! pp. 143-151; §A.2.3, pp. 415-416; PDF pp. 427-428:
+//!
+//! - `labeled-statement`: §6.8.1, pp. 131-132; PDF pp. 143-144.
+//! - `compound-statement`: §6.8.2, p. 132; PDF p. 144, delegated to the
+//!   compound-statement frame.
+//! - `expression-statement` and the null statement: §6.8.3, p. 132; PDF p. 144.
+//! - `selection-statement` (`if`, `switch`): §6.8.4, p. 133; PDF p. 145.
+//! - `iteration-statement` (`while`, `do`, `for`): §6.8.5, p. 135; PDF p. 147,
+//!   with the `for` declaration clause of §6.8.5.3, p. 136; PDF p. 148.
+//! - `jump-statement` (`goto`, `continue`, `break`, `return`): §6.8.6, p. 136;
+//!   PDF p. 148.
+//!
+//! Selection and iteration statements, and each of their substatements, are
+//! blocks (§6.8.4 paragraph 3, p. 133; PDF p. 145; §6.8.5 paragraph 5,
+//! p. 135; PDF p. 147), so the frame opens implicit scopes for them.
+//!
+//! Only syntax and the duplicate-`default` constraint (§6.8.4.2 paragraph 3,
+//! p. 134; PDF p. 146) are checked here. The remaining statement
+//! constraints belong to semantic analysis: `case`/`default` outside a
+//! `switch` (§6.8.1 paragraph 2, p. 131; PDF p. 143), unique label names
+//! (§6.8.1 paragraph 3, p. 132; PDF p. 144), controlling-expression types
+//! (§6.8.4.1 paragraph 1, p. 133; PDF p. 145; §6.8.4.2 paragraph 1, p. 134;
+//! PDF p. 146; §6.8.5 paragraph 2, p. 135; PDF p. 147), integer constant
+//! `case` values and duplicates (§6.8.4.2 paragraph 3, p. 134; PDF p. 146),
+//! `for` declaration storage classes (§6.8.5 paragraph 3, p. 135;
+//! PDF p. 147), `goto` targets (§6.8.6.1 paragraph 1, p. 137; PDF p. 149),
+//! `continue` and `break` placement (§6.8.6.2 paragraph 1 and §6.8.6.3
+//! paragraph 1, p. 138; PDF p. 150), and `return` operands (§6.8.6.4
+//! paragraph 1, p. 139; PDF p. 151).
 
 use std::fmt::Debug;
 
@@ -61,6 +93,10 @@ use crate::translation_phases::{
 /// looking for its closing parenthesis.
 const HEADER_RECOVERY_LOOKAHEAD: u16 = 256;
 
+/// Statements whose header is `( expression )` followed by one substatement.
+///
+/// C99: `if` and `switch` are §6.8.4, p. 133; PDF p. 145; `while` is
+/// §6.8.5, p. 135; PDF p. 147.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HeaderKind {
     If,
@@ -68,6 +104,10 @@ pub(super) enum HeaderKind {
     While,
 }
 
+/// The prefix of a `labeled-statement`: `identifier :`,
+/// `case constant-expression :`, or `default :`.
+///
+/// C99: §6.8.1 paragraph 1, p. 131; PDF p. 143.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum LabelPrefix<'tu> {
     Identifier(Identifier),
@@ -75,12 +115,18 @@ pub(super) enum LabelPrefix<'tu> {
     Default,
 }
 
+/// The operand-free `jump-statement`s `break ;` and `continue ;`.
+///
+/// C99: §6.8.6 paragraph 1, p. 136; PDF p. 148.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum SimpleJump {
     Break,
     Continue,
 }
 
+/// Resumable positions inside one statement production. The `Header*` and
+/// `If*` phases cover the parenthesized-header statements, `Do*` the `do`
+/// statement, and `For*` the `for` statement of §6.8.5, p. 135; PDF p. 147.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum StatementPhase<'tu> {
     Start,
@@ -154,6 +200,10 @@ pub(super) enum StatementPhase<'tu> {
     Finish(StatementType<'tu>),
 }
 
+/// Resumable `statement` production.
+///
+/// C99: §6.8 paragraph 1, p. 131; PDF p. 143; §A.2.3, pp. 415-416;
+/// PDF pp. 427-428.
 #[derive(Debug)]
 pub(super) struct StatementFrame<'tu> {
     phase:                     StatementPhase<'tu>,
@@ -174,6 +224,10 @@ impl HeaderKind {
         }
     }
 
+    /// The implicit block each substatement forms.
+    ///
+    /// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145; §6.8.5 paragraph 5,
+    /// p. 135; PDF p. 147.
     fn scope_kind(self) -> ScopeKind {
         match self {
             | Self::If | Self::Switch => ScopeKind::ImplicitSelection,
@@ -212,6 +266,10 @@ impl<'tu, 'p> StatementFrame<'tu> {
         }
     }
 
+    /// The `then` substatement leaves a following `else` to its `if`, so the
+    /// `else` pairs with the lexically nearest `if`.
+    ///
+    /// C99: §6.8.4.1 paragraph 3, p. 134; PDF p. 146.
     fn for_if_then(starting_error_count: usize, implicit_scope: Option<ScopeKind>) -> Self {
         Self::with_else_ownership(starting_error_count, implicit_scope, true)
     }
@@ -238,11 +296,15 @@ impl<'tu, 'p> StatementFrame<'tu> {
                         CompoundStatementFrame::new(parser.arena, parser.hard_error_count, false),
                     ));
                 }
+                // C99 §6.8.3p1, p3: a lone `;` is the null statement.
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     self.merge_token(parser, token.expect("semicolon exists"));
                     self.phase = StatementPhase::Finish(StatementType::Null);
                     return ParseAction::Consume;
                 }
+                // C99 §6.8.1p1: `identifier :` declares a label, which has
+                // function scope (§6.2.1p3). Uniqueness (§6.8.1p3) is a
+                // semantic check.
                 if let Some(token) = token
                     && token.kind == TokenType::Identifier
                     && is_operator(parser.cursor.following(), OperatorTokenType::Colon)
@@ -285,8 +347,10 @@ impl<'tu, 'p> StatementFrame<'tu> {
                             return ParseAction::Consume;
                         },
                         | KeywordTokenType::Default => {
-                            // The duplicate is the label itself, so the
-                            // diagnostic belongs on its keyword rather than
+                            // C99 §6.8.4.2p3: at most one `default` label
+                            // per `switch`. The duplicate is the label itself,
+                            // so the diagnostic
+                            // belongs on its keyword rather than
                             // on whatever token follows it.
                             if parser
                                 .switch_scopes
@@ -350,9 +414,10 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
                 // A typedef name that continues into declaration specifiers
                 // or a declarator starts a declaration, which C99 allows only
-                // as a block item, never as a substatement. Compound blocks
-                // route such tokens to a declaration frame before a statement
-                // frame starts, so only substatements reach this point.
+                // as a block item, never as a substatement (§6.8.2p1). Compound
+                // blocks route such tokens to a declaration
+                // frame before a statement frame starts, so
+                // only substatements reach this point.
                 if let Some(token) = token
                     && token.kind == TokenType::Identifier
                     && parser.declaration_recovery_starts_here(token)
@@ -405,6 +470,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     }
                     return self.finish(parser, StatementType::Null);
                 }
+                // C99 §6.8.3p1: `expression-statement`.
                 self.phase = StatementPhase::AwaitExpression;
                 ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
                     parser.arena,
@@ -437,6 +503,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
             },
             | StatementPhase::ReturnStart => {
+                // C99 §6.8.6p1: `return expression(opt) ;`.
                 debug_assert!(returned.is_none());
                 let identifier_continues_expression = token
                     .is_some_and(|token| token.kind == TokenType::Identifier)
@@ -503,6 +570,8 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     && token.kind == TokenType::Identifier
                 {
                     let identifier = Identifier::from_token(token);
+                    // C99 §6.8.6.1p1: the target is checked against the
+                    // function's labels later.
                     if let Some(labels) = parser.label_scopes.innermost_mut() {
                         _ = labels.references.insert(identifier.name);
                     }
@@ -555,6 +624,8 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     self.phase = StatementPhase::CaseColon(Self::missing_constant_slot(parser));
                     ParseAction::Reprocess
                 } else {
+                    // C99 §6.8.1p1: `case constant-expression :`; the
+                    // integer-constant requirement (§6.8.4.2p3) is semantic.
                     self.phase = StatementPhase::AwaitCaseExpression;
                     ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
                         parser.arena,
@@ -761,6 +832,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
             },
             | StatementPhase::IfAfterThen(expression, then_statement) => {
+                // C99 §6.8.4.1p3: `else` binds to the nearest `if`.
                 debug_assert!(returned.is_none());
                 if token
                     .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Else))
@@ -973,6 +1045,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     self.phase = StatementPhase::ForCondition(None);
                     ParseAction::Reprocess
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                    // C99 §6.8.5p1: `for ( declaration ...`. The declared
+                    // names are in scope for the rest of the header and the
+                    // body (§6.8.5.3p1), the iteration statement's block.
                     self.phase = StatementPhase::AwaitForInitializerDeclaration;
                     ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
                         parser.arena,
@@ -1416,6 +1491,11 @@ impl<'tu, 'p> StatementFrame<'tu> {
 
 /// Returns whether a token begins a statement production rather than an
 /// expression that the expression frame can consume.
+///
+/// C99: the keywords that open `labeled-statement`, `selection-statement`,
+/// `iteration-statement`, and `jump-statement` in §6.8.1-§6.8.6,
+/// pp. 131-136; PDF pp. 143-148, plus `else` from §6.8.4, p. 133;
+/// PDF p. 145.
 pub(super) fn is_statement_keyword(token: TokenType) -> bool {
     matches!(
         token,

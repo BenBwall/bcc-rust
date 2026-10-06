@@ -1,6 +1,10 @@
 //! Shared translation-phase concepts: diagnostics plumbing, provenance,
 //! the translation [`Context`], and the [`TranslationPhase`] interface of
 //! the preprocessing-token sources.
+//!
+//! C99: translation phases 1-7, §5.1.1.2, pp. 9-10; PDF pp. 21-22. This
+//! interface also carries the diagnostics required by §5.1.1.3 paragraph 1,
+//! p. 11; PDF p. 23.
 
 mod context;
 pub(crate) mod initial_processing;
@@ -42,6 +46,8 @@ use crate::{
     util::bump::Bump,
 };
 
+/// Diagnostics emitted while translating one preprocessing translation unit.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
 #[derive(Error, Debug)]
 pub(crate) enum TranslationError<'tu> {
     #[error(transparent)]
@@ -256,6 +262,8 @@ impl GetPosition for Infallible {
     }
 }
 
+/// Reads one stage of the conceptual translation sequence.
+/// C99: §5.1.1.2p1-7, pp. 9-10; PDF pp. 21-22.
 pub(crate) trait TranslationPhase<'tu>:
     GetPosition + SetPosition + GetSourceFileIndex + SetSourceFileIndex
 {

@@ -1,4 +1,22 @@
 //! Evaluation of `#if` and `#elif` controlling expressions.
+//!
+//! C99: conditional inclusion, §6.10.1 paragraphs 1-4, pp. 147-148; PDF
+//! pp. 159-160, with the constant-expression rules of §6.6 paragraphs 3-6,
+//! p. 95; PDF p. 107. Macros are replaced first, except the operand of
+//! `defined`; remaining identifiers, keywords included, become 0; and the
+//! arithmetic is that of `intmax_t` and `uintmax_t` (§6.10.1 paragraph 4,
+//! p. 148; PDF p. 160), here `i64` and `u64`.
+//!
+//! The operators and their grouping are those of §6.5, pp. 67-94; PDF
+//! pp. 79-106, which a Double-E reducer evaluates directly. Operands are
+//! converted as by the usual arithmetic conversions (§6.3.1.8 paragraph 1,
+//! pp. 44-45; PDF pp. 56-57): one unsigned operand makes the operation
+//! unsigned.
+//!
+//! Behavior C99 leaves open: a `defined` produced by macro replacement is
+//! undefined (§6.10.1 paragraph 4) and is evaluated like a written one, as
+//! GCC does. An evaluated comma operator (§6.6 paragraph 3) is an extension
+//! under the extension policy.
 
 use std::{
     fmt::Debug,
@@ -43,6 +61,12 @@ pub(super) enum PreprocessorExpressionParserState {
     Binary,
 }
 
+/// The operators an `#if` expression can evaluate.
+///
+/// C99: §6.10.1 paragraph 1, p. 147; PDF p. 159, and §6.6 paragraphs 3 and
+/// 6, p. 95; PDF p. 107. Casts, `sizeof`, assignment, increment and
+/// decrement, function calls, and the address and member operators have no
+/// place in it; `defined` is read separately.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum PreprocessorExpressionOperator {
     // Unary
@@ -115,6 +139,10 @@ impl PreprocessorExpressionOperator {
         }
     }
 
+    /// Binding strength, lower binding tighter.
+    ///
+    /// C99: the order of the subclauses of §6.5 gives operator precedence
+    /// (§6.5 paragraph 3 and footnote 74, p. 67; PDF p. 79).
     fn precedence(self) -> u32 {
         match self {
             // Based on https://en.cppreference.com/w/c/language/operator_precedence.
@@ -185,6 +213,11 @@ struct LocatedExpressionOperator {
     source_vectors: SourceVectors,
 }
 
+/// Arithmetic with no defined result: signed overflow, which leaves a
+/// constant expression out of its type's range (C99: §6.6 paragraph 4,
+/// p. 95; PDF p. 107); a zero divisor (§6.5.5 paragraph 5, p. 82; PDF
+/// p. 94); and a shift count that is negative or at least the width
+/// (§6.5.7 paragraph 3, p. 84; PDF p. 96).
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ArithmeticFaultKind {
     UnaryMinusOverflow,
@@ -219,6 +252,11 @@ impl ArithmeticFaultKind {
 /// Only arithmetic that would diagnose allocates nodes. Operand roots let
 /// short-circuit operators discard a whole unevaluated subtree in constant
 /// time.
+///
+/// C99: an unevaluated operand of `&&`, `||`, or `?:` raises no fault
+/// (§6.5.13 paragraph 4 and §6.5.14 paragraph 4, p. 89; PDF p. 101;
+/// §6.5.15 paragraph 4, p. 90; PDF p. 102), and only an evaluated
+/// subexpression is held to §6.6 paragraph 3, p. 95; PDF p. 107.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ArithmeticFaultNode {
     Fault {
@@ -239,6 +277,10 @@ pub(crate) struct PreprocessorExpressionParser<'pp> {
     open_parentheses: ArenaVec<'pp, usize>,
 }
 
+/// A value of an `#if` expression: every signed type acts as `intmax_t`
+/// and every unsigned type as `uintmax_t`, both 64 bits here.
+///
+/// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum PreprocessorExpressionOperand {
     Signed(i64),
@@ -555,6 +597,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         }
     }
 
+    /// Applies `operator` to the operands on the stack.
+    ///
+    /// C99: the semantics of §6.5.3.3 through §6.5.17, pp. 79-94; PDF
+    /// pp. 91-106. Unsigned arithmetic wraps and never overflows (§6.2.5
+    /// paragraph 9, p. 34; PDF p. 46); comparisons and logical operators
+    /// yield a signed 0 or 1.
     #[expect(
         clippy::too_many_lines,
         reason = "This function is long because it contains the logic for evaluating an operator \
@@ -722,6 +770,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     return;
                 };
                 let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+                // C99 §6.5.5p5-6: a zero divisor is undefined, and integer
+                // division truncates toward zero.
                 if rhs.as_signed() == 0 {
                     self.expression_parser
                         .operand_stack
@@ -808,7 +858,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     return;
                 };
                 // C99 §6.5.7: shifts promote each operand independently;
-                // the right operand never changes the result's type.
+                // the right operand never changes the result's type. Only the
+                // shift count is checked; a signed left shift that loses bits
+                // (§6.5.7p4) is not diagnosed.
                 let is_unsigned = lhs.is_unsigned();
                 let (new, did_overflow) = {
                     let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
@@ -842,6 +894,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     self.expression_parser.operand_stack.push(rhs);
                     return;
                 };
+                // C99 §6.5.7p5: shifting a negative signed value right is
+                // implementation-defined; here it is arithmetic.
                 let is_unsigned = lhs.is_unsigned();
                 let (new, did_overflow) = {
                     let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
@@ -1092,6 +1146,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     self.expression_parser.operand_stack.push(rhs);
                     return;
                 };
+                // C99 §6.5.13p4: the right operand is evaluated only when
+                // the left is nonzero, so only then do its faults count.
                 let lhs_is_true = lhs.as_signed() != 0;
                 self.expression_parser
                     .operand_stack
@@ -1126,6 +1182,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     self.expression_parser.operand_stack.push(rhs);
                     return;
                 };
+                // C99 §6.5.14p4: the right operand is evaluated only when
+                // the left is zero.
                 let lhs_is_true = lhs.as_signed() != 0;
                 self.expression_parser
                     .operand_stack
@@ -1145,6 +1203,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     ),
                 );
             },
+            // C99 §6.6p3 forbids an evaluated comma operator; it is reported
+            // once the whole expression is known (an extension under the
+            // extension policy).
             | PreprocessorExpressionOperator::Comma => {
                 let Some(rhs) = self.expression_parser.operand_stack.pop_isolated() else {
                     return;
@@ -1249,6 +1310,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         }
     }
 
+    /// Evaluates `defined identifier` or `defined ( identifier )` to 1 when
+    /// the identifier is a macro name and 0 otherwise. The identifier is read
+    /// before macro replacement.
+    ///
+    /// C99: §6.10.1 paragraph 1, p. 148; PDF p. 160, and paragraph 4.
     fn parse_defined_operator(&mut self) {
         let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase::<true>(|_, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::OpeningParenthesis),
             |_, t|
@@ -1401,7 +1467,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             },
                         );
                         let mut paren_depth = 1;
-                        // Step over function call.
+                        // Step over function call, which C99 §6.6p3 excludes.
                         while paren_depth > 0 {
                             match self.next_preprocessor_token::<true>() {
                                 | None => {
@@ -1578,6 +1644,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         },
                     ),
                     (PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::UnavailableIdentifier | PreprocessorTokenType::UnavailableUniversalIdentifier, UNARY) => {
+                        // C99 §6.10.1p4: an identifier left after macro
+                        // replacement, even a keyword, is the pp-number 0.
                         self.context.preprocessor_error(PreprocessorError {
                                     error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(self.context.diagnostic_text(self.context.string_cache.at(token.contents))),
                                     source_vectors: token.source_vectors,

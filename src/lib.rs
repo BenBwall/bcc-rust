@@ -1,4 +1,7 @@
 //! BCC C compiler
+//!
+//! It connects translation phases 1-7 (§5.1.1.2, pp. 9-10; PDF pp. 21-22);
+//! semantic analysis and code generation are not yet in this pipeline.
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
 #[cfg(test)]

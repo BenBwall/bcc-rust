@@ -15,6 +15,9 @@
 //! Everything printed comes from the C source and fixed wording; no internal
 //! representation (arena indices, interned-string handles, Rust `Debug`
 //! output) may appear in a diagnostic.
+//! C99: required diagnostics for syntax and constraint violations §5.1.1.3p1,
+//! p. 11; PDF p. 23. This renderer carries locations from translation phases
+//! 1-7 (§5.1.1.2, pp. 9-10; PDF pp. 21-22).
 
 use std::fmt::{
     self,

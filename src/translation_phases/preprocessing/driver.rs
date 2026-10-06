@@ -1,4 +1,14 @@
 //! Tokenizer frame stack and the main preprocessing-token loop.
+//!
+//! The loop is the macro-replacing reader of translation phase 4. C99:
+//! §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22. It recognizes macro
+//! invocations and collects their arguments (§6.10.3 paragraphs 9-12,
+//! pp. 152-153; PDF pp. 164-165), rescans replacements with the names being
+//! replaced disabled (§6.10.3.4 paragraphs 1-2, p. 155; PDF p. 167), expands
+//! the predefined macros (§6.10.8 paragraph 1, p. 160; PDF p. 172), and
+//! executes `_Pragma` operators (§6.10.9 paragraph 1, p. 161; PDF p. 173).
+//! An include pushes a source-file frame, so an included file passes through
+//! phase 4 on its own (§5.1.1.2 paragraph 1 item 4).
 
 use std::{
     cell::OnceCell,
@@ -55,21 +65,32 @@ use crate::{
     },
 };
 
+/// What a frame of the tokenizer stack reads.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenizerFrameType<'a> {
     /// Remainder of already substituted tokens in a boundary-crossing call.
     Rescan,
+    /// A source file, the main file or one named by `#include`.
+    ///
+    /// C99: §6.10.2 paragraphs 2-3, pp. 149-150; PDF pp. 161-162.
     SourceFile {
         /// Caller groups below this depth cannot be modified by this file.
         conditional_base:           usize,
         /// Physical file identity, unaffected by #line.
         physical_source_file_index: u32,
     },
+    /// The replacement list of an object-like macro being rescanned.
+    ///
+    /// C99: §6.10.3 paragraph 9, p. 152; PDF p. 164.
     ObjectLikeMacroInvocation {
         name:           StringCacheId,
         invocation:     SourceVector,
         invocation_end: SourceVector,
     },
+    /// The replacement list of a function-like macro, with the arguments
+    /// that its parameters stand for.
+    ///
+    /// C99: §6.10.3 paragraphs 10-11, p. 152; PDF p. 164.
     FunctionLikeMacroInvocation {
         invocation:     SourceVector,
         invocation_end: SourceVector,
@@ -77,6 +98,9 @@ pub(crate) enum TokenizerFrameType<'a> {
         arguments:      MacroArguments<'a>,
         is_variadic:    bool,
     },
+    /// The tokens of one argument, read where its parameter is substituted.
+    ///
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
     FunctionLikeMacroArgument {
         argument:            &'a FunctionLikeMacroArgument<'a>,
         /// The parenthesis depth within an argument read from its invocation,
@@ -106,6 +130,10 @@ const _: () = {
 };
 
 /// The date and time of translation, spelled as C99 §6.10.8p1 requires.
+///
+/// C99: §6.10.8 paragraph 1, p. 160; PDF p. 172: `"Mmm dd yyyy"` with a
+/// space before a day below 10, and `"hh:mm:ss"`. The values stay constant
+/// for the translation unit (§6.10.8 paragraph 3, p. 161; PDF p. 173).
 #[derive(Debug)]
 pub(super) struct TranslationTimestamp<'pp> {
     date: ArenaString<'pp>,
@@ -117,6 +145,9 @@ impl<'pp> TranslationTimestamp<'pp> {
     /// builds can pin the expansion (the CLI takes it from `SOURCE_DATE_EPOCH`,
     /// as GCC and Clang do). Without it, or for seconds that no date can
     /// represent, spells the local time.
+    ///
+    /// A pinned value stands in for the actual time of translation that
+    /// C99 §6.10.8p1 names; that is GCC's and Clang's choice too.
     fn new(pp: &'pp Bump, source_date_epoch: Option<i64>) -> Self {
         let time = source_date_epoch
             .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
@@ -131,6 +162,9 @@ impl<'pp> TranslationTimestamp<'pp> {
 
 /// Spells `value` as a narrow C string literal whose evaluated contents are
 /// exactly `value`, passing the spelling to `write` one character at a time.
+///
+/// C99: §6.4.5 paragraphs 1 and 3, p. 62; PDF p. 74: an `s-char` excludes
+/// `"`, `\`, and new-line, which need escape sequences.
 pub(super) fn spell_string_literal(value: &str, mut write: impl FnMut(char)) {
     write('"');
     for c in value.chars() {
@@ -267,6 +301,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         self.pushed_frames += 1;
     }
 
+    /// Pops the innermost frame. Popping a source file reports the
+    /// conditionals it left open: each file passes through phase 4 on its
+    /// own, so its `if-section`s close within it, as GCC and Clang require.
+    ///
+    /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22, and the
+    /// `if-section` grammar of §6.10 paragraph 1, p. 145; PDF p. 157.
     pub(super) fn pop_tokenizer_frame(&mut self) {
         let frame = self.tokenizer_stack.pop();
         if let Some(TokenizerFrame {
@@ -427,6 +467,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         }
     }
 
+    /// Returns the next completely macro-replaced preprocessing token.
+    ///
+    /// Placemarkers left by `##` are dropped here (C99: §6.10.3.4 paragraph
+    /// 1, p. 155; PDF p. 167), and a name met while its macro is being
+    /// replaced is marked unavailable for good (§6.10.3.4 paragraph 2).
     pub(super) fn next_preprocessor_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
     ) -> Option<PreprocessorToken> {
@@ -513,10 +558,13 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 continue;
             }
             if self.is_reading_operand() {
-                // A `#` or `##` operand is not macro-replaced.
+                // A `#` or `##` operand is not macro-replaced (C99
+                // §6.10.3.1p1).
                 break 'base Some(token);
             }
 
+            // C99 §6.10.3.4p2: a name met while its macro is being replaced
+            // stays unreplaced, even when it is rescanned later.
             if self.macro_is_disabled(token.identifier_id(self.context)) {
                 token.kind = if token.kind == PreprocessorTokenType::UniversalIdentifier {
                     PreprocessorTokenType::UnavailableUniversalIdentifier
@@ -578,7 +626,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         }
                         let position = self.position();
                         // A source newline is whitespace between a function
-                        // macro's name and `(`. In a replacement list it ends
+                        // macro's name and `(` (C99 §6.10.3p10). In a
+                        // replacement list it ends
                         // the frame and must not expose the definition's
                         // following source lines to this lookahead.
                         let source_file = matches!(
@@ -641,7 +690,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                             closed_at = before;
                                             // F() supplies no arguments when
                                             // F has no parameters, but one
-                                            // empty argument when it has one.
+                                            // empty argument when it has one
+                                            // (C99 §6.10.3p4).
                                             argument_count = if i == 0
                                                 && argument_names.is_empty()
                                                 && !has_argument_token
@@ -710,6 +760,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             }
                         }
 
+                        // C99 §6.10.3p4: one argument per parameter, and more
+                        // than the named parameters of a macro with `...`.
                         let missing_named_arguments = if is_variadic {
                             closed_at.is_some() && argument_count < argument_names.len()
                         } else {
@@ -726,7 +778,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             );
                         } else if closed_at.is_some() {
                             // C99 §6.10.3p4 requires an argument for `...`;
-                            // omitting it is a common extension.
+                            // omitting it is a common extension (§4p6), which
+                            // the extension policy governs.
                             let extension_policy = match self.context.configuration.standard() {
                                 | CStandard::C99 => self.context.configuration.extension_policy(),
                             };
@@ -740,8 +793,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             }
                         }
                         if is_variadic {
-                            // Without an argument, `__VA_ARGS__` is empty: it
-                            // reads only the closing parenthesis.
+                            // The trailing arguments, commas included, form
+                            // the one argument `__VA_ARGS__` stands for (C99
+                            // §6.10.3p12, §6.10.3.1p2). Without an argument,
+                            // `__VA_ARGS__` is empty: it reads only the
+                            // closing parenthesis.
                             let va_args_tokenizer = match closed_at {
                                 | Some(position) => {
                                     let mut closing = self.tokenizer.clone();
@@ -847,10 +903,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             | "__STDC_HOSTED__"
                             | "__STDC_MB_MIGHT_NEQ_WC__") => {
                                 // C99 §6.10.8p1. This front end currently uses
-                                // a
-                                // freestanding execution model; the version
-                                // must
-                                // retain its prescribed long suffix.
+                                // a freestanding execution model, so
+                                // `__STDC_HOSTED__` is 0 (§4p6); the version
+                                // must retain its prescribed long suffix.
                                 // MB_MIGHT_NEQ_WC permits unequal codes; its 1
                                 // does not assert that their values differ.
                                 let spelling = if name == "__STDC_VERSION__" {
@@ -892,6 +947,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                     source_vectors: token.source_vectors,
                                 });
                             },
+                            // C99 §6.10.9p1: `_Pragma ( string-literal )` runs
+                            // the destringized literal, retokenized, as the
+                            // pp-tokens of a `#pragma`, and all four tokens
+                            // are removed.
                             | "_Pragma" => {
                                 _ = self.expect_token_preserving_rejected::<true>(
                                 |_, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
@@ -924,10 +983,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
 
                                 let tokenizer = take(&mut self.tokenizer);
                                 // Each operator gets its own identity:
-                                // diagnostics
-                                // rendered later must quote this payload, not
-                                // the
-                                // most recent one.
+                                // diagnostics rendered later must quote this
+                                // payload, not the most recent one.
                                 let pragma_string = self
                                     .context
                                     .add_synthetic_source_file(Path::new("<pragma string>"), input);
@@ -989,6 +1046,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         }
     }
 
+    /// Reads the next token of a macro invocation, where a new-line is an
+    /// ordinary white-space character; runs of whitespace collapse to one.
+    ///
+    /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
     pub(super) fn next_treat_newlines_as_whitespace(
         tokenizer: &mut TokenSource<'_>,
         context: &mut Context<'_>,

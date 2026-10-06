@@ -1,4 +1,18 @@
 //! Declaration, specifier, declarator, and initializer syntax nodes.
+//!
+//! The retained syntax-tree shapes that translation phase 7 (§5.1.1.2,
+//! p. 10; PDF p. 22) builds for declarations. C99: declarations §6.7,
+//! pp. 97-98; PDF pp. 109-110; declaration specifiers §6.7.1-§6.7.4,
+//! pp. 98-113; PDF pp. 110-125; declarators §6.7.5-§6.7.5.3, pp. 114-121;
+//! PDF pp. 126-133; type names §6.7.6, p. 122; PDF p. 134; initializers
+//! §6.7.8, pp. 125-130; PDF pp. 137-142; summarized in §A.2.2,
+//! pp. 411-415; PDF pp. 423-427.
+//!
+//! Nodes record grammatical form. `TypeSpecifiers` folds the type-specifier
+//! keywords into one of the sets of §6.7.2 paragraph 2 as they are read;
+//! types, linkage (§6.2.2, pp. 30-31; PDF pp. 42-43), storage duration
+//! (§6.2.4, p. 32; PDF p. 44), completeness, and the other constraints and
+//! semantics of §6.7-§6.7.8 belong to semantic analysis.
 
 use std::{
     fmt::{
@@ -58,7 +72,9 @@ pub(crate) struct Declaration<'tu> {
 /// - declarator
 /// - declarator = initializer
 ///
-/// C99: §6.7, p. 97; PDF p. 109.
+/// C99: §6.7 paragraph 1, p. 97; PDF p. 109. The §6.7.8 paragraph 5
+/// constraint on block-scope identifiers with linkage, p. 125; PDF p. 137,
+/// is left to semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct InitDeclarator<'tu> {
     pub(crate) declarator:     Declarator<'tu>,
@@ -71,7 +87,10 @@ pub(crate) struct InitDeclarator<'tu> {
 /// - { initializer-list }
 /// - { initializer-list , }
 ///
-/// C99: §6.7.8, p. 125; PDF p. 137.
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137. The constraints of
+/// paragraphs 2-7, p. 125; PDF p. 137, and the initialization semantics of
+/// paragraphs 8-23, pp. 126-128; PDF pp. 138-140, are left to semantic
+/// analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Initializer<'tu> {
     pub(crate) kind:           InitializerType<'tu>,
@@ -79,6 +98,10 @@ pub(crate) struct Initializer<'tu> {
     pub(crate) recovered:      bool,
 }
 
+/// The two `initializer` alternatives: an `assignment-expression` or a
+/// braced `initializer-list`.
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum InitializerType<'tu> {
     AssignmentExpression(&'tu Expression<'tu>),
@@ -88,6 +111,8 @@ pub(crate) enum InitializerType<'tu> {
 /// `{ initializer-list }` or `{ initializer-list , }`: the elements and the
 /// braces around them. Only a braced list has braces, so their locations
 /// live here rather than in every [`Initializer`].
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137; §A.2.2, p. 414; PDF p. 426.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct BracedInitializerList<'tu> {
     pub(crate) elements:                     ArenaList<'tu, InitializerElement<'tu>>,
@@ -96,6 +121,9 @@ pub(crate) struct BracedInitializerList<'tu> {
     pub(crate) closing_brace_source_vectors: Option<SourceVectors>,
 }
 
+/// One `designation? initializer` element of an `initializer-list`.
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct InitializerElement<'tu> {
     pub(crate) designation:          Option<&'tu Designation<'tu>>,
@@ -104,6 +132,12 @@ pub(crate) struct InitializerElement<'tu> {
     pub(crate) source_vectors:       SourceVectors,
 }
 
+/// designation:
+/// - designator-list =
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137. Resolving the current
+/// object a designator list names (paragraphs 17-18, pp. 126-127;
+/// PDF pp. 138-139) is semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Designation<'tu> {
     pub(crate) designators:           ArenaList<'tu, Designator<'tu>>,
@@ -112,6 +146,11 @@ pub(crate) struct Designation<'tu> {
     pub(crate) recovered:             bool,
 }
 
+/// designator:
+/// - [ constant-expression ]
+/// - . identifier
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137; §A.2.2, p. 415; PDF p. 427.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Designator<'tu> {
     pub(crate) kind: DesignatorType<'tu>,
@@ -121,6 +160,12 @@ pub(crate) struct Designator<'tu> {
     pub(crate) recovered: bool,
 }
 
+/// The `designator` alternatives, plus an error node for recovery.
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137. That an array designator is
+/// an integer constant expression for an array object (paragraph 6) and a
+/// field designator names a member (paragraph 7), p. 125; PDF p. 137, is
+/// left to semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum DesignatorType<'tu> {
     Array(ConstantExpression<'tu>),
@@ -137,7 +182,10 @@ bitflags::bitflags! {
     ///
     /// Represents all the type-qualifiers in a declaration. For example, the declaration `const volatile int foo;` would be represented as `TypeQualifiers::CONST | TypeQualifiers::VOLATILE`.
     ///
-    /// C99: §6.7.3, p. 108; PDF p. 120.
+    /// C99: §6.7.3 paragraph 1, p. 108; PDF p. 120. A set suffices because a
+    /// repeated qualifier behaves as if it appeared once (paragraph 4,
+    /// p. 108; PDF p. 120). The `restrict` constraint of paragraph 2,
+    /// p. 108; PDF p. 120, is left to semantic analysis.
     pub(crate) struct TypeQualifiers: u8 {
         const CONST = 1 << 0;
         const VOLATILE = 1 << 1;
@@ -169,7 +217,12 @@ bitflags::bitflags! {
 /// C99: §6.7.2, pp. 99-100; PDF pp. 111-112. `_Imaginary` is listed as a
 /// keyword by §6.4.1, p. 50; PDF p. 62, but is not a core type-specifier in
 /// the normative §6.7.2 grammar. Its central constraint is: “At least one type
-/// specifier shall be given”.
+/// specifier shall be given” (§6.7.2 paragraph 2, p. 99; PDF p. 111). The
+/// core variants are the multisets that paragraph 2 lists, pp. 99-100;
+/// PDF pp. 111-112, kept distinct per spelling although paragraph 5, p. 100;
+/// PDF p. 112, makes each comma-separated set designate one type.
+/// `Complex` and `ComplexLong` are incomplete intermediate states that the
+/// specifier frame diagnoses if the list ends in them.
 #[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub(crate) enum TypeSpecifiers<'tu> {
     #[default]
@@ -611,7 +664,11 @@ impl<'tu> TypeSpecifiers<'tu> {
 /// - struct-or-union identifier? { struct-declaration-list }
 /// - struct-or-union identifier
 ///
-/// C99: §6.7.2.1, p. 101; PDF p. 113.
+/// C99: §6.7.2.1 paragraph 1, p. 101; PDF p. 113. A tag-only specifier
+/// declares or refers to a tag under §6.7.2.3 paragraphs 7-9, p. 107;
+/// PDF p. 119; tag resolution, completeness, and the member constraints of
+/// §6.7.2.1 paragraphs 2-4, p. 101; PDF p. 113, are left to semantic
+/// analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StructOrUnionSpecifier<'tu> {
     pub(crate) struct_or_union:         StructOrUnion,
@@ -627,7 +684,7 @@ pub(crate) struct StructOrUnionSpecifier<'tu> {
 /// - struct
 /// - union
 ///
-/// C99: §6.7.2.1, p. 101; PDF p. 113.
+/// C99: §6.7.2.1 paragraph 1, p. 101; PDF p. 113.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum StructOrUnion {
     Struct,
@@ -639,7 +696,7 @@ pub(crate) enum StructOrUnion {
 ///
 /// `type_qualifiers` and `type_specifiers` are split into two fields.
 ///
-/// C99: §6.7.2.1, p. 101; PDF p. 113.
+/// C99: §6.7.2.1 paragraph 1, p. 101; PDF p. 113.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StructDeclaration<'tu> {
     pub(crate) type_qualifiers:        TypeQualifiers,
@@ -652,7 +709,9 @@ pub(crate) struct StructDeclaration<'tu> {
 /// - declarator
 /// - declarator? : constant-expression
 ///
-/// C99: §6.7.2.1, p. 101; PDF p. 113.
+/// C99: §6.7.2.1 paragraph 1, p. 101; PDF p. 113. The bit-field width and
+/// type constraints of paragraphs 3-4, p. 101; PDF p. 113, are left to
+/// semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StructDeclarator<'tu> {
     pub(crate) declarator:     Option<Declarator<'tu>>,
@@ -665,7 +724,10 @@ pub(crate) struct StructDeclarator<'tu> {
 /// - enum identifier? { enumerator-list , }
 /// - enum identifier
 ///
-/// C99: §6.7.2.2, p. 105; PDF p. 117.
+/// C99: §6.7.2.2 paragraph 1, p. 105; PDF p. 117; tags §6.7.2.3, pp. 106-107;
+/// PDF pp. 118-119. The §6.7.2.3 paragraph 3 rule that a bare `enum
+/// identifier` follow the complete type, p. 106; PDF p. 118, is left to
+/// semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct EnumSpecifier<'tu> {
     pub(crate) name:             Option<Identifier>,
@@ -677,7 +739,9 @@ pub(crate) struct EnumSpecifier<'tu> {
 /// - enumeration-constant
 /// - enumeration-constant = constant-expression
 ///
-/// C99: §6.7.2.2, p. 105; PDF p. 117.
+/// C99: §6.7.2.2 paragraph 1, p. 105; PDF p. 117. The paragraph 2 value
+/// constraint and paragraph 3 value assignment, p. 105; PDF p. 117, are left
+/// to semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Enumerator<'tu> {
     pub(crate) name:           Identifier,
@@ -688,7 +752,10 @@ pub(crate) struct Enumerator<'tu> {
 /// function-specifier:
 /// - inline
 ///
-/// C99: §6.7.4, p. 113; PDF p. 125.
+/// C99: §6.7.4 paragraph 1, p. 112; PDF p. 124. A flag suffices because a
+/// repeated `inline` behaves as if it appeared once (paragraph 5, p. 112;
+/// PDF p. 124). The constraints of paragraphs 2-4, p. 112; PDF p. 124, are
+/// left to semantic analysis.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub(crate) struct FunctionSpecifiers {
     pub(crate) is_inline: bool,
@@ -736,16 +803,16 @@ impl DeclarationSpecifiers<'_> {
 }
 
 /// pointer:
-/// - type-qualifier-list?
-/// - type-qualifier-list? pointer
+/// - \* type-qualifier-list?
+/// - \* type-qualifier-list? pointer
 ///
 /// Each element in the `type_qualifiers_list` represents the type qualifiers
 /// for one level of indirection. For example, this declaration: `*const
 /// *volatile *x` would be parsed as: `[TypeQualifiers::CONST,
 /// TypeQualifiers::VOLATILE, TypeQualifiers::empty()]`
 ///
-/// C99: §6.7.5, p. 114; PDF p. 126, and pointer derivation §6.7.5.1,
-/// p. 115; PDF p. 127.
+/// C99: §6.7.5 paragraph 1, p. 114; PDF p. 126, and pointer derivation
+/// §6.7.5.1 paragraph 1, p. 115; PDF p. 127.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct PointerDeclarator<'tu> {
     /// Each element represents the type qualifiers for one level of
@@ -762,8 +829,8 @@ pub(crate) struct PointerDeclarator<'tu> {
 ///
 /// Represents both declarators and abstract declarators.
 ///
-/// C99: declarators are §6.7.5, p. 114; PDF p. 126. Abstract declarators are
-/// §6.7.6, p. 122; PDF p. 134.
+/// C99: declarators are §6.7.5 paragraph 1, p. 114; PDF p. 126. Abstract
+/// declarators are §6.7.6 paragraph 1, p. 122; PDF p. 134.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Declarator<'tu> {
     pub(crate) pointer:        PointerDeclarator<'tu>,
@@ -801,15 +868,24 @@ pub(crate) struct Declarator<'tu> {
 pub(crate) enum DirectDeclarator<'tu> {
     Identifier(Identifier),
     Parenthesized(&'tu ParenthesizedDeclarator<'tu>),
+    /// `( identifier-list? )`: C99 §6.7.5.3 paragraph 14, p. 119; PDF p. 131.
+    /// The paragraph 3 rule that a non-empty list appear only in a
+    /// definition, p. 118; PDF p. 130, is left to semantic analysis.
     KAndRStyleFunction {
         parameters: ArenaList<'tu, Identifier>,
     },
+    /// The four `[...]` suffixes: C99 §6.7.5.2 paragraph 3, p. 116;
+    /// PDF p. 128. `is_pointer` records `[*]`. The paragraph 1-2 constraints,
+    /// p. 116; PDF p. 128, are left to semantic analysis.
     Array {
         type_qualifiers:       TypeQualifiers,
         is_static:             bool,
         is_pointer:            bool,
         assignment_expression: Option<&'tu Expression<'tu>>,
     },
+    /// `( parameter-type-list )`, or an empty list: C99 §6.7.5.3
+    /// paragraph 5, p. 118; PDF p. 130; §6.7.6 paragraph 1, p. 122;
+    /// PDF p. 134.
     Function {
         parameter_list: ArenaList<'tu, ParameterDeclaration<'tu>>,
         is_variadic:    bool,
@@ -818,6 +894,10 @@ pub(crate) enum DirectDeclarator<'tu> {
 
 /// Grouping syntax lives in the arena so its child and delimiter span do not
 /// enlarge every direct-declarator variant.
+///
+/// C99: `( declarator )` binds as the unparenthesized declarator, §6.7.5
+/// paragraph 6, p. 115; PDF p. 127; `( abstract-declarator )` is §6.7.6
+/// paragraph 1, p. 122; PDF p. 134.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct ParenthesizedDeclarator<'tu> {
     pub(crate) declarator: Declarator<'tu>,
@@ -830,7 +910,9 @@ pub(crate) struct ParenthesizedDeclarator<'tu> {
 /// - declaration-specifiers abstract-declarator?
 ///
 /// C99: §6.7.5, p. 114; PDF p. 126, and function declarators §6.7.5.3,
-/// pp. 118-121; PDF pp. 130-133.
+/// pp. 118-121; PDF pp. 130-133. The paragraph 2 storage-class constraint,
+/// p. 118; PDF p. 130, and the adjustments of paragraphs 7-8, p. 119;
+/// PDF p. 131, are left to semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct ParameterDeclaration<'tu> {
     pub(crate) declaration_specifiers: DeclarationSpecifiers<'tu>,
@@ -843,7 +925,13 @@ pub(crate) struct ParameterDeclaration<'tu> {
 
 /// A parsed type-name syntax node.
 ///
-/// C99: §6.7.6, p. 122; PDF p. 134.
+/// type-name:
+/// - specifier-qualifier-list abstract-declarator?
+///
+/// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134. The
+/// `specifier-qualifier-list` (§6.7.2.1 paragraph 1, p. 101; PDF p. 113)
+/// reuses [`DeclarationSpecifiers`], whose storage-class and function
+/// specifiers stay empty.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct TypeName<'tu> {
     /// Specifiers and qualifiers that establish the base type.
@@ -857,6 +945,9 @@ pub(crate) struct TypeName<'tu> {
 impl<'tu> Declaration<'tu> {
     /// The declarator of a declaration that could head a function
     /// definition: its only init-declarator, without an initializer.
+    ///
+    /// C99: `function-definition` takes one `declarator` and no initializer,
+    /// §6.9.1 paragraph 1, p. 141; PDF p. 153.
     pub(super) fn head_declarator(&self) -> Option<Declarator<'tu>> {
         let [init] = self.init_declarators.as_slice() else {
             return None;
@@ -886,8 +977,9 @@ impl<'tu> Declarator<'tu> {
     /// Finds the identifier declared by nested parenthesized direct
     /// declarators.
     ///
-    /// C99: declarator binding is specified by §6.7.5 paragraph 4,
-    /// p. 114; PDF p. 126.
+    /// C99: each declarator declares one identifier, §6.7.5 paragraph 2,
+    /// p. 114; PDF p. 126, and a parenthesized declarator binds as the
+    /// unparenthesized one, paragraph 6, p. 115; PDF p. 127.
     pub(crate) fn identifier(self) -> Option<Identifier> {
         let mut declarator = self;
         loop {
@@ -906,6 +998,9 @@ impl<'tu> Declarator<'tu> {
 
     /// The function suffix that applies to the declared identifier, looking
     /// through parenthesized declarators.
+    ///
+    /// C99: function declarators are §6.7.5.3 paragraph 5, pp. 118-119;
+    /// PDF pp. 130-131.
     pub(super) fn function_suffix(self) -> Option<DirectDeclarator<'tu>> {
         let mut declarator = self;
         let mut suffix = None;
@@ -948,6 +1043,10 @@ impl TypeSpecifiers<'_> {
     /// Passes `bind` the ordinary identifiers these specifiers declare, the
     /// enumeration constants of nested enum bodies. `pending` is empty scan
     /// storage, reused across calls and left empty.
+    ///
+    /// C99: enumeration constants are ordinary identifiers, §6.2.3
+    /// paragraph 1, p. 31; PDF p. 43, even inside a member declaration, whose
+    /// member names live in the structure's own name space.
     pub(super) fn collect_bindings(
         self,
         pending: &mut ArenaVec<'_, Self>,

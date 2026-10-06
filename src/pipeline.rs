@@ -1,6 +1,8 @@
 //! Runs the translation phases over one translation unit in order: each
 //! source file is lexed completely when it is opened, the whole unit is
 //! preprocessed, and only then is it parsed.
+//!
+//! C99: translation phases 1-7, §5.1.1.2, pp. 9-10; PDF pp. 21-22.
 
 use std::path::Path;
 

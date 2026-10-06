@@ -1,4 +1,18 @@
 //! Directive dispatch and the non-conditional directives.
+//!
+//! C99: the `group-part`, `control-line`, and `non-directive` grammar of
+//! §6.10 paragraph 1, pp. 145-146; PDF pp. 157-158 (also §A.3, pp. 416-418;
+//! PDF pp. 428-430), and the directives `#include` (§6.10.2, pp. 149-151;
+//! PDF pp. 161-163), `#define` (§6.10.3, pp. 151-153; PDF pp. 163-165),
+//! `#undef` (§6.10.3.5, p. 155; PDF p. 167), `#line` (§6.10.4, p. 158; PDF
+//! p. 170), `#error` (§6.10.5, p. 159; PDF p. 171), `#pragma` (§6.10.6,
+//! p. 159; PDF p. 171), and the null directive (§6.10.7, p. 160; PDF
+//! p. 172). Conditional directives are in `conditional`.
+//!
+//! Directive tokens are not macro-replaced unless a clause says so (§6.10
+//! paragraph 7, p. 147; PDF p. 159). Of the directives here, only the
+//! operands of `#include` and `#line` are; `#pragma` operands are not, which
+//! footnote 152 permits (§6.10.6 paragraph 1, p. 159; PDF p. 171).
 
 use std::{
     ffi::OsStr,
@@ -60,11 +74,17 @@ use crate::{
 /// before diagnosing the include and continuing with the caller. The 200
 /// levels leave substantial headroom above C99 §5.2.4.1's required 15 while
 /// keeping a runaway include chain finite.
+///
+/// C99: the nesting limit is implementation-defined, §6.10.2 paragraph 6,
+/// p. 150; PDF p. 162; the minimum is in §5.2.4.1 paragraph 1, p. 21; PDF
+/// p. 33.
 const MAX_INCLUDE_NESTING: usize = 200;
 
 /// Compares one position of two macro definitions under C99 §6.10.3p2: the
 /// tokens must be spelled identically, while any two whitespace separations
 /// are equivalent and a line end matches the end of input.
+///
+/// C99: §6.10.3 paragraphs 1-2, p. 151; PDF p. 163.
 fn same_replacement_token(
     context: &Context<'_>,
     old: Option<&PreprocessorToken>,
@@ -87,14 +107,24 @@ fn same_replacement_token(
 /// How an `#include` operand is written, judged from its first token.
 enum IncludeOperand {
     /// `<…>`, read from the source text.
+    ///
+    /// C99: §6.10.2 paragraph 2, p. 149; PDF p. 161.
     Angle,
     /// `"…"`, read from the source text.
+    ///
+    /// C99: §6.10.2 paragraph 3, pp. 149-150; PDF pp. 161-162.
     Quoted,
     /// Anything else, which macro replacement must turn into a header name.
+    ///
+    /// C99: §6.10.2 paragraph 4, p. 150; PDF p. 162.
     Other,
 }
 
 /// The header name of an `#include` directive.
+///
+/// C99: `header-name`, §6.4.7 paragraph 1, p. 64; PDF p. 76. The lexer forms
+/// no header names; the directive reads them from source text, the one
+/// context besides `#pragma` where §6.4.7 paragraph 3 recognizes them.
 struct HeaderName<'x> {
     name:              &'x str,
     is_system_header:  bool,
@@ -106,7 +136,8 @@ struct HeaderName<'x> {
     /// where it is.
     invalid:           Option<(&'static str, SourceVectors)>,
     /// Where a `"…"` name first uses a backslash, which only the backslash
-    /// extension accepts.
+    /// extension accepts. §6.4.7p3 leaves its behavior undefined; reading it
+    /// as a path character is an extension (§4p6).
     backslash:         Option<SourceVectors>,
     /// A character after `>` in the token that closes a written angle name.
     extra_tokens:      Option<SourceVectors>,
@@ -117,6 +148,8 @@ struct HeaderName<'x> {
 /// form, and also `\` or `"` between `<` and `>`. A backslash in a `"…"`
 /// name is the backslash extension, which the configured
 /// [`ExtensionPolicy`] governs instead.
+///
+/// C99: §6.4.7 paragraph 3, pp. 64-65; PDF pp. 76-77.
 fn invalid_header_sequence(name: &str, angle: bool) -> Option<(usize, &'static str)> {
     let bytes = name.as_bytes();
     bytes.iter().enumerate().find_map(|(offset, &byte)| {
@@ -264,6 +297,15 @@ fn header_name_from_source<'a>(
     reason = "The macro-parameter loop has multiple semantic exit conditions."
 )]
 impl<'x> Expander<'_, '_, '_, 'x> {
+    /// Executes the directive that `token`, a `#`, introduces.
+    ///
+    /// C99: §6.10 paragraphs 1-3, pp. 145-147; PDF pp. 157-159. A `#` begins
+    /// a directive only at the start of a line; one found elsewhere is
+    /// diagnosed and, for recovery, still read as a directive. A name that is
+    /// not a directive makes a `non-directive`, to which C99 gives no
+    /// meaning; it is diagnosed and skipped, as GCC and Clang do.
+    /// `# new-line` is the null directive (§6.10.7 paragraph 1, p. 160; PDF
+    /// p. 172).
     pub(super) fn parse_directive(&mut self, token: PreprocessorToken) {
         if !self.last_was_newline {
             self.context.preprocessor_error(PreprocessorError {
@@ -276,7 +318,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             return;
         };
         match directive.kind {
-            // Null directive.
+            // Null directive (C99 §6.10.7p1).
             | PreprocessorTokenType::Newline => {
                 self.last_was_newline = true;
                 self.current_is_newline = true;
@@ -328,6 +370,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// The source text a `_Pragma` string literal stands for (C99 §6.10.9p1),
     /// with a final newline, in the translation-unit arena, where diagnostics
     /// can still quote it.
+    ///
+    /// C99: §6.10.9 paragraph 1, p. 161; PDF p. 173: destringizing drops an
+    /// `L` prefix and the quotes, and turns `\"` into `"` and `\\` into `\`.
     pub(super) fn prepare_pragma_operator_string<'c>(
         context: &Context<'c>,
         string: StringCacheId,
@@ -400,6 +445,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     ///
     /// `including_file` is the file containing the directive, captured before
     /// a macro-expanded operand can switch to its definition's tokenizer.
+    ///
+    /// A header that cannot be found violates the constraint of C99 §6.10.2
+    /// paragraph 1, p. 149; PDF p. 161. A file that `#pragma once` marked,
+    /// an implementation-defined pragma (§6.10.6 paragraph 1, p. 159; PDF
+    /// p. 171), is not read again.
     fn find_header_from_path(
         &mut self,
         including_file: u32,
@@ -491,6 +541,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// Reads a `<…>` operand as written: tokens through the first one that
     /// contains `>`. The name is the source text between the delimiters, so
     /// it keeps the whitespace that the tokens between them do not spell.
+    ///
+    /// C99: `< h-char-sequence >`, §6.4.7 paragraph 1, p. 64; PDF p. 76, and
+    /// §6.10.2 paragraph 2, p. 149; PDF p. 161.
     fn read_written_angle_header(&mut self, directive: PreprocessorToken) -> HeaderName<'x> {
         let open = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             .expect("the operand was peeked");
@@ -605,7 +658,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     }
 
     /// Reads a `"…"` operand as written: one string literal, whose source
-    /// text between its quotes is the name.
+    /// text between its quotes is the name. Where a sequence could be either
+    /// a header name or a string literal, it is the header name.
+    ///
+    /// C99: `" q-char-sequence "`, §6.4.7 paragraph 1, p. 64; PDF p. 76;
+    /// §6.4 paragraph 4, p. 50; PDF p. 62; and §6.10.2 paragraph 3,
+    /// pp. 149-150; PDF pp. 161-162.
     fn read_written_quoted_header(&mut self) -> HeaderName<'x> {
         let token = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             .expect("the operand was peeked");
@@ -722,6 +780,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 
     /// Reads an operand not written as a header name: macros that expand to
     /// one (C99 §6.10.2p4), whose tokens are combined by their spellings.
+    ///
+    /// C99: §6.10.2 paragraph 4, p. 150; PDF p. 162, leaves the combination
+    /// implementation-defined. A string literal is taken whole; after `<`,
+    /// the spellings of the following tokens, whitespace included, are
+    /// joined up to the first `>`. Adjacent string literals are not
+    /// concatenated here (footnote 148), so a second one is an extra token.
     fn read_expanded_header(&mut self, directive: PreprocessorToken) -> Option<HeaderName<'x>> {
         let include_string =
             self.expect_token_without_rewind::<true>(
@@ -883,6 +947,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         empty
     }
 
+    /// Replaces an `#include` directive with the contents of the header or
+    /// source file it names, which is then processed through phase 4.
+    ///
+    /// C99: §6.10.2 paragraphs 1-6, pp. 149-150; PDF pp. 161-162, and
+    /// §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22. Tokens after the
+    /// header name do not match any of the forms of paragraphs 2-4.
     fn parse_include_directive(&mut self, directive: PreprocessorToken) {
         let including_file = self.physical_source_file_index();
         let header = match self.peek_include_operand() {
@@ -915,6 +985,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             });
         }
         let mut look_up = true;
+        // A backslash in a `"…"` name is undefined by C99 §6.4.7p3; reading
+        // it as a path character is an extension (§4p6).
         if let Some(source_vectors) = header.backslash {
             let policy = match self.context.configuration.standard() {
                 | CStandard::C99 => self.context.configuration.extension_policy(),
@@ -967,7 +1039,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             return;
         };
         // The main source contributes one frame. Macro frames and headers
-        // whose processing has finished do not consume the nesting limit.
+        // whose processing has finished do not consume the nesting limit
+        // (C99 §6.10.2p6).
         let source_depth = self
             .tokenizer_stack
             .iter()
@@ -1553,6 +1626,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
     }
 
+    /// Reports an error whose message includes the directive's tokens, which
+    /// are not macro-replaced; translation then does not succeed.
+    ///
+    /// C99: §6.10.5 paragraph 1, p. 159; PDF p. 171, and §4 paragraph 4,
+    /// p. 7; PDF p. 19.
     fn parse_error_directive(&mut self, directive: PreprocessorToken) {
         let mut contents = ArenaString::new_in(self.scratch);
         // A directive ending at end of file is complete; the missing final
@@ -1576,6 +1654,16 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         });
     }
 
+    /// Executes a `#pragma` directive, or the pragma of a `_Pragma` operator,
+    /// whose operands are not macro-replaced. Returns whether the directive's
+    /// new-line was consumed.
+    ///
+    /// C99: §6.10.6 paragraphs 1-2, p. 159; PDF p. 171. `STDC` pragmas must
+    /// name `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE` and an
+    /// `on-off-switch`; they are checked but have no effect yet. `#pragma
+    /// once` is bcc's one implementation-defined pragma. Other pragmas are
+    /// ignored (paragraph 1), and one that does not begin with an identifier
+    /// draws a warning first.
     pub(super) fn parse_pragma_directive(&mut self, _directive: PreprocessorToken) -> bool {
         let mut consumed_newline = false;
         let mut completed_stdc = false;

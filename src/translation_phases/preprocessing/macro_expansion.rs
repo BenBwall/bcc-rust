@@ -1,4 +1,14 @@
 //! Macro definitions, argument collection, and `#`/`##` operators.
+//!
+//! C99: macro replacement §6.10.3, pp. 151-153; PDF pp. 163-165; argument
+//! substitution §6.10.3.1, p. 153; PDF p. 165; the `#` operator §6.10.3.2,
+//! p. 153; PDF p. 165; the `##` operator §6.10.3.3, p. 154; PDF p. 166;
+//! rescanning §6.10.3.4, p. 155; PDF p. 167.
+//!
+//! The order of evaluation of `#` and `##` is unspecified (§6.10.3.2
+//! paragraph 2, p. 153; PDF p. 165, and §6.10.3.3 paragraph 3, p. 154;
+//! PDF p. 166). Here `#` stringifies its operand before an adjacent `##`
+//! pastes the result.
 
 use std::{
     cell::OnceCell,
@@ -48,19 +58,40 @@ use crate::{
     },
 };
 
+/// A macro name's current definition. It lasts until `#undef` names it or
+/// preprocessing ends.
+///
+/// C99: §6.10.3.5 paragraph 1, p. 155; PDF p. 167.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum MacroDefinition<'pp> {
-    ObjectLike {
-        tokenizer: TokenSource<'pp>,
-    },
+    /// `# define identifier replacement-list new-line`; the tokenizer reads
+    /// the replacement list.
+    ///
+    /// C99: §6.10.3 paragraph 9, p. 152; PDF p. 164.
+    ObjectLike { tokenizer: TokenSource<'pp> },
+    /// `# define identifier lparen identifier-list(opt) ) replacement-list
+    /// new-line` and its `...` forms.
+    ///
+    /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
     FunctionLike {
         argument_names: &'pp [StringCacheId],
         tokenizer:      TokenSource<'pp>,
         is_variadic:    bool,
     },
+    /// A predefined macro or the `_Pragma` operator, expanded by the driver.
+    ///
+    /// C99: §6.10.8 paragraph 1, p. 160; PDF p. 172, and §6.10.9 paragraph
+    /// 1, p. 161; PDF p. 173.
     BuiltIn,
 }
 
+/// A `##` paste waiting for an operand that an argument frame is still
+/// producing. `Lhs` holds the left operand, to paste with the right
+/// argument's first token; `Rhs` holds the right operand, to paste with the
+/// left argument's last token; `Empty` marks a paste whose left argument is
+/// still being read.
+///
+/// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum HashHash {
     Lhs(PreprocessorToken),
@@ -71,6 +102,11 @@ pub(crate) enum HashHash {
 /// One argument of a function-like macro invocation. Its data lives in the
 /// expansion arena and is shared by reference between the invocation and
 /// the frames that read it.
+///
+/// C99: §6.10.3 paragraph 11, p. 152; PDF p. 164. The tokenizer reads the
+/// argument as written, for `#` and `##` operands; `expanded` holds it
+/// completely macro-replaced, for other parameter uses (§6.10.3.1 paragraph
+/// 1, p. 153; PDF p. 165).
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct FunctionLikeMacroArgument<'x> {
     pub(super) name:                StringCacheId,
@@ -99,6 +135,10 @@ pub(super) fn find_argument(
 /// Transactional logical cursor over replacement lists and their continuations.
 /// Exhausted frames remain present until normal rescan unwinds them, preserving
 /// disabled macro names. A failed lookahead changes no real source cursor.
+///
+/// C99: §6.10.3.4 paragraph 1, p. 155; PDF p. 167: a replacement is rescanned
+/// along with the rest of the source, so an invocation's `(` and arguments
+/// may follow the replacement list that ends with the macro's name.
 struct MacroCallCursor<'x> {
     frames:       ArenaVec<'x, TokenizerFrame<'x>>,
     index:        Option<usize>,
@@ -309,6 +349,10 @@ impl<'x> MacroCallCursor<'x> {
 impl<'x> Expander<'_, '_, '_, 'x> {
     /// Capture an invocation whose opening, arguments, or closing delimiter
     /// can come from different replacement/argument/source frames.
+    ///
+    /// C99: §6.10.3.4 paragraph 1, p. 155; PDF p. 167; argument separation
+    /// and count, §6.10.3 paragraphs 4 and 11-12, pp. 151-153; PDF
+    /// pp. 163-165.
     pub(super) fn capture_cross_frame_call(
         &mut self,
         invocation: PreprocessorToken,
@@ -383,6 +427,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 source_vectors: invocation.source_vectors,
             });
         } else if variadic && count == names.len() {
+            // C99 §6.10.3p4 requires an argument for `...`; omitting it is
+            // an extension (§4p6), which the extension policy governs.
             let policy = self.context.configuration.extension_policy();
             if policy != crate::configuration::ExtensionPolicy::Allow {
                 self.context.preprocessor_error(PreprocessorError {
@@ -486,6 +532,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         next_is_end
     }
 
+    /// Whether `name` is a macro being replaced where the current token is
+    /// read, so that the name is not replaced again.
+    ///
+    /// C99: §6.10.3.4 paragraph 2, p. 155; PDF p. 167.
     pub(super) fn macro_is_disabled(&self, name: StringCacheId) -> bool {
         for frame in self.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
@@ -502,6 +552,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         false
     }
 
+    /// The macros being replaced where an argument is collected; nested
+    /// replacements within the argument do not replace them either.
+    ///
+    /// C99: §6.10.3.4 paragraph 2, p. 155; PDF p. 167.
     pub(super) fn disabled_macros(&self) -> &'x [StringCacheId] {
         if let Some(frame) = self.tokenizer_stack.last() {
             match &frame.frame_type {
@@ -526,6 +580,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         names.leak()
     }
 
+    /// Substitutes the macro-replaced argument for a parameter that is not a
+    /// `#` or `##` operand.
+    ///
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
     pub(super) fn handle_macro_argument(
         &mut self,
         token: PreprocessorToken,
@@ -543,6 +601,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// Share prescan results with speculative invocation lookahead too:
     /// repeating replacement would also repeat its diagnostics and
     /// `_Pragma` effects.
+    ///
+    /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165: the argument is
+    /// replaced as if it formed the rest of the file, with no other tokens
+    /// available.
     fn expanded_argument(
         &mut self,
         token: PreprocessorToken,
@@ -719,6 +781,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 
     /// C99 6.10.3.2p2: escape quotes/backslashes only inside literal tokens.
     /// A backslash that was an Other token participates in phase-5 escapes.
+    ///
+    /// Whether a `\` is inserted before the `\` that begins a universal
+    /// character name is implementation-defined. Inside a literal one is
+    /// inserted, as before any other `\`; an identifier's spelling is copied
+    /// as it is.
+    ///
+    /// C99: §6.10.3.2 paragraph 2, p. 153; PDF p. 165.
     fn append_stringified_token(
         context: &Context<'_>,
         spelling: &mut ArenaString<'_>,
@@ -745,6 +814,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
     }
 
+    /// Pastes `lhs ## rhs`. A parameter operand stands for its argument as
+    /// written, the last token of a left argument and the first of a right
+    /// one taking part; an empty argument is a placemarker.
+    ///
+    /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166.
     fn parse_hash_hash_operator(
         &mut self,
         lhs: PreprocessorToken,
@@ -777,6 +851,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         None
     }
 
+    /// Replaces `#` and the parameter after it with a character string
+    /// literal spelling the argument as written: inner whitespace becomes one
+    /// space, outer whitespace is dropped, and an empty argument gives `""`.
+    ///
+    /// C99: §6.10.3.2 paragraphs 1-2, p. 153; PDF p. 165.
     fn parse_hash_operator(&mut self, token: PreprocessorToken) -> PreprocessorToken {
         let position = self.position();
         let Some(argument_name) = self.expect_token_from_previous_phase::<true>(
@@ -962,6 +1041,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
     }
 
+    /// Concatenates two preprocessing tokens for `##`, or `None` when both
+    /// are placemarkers. A result that is not one valid preprocessing token
+    /// is undefined behavior; it is diagnosed, keeping the left operand.
+    /// Forming a universal character name by concatenation is undefined too;
+    /// an identifier that pasting leaves with a `\` is read as a universal
+    /// identifier.
+    ///
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166, and §5.1.1.2
+    /// paragraph 1 item 4, p. 10; PDF p. 22.
     pub(super) fn merge_tokens(
         &mut self,
         mut lhs: PreprocessorToken,
@@ -992,6 +1080,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
         match (lhs.kind, rhs.kind) {
+            // C99 §6.10.3.3p3: two placemarkers give one placemarker, and a
+            // placemarker with another token gives that token.
             | (PreprocessorTokenType::Placeholder, PreprocessorTokenType::Placeholder) => None,
             | (PreprocessorTokenType::Placeholder, _) => Some(rhs),
             | (_, PreprocessorTokenType::Placeholder) => Some(lhs),
@@ -1177,6 +1267,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
     }
 
+    /// Reads the next token from the frame stack, popping exhausted frames.
+    /// A replacement list ends at its directive's new-line, and inside an
+    /// argument a new-line is whitespace.
+    ///
+    /// C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.
     fn expand_macros<const SHOULD_IGNORE_WHITESPACE: bool>(&mut self) -> Option<PreprocessorToken> {
         'base: loop {
             if self.tokenizer_stack.is_empty() {
@@ -1290,6 +1385,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
     }
 
+    /// The placemarker that stands for an empty `##` operand; it exists only
+    /// within phase 4.
+    ///
+    /// C99: §6.10.3.3 paragraph 2 and footnote 151, p. 154; PDF p. 166.
     fn placeholder(context: &mut Context<'_>) -> PreprocessorToken {
         PreprocessorToken {
             kind:           PreprocessorTokenType::Placeholder,
@@ -1334,6 +1433,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         false
     }
 
+    /// Reads the next token, applying `#` when it is one. `#` is an operator
+    /// only in the replacement list of a function-like macro.
+    ///
+    /// C99: §6.10.3.2 paragraph 1, p. 153; PDF p. 165.
     fn handle_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
     ) -> Option<PreprocessorToken> {
@@ -1359,6 +1462,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 
     /// Reads the next token, applying any `##` that follows it. The flag
     /// tells whether `##` formed the token, which then names no parameter.
+    ///
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166: `##` is an operator in
+    /// the replacement list of either form of macro, but not one that comes
+    /// from an argument.
     pub(super) fn handle_hash_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
     ) -> Option<(PreprocessorToken, bool)> {
