@@ -139,11 +139,7 @@ impl Bus {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(db_error)?;
         }
-        let url = format!(
-            "sqlite://{}?mode=rwc",
-            path.to_string_lossy().replace('\\', "/")
-        );
-        let mut options = ConnectOptions::new(url);
+        let mut options = ConnectOptions::new("sqlite://agentbus.db");
         options
             .max_connections(1)
             .min_connections(1)
@@ -152,6 +148,8 @@ impl Bus {
             .sqlx_logging(false)
             .map_sqlx_sqlite_opts(|sqlite| {
                 sqlite
+                    .filename(&path)
+                    .create_if_missing(true)
                     .journal_mode(SqliteJournalMode::Wal)
                     .busy_timeout(StdDuration::from_secs(10))
             });

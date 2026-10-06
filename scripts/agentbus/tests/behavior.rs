@@ -82,6 +82,18 @@ impl Drop for Harness {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn database_paths_with_url_characters_use_the_exact_file() {
+    for name in ["bus%20.db", "bus?mode=ro.db", "bus#archive.db", "bus\\archive.db"] {
+        let mut h = Harness::new();
+        h.db = h.dir.join(name);
+        h.ok(&["send", "--from", "codex", "--to", "claude", "saved"], "");
+        assert!(h.db.is_file(), "database missing at {name:?}");
+        assert!(h.ok(&["inbox", "--agent", "claude"], "").contains("saved"));
+    }
+}
+
 #[test]
 fn disabled_hook_does_not_open_database_or_consume_messages() {
     let h = Harness::new();
