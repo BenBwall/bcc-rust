@@ -66,6 +66,7 @@ pub(super) struct CompoundStatementFrame<'tu, 'p> {
     starting_error_count:      usize,
     entry_scope_depth:         Option<usize>,
     function_body:             bool,
+    has_statement:             bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,6 +92,7 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
             starting_error_count,
             entry_scope_depth: None,
             function_body,
+            has_statement: false,
         }
     }
 
@@ -147,7 +149,18 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                     // labels have their own name space (§6.2.3p1).
                     let is_label = token.is_some_and(|token| token.kind == TokenType::Identifier)
                         && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
-                    if !is_label && token.is_some_and(|token| parser.declaration_starter(token)) {
+                    if !is_label
+                        && token.is_some_and(|token| parser.declaration_starter(token))
+                        && (!parser.attribute_starter(token)
+                            || parser.attributes_precede_declaration())
+                    {
+                        if self.has_statement {
+                            parser.extension(
+                                crate::configuration::Feature::MixedDeclarations,
+                                "mixed declarations and code",
+                                token.expect("declaration starts here"),
+                            );
+                        }
                         self.phase = CompoundStatementPhase::AwaitDeclaration;
                         ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
                             parser.arena,
@@ -156,10 +169,10 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                         )))
                     } else {
                         self.phase = CompoundStatementPhase::AwaitStatement;
-                        ParseAction::Push(ParseFrame::Statement(StatementFrame::new(
-                            parser.hard_error_count,
-                            None,
-                        )))
+                        ParseAction::Push(ParseFrame::Statement(
+                            StatementFrame::new(parser.hard_error_count, None)
+                                .with_block_item(true),
+                        ))
                     }
                 }
             },
@@ -180,6 +193,7 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                 let source = statement.source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Statement(statement));
+                self.has_statement = true;
                 self.phase = CompoundStatementPhase::ItemOrClose;
                 ParseAction::Continue
             },

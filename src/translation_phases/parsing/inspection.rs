@@ -85,6 +85,11 @@ pub(crate) struct InspectionOptions {
 }
 
 enum Work<'tu> {
+    SpecifierExtensionItem(&'tu super::modern::SpecifierExtension<'tu>, usize),
+    GenericAssociation(super::modern::GenericAssociation<'tu>, usize),
+    Attributes(&'tu super::modern::AttributeSpecifier<'tu>, usize),
+    Assertion(&'tu super::modern::StaticAssertion<'tu>, usize),
+    SpecifierExtension(&'tu super::modern::SpecifierExtension<'tu>, usize),
     Root(ExternalDeclaration<'tu>, usize),
     Declaration(&'tu Declaration<'tu>, usize, &'static str),
     InitDeclarator(InitDeclarator<'tu>, usize),
@@ -162,7 +167,135 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         options,
                     ),
                 },
+                | Work::GenericAssociation(association, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        format_args!(
+                            "generic-association {}",
+                            if association.type_name.is_some() {
+                                "type"
+                            } else {
+                                "default"
+                            }
+                        ),
+                        None,
+                        context,
+                        options,
+                    );
+                    work.push(Work::Expression(
+                        association.expression,
+                        indent + 1,
+                        "result",
+                    ));
+                    if let Some(x) = association.type_name {
+                        work.push(Work::TypeName(x, indent + 1, "type"));
+                    }
+                },
+                | Work::Attributes(attributes, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        format_args!(
+                            "attribute-specifier [[...]]{}",
+                            if attributes.recovered {
+                                " recovered"
+                            } else {
+                                ""
+                            }
+                        ),
+                        Some(attributes.source_vectors),
+                        context,
+                        options,
+                    );
+                    for token in attributes.tokens {
+                        Self::line(
+                            &mut output,
+                            indent + 1,
+                            format_args!("token {}", context.string_cache.at(token.contents)),
+                            Some(token.source_vectors),
+                            context,
+                            options,
+                        );
+                    }
+                },
+                | Work::Assertion(assertion, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        format_args!(
+                            "static-assert{}",
+                            if assertion.recovered {
+                                " recovered"
+                            } else {
+                                ""
+                            }
+                        ),
+                        Some(assertion.source_vectors),
+                        context,
+                        options,
+                    );
+                    if let Some(message) = assertion.message {
+                        Self::line(
+                            &mut output,
+                            indent + 1,
+                            format_args!("message {}", context.string_cache.at(message.contents)),
+                            Some(message.source_vectors),
+                            context,
+                            options,
+                        );
+                    }
+                    work.push(Work::Expression(
+                        assertion.expression,
+                        indent + 1,
+                        "condition",
+                    ));
+                },
+                | Work::SpecifierExtension(extension, indent) => {
+                    work.push(Work::SpecifierExtensionItem(extension, indent));
+                    if let Some(next) = extension.next {
+                        work.push(Work::SpecifierExtension(next, indent));
+                    }
+                },
+                | Work::SpecifierExtensionItem(extension, indent) => match extension.kind {
+                    | super::modern::SpecifierExtensionKind::Attributes(x) =>
+                        work.push(Work::Attributes(x, indent)),
+                    | super::modern::SpecifierExtensionKind::Alignment(x) => {
+                        Self::line(
+                            &mut output,
+                            indent,
+                            format_args!("alignment"),
+                            Some(extension.source_vectors),
+                            context,
+                            options,
+                        );
+                        Self::push_operand(&mut work, x, indent + 1);
+                    },
+                    | kind => Self::line(
+                        &mut output,
+                        indent,
+                        format_args!(
+                            "{}",
+                            match kind {
+                                | super::modern::SpecifierExtensionKind::ThreadLocal =>
+                                    "thread_local",
+                                | super::modern::SpecifierExtensionKind::Constexpr => "constexpr",
+                                | _ => unreachable!("other extension kinds have children"),
+                            }
+                        ),
+                        Some(extension.source_vectors),
+                        context,
+                        options,
+                    ),
+                },
                 | Work::Declaration(declaration, indent, role) => {
+                    if let Some(assertion) = declaration.assertion {
+                        work.push(Work::Assertion(assertion, indent));
+                        continue;
+                    }
+                    if let Some(extension) = declaration.declaration_specifiers.extensions {
+                        work.push(Work::SpecifierExtension(extension, indent + 1));
+                    }
                     if let Some(ordinal) = first_visit(&mut visited, 0, declaration) {
                         Self::shared(
                             &mut output,
@@ -195,15 +328,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                                 context,
                             ),
                             qualifier_list(declaration.declaration_specifiers.type_qualifiers),
-                            if declaration
-                                .declaration_specifiers
-                                .function_specifiers
-                                .is_inline
-                            {
-                                "inline"
-                            } else {
-                                "none"
-                            },
+                            function_specifier_list(
+                                declaration.declaration_specifiers.function_specifiers
+                            ),
                         ),
                         Some(declaration.source_vectors),
                         context,
@@ -239,6 +366,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     work.push(Work::Declarator(init.declarator, indent + 1, "shape"));
                 },
                 | Work::Function(function, indent, role) => {
+                    if let Some(x) = function.declaration_specifiers.extensions {
+                        work.push(Work::SpecifierExtension(x, indent + 1));
+                    }
                     if let Some(ordinal) = first_visit(&mut visited, 1, function) {
                         Self::shared(
                             &mut output,
@@ -273,15 +403,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                                 .storage_class
                                 .map_or("none", StorageClass::spelling),
                             qualifier_list(function.declaration_specifiers.type_qualifiers),
-                            if function
-                                .declaration_specifiers
-                                .function_specifiers
-                                .is_inline
-                            {
-                                "inline"
-                            } else {
-                                "none"
-                            },
+                            function_specifier_list(
+                                function.declaration_specifiers.function_specifiers
+                            ),
                         ),
                         Some(function.source_vectors),
                         context,
@@ -345,6 +469,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::DirectDeclarator(direct, indent) => match direct {
+                    | DirectDeclarator::Attributes(x) => work.push(Work::Attributes(x, indent)),
                     | DirectDeclarator::Identifier(identifier) => {
                         work.push(Work::Identifier(identifier, indent, "identifier"));
                     },
@@ -422,6 +547,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     options,
                 ),
                 | Work::Parameter(parameter, indent) => {
+                    if let Some(x) = parameter.declaration_specifiers.extensions {
+                        work.push(Work::SpecifierExtension(x, indent + 1));
+                    }
                     Self::line(
                         &mut output,
                         indent,
@@ -436,15 +564,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                                 .storage_class
                                 .map_or("none", StorageClass::spelling),
                             qualifier_list(parameter.declaration_specifiers.type_qualifiers),
-                            if parameter
-                                .declaration_specifiers
-                                .function_specifiers
-                                .is_inline
-                            {
-                                "inline"
-                            } else {
-                                "none"
-                            },
+                            function_specifier_list(
+                                parameter.declaration_specifiers.function_specifiers
+                            ),
                         ),
                         Some(parameter.source_vectors),
                         context,
@@ -460,6 +582,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     );
                 },
                 | Work::StructOrUnion(specifier, indent) => {
+                    if let Some(x) = specifier.attributes {
+                        work.push(Work::SpecifierExtension(x, indent + 1));
+                    }
                     if first_visit(&mut visited, 7, specifier).is_some() {
                         continue;
                     }
@@ -485,6 +610,13 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::StructDeclaration(declaration, indent) => {
+                    if let Some(assertion) = declaration.assertion {
+                        work.push(Work::Assertion(assertion, indent));
+                        continue;
+                    }
+                    if let Some(x) = declaration.extensions {
+                        work.push(Work::SpecifierExtension(x, indent + 1));
+                    }
                     Self::line(
                         &mut output,
                         indent,
@@ -523,6 +655,12 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::Enum(specifier, indent) => {
+                    if let Some(x) = specifier.attributes {
+                        work.push(Work::SpecifierExtension(x, indent + 1));
+                    }
+                    if let Some(x) = specifier.underlying_type {
+                        work.push(Work::TypeName(x, indent + 1, "underlying-type"));
+                    }
                     if first_visit(&mut visited, 8, specifier).is_some() {
                         continue;
                     }
@@ -544,6 +682,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::Enumerator(enumerator, indent) => {
+                    if let Some(x) = enumerator.attributes {
+                        work.push(Work::SpecifierExtension(x, indent + 1));
+                    }
                     Self::line(
                         &mut output,
                         indent,
@@ -754,6 +895,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         );
                         continue;
                     }
+                    if let Some(x) = type_name.declaration_specifiers.extensions {
+                        work.push(Work::SpecifierExtension(x, indent + 1));
+                    }
                     Self::line(
                         &mut output,
                         indent,
@@ -774,6 +918,16 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         context,
                         options,
                     );
+                    if let Some(storage) = type_name.declaration_specifiers.storage_class {
+                        Self::line(
+                            &mut output,
+                            indent + 1,
+                            format_args!("storage={}", storage.spelling()),
+                            None,
+                            context,
+                            options,
+                        );
+                    }
                     if let Some(declarator) = type_name.declarator {
                         work.push(Work::Declarator(declarator, indent + 1, "declarator"));
                     }
@@ -794,6 +948,15 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         indent: usize,
     ) {
         match specifiers {
+            | TypeSpecifiers::Extended(x) => match x {
+                | super::modern::ExtendedType::Atomic(x) =>
+                    work.push(Work::TypeName(x, indent, "atomic-type")),
+                | super::modern::ExtendedType::Typeof { operand, .. } =>
+                    Self::push_operand(work, *operand, indent),
+                | super::modern::ExtendedType::BitInt { width, .. } =>
+                    work.push(Work::Expression(width, indent, "bit-width")),
+                | _ => {},
+            },
             | TypeSpecifiers::StructOrUnion(index) => work.push(Work::StructOrUnion(index, indent)),
             | TypeSpecifiers::Enum(index) => work.push(Work::Enum(index, indent)),
             | _ => {},
@@ -831,6 +994,17 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         indent: usize,
     ) {
         match *kind {
+            | StatementType::Attributed(x) => {
+                work.push(Work::Statement(x.statement, indent, "statement"));
+                work.push(Work::Attributes(x.attributes, indent));
+            },
+            | StatementType::Declaration(x) =>
+                work.push(Work::Declaration(x, indent, "labeled-declaration")),
+            | StatementType::CaseRange(x) => {
+                work.push(Work::Statement(x.statement, indent, "statement"));
+                Self::push_constant_slot(work, x.upper, indent, "upper");
+                Self::push_constant_slot(work, x.lower, indent, "lower");
+            },
             | StatementType::Compound { items } =>
                 for item in items.iter().rev() {
                     match *item {
@@ -915,6 +1089,8 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     },
                 }
             },
+            | StatementType::NamedBreak(_)
+            | StatementType::NamedContinue(_)
             | StatementType::Return(None)
             | StatementType::Break
             | StatementType::Continue
@@ -944,6 +1120,13 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 | StatementType::Continue => "continue",
                 | StatementType::Break => "break",
                 | StatementType::Return(..) => "return",
+                | StatementType::Attributed(_) => "attributed",
+                | StatementType::Declaration(_) => "declaration",
+                | StatementType::CaseRange(_) => "case-range",
+                | StatementType::NamedBreak(x) =>
+                    return write!(f, "break {}", context.string_cache.at(x.name)),
+                | StatementType::NamedContinue(x) =>
+                    return write!(f, "continue {}", context.string_cache.at(x.name)),
                 | StatementType::Null => "null",
             })
         })
@@ -996,9 +1179,41 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 | ExpressionType::SizeofType(..) => "sizeof type",
                 | ExpressionType::SizeofExpr(..) => "sizeof expression",
                 | ExpressionType::Cast { .. } => "cast",
+                | ExpressionType::AlignofType(_) => "alignof type",
+                | ExpressionType::Countof(_) => "countof",
+                | ExpressionType::Generic(_) => "generic-selection",
+                | ExpressionType::Boolean(true) => "true",
+                | ExpressionType::Boolean(false) => "false",
+                | ExpressionType::Nullptr => "nullptr",
                 | ExpressionType::Error => "error-expression",
             })
         })
+    }
+
+    fn push_constant_slot(
+        work: &mut ArenaVec<'_, Work<'tu>>,
+        slot: ConstantExpressionSlot<'tu>,
+        indent: usize,
+        role: &'static str,
+    ) {
+        match slot {
+            | ConstantExpressionSlot::Parsed(x) =>
+                work.push(Work::Expression(x.expression(), indent, role)),
+            | ConstantExpressionSlot::Missing(x) => work.push(Work::Missing(x, indent, role)),
+        }
+    }
+
+    fn push_operand(
+        work: &mut ArenaVec<'_, Work<'tu>>,
+        operand: super::modern::SyntaxOperand<'tu>,
+        indent: usize,
+    ) {
+        match operand {
+            | super::modern::SyntaxOperand::Expression(x) =>
+                work.push(Work::Expression(x, indent, "operand")),
+            | super::modern::SyntaxOperand::Type(x) =>
+                work.push(Work::TypeName(x, indent, "operand-type")),
+        }
     }
 
     fn push_slot(
@@ -1008,6 +1223,16 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         role: &'static str,
     ) {
         match slot {
+            | ExpressionSlot::Selection(header) => {
+                if let Some(expression) = header.expression {
+                    Self::push_slot(work, expression, indent, role);
+                }
+                work.push(Work::Declaration(
+                    header.declaration,
+                    indent,
+                    "selection-declaration",
+                ));
+            },
             | ExpressionSlot::Parsed(index) => work.push(Work::Expression(index, indent, role)),
             | ExpressionSlot::Missing(source) => work.push(Work::Missing(source, indent, role)),
         }
@@ -1075,9 +1300,18 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 work.push(Work::Expression(operand_expression, indent, "operand"));
                 work.push(Work::TypeName(target_type, indent, "target-type"));
             },
-            | ExpressionType::SizeofType(type_name) => {
+            | ExpressionType::SizeofType(type_name) | ExpressionType::AlignofType(type_name) => {
                 work.push(Work::TypeName(type_name, indent, "operand-type"));
             },
+            | ExpressionType::Countof(operand) => Self::push_operand(work, *operand, indent),
+            | ExpressionType::Generic(selection) => {
+                for association in selection.associations.iter().rev() {
+                    work.push(Work::GenericAssociation(*association, indent));
+                }
+                Self::push_operand(work, selection.controlling, indent);
+            },
+            | ExpressionType::Boolean(_)
+            | ExpressionType::Nullptr
             | ExpressionType::Identifier(_)
             | ExpressionType::Constant(_)
             | ExpressionType::StringLiteral(_)
@@ -1145,6 +1379,17 @@ impl<'tu> ParsedTranslationUnit<'tu> {
     }
 }
 
+fn function_specifier_list(
+    specifiers: super::declaration_syntax::FunctionSpecifiers,
+) -> &'static str {
+    match (specifiers.is_inline, specifiers.is_noreturn) {
+        | (false, false) => "none",
+        | (true, false) => "inline",
+        | (false, true) => "_Noreturn",
+        | (true, true) => "inline _Noreturn",
+    }
+}
+
 /// Lists qualifiers in C spelling, such as `const volatile`, or `none`.
 fn qualifier_list(qualifiers: TypeQualifiers) -> impl Display {
     fmt::from_fn(move |f| {
@@ -1152,6 +1397,7 @@ fn qualifier_list(qualifiers: TypeQualifiers) -> impl Display {
             (TypeQualifiers::CONST, "const"),
             (TypeQualifiers::VOLATILE, "volatile"),
             (TypeQualifiers::RESTRICT, "restrict"),
+            (TypeQualifiers::ATOMIC, "_Atomic"),
         ]
         .into_iter()
         .filter(|&(flag, _)| qualifiers.contains(flag))

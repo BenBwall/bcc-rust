@@ -48,6 +48,11 @@ use super::{
         ParseFrameKind,
         ParseValue,
     },
+    modern::{
+        ModernFrame,
+        ModernKind,
+        ModernValue,
+    },
     recovery::{
         SynchronizationKind,
         SynchronizationSet,
@@ -60,6 +65,7 @@ use crate::{
     translation_phases::{
         SourceVectors,
         preprocessing::{
+            KeywordTokenType,
             OperatorTokenType,
             Token,
             TokenType,
@@ -109,6 +115,7 @@ pub(super) enum DeclarationContext {
     /// PDF p. 147. Its storage-class constraint (paragraph 3, p. 135;
     /// PDF p. 147) is left to semantic analysis.
     ForInitializer,
+    SelectionHeader,
     /// One declaration of a function definition's `declaration-list`: C99
     /// §6.9.1 paragraph 1, p. 141; PDF p. 153.
     OldStyleParameter,
@@ -120,6 +127,7 @@ pub(super) enum DeclarationContext {
 /// iteratively.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DeclarationPhase {
+    AwaitAssertion,
     /// Push declaration specifiers.
     Start,
     /// Receive specifiers and decide whether a declarator follows.
@@ -166,7 +174,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
         let place = match self.context {
             | DeclarationContext::External => DeclarationPlace::External,
             | DeclarationContext::Block => DeclarationPlace::Block,
-            | DeclarationContext::ForInitializer => DeclarationPlace::ForInitializer,
+            | DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader =>
+                DeclarationPlace::ForInitializer,
             | DeclarationContext::OldStyleParameter => DeclarationPlace::OldStyleParameter,
         };
         DeclarationContinuation {
@@ -186,7 +195,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
     fn recovery_kind(&self) -> SynchronizationKind {
         match self.context {
             | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
-            | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
+            | DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader =>
+                SynchronizationKind::ForInitializer,
             | DeclarationContext::External => SynchronizationKind::Declaration,
             | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
         }
@@ -199,11 +209,34 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self.phase {
+            | DeclarationPhase::AwaitAssertion => {
+                let Some(ParseValue::Modern(ModernValue::Assertion(assertion))) = returned else {
+                    panic!("assertion declaration protocol: {returned:?}")
+                };
+                ParseAction::Reduce(ParseValue::Declaration(parser.alloc_syntax(Declaration {
+                    assertion:                   Some(assertion),
+                    declaration_specifiers:      DeclarationSpecifiers::new(),
+                    init_declarators:            crate::util::arena_list::ArenaList::empty(),
+                    source_vectors:              assertion.source_vectors,
+                    recovered:                   assertion.recovered,
+                    is_function_definition_head: false,
+                })))
+            },
             | DeclarationPhase::Start => {
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                if token
+                    .is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::StaticAssert))
+                {
+                    self.phase = DeclarationPhase::AwaitAssertion;
+                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Assertion,
+                        parser.hard_error_count,
+                    )));
+                }
                 // Specifiers are a child production because tag
                 // specifiers may suspend again
                 // for complete struct/union/enum bodies.
@@ -403,8 +436,10 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     self.is_function_definition_head = true;
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Reprocess
-                } else if self.context == DeclarationContext::ForInitializer
-                    && is_operator(token, OperatorTokenType::ClosingParenthesis)
+                } else if matches!(
+                    self.context,
+                    DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader
+                ) && is_operator(token, OperatorTokenType::ClosingParenthesis)
                 {
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Reprocess
@@ -503,7 +538,10 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
                     parser.arena,
                     parser.hard_error_count,
-                    self.context == DeclarationContext::ForInitializer,
+                    matches!(
+                        self.context,
+                        DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader
+                    ),
                     false,
                 )))
             },
@@ -554,6 +592,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
                 let init_declarators = parser.alloc_syntax_list(&mut self.init_declarators);
                 let declaration = parser.alloc_syntax(Declaration {
+                    assertion: None,
                     declaration_specifiers: self
                         .declaration_specifiers
                         .expect("a declaration cannot finish without specifiers"),

@@ -348,3 +348,28 @@ Allow/Warn/Deny and original alternate spellings. CLI goldens under
 `language/` cover policy severity and macro-expansion provenance. Newly recognized
 unsupported keywords also have parser recovery coverage; recognition is separate
 from implementing their grammar. See the root language-standards.md matrix.
+
+## ISO phase-7 parser modes
+
+The ISO parser recognizes later-standard syntax while shared extension diagnostics
+select Allow/Warn/Deny. Grammar-only C99 extensions have exact warning/error CLI
+goldens in [language/iso-c89-warning.stderr](language/iso-c89-warning.stderr) and
+[language/iso-c89-error.stderr](language/iso-c89-error.stderr); native revision CLI
+samples produce no diagnostics. Reserved-keyword origin diagnostics remain the
+foundation's responsibility and are not duplicated by the parser.
+
+| Diagnostic surface | Status | Evidence |
+| --- | --- | --- |
+| `ExpectedIsoSyntax` attribute delimiter/component | rendered | [parser-iso-attribute.c](parser-iso-attribute.c), malformed-name and balanced-argument unit tests |
+| `ExpectedIsoSyntax` static assertion message | rendered | [parser-iso-static-assert.c](parser-iso-static-assert.c) |
+| Generic association expression | rendered | [parser-iso-generic.c](parser-iso-generic.c) |
+| Grammar-only ISO origin/severity | rendered | C89 warning/error goldens above; unit matrix exercises all policies through C2y |
+| Missing type and Unicode label | rendered | Existing missing-type fixtures now use struct members: ordinary missing declaration types are ImplicitInt extensions under the default Allow policy |
+| Atomic/BitInt operands, fixed enum types, selection headers, attribute names and EOF | parser-tested | `parsing::tests::standards`: following declarations survive, every prefix terminates with restored scopes, and deep nesting avoids native recursion |
+
+The ISO diagnostics describe the required production component instead of treating
+an attribute delimiter or static-assert message as an expression. No diagnostic
+is based on evaluating an assertion, inferring a type, applying attributes or
+resolving a named control target. The new mode suite also pins AST provenance
+through macros and compaction. Zero-global-allocation tests exercise the new ISO
+frame paths and the rendered diagnostic corpus.

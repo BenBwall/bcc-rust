@@ -34,6 +34,10 @@ use super::{
     },
     function_definition::FunctionDefinitionFrame,
     initializer::InitializerFrame,
+    modern::{
+        ModernFrame,
+        ModernValue,
+    },
     parameter_list::ParameterListFrame,
     recovery::SynchronizationSet,
     statement::StatementFrame,
@@ -63,6 +67,7 @@ use crate::translation_phases::{
 /// implementation mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParseFrameKind {
+    Modern,
     /// Translation-unit entry for one external declaration.
     ExternalDeclaration,
     /// Declaration shell and init-declarator list.
@@ -96,6 +101,7 @@ impl ParseFrameKind {
     /// Returns the stable kebab-case label used in traces and diagnostics.
     pub(super) fn label(self) -> &'static str {
         match self {
+            | Self::Modern => "iso-construct",
             | Self::ExternalDeclaration => "external-declaration",
             | Self::Declaration => "declaration",
             | Self::DeclarationSpecifiers => "declaration-specifiers",
@@ -143,6 +149,7 @@ pub(super) enum ParseAction<'tu, 'p> {
 /// pp. 67-144; PDF pp. 79-156. Typed returns are an implementation mechanism.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ParseValue<'tu> {
+    Modern(ModernValue<'tu>),
     /// Result of a declaration-specifier child.
     DeclarationSpecifiers(DeclarationSpecifiers<'tu>),
     /// Declarator result; `None` records a recoverable missing declarator.
@@ -213,6 +220,7 @@ pub(super) struct InitializerResult<'tu> {
 /// definitions, §6.5-§6.9, pp. 67-144; PDF pp. 79-156.
 #[derive(Debug)]
 pub(super) enum ParseFrame<'tu, 'p> {
+    Modern(ModernFrame<'tu, 'p>),
     ExternalDeclaration(ExternalDeclarationFrame),
     Declaration(DeclarationFrame<'tu, 'p>),
     DeclarationSpecifiers(DeclarationSpecifiersFrame<'tu>),
@@ -295,6 +303,11 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
             | Self::FunctionDefinition(frame) => frame.declaration_list.len(),
             | Self::CompoundStatement(frame) => frame.items.len(),
             | Self::Declaration(frame) => frame.init_declarators.len(),
+            | Self::Modern(frame) => frame
+                .associations
+                .len()
+                .checked_add(frame.tokens.len())
+                .expect("ISO retained node count overflows"),
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
@@ -342,6 +355,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
                 pools.enumerators.lend(&mut frame.enumerators);
                 pools.source_vectors.lend(&mut frame.source_vectors);
             },
+            | Self::Modern(_)
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
@@ -386,6 +400,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
                 pools.enumerators.reclaim(&mut frame.enumerators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
             },
+            | Self::Modern(_)
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
@@ -395,6 +410,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
 
     pub(super) fn kind(&self) -> ParseFrameKind {
         match self {
+            | Self::Modern(_) => ParseFrameKind::Modern,
             | Self::ExternalDeclaration(_) => ParseFrameKind::ExternalDeclaration,
             | Self::Declaration(_) => ParseFrameKind::Declaration,
             | Self::DeclarationSpecifiers(_) => ParseFrameKind::DeclarationSpecifiers,
@@ -422,6 +438,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
             return;
         };
         let destination = match self {
+            | Self::Modern(_)
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
@@ -485,6 +502,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self {
+            | Self::Modern(frame) => frame.step(parser, token, returned),
             | Self::ExternalDeclaration(frame) => frame.step(parser, token, returned),
             | Self::Declaration(frame) => frame.step(parser, token, returned),
             | Self::DeclarationSpecifiers(frame) => frame.step(parser, token, returned),

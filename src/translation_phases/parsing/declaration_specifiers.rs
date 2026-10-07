@@ -36,6 +36,15 @@ use super::{
         ParseFrame,
         ParseValue,
     },
+    modern::{
+        ExtendedType,
+        ModernFrame,
+        ModernKind,
+        ModernValue,
+        SpecifierExtension,
+        SpecifierExtensionKind,
+        SyntaxOperand,
+    },
     struct_or_union::StructOrUnionSpecifierFrame,
     syntax::{
         Identifier,
@@ -68,6 +77,7 @@ pub(super) enum SpecifierMode {
     /// Type-name specifiers: types and qualifiers followed only by an
     /// optional abstract declarator.
     TypeName,
+    CompoundLiteral,
 }
 
 /// Accumulates one declaration-specifier or specifier-qualifier sequence.
@@ -87,6 +97,7 @@ pub(super) struct DeclarationSpecifiersFrame<'tu> {
     specifiers:             DeclarationSpecifiers<'tu>,
     /// Whether at least one legal specifier has been consumed.
     consumed:               bool,
+    implicit_name_allowed:  bool,
     /// Whether a storage-class specifier has already appeared.
     storage_seen:           bool,
     /// Whether an invalid token occupied the mandatory type-specifier slot.
@@ -112,6 +123,8 @@ pub(super) struct DeclarationSpecifiersFrame<'tu> {
 pub(super) enum DeclarationSpecifiersPhase {
     /// Consume primitive, storage, qualifier, function, and typedef specifiers.
     Collect,
+    AwaitModern(KeywordTokenType),
+    AwaitAttributes,
     /// Receive the struct/union specifier pushed by its keyword.
     AwaitStructOrUnion,
     /// Receive the enum specifier pushed by its keyword.
@@ -125,12 +138,20 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             mode,
             specifiers: DeclarationSpecifiers::new(),
             consumed: false,
+            implicit_name_allowed: true,
             storage_seen: false,
             invalid_type_seen: false,
             type_conflict_seen: false,
             pending_type_specifier: None,
             complex_token: None,
             source_vectors: None,
+        }
+    }
+
+    pub(super) fn parameter() -> Self {
+        Self {
+            implicit_name_allowed: false,
+            ..Self::new(SpecifierMode::Declaration)
         }
     }
 
@@ -141,6 +162,56 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self.phase {
+            | DeclarationSpecifiersPhase::AwaitAttributes => {
+                let Some(ParseValue::Modern(ModernValue::Attributes(attributes))) = returned else {
+                    panic!("attribute protocol: {returned:?}")
+                };
+                self.add_extension(
+                    parser,
+                    SpecifierExtensionKind::Attributes(attributes),
+                    attributes.source_vectors,
+                );
+                self.phase = DeclarationSpecifiersPhase::Collect;
+                self.consumed = true;
+                return ParseAction::Continue;
+            },
+            | DeclarationSpecifiersPhase::AwaitModern(keyword) => {
+                let Some(ParseValue::Modern(ModernValue::Operand(operand, source))) = returned
+                else {
+                    panic!("specifier operand protocol: {returned:?}")
+                };
+                if keyword == KeywordTokenType::Alignas {
+                    self.add_extension(parser, SpecifierExtensionKind::Alignment(operand), source);
+                } else {
+                    let kind = match (keyword, operand) {
+                        | (KeywordTokenType::Atomic, SyntaxOperand::Type(x)) =>
+                            ExtendedType::Atomic(x),
+                        | (KeywordTokenType::BitInt, SyntaxOperand::Expression(width)) =>
+                            ExtendedType::BitInt {
+                                width,
+                                signedness: match self.specifiers.type_specifiers {
+                                    | TypeSpecifiers::Signed => Some(true),
+                                    | TypeSpecifiers::Unsigned => Some(false),
+                                    | _ => None,
+                                },
+                            },
+                        | (_, operand) => ExtendedType::Typeof {
+                            operand,
+                            unqualified: keyword == KeywordTokenType::TypeofUnqual,
+                        },
+                    };
+                    self.specifiers.type_specifiers =
+                        TypeSpecifiers::Extended(parser.alloc_syntax(kind));
+                    self.source_vectors = Some(
+                        parser
+                            .context
+                            .merge_vectors(self.source_vectors.unwrap_or_default(), source),
+                    );
+                }
+                self.phase = DeclarationSpecifiersPhase::Collect;
+                self.consumed = true;
+                return ParseAction::Continue;
+            },
             | DeclarationSpecifiersPhase::AwaitStructOrUnion => {
                 let Some(ParseValue::StructOrUnionSpecifier(index)) = returned else {
                     panic!("struct specifier returned an unexpected value: {returned:?}");
@@ -227,6 +298,121 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             return ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers));
         };
 
+        if parser.attribute_starter(Some(token)) {
+            self.phase = DeclarationSpecifiersPhase::AwaitAttributes;
+            return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                parser.arena,
+                ModernKind::Attributes,
+                parser.hard_error_count,
+            )));
+        }
+        if let TokenType::Keyword(keyword) = token.kind {
+            if matches!(
+                keyword,
+                KeywordTokenType::Alignas
+                    | KeywordTokenType::BitInt
+                    | KeywordTokenType::Typeof
+                    | KeywordTokenType::TypeofUnqual
+            ) || keyword == KeywordTokenType::Atomic
+                && parser.cursor.following().is_some_and(|x| {
+                    x.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                })
+            {
+                if keyword == KeywordTokenType::Alignas && self.mode == SpecifierMode::TypeName {
+                    parser.extension(
+                        crate::configuration::Feature::C23Keywords,
+                        "alignment specifier in type name",
+                        token,
+                    );
+                }
+                if keyword != KeywordTokenType::Alignas
+                    && self.specifiers.type_specifiers != TypeSpecifiers::Empty
+                    && !(keyword == KeywordTokenType::BitInt
+                        && matches!(
+                            self.specifiers.type_specifiers,
+                            TypeSpecifiers::Signed | TypeSpecifiers::Unsigned
+                        ))
+                {
+                    self.specifiers
+                        .type_specifiers
+                        .report_conflict(parser, token.contents, token);
+                }
+                self.phase = DeclarationSpecifiersPhase::AwaitModern(keyword);
+                return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                    parser.arena,
+                    ModernKind::Operand {
+                        type_only: keyword == KeywordTokenType::Atomic,
+                        constant:  matches!(
+                            keyword,
+                            KeywordTokenType::Alignas | KeywordTokenType::BitInt
+                        ),
+                    },
+                    parser.hard_error_count,
+                )));
+            }
+            if matches!(
+                keyword,
+                KeywordTokenType::ThreadLocal | KeywordTokenType::Constexpr
+            ) {
+                if !matches!(
+                    self.mode,
+                    SpecifierMode::Declaration | SpecifierMode::CompoundLiteral
+                ) {
+                    parser.report(
+                        ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
+                        Some(token),
+                    );
+                }
+                if self.mode == SpecifierMode::CompoundLiteral {
+                    parser.extension(
+                        crate::configuration::Feature::C23Keywords,
+                        "storage class in compound literal",
+                        token,
+                    );
+                }
+                self.add_extension(
+                    parser,
+                    if keyword == KeywordTokenType::ThreadLocal {
+                        SpecifierExtensionKind::ThreadLocal
+                    } else {
+                        SpecifierExtensionKind::Constexpr
+                    },
+                    token.source_vectors,
+                );
+                self.consumed = true;
+                return ParseAction::Consume;
+            }
+            if keyword == KeywordTokenType::Noreturn {
+                if self.mode != SpecifierMode::Declaration {
+                    parser.report(
+                        ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
+                        Some(token),
+                    );
+                }
+                self.specifiers.function_specifiers.is_noreturn = true;
+                parser.merge_source(&mut self.source_vectors, token);
+                self.consumed = true;
+                return ParseAction::Consume;
+            }
+            let decimal = match keyword {
+                | KeywordTokenType::Decimal32 => Some(ExtendedType::Decimal32),
+                | KeywordTokenType::Decimal64 => Some(ExtendedType::Decimal64),
+                | KeywordTokenType::Decimal128 => Some(ExtendedType::Decimal128),
+                | _ => None,
+            };
+            if let Some(decimal) = decimal {
+                if self.specifiers.type_specifiers != TypeSpecifiers::Empty {
+                    self.specifiers
+                        .type_specifiers
+                        .report_conflict(parser, token.contents, token);
+                }
+                self.specifiers.type_specifiers =
+                    TypeSpecifiers::Extended(parser.alloc_syntax(decimal));
+                parser.merge_source(&mut self.source_vectors, token);
+                self.consumed = true;
+                return ParseAction::Consume;
+            }
+        }
         if matches!(
             token.kind,
             TokenType::Keyword(KeywordTokenType::Struct | KeywordTokenType::Union)
@@ -250,7 +436,17 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         }
 
         if let Some(storage_class) = storage_class(token.kind) {
-            if self.mode != SpecifierMode::Declaration {
+            if self.mode == SpecifierMode::CompoundLiteral {
+                parser.extension(
+                    crate::configuration::Feature::C23Keywords,
+                    "storage class in compound literal",
+                    token,
+                );
+            }
+            if !matches!(
+                self.mode,
+                SpecifierMode::Declaration | SpecifierMode::CompoundLiteral
+            ) {
                 parser.report(
                     ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                     Some(token),
@@ -302,7 +498,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         }
 
         if token.kind == TokenType::Keyword(KeywordTokenType::Inline) {
-            if self.mode != SpecifierMode::Declaration {
+            if !matches!(
+                self.mode,
+                SpecifierMode::Declaration | SpecifierMode::CompoundLiteral
+            ) {
                 parser.report(
                     ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                     Some(token),
@@ -377,7 +576,16 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         // means no declaration started here at all.
         // C99 §6.7.2p2: at least one type specifier in each declaration,
         // struct declaration, and type name.
-        if !self.consumed && token.kind != TokenType::Identifier {
+        let implicit_declarator = self.mode == SpecifierMode::Declaration
+            && self.implicit_name_allowed
+            && matches!(
+                token.kind,
+                TokenType::Identifier
+                    | TokenType::Operator(
+                        OperatorTokenType::Asterisk | OperatorTokenType::OpeningParenthesis
+                    )
+            );
+        if !self.consumed && !implicit_declarator {
             parser.report(
                 ParserErrorType::EmptyDeclarationSpecifiers(token.kind),
                 Some(token),
@@ -385,14 +593,78 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         } else if self.specifiers.type_specifiers == TypeSpecifiers::Empty
             && !self.invalid_type_seen
         {
-            parser.report(
-                ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(token.kind),
-                Some(token),
-            );
+            if self.mode == SpecifierMode::Declaration
+                && self.has_only_attributes()
+                && token.kind == TokenType::Operator(OperatorTokenType::Semicolon)
+                && self.specifiers.storage_class.is_none()
+            {
+            } else if self.mode == SpecifierMode::Declaration
+                && (self.consumed || self.implicit_name_allowed)
+            {
+                if self.specifiers.storage_class == Some(StorageClass::Auto)
+                    && parser.context.configuration.standard()
+                        >= crate::configuration::CStandard::C23
+                {
+                    self.specifiers.type_specifiers =
+                        TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::Inferred));
+                } else {
+                    parser.extension(
+                        crate::configuration::Feature::ImplicitInt,
+                        "implicit int",
+                        token,
+                    );
+                    self.specifiers.type_specifiers = TypeSpecifiers::Int;
+                    self.specifiers.implicit_int = true;
+                }
+            } else {
+                parser.report(
+                    ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(token.kind),
+                    Some(token),
+                );
+            }
         }
         self.report_incomplete_complex(parser);
         self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
         ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers))
+    }
+
+    fn has_only_attributes(&self) -> bool {
+        if self.specifiers.storage_class.is_some()
+            || !self.specifiers.type_qualifiers.is_empty()
+            || self.specifiers.function_specifiers.is_inline
+            || self.specifiers.function_specifiers.is_noreturn
+        {
+            return false;
+        }
+        let mut extension = self.specifiers.extensions;
+        if extension.is_none() {
+            return false;
+        }
+        while let Some(item) = extension {
+            if !matches!(item.kind, SpecifierExtensionKind::Attributes(_)) {
+                return false;
+            }
+            extension = item.next;
+        }
+        true
+    }
+
+    fn add_extension(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        kind: SpecifierExtensionKind<'tu>,
+        source_vectors: SourceVectors,
+    ) {
+        self.specifiers.extensions = Some(parser.alloc_syntax(SpecifierExtension {
+            kind,
+            next: self.specifiers.extensions,
+            source_vectors,
+        }));
+        self.source_vectors = Some(
+            parser
+                .context
+                .merge_vectors(self.source_vectors.unwrap_or_default(), source_vectors),
+        );
     }
 
     /// Diagnoses a finished list whose `_Complex` never received `float`,
@@ -426,6 +698,27 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         token: Token,
         specifier: PrimitiveTypeSpecifier,
     ) {
+        if let TypeSpecifiers::Extended(ExtendedType::BitInt { width, signedness }) =
+            self.specifiers.type_specifiers
+            && matches!(
+                specifier,
+                PrimitiveTypeSpecifier::Signed | PrimitiveTypeSpecifier::Unsigned
+            )
+        {
+            let new_sign = matches!(specifier, PrimitiveTypeSpecifier::Signed);
+            if signedness.is_some() {
+                self.specifiers
+                    .type_specifiers
+                    .report_conflict(parser, token.contents, token);
+            } else {
+                self.specifiers.type_specifiers =
+                    TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::BitInt {
+                        width,
+                        signedness: Some(new_sign),
+                    }));
+            }
+            return;
+        }
         let type_specifiers = &mut self.specifiers.type_specifiers;
         // Normalize order-independent keyword sequences into one canonical
         // TypeSpecifiers value while preserving specific conflict diagnostics.
@@ -455,7 +748,12 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             {
                 parser.report(ParserErrorType::LongSpecifiedThrice, Some(token));
             },
-            | PrimitiveTypeSpecifier::Long => type_specifiers.make_long(parser, token),
+            | PrimitiveTypeSpecifier::Long => {
+                if type_specifiers.is_long() {
+                    parser.extension(crate::configuration::Feature::LongLong, "long long", token);
+                }
+                self.specifiers.type_specifiers.make_long(parser, token);
+            },
             | PrimitiveTypeSpecifier::Char => apply_once!(is_char, make_char),
             | PrimitiveTypeSpecifier::Float => apply_once!(is_float, make_float),
             | PrimitiveTypeSpecifier::Double if type_specifiers.is_double() => {
@@ -508,6 +806,7 @@ pub(super) fn storage_class(token: TokenType) -> Option<StorageClass> {
 /// C99: §6.7.3 paragraph 1, p. 108; PDF p. 120.
 pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
     match token {
+        | TokenType::Keyword(KeywordTokenType::Atomic) => Some(TypeQualifiers::ATOMIC),
         | TokenType::Keyword(KeywordTokenType::Const) => Some(TypeQualifiers::CONST),
         | TokenType::Keyword(KeywordTokenType::Volatile) => Some(TypeQualifiers::VOLATILE),
         | TokenType::Keyword(KeywordTokenType::Restrict) => Some(TypeQualifiers::RESTRICT),
@@ -527,6 +826,7 @@ pub(super) fn report_duplicate_type_qualifier(
         | TypeQualifiers::CONST => ParserErrorType::ConstSpecifiedTwice,
         | TypeQualifiers::VOLATILE => ParserErrorType::VolatileSpecifiedTwice,
         | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
+        | TypeQualifiers::ATOMIC => return,
         | _ => unreachable!("one type qualifier is handled at a time"),
     };
     parser.report(error_type, Some(token));

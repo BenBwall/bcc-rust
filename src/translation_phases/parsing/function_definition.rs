@@ -144,6 +144,24 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                 if let Some(suffix) = declarator.function_suffix() {
                     match suffix {
                         | DirectDeclarator::Function { parameter_list, .. } => {
+                            for parameter in parameter_list {
+                                let void_singleton = parameter_list.len() == 1
+                                    && parameter.declarator.is_none()
+                                    && parameter.declaration_specifiers.type_specifiers
+                                        == super::declaration_syntax::TypeSpecifiers::Void;
+                                if !void_singleton
+                                    && parameter
+                                        .declarator
+                                        .and_then(Declarator::identifier)
+                                        .is_none()
+                                {
+                                    parser.context.report_extension(
+                                        crate::configuration::Feature::C23Keywords,
+                                        "unnamed parameter in function definition",
+                                        parameter.source_vectors,
+                                    );
+                                }
+                            }
                             if parameter_list.is_empty() {
                                 self.phase = FunctionDefinitionPhase::DeclarationOrBody;
                                 return ParseAction::Reprocess;
@@ -254,7 +272,9 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     // would swallow every later declaration, so end it here
                     // and let the token start the next external declaration.
                     let head_is_doubtful = !self.declaration_list.is_empty()
-                        && (!head_is_function || self.head.recovered);
+                        && (!head_is_function
+                            || self.head.recovered
+                            || self.head.declaration_specifiers.implicit_int);
                     if token.is_none() || head_is_doubtful {
                         let body_source = parser.missing_syntax_source();
                         let body = parser.alloc_syntax(Statement {

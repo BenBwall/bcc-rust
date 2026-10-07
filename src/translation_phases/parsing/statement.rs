@@ -59,6 +59,12 @@ use super::{
         ParseFrameKind,
         ParseValue,
     },
+    modern::{
+        AttributeSpecifier,
+        ModernFrame,
+        ModernKind,
+        ModernValue,
+    },
     recovery::{
         ExpressionTerminator,
         SynchronizationKind,
@@ -69,11 +75,14 @@ use super::{
         SwitchScope,
     },
     syntax::{
+        AttributedStatement,
+        CaseRange,
         ConstantExpressionSlot,
         ExpressionSlot,
         ForInitializer,
         ForStatement,
         Identifier,
+        SelectionHeader,
         Statement,
         StatementType,
     },
@@ -112,6 +121,7 @@ pub(super) enum HeaderKind {
 pub(super) enum LabelPrefix<'tu> {
     Identifier(Identifier),
     Case(ConstantExpressionSlot<'tu>),
+    Range(ConstantExpressionSlot<'tu>, ConstantExpressionSlot<'tu>),
     Default,
 }
 
@@ -130,6 +140,14 @@ pub(super) enum SimpleJump {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum StatementPhase<'tu> {
     Start,
+    AwaitAttributes,
+    AwaitAttributedStatement(&'tu AttributeSpecifier<'tu>),
+    AwaitLabeledDeclaration(LabelPrefix<'tu>),
+    NamedJumpSemicolon(SimpleJump, Identifier),
+    AwaitHeaderDeclaration(HeaderKind),
+    AwaitSelectionExpression(HeaderKind, &'tu super::declaration_syntax::Declaration<'tu>),
+    PushCaseRange(ConstantExpressionSlot<'tu>),
+    AwaitCaseRange(ConstantExpressionSlot<'tu>),
     AwaitCompound,
     AwaitExpression,
     ExpressionSemicolon(ExpressionSlot<'tu>),
@@ -213,6 +231,9 @@ pub(super) struct StatementFrame<'tu> {
     implicit_scope:            Option<ScopeKind>,
     owns_switch_scope:         bool,
     leave_else_unconsumed:     bool,
+    /// C23 permits standalone labels among compound block items, not as a
+    /// selection/iteration substatement whose required statement is absent.
+    block_item:                bool,
 }
 
 impl HeaderKind {
@@ -252,7 +273,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
             implicit_scope,
             owns_switch_scope: false,
             leave_else_unconsumed: false,
+            block_item: false,
         }
+    }
+
+    pub(super) fn with_block_item(mut self, block_item: bool) -> Self {
+        self.block_item = block_item;
+        self
     }
 
     fn with_else_ownership(
@@ -288,8 +315,141 @@ impl<'tu, 'p> StatementFrame<'tu> {
         }
 
         match self.phase {
+            | StatementPhase::AwaitAttributes => {
+                let Some(ParseValue::Modern(ModernValue::Attributes(x))) = returned else {
+                    panic!("statement attributes protocol: {returned:?}")
+                };
+                self.source_vectors = Some(x.source_vectors);
+                self.phase = StatementPhase::AwaitAttributedStatement(x);
+                ParseAction::Push(ParseFrame::Statement(
+                    StatementFrame::with_else_ownership(
+                        parser.hard_error_count,
+                        None,
+                        self.leave_else_unconsumed,
+                    )
+                    .with_block_item(self.block_item),
+                ))
+            },
+            | StatementPhase::AwaitAttributedStatement(attributes) => {
+                let Some(ParseValue::Statement(statement)) = returned else {
+                    panic!("attributed statement protocol: {returned:?}")
+                };
+                self.merge_statement(parser.context, statement);
+                let node = parser.alloc_syntax(AttributedStatement {
+                    attributes,
+                    statement,
+                });
+                self.finish(parser, StatementType::Attributed(node))
+            },
+            | StatementPhase::AwaitLabeledDeclaration(prefix) => {
+                let Some(ParseValue::Declaration(declaration)) = returned else {
+                    panic!("labeled declaration protocol: {returned:?}")
+                };
+                let child = parser.alloc_syntax(Statement {
+                    kind:           StatementType::Declaration(declaration),
+                    source_vectors: declaration.source_vectors,
+                    recovered:      declaration.recovered,
+                });
+                self.merge_statement(parser.context, child);
+                let kind = match prefix {
+                    | LabelPrefix::Identifier(x) => StatementType::Label(x, child),
+                    | LabelPrefix::Case(x) => StatementType::Case(x, child),
+                    | LabelPrefix::Default => StatementType::Default(child),
+                    | LabelPrefix::Range(lower, upper) =>
+                        StatementType::CaseRange(parser.alloc_syntax(CaseRange {
+                            lower,
+                            upper,
+                            statement: child,
+                        })),
+                };
+                self.finish(parser, kind)
+            },
+            | StatementPhase::NamedJumpSemicolon(jump, identifier) => {
+                self.own_semicolon_or_report(parser, token, "named jump statement");
+                self.phase = StatementPhase::Finish(match jump {
+                    | SimpleJump::Break => StatementType::NamedBreak(identifier),
+                    | SimpleJump::Continue => StatementType::NamedContinue(identifier),
+                });
+                if is_operator(token, OperatorTokenType::Semicolon) {
+                    ParseAction::Consume
+                } else {
+                    ParseAction::Reprocess
+                }
+            },
+            | StatementPhase::AwaitHeaderDeclaration(kind) => {
+                let Some(ParseValue::Declaration(declaration)) = returned else {
+                    panic!("selection declaration protocol: {returned:?}")
+                };
+                if is_operator(token, OperatorTokenType::ClosingParenthesis)
+                    && !is_operator(parser.cursor.previous, OperatorTokenType::Semicolon)
+                {
+                    if !matches!(declaration.init_declarators.as_slice(),[init] if init.initializer.is_some())
+                    {
+                        parser.report(
+                            ParserErrorType::ExpectedIsoSyntax(
+                                "a single initialized declaration in selection header",
+                                token.map(|x| x.kind),
+                            ),
+                            token,
+                        );
+                    }
+                    let header = parser.alloc_syntax(SelectionHeader {
+                        declaration,
+                        expression: None,
+                    });
+                    self.phase =
+                        StatementPhase::HeaderClosing(kind, ExpressionSlot::Selection(header));
+                    return ParseAction::Continue;
+                }
+                self.phase = StatementPhase::AwaitSelectionExpression(kind, declaration);
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
+                    ExpressionMode::Expression,
+                    ExpressionBoundary::ClosingParenthesis,
+                    parser.hard_error_count,
+                )))
+            },
+            | StatementPhase::AwaitSelectionExpression(kind, declaration) => {
+                let slot = Self::parsed_slot(returned);
+                let header = parser.alloc_syntax(SelectionHeader {
+                    declaration,
+                    expression: Some(slot),
+                });
+                self.phase = StatementPhase::HeaderClosing(kind, ExpressionSlot::Selection(header));
+                ParseAction::Continue
+            },
+            | StatementPhase::PushCaseRange(lower) => {
+                self.phase = StatementPhase::AwaitCaseRange(lower);
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
+                    ExpressionMode::ConstantExpression,
+                    ExpressionBoundary::Statement(ExpressionTerminator::Colon),
+                    parser.hard_error_count,
+                )))
+            },
+            | StatementPhase::AwaitCaseRange(lower) => {
+                let upper = Self::parsed_constant_slot(returned);
+                self.merge_constant_slot(parser.context, upper);
+                self.phase = StatementPhase::PushLabeled(LabelPrefix::Range(lower, upper));
+
+                if is_operator(token, OperatorTokenType::Colon) {
+                    self.merge_token(parser, token.expect("colon exists"));
+                    ParseAction::Consume
+                } else {
+                    self.own_colon_or_report(parser, token, "case range");
+                    ParseAction::Reprocess
+                }
+            },
             | StatementPhase::Start => {
                 debug_assert!(returned.is_none());
+                if parser.attribute_starter(token) {
+                    self.phase = StatementPhase::AwaitAttributes;
+                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Attributes,
+                        parser.hard_error_count,
+                    )));
+                }
                 if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
                     self.phase = StatementPhase::AwaitCompound;
                     return ParseAction::Push(ParseFrame::CompoundStatement(
@@ -552,6 +712,19 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
             },
             | StatementPhase::SimpleJumpSemicolon(jump) => {
+                if let Some(token) = token
+                    && token.kind == TokenType::Identifier
+                {
+                    parser.extension(
+                        crate::configuration::Feature::NamedLoops,
+                        "named loop control",
+                        token,
+                    );
+                    self.merge_token(parser, token);
+                    self.phase =
+                        StatementPhase::NamedJumpSemicolon(jump, Identifier::from_token(token));
+                    return ParseAction::Consume;
+                }
                 debug_assert!(returned.is_none());
                 self.own_semicolon_or_report(parser, token, "jump statement");
                 self.phase = StatementPhase::Finish(match jump {
@@ -638,6 +811,17 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::AwaitCaseExpression => {
                 let slot = Self::parsed_constant_slot(returned);
                 self.merge_constant_slot(parser.context, slot);
+                if is_operator(token, OperatorTokenType::Ellipsis) {
+                    let token = token.expect("ellipsis exists");
+                    parser.extension(
+                        crate::configuration::Feature::CaseRanges,
+                        "case range",
+                        token,
+                    );
+                    self.merge_token(parser, token);
+                    self.phase = StatementPhase::PushCaseRange(slot);
+                    return ParseAction::Consume;
+                }
                 self.phase = StatementPhase::CaseColon(slot);
                 ParseAction::Reprocess
             },
@@ -689,28 +873,91 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::PushLabeled(prefix) => {
                 debug_assert!(returned.is_none());
+                if is_operator(token, OperatorTokenType::ClosingCurlyBrace) {
+                    if !self.block_item {
+                        parser.report(
+                            ParserErrorType::ExpectedIsoSyntax(
+                                "a statement after a label outside a compound block",
+                                token.map(|x| x.kind),
+                            ),
+                            token,
+                        );
+                    }
+                    parser.extension(
+                        crate::configuration::Feature::C23Keywords,
+                        "label at end of compound statement",
+                        token.expect("closing brace exists"),
+                    );
+                    let child = parser.alloc_syntax(Statement {
+                        kind:           StatementType::Null,
+                        source_vectors: self.source_vectors.unwrap_or_default(),
+                        recovered:      false,
+                    });
+                    let kind = match prefix {
+                        | LabelPrefix::Identifier(x) => StatementType::Label(x, child),
+                        | LabelPrefix::Case(x) => StatementType::Case(x, child),
+                        | LabelPrefix::Default => StatementType::Default(child),
+                        | LabelPrefix::Range(lower, upper) =>
+                            StatementType::CaseRange(parser.alloc_syntax(CaseRange {
+                                lower,
+                                upper,
+                                statement: child,
+                            })),
+                    };
+                    return self.finish(parser, kind);
+                }
+                if token.is_some_and(|x| parser.declaration_starter(x))
+                    && (!parser.attribute_starter(token) || parser.attributes_precede_declaration())
+                {
+                    if !self.block_item {
+                        parser.report(
+                            ParserErrorType::ExpectedIsoSyntax(
+                                "a statement after a label outside a compound block",
+                                token.map(|x| x.kind),
+                            ),
+                            token,
+                        );
+                    }
+                    parser.extension(
+                        crate::configuration::Feature::C23Keywords,
+                        "label before declaration",
+                        token.expect("declaration exists"),
+                    );
+                    self.phase = StatementPhase::AwaitLabeledDeclaration(prefix);
+                    return ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
+                        parser.arena,
+                        DeclarationContext::Block,
+                        parser.hard_error_count,
+                    )));
+                }
                 self.phase = StatementPhase::AwaitLabeled(prefix);
-                ParseAction::Push(ParseFrame::Statement(StatementFrame::with_else_ownership(
-                    parser.hard_error_count,
-                    None,
-                    self.leave_else_unconsumed,
-                )))
+                ParseAction::Push(ParseFrame::Statement(
+                    StatementFrame::with_else_ownership(
+                        parser.hard_error_count,
+                        None,
+                        self.leave_else_unconsumed,
+                    )
+                    .with_block_item(self.block_item),
+                ))
             },
             | StatementPhase::AwaitLabeled(prefix) => {
                 let Some(ParseValue::Statement(statement)) = returned else {
                     panic!("labeled child returned an unexpected value: {returned:?}");
                 };
                 self.merge_statement(parser.context, statement);
-                self.finish(
-                    parser,
-                    match prefix {
-                        | LabelPrefix::Identifier(identifier) =>
-                            StatementType::Label(identifier, statement),
-                        | LabelPrefix::Case(expression) =>
-                            StatementType::Case(expression, statement),
-                        | LabelPrefix::Default => StatementType::Default(statement),
-                    },
-                )
+                let kind = match prefix {
+                    | LabelPrefix::Identifier(identifier) =>
+                        StatementType::Label(identifier, statement),
+                    | LabelPrefix::Case(expression) => StatementType::Case(expression, statement),
+                    | LabelPrefix::Default => StatementType::Default(statement),
+                    | LabelPrefix::Range(lower, upper) =>
+                        StatementType::CaseRange(parser.alloc_syntax(CaseRange {
+                            lower,
+                            upper,
+                            statement,
+                        })),
+                };
+                self.finish(parser, kind)
             },
             | StatementPhase::HeaderOpening(kind) => {
                 debug_assert!(returned.is_none());
@@ -731,6 +978,21 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
             },
             | StatementPhase::HeaderExpression(kind) => {
+                if matches!(kind, HeaderKind::If | HeaderKind::Switch)
+                    && token.is_some_and(|x| parser.declaration_starter(x))
+                {
+                    parser.extension(
+                        crate::configuration::Feature::IfSwitchDeclarations,
+                        "selection declaration",
+                        token.expect("declaration exists"),
+                    );
+                    self.phase = StatementPhase::AwaitHeaderDeclaration(kind);
+                    return ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
+                        parser.arena,
+                        DeclarationContext::SelectionHeader,
+                        parser.hard_error_count,
+                    )));
+                }
                 debug_assert!(returned.is_none());
                 if Self::at_expression_boundary(token, ExpressionTerminator::ClosingParenthesis) {
                     parser.report(
@@ -1046,6 +1308,11 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     ParseAction::Reprocess
                 } else if token.is_some_and(|token| parser.declaration_starter(token)) {
                     // C99 §6.8.5p1: `for ( declaration ...`. The declared
+                    parser.extension(
+                        crate::configuration::Feature::ForDeclarations,
+                        "for declaration",
+                        token.expect("declaration starts here"),
+                    );
                     // names are in scope for the rest of the header and the
                     // body (§6.8.5.3p1), the iteration statement's block.
                     self.phase = StatementPhase::AwaitForInitializerDeclaration;
@@ -1385,6 +1652,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
 
     fn merge_slot(&mut self, context: &mut Context<'_>, slot: ExpressionSlot<'tu>) {
         let source = match slot {
+            | ExpressionSlot::Selection(header) => header.declaration.source_vectors,
             | ExpressionSlot::Parsed(index) => index.source_vectors,
             | ExpressionSlot::Missing(source) => source,
         };

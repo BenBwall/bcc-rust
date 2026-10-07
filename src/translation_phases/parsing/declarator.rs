@@ -56,6 +56,11 @@ use super::{
         ParseFrameKind,
         ParseValue,
     },
+    modern::{
+        ModernFrame,
+        ModernKind,
+        ModernValue,
+    },
     parameter_list::ParameterListFrame,
     recovery::{
         SynchronizationKind,
@@ -161,6 +166,8 @@ pub(super) struct DeclaratorFrame<'tu, 'p> {
 /// §6.7.5.1-§6.7.5.3, pp. 115-121; PDF pp. 127-133.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DeclaratorPhase {
+    AwaitAttributes,
+    AwaitPointerAttributes,
     /// Decide whether the declarator begins with a pointer or direct base.
     PointerOrBase,
     /// Collect qualifiers for the current pointer level.
@@ -234,6 +241,23 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self.phase {
+            | DeclaratorPhase::AwaitPointerAttributes | DeclaratorPhase::AwaitAttributes => {
+                let Some(ParseValue::Modern(ModernValue::Attributes(attributes))) = returned else {
+                    panic!("declarator attributes protocol: {returned:?}")
+                };
+                self.direct_declarators
+                    .push(DirectDeclarator::Attributes(attributes));
+                self.source_vectors = Some(parser.context.merge_vectors(
+                    self.source_vectors.unwrap_or_default(),
+                    attributes.source_vectors,
+                ));
+                self.phase = if matches!(self.phase, DeclaratorPhase::AwaitPointerAttributes) {
+                    DeclaratorPhase::PointerQualifiers
+                } else {
+                    DeclaratorPhase::Suffix
+                };
+                ParseAction::Continue
+            },
             | DeclaratorPhase::PointerOrBase => {
                 debug_assert!(
                     returned.is_none(),
@@ -252,6 +276,14 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 }
             },
             | DeclaratorPhase::PointerQualifiers => {
+                if parser.attribute_starter(token) {
+                    self.phase = DeclaratorPhase::AwaitPointerAttributes;
+                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Attributes,
+                        parser.hard_error_count,
+                    )));
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -418,6 +450,14 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                if parser.attribute_starter(token) {
+                    self.phase = DeclaratorPhase::AwaitAttributes;
+                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Attributes,
+                        parser.hard_error_count,
+                    )));
+                }
                 // Direct-declarator suffixes repeat left-to-right.
                 // Re-enter this phase after
                 // every array or function child to preserve
@@ -460,6 +500,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     {
                         report_duplicate_type_qualifier(parser, token, qualifier);
                     }
+                    if self.array_qualifiers.is_empty() {
+                        parser.c99_syntax_extension("qualified array parameter", token);
+                    }
                     // C99 §6.7.5p1: qualifiers go before or after `static`,
                     // not both.
                     if self.array_is_static && self.array_qualifiers_before_static {
@@ -479,6 +522,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Static))
                 {
                     let token = token.expect("static token exists");
+                    parser.c99_syntax_extension("static array parameter", token);
                     if self.array_is_static {
                         parser.report(ParserErrorType::StaticSpecifiedTwice, Some(token));
                     }
@@ -488,6 +532,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 }
                 if is_array_pointer_marker(parser, token) {
                     let token = token.expect("asterisk token exists");
+                    parser.c99_syntax_extension("variable length array marker", token);
                     // C99 §6.7.6p1: an abstract declarator's `[ * ]` takes no
                     // qualifiers, whichever suffixes or grouping precede it.
                     if self.mode != DeclaratorMode::Named

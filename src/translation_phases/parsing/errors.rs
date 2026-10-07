@@ -93,6 +93,8 @@ pub(crate) enum ExpectedSyntax {
     DeclarationContinuation,
     SeparatorOrCloser,
     OwnedDelimiter,
+    /// A required component of a later ISO grammar production.
+    IsoSyntax,
     None,
 }
 
@@ -407,6 +409,10 @@ pub(crate) enum ParserErrorType<'tu> {
     /// PDF p. 81); an assignment's left operand is a unary-expression
     /// (§6.5.16 paragraph 1, p. 91; PDF p. 103).
     ExpectedStatementExpression(&'static str, Option<TokenType>),
+    /// A required delimiter, attribute component, or assertion message is
+    /// absent. C11: §6.5.1.1p1, p. 78; PDF p. 96; §6.7.10p1, p. 145; PDF p.
+    /// 163. C23: §6.7.13.2p1, pp. 142-143; PDF pp. 155-156.
+    ExpectedIsoSyntax(&'static str, Option<TokenType>),
     /// `.` or `->` was not followed by a member identifier.
     /// C99: `postfix-expression . identifier` is §6.5.2 paragraph 1, p. 69;
     /// PDF p. 81; member access is §6.5.2.3, pp. 72-73; PDF pp. 84-85.
@@ -668,6 +674,7 @@ impl GetSeverity for ParserErrorType<'_> {
             | Self::ExpectedStatement(..)
             | Self::ExpectedGotoLabel(..)
             | Self::ExpectedStatementExpression(..)
+            | Self::ExpectedIsoSyntax(..)
             | Self::ExpectedMemberIdentifier(..)
             | Self::ExpectedClosingSquareBracketInSubscript(..)
             | Self::ExpectedClosingSquareBracketInArrayDesignator(..)
@@ -882,6 +889,7 @@ impl ParserErrorType<'_> {
             | Self::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(..) =>
                 ExpectedSyntax::Declarator,
             | Self::ExpectedStatement(..) => ExpectedSyntax::Statement,
+            | Self::ExpectedIsoSyntax(..) => ExpectedSyntax::IsoSyntax,
             | Self::ExpectedStatementExpression(..)
             | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator =>
                 ExpectedSyntax::Expression,
@@ -1073,6 +1081,7 @@ impl ParserErrorType<'_> {
                 "expected an expression",
                 *token,
             ),
+            | Self::ExpectedIsoSyntax(component, token) => expected(component, *token),
             | Self::ExpectedMemberIdentifier(token) => expected_with_label(
                 "a member name after `.` or `->`",
                 "expected an identifier",

@@ -58,6 +58,12 @@ use super::{
         any_expression_value,
         expression_value,
     },
+    modern::{
+        ModernFrame,
+        ModernKind,
+        ModernValue,
+        SyntaxOperand,
+    },
     recovery::ExpressionTerminator,
     statement::is_statement_keyword,
     syntax::{
@@ -203,6 +209,9 @@ impl<'p> CallState<'_, 'p> {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ExpressionPhase<'tu> {
     Parse,
+    AwaitModern(KeywordTokenType, SourceVectors),
+    CountofStart(SourceVectors),
+    AwaitCountofExpression(SourceVectors),
     Finish,
     RecoverUnexpectedBrace(u32, SourceVectors),
     PushGrouped(SourceVectors),
@@ -556,6 +565,64 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self.phase {
+            | ExpressionPhase::CountofStart(source) => {
+                if token.is_some_and(|x| {
+                    x.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                }) && Self::parenthesized_type_name_follows(parser)
+                {
+                    self.phase = ExpressionPhase::AwaitModern(KeywordTokenType::Countof, source);
+                    let frame = ModernFrame::operand_after_keyword(
+                        parser.arena,
+                        parser.hard_error_count,
+                        source,
+                    );
+                    return ParseAction::Push(ParseFrame::Modern(frame));
+                }
+                self.phase = ExpressionPhase::AwaitCountofExpression(source);
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
+                    ExpressionMode::UnaryExpression,
+                    self.boundary,
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitCountofExpression(source) => {
+                let operand = expression_value(returned);
+                let merged = parser.context.merge_vectors(source, operand.source_vectors);
+                let index = parser.store_expression(
+                    ExpressionType::Countof(SyntaxOperand::Expression(operand)),
+                    merged,
+                    Some(source),
+                    parser.hard_error_count > self.starting_error_count,
+                );
+                self.push_operand(index, true, false);
+                self.phase = ExpressionPhase::Parse;
+                return ParseAction::Continue;
+            },
+            | ExpressionPhase::AwaitModern(keyword, keyword_source) => {
+                let (kind, source) = match returned {
+                    | Some(ParseValue::Modern(ModernValue::Generic(x))) =>
+                        (ExpressionType::Generic(x), x.source_vectors),
+                    | Some(ParseValue::Modern(ModernValue::Operand(operand, source))) => (
+                        match (keyword, operand) {
+                            | (KeywordTokenType::Alignof, SyntaxOperand::Type(x)) =>
+                                ExpressionType::AlignofType(x),
+                            | (_, operand) => ExpressionType::Countof(operand),
+                        },
+                        source,
+                    ),
+                    | _ => panic!("ISO expression protocol: {returned:?}"),
+                };
+                let index = parser.store_expression(
+                    kind,
+                    source,
+                    Some(keyword_source),
+                    parser.hard_error_count > self.starting_error_count,
+                );
+                self.push_operand(index, true, keyword == KeywordTokenType::Generic);
+                self.phase = ExpressionPhase::Parse;
+                return ParseAction::Continue;
+            },
             | ExpressionPhase::RecoverUnexpectedBrace(depth, source_vectors) => {
                 debug_assert!(returned.is_none());
                 let Some(token) = token else {
@@ -893,9 +960,11 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             | ExpressionPhase::PushTypeName(opening_source, use_kind) => {
                 debug_assert!(returned.is_none());
                 self.phase = ExpressionPhase::AwaitTypeName(opening_source, use_kind);
-                return ParseAction::Push(ParseFrame::TypeName(TypeNameFrame::new(
-                    parser.hard_error_count,
-                )));
+                let mut frame = TypeNameFrame::new(parser.hard_error_count);
+                if Self::type_name_is_compound_literal(parser) {
+                    frame = frame.with_storage();
+                }
+                return ParseAction::Push(ParseFrame::TypeName(frame));
             },
             | ExpressionPhase::AwaitTypeName(opening_source, use_kind) => {
                 let Some(ParseValue::TypeName(type_name)) = returned else {
@@ -988,6 +1057,13 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             },
             | ExpressionPhase::PushCompoundLiteral(type_name, type_source, use_kind) => {
                 debug_assert!(returned.is_none());
+                if let Some(token) = token {
+                    parser.extension(
+                        crate::configuration::Feature::CompoundLiterals,
+                        "compound literal",
+                        token,
+                    );
+                }
                 self.phase =
                     ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind);
                 return ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
@@ -1232,6 +1308,28 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 self.push_error(parser, None);
                 return self.finish(parser);
             };
+            if token.kind == TokenType::Keyword(KeywordTokenType::Countof) {
+                self.phase = ExpressionPhase::CountofStart(token.source_vectors);
+                return ParseAction::Consume;
+            }
+            if let TokenType::Keyword(
+                keyword @ (KeywordTokenType::Generic | KeywordTokenType::Alignof),
+            ) = token.kind
+            {
+                self.phase = ExpressionPhase::AwaitModern(keyword, token.source_vectors);
+                return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                    parser.arena,
+                    if keyword == KeywordTokenType::Generic {
+                        ModernKind::Generic
+                    } else {
+                        ModernKind::Operand {
+                            type_only: keyword == KeywordTokenType::Alignof,
+                            constant:  false,
+                        }
+                    },
+                    parser.hard_error_count,
+                )));
+            }
             // A brace group directly inside a `(` and closed before its `)`,
             // such as a GNU statement expression `({ ... })`, is one error
             // operand even when it holds statements: skip it whole so the
@@ -1319,7 +1417,13 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 self.phase = ExpressionPhase::PushGrouped(token.source_vectors);
                 return ParseAction::Consume;
             }
+            if token.kind == TokenType::Identifier && parser.func_name == Some(token.contents) {
+                parser.extension(crate::configuration::Feature::Func, "__func__", token);
+            }
             let kind = match token.kind {
+                | TokenType::Keyword(KeywordTokenType::True) => ExpressionType::Boolean(true),
+                | TokenType::Keyword(KeywordTokenType::False) => ExpressionType::Boolean(false),
+                | TokenType::Keyword(KeywordTokenType::Nullptr) => ExpressionType::Nullptr,
                 | TokenType::Identifier =>
                     ExpressionType::Identifier(Identifier::from_token(token)),
                 | TokenType::Integer(value) => ExpressionType::Constant(Constant::Integer(value)),
@@ -1611,6 +1715,33 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// C99: a `type-name` begins with a `specifier-qualifier-list` (§6.7.6
     /// paragraph 1, p. 122; PDF p. 134), and an identifier starts one only
     /// as a visible `typedef-name` (§6.7.7 paragraph 1, p. 123; PDF p. 135).
+    fn type_name_is_compound_literal(parser: &Parser<'_, 'tu, 'p>) -> bool {
+        let mut groups = 0usize;
+        let mut offset = 0usize;
+        let mut token = parser.cursor.current();
+        while let Some(current) = token {
+            match current.kind {
+                | TokenType::Operator(
+                    OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
+                ) => groups += 1,
+                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if groups == 0 =>
+                    return parser.cursor.lookahead(offset).is_some_and(|x| {
+                        x.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    }),
+                | TokenType::Operator(
+                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
+                ) => groups = groups.saturating_sub(1),
+                | TokenType::Operator(
+                    OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace,
+                ) => return false,
+                | _ => {},
+            }
+            token = parser.cursor.lookahead(offset);
+            offset += 1;
+        }
+        false
+    }
+
     fn parenthesized_type_name_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
         let Some(following) = parser.cursor.following() else {
             return false;
@@ -1740,6 +1871,11 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
     /// p. 91; PDF p. 103); a `constant-expression` ends before a comma or an
     /// assignment operator (§6.6 paragraph 1, p. 95; PDF p. 107).
     fn is_boundary(&self, token: Option<TokenType>) -> bool {
+        if self.boundary == ExpressionBoundary::Statement(ExpressionTerminator::Colon)
+            && token == Some(TokenType::Operator(OperatorTokenType::Ellipsis))
+        {
+            return true;
+        }
         let Some(token) = token else {
             return true;
         };

@@ -40,6 +40,13 @@ use super::{
         ParseFrameKind,
         ParseValue,
     },
+    modern::{
+        ModernFrame,
+        ModernKind,
+        ModernValue,
+        SpecifierExtension,
+        SpecifierExtensionKind,
+    },
     recovery::{
         SynchronizationKind,
         SynchronizationSet,
@@ -77,6 +84,9 @@ use crate::{
 pub(super) struct EnumSpecifierFrame<'tu, 'p> {
     /// Current tag/enumerator transition.
     phase: EnumPhase,
+    attributes: Option<&'tu SpecifierExtension<'tu>>,
+    enumerator_attributes: Option<&'tu SpecifierExtension<'tu>>,
+    underlying_type: Option<&'tu super::declaration_syntax::TypeName<'tu>>,
     /// Optional enum tag.
     name: Option<Identifier>,
     /// Completed enumerators before arena insertion.
@@ -106,6 +116,10 @@ pub(super) struct EnumSpecifierFrame<'tu, 'p> {
 pub(super) enum EnumPhase {
     /// Consume the `enum` keyword.
     Start,
+    AwaitTagAttributes,
+    AwaitEnumeratorAttributes,
+    PushUnderlyingType,
+    AwaitUnderlyingType,
     /// Parse an optional tag or anonymous opening brace.
     NameOrBody,
     /// Decide whether a named tag also has a body.
@@ -128,6 +142,9 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump) -> Self {
         Self {
             phase: EnumPhase::Start,
+            attributes: None,
+            enumerator_attributes: None,
+            underlying_type: None,
             name: None,
             enumerators: ArenaVec::new_in(arena),
             current_enumerator: None,
@@ -147,6 +164,60 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self.phase {
+            | EnumPhase::PushUnderlyingType => {
+                self.body_starting_error_count = parser.hard_error_count;
+                self.phase = EnumPhase::AwaitUnderlyingType;
+                ParseAction::Push(ParseFrame::DeclarationSpecifiers(
+                    super::declaration_specifiers::DeclarationSpecifiersFrame::new(
+                        super::declaration_specifiers::SpecifierMode::TypeName,
+                    ),
+                ))
+            },
+            | EnumPhase::AwaitUnderlyingType => {
+                let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
+                    panic!("enum underlying type protocol: {returned:?}")
+                };
+                let x = parser.alloc_syntax(super::declaration_syntax::TypeName {
+                    declaration_specifiers: specifiers,
+                    declarator:             None,
+                    source_vectors:         specifiers.source_vectors,
+                    recovered:              parser.hard_error_count
+                        > self.body_starting_error_count,
+                });
+                self.underlying_type = Some(x);
+                self.source_vectors.push(x.source_vectors);
+                self.phase = EnumPhase::AfterName;
+                ParseAction::Continue
+            },
+            | EnumPhase::AwaitTagAttributes | EnumPhase::AwaitEnumeratorAttributes => {
+                let Some(ParseValue::Modern(ModernValue::Attributes(x))) = returned else {
+                    panic!("enum attributes protocol: {returned:?}")
+                };
+                let is_enumerator = matches!(self.phase, EnumPhase::AwaitEnumeratorAttributes);
+                let next = if is_enumerator {
+                    self.enumerator_attributes
+                } else {
+                    self.attributes
+                };
+                let attributes = Some(parser.alloc_syntax(SpecifierExtension {
+                    kind: SpecifierExtensionKind::Attributes(x),
+                    next,
+                    source_vectors: x.source_vectors,
+                }));
+                self.source_vectors.push(x.source_vectors);
+                if is_enumerator {
+                    self.enumerator_attributes = attributes;
+                    self.current_enumerator_source = Some(parser.context.merge_vectors(
+                        self.current_enumerator_source.unwrap_or_default(),
+                        x.source_vectors,
+                    ));
+                    self.phase = EnumPhase::AfterEnumeratorName;
+                } else {
+                    self.attributes = attributes;
+                    self.phase = EnumPhase::NameOrBody;
+                }
+                ParseAction::Continue
+            },
             | EnumPhase::Start => {
                 debug_assert!(
                     returned.is_none(),
@@ -171,6 +242,25 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                if parser.attribute_starter(token) {
+                    self.phase = EnumPhase::AwaitTagAttributes;
+                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Attributes,
+                        parser.hard_error_count,
+                    )));
+                }
+                if is_operator(token, OperatorTokenType::Colon) {
+                    let token = token.expect("colon exists");
+                    parser.extension(
+                        crate::configuration::Feature::EnumUnderlyingType,
+                        "fixed enum underlying type",
+                        token,
+                    );
+                    self.source_vectors.push(token.source_vectors);
+                    self.phase = EnumPhase::PushUnderlyingType;
+                    return ParseAction::Consume;
+                }
                 // Like tag specifiers for aggregates, an enum can be a tagged
                 // reference, tagged definition, or anonymous definition.
                 if let Some(token) = token
@@ -199,6 +289,17 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 }
             },
             | EnumPhase::AfterName => {
+                if is_operator(token, OperatorTokenType::Colon) {
+                    let token = token.expect("colon exists");
+                    parser.extension(
+                        crate::configuration::Feature::EnumUnderlyingType,
+                        "fixed enum underlying type",
+                        token,
+                    );
+                    self.source_vectors.push(token.source_vectors);
+                    self.phase = EnumPhase::PushUnderlyingType;
+                    return ParseAction::Consume;
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -313,6 +414,14 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                if parser.attribute_starter(token) {
+                    self.phase = EnumPhase::AwaitEnumeratorAttributes;
+                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Attributes,
+                        parser.hard_error_count,
+                    )));
+                }
                 // The constant-expression is optional. Finalize immediately
                 // unless `=` explicitly transfers ownership to the value child.
                 if is_operator(token, OperatorTokenType::Equals) {
@@ -371,6 +480,16 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 let resuming_after_error = std::mem::take(&mut self.resuming_after_error);
                 if is_operator(token, OperatorTokenType::Comma) {
                     let token = token.expect("comma token exists");
+                    if is_operator(
+                        parser.cursor.following(),
+                        OperatorTokenType::ClosingCurlyBrace,
+                    ) {
+                        parser.extension(
+                            crate::configuration::Feature::TrailingEnumComma,
+                            "trailing enum comma",
+                            token,
+                        );
+                    }
                     self.source_vectors.push(token.source_vectors);
                     self.phase = EnumPhase::EnumeratorOrClose;
                     ParseAction::Consume
@@ -562,6 +681,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
         let source_vectors = self.current_enumerator_source.take().unwrap_or_default();
         if let Some(name) = self.current_enumerator.take() {
             self.enumerators.push(Enumerator {
+                attributes: self.enumerator_attributes.take(),
                 name,
                 expression,
                 source_vectors,
@@ -580,6 +700,8 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
             .then(|| parser.alloc_syntax_list(&mut self.enumerators));
         let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
         let index = parser.alloc_syntax(EnumSpecifier {
+            underlying_type: self.underlying_type,
+            attributes: self.attributes,
             name: self.name,
             enumeration_list,
             source_vectors,

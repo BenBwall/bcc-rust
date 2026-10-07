@@ -181,6 +181,86 @@ mod tests {
         }
     }
 
+    #[test]
+    fn iso_parser_syntax_is_native_in_its_selected_revision() {
+        let c11 = "_Alignas(16) _Atomic(int) x; _Thread_local int t; _Static_assert(1,\"ok\"); \
+                   _Noreturn void f(void){int n=_Generic(x,int:1,default:0)+_Alignof(int); \
+                   return;}\n";
+        for (flag, source) in [
+            ("-std=c89", "extern object; f(void){return 0;}\n"),
+            ("-std=iso9899:199409", "extern object; f(void){return 0;}\n"),
+            (
+                "-std=c99",
+                include_str!("fixtures/diagnostics/language/iso-c89.c"),
+            ),
+            ("-std=c11", c11),
+            ("-std=c17", c11),
+            (
+                "-std=c23",
+                "[[maybe_unused]] constexpr int c=1; static_assert(1); typeof_unqual(const int) \
+                 x; auto n=true; void *p=nullptr;\n",
+            ),
+            (
+                "-std=c2y",
+                include_str!("fixtures/diagnostics/language/iso-c2y.c"),
+            ),
+        ] {
+            let output = run(&[flag, "-pedantic-errors", "--syntax-tree", "--input", source]);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{flag}: {stderr}");
+            assert!(
+                !stderr.contains("error:")
+                    && !stderr.contains("warning:")
+                    && !stderr.contains("recovered"),
+                "{flag}: {stderr}"
+            );
+            assert!(
+                stderr.contains("declaration") || stderr.contains("function"),
+                "{flag}: {stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn iso_parser_policy_diagnostics_match_goldens() {
+        let source = include_str!("fixtures/diagnostics/language/iso-c89.c");
+        for (flag, expected) in [
+            (
+                "-pedantic",
+                include_str!("fixtures/diagnostics/language/iso-c89-warning.stderr"),
+            ),
+            (
+                "-pedantic-errors",
+                include_str!("fixtures/diagnostics/language/iso-c89-error.stderr"),
+            ),
+        ] {
+            let output = run(&["-std=c89", flag, "--input", source]);
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
+        }
+        let output = run(&["-std=c89", "--input", source]);
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+
+    #[test]
+    fn iso_grammar_token_seam_matches_its_snapshot() {
+        // Pins the existing phase-7 tokens consumed by the new parser grammar.
+        // This test changes no lexer or preprocessing behavior.
+        let source = include_str!("fixtures/diagnostics/language/iso-c2y.c");
+        let output = run(&[
+            "-std=c2y",
+            "-pedantic-errors",
+            "--tokens",
+            "--input",
+            source,
+        ]);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            include_str!("fixtures/lexing/iso_parser_token_seam.snap")
+        );
+    }
+
     fn run(arguments: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
             .args(arguments)

@@ -23,10 +23,7 @@ use std::fmt::Debug;
 
 use super::{
     Parser,
-    declaration_specifiers::{
-        DeclarationSpecifiersFrame,
-        SpecifierMode,
-    },
+    declaration_specifiers::DeclarationSpecifiersFrame,
     declaration_syntax::{
         DeclarationSpecifiers,
         Declarator,
@@ -288,7 +285,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     self.diagnosed_mixed_parameter = true;
                     self.phase = ParameterListPhase::KAndRMixedSpecifiers;
                     return ParseAction::Push(ParseFrame::DeclarationSpecifiers(
-                        DeclarationSpecifiersFrame::new(SpecifierMode::Declaration),
+                        DeclarationSpecifiersFrame::parameter(),
                     ));
                 }
                 // After a diagnosed prototype parameter, a trailing `...`
@@ -437,7 +434,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 );
                 self.phase = ParameterListPhase::AwaitSpecifiers;
                 ParseAction::Push(ParseFrame::DeclarationSpecifiers(
-                    DeclarationSpecifiersFrame::new(SpecifierMode::Declaration),
+                    DeclarationSpecifiersFrame::parameter(),
                 ))
             },
             | ParameterListPhase::AwaitSpecifiers => {

@@ -107,13 +107,6 @@ impl Context<'_> {
     }
 
     /// Feature-based adapter for lexer, preprocessor, and parser consumers.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Shared seam consumed by later language-standard workstreams."
-        )
-    )]
     pub(crate) fn report_extension(
         &mut self,
         feature: Feature,

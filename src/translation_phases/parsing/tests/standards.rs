@@ -1,0 +1,666 @@
+//! Mode-specific ISO syntax, policy, provenance, and recovery regressions.
+
+use super::{
+    block_items,
+    declaration,
+    function_definition,
+    parser_errors,
+};
+use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+    },
+    translation_phases::{
+        ErrorSeverity,
+        GetSeverity,
+        TranslationError,
+        parsing::{
+            declaration_syntax::{
+                DirectDeclarator,
+                TypeSpecifiers,
+            },
+            modern::{
+                ExtendedType,
+                SyntaxOperand,
+            },
+            syntax::{
+                BlockItem,
+                ExpressionSlot,
+                ExpressionType,
+                StatementType,
+            },
+        },
+    },
+};
+
+fn with_parse_configuration<R>(
+    source: &str,
+    configuration: CompilerConfiguration,
+    inspect: impl FnOnce(&super::Parsed<'_, '_>) -> R,
+) -> R {
+    super::with_parse_configuration(&format!("{source}\n"), configuration, inspect)
+}
+fn mode(standard: CStandard, policy: ExtensionPolicy) -> CompilerConfiguration {
+    CompilerConfiguration::new(standard, policy)
+}
+fn extensions(parsed: &super::Parsed<'_, '_>) -> Vec<String> {
+    parsed
+        .errors
+        .iter()
+        .filter_map(|x| {
+            if let TranslationError::Extension(x) = x {
+                Some(x.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+fn clean(source: &str, standard: CStandard) {
+    with_parse_configuration(source, mode(standard, ExtensionPolicy::Warn), |p| {
+        assert!(p.errors.is_empty(), "{source}\n{:?}", p.errors);
+    });
+}
+
+#[test]
+fn c99_constructs_follow_policy_in_every_pre_c99_mode() {
+    let source = "long long wide; enum E { A, }; struct S { int n; int tail[]; }; int f(void) { \
+                  int x=0; x++; int y=1; for(int i=0;i<2;i++) x+=i; struct S s={.n=1}; return \
+                  ((struct S){.n=y}).n; }";
+    for standard in [CStandard::C89, CStandard::C95] {
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            with_parse_configuration(source, mode(standard, policy), |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+                let ext = extensions(p);
+                if policy == ExtensionPolicy::Allow {
+                    assert_eq!(ext, Vec::<String>::new());
+                } else {
+                    for feature in [
+                        "long long",
+                        "trailing enum comma",
+                        "flexible array member",
+                        "mixed declarations and code",
+                        "for declaration",
+                        "designated initializer",
+                        "compound literal",
+                    ] {
+                        assert!(
+                            ext.iter().any(|x| x.contains(feature)),
+                            "{feature}: {ext:?}"
+                        );
+                    }
+                    for error in &p.errors {
+                        assert_eq!(
+                            error.severity(),
+                            if policy == ExtensionPolicy::Deny {
+                                ErrorSeverity::Error
+                            } else {
+                                ErrorSeverity::Warning
+                            }
+                        );
+                    }
+                }
+                assert_eq!(p.items.len(), 4);
+            });
+        }
+    }
+    clean(source, CStandard::C99);
+}
+
+#[test]
+fn implicit_int_is_native_in_c90_and_a_policy_extension_afterward() {
+    for standard in [
+        CStandard::C89,
+        CStandard::C95,
+        CStandard::C99,
+        CStandard::C11,
+        CStandard::C23,
+    ] {
+        with_parse_configuration(
+            "extern object; f(void) { return 0; }",
+            mode(standard, ExtensionPolicy::Warn),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+                assert_eq!(
+                    extensions(p).len(),
+                    if standard < CStandard::C99 { 0 } else { 2 }
+                );
+                assert_eq!(
+                    declaration(p, 0).declaration_specifiers.type_specifiers,
+                    TypeSpecifiers::Int
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn c11_and_c17_syntax_and_reserved_older_spellings() {
+    let source = "_Thread_local static int t; _Alignas(int) _Alignas(16) int x; _Atomic(int *) a; \
+                  const _Atomic int b; _Noreturn void f(void) { _Static_assert(1,\"yes\"); \
+                  _Generic(x,int:x++,default:x--); } struct S { _Static_assert(1,\"member\"); \
+                  union { int a; float b; }; }; int g(void) { return _Alignof(int *); }";
+    for standard in [CStandard::C11, CStandard::C17] {
+        clean(source, standard);
+    }
+    for standard in [CStandard::C89, CStandard::C99] {
+        with_parse_configuration(source, mode(standard, ExtensionPolicy::Warn), |p| {
+            assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+            for feature in [
+                "_Thread_local",
+                "_Alignas",
+                "_Atomic",
+                "_Noreturn",
+                "_Static_assert",
+                "_Generic",
+                "anonymous struct or union member",
+                "_Alignof",
+            ] {
+                assert!(
+                    extensions(p).iter().any(|x| x.contains(feature)),
+                    "{feature}: {:?}",
+                    p.errors
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn c23_types_constants_initializers_and_compound_literal_storage() {
+    clean(
+        "constexpr bool yes=true; bool no=false; typeof(yes) a; typeof_unqual(yes) b; typeof(int \
+         *) p; unsigned _BitInt(17) bits; _BitInt(9) signed more; _Decimal32 d; _Decimal64 e; \
+         _Decimal128 f; auto inferred=1; static_assert(1); thread_local int tls; alignas(8) int \
+         aligned; int empty[2]={}; int g(int) { start: int v=alignof(int); void *p=nullptr; int \
+         n=(static int){1}; return v+n; end: } enum E : unsigned int { A, B=2 };",
+        CStandard::C23,
+    );
+}
+
+#[test]
+fn c23_nodes_preserve_types_and_generic_children() {
+    with_parse_configuration(
+        "_Atomic(int *) a; typeof_unqual(1+2) b; unsigned _BitInt(17) c; int f(void){return \
+         _Generic(1,int:2,default:3);}",
+        mode(CStandard::C23, ExtensionPolicy::Warn),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            assert!(matches!(
+                declaration(p, 0).declaration_specifiers.type_specifiers,
+                TypeSpecifiers::Extended(ExtendedType::Atomic(_))
+            ));
+            assert!(matches!(
+                declaration(p, 1).declaration_specifiers.type_specifiers,
+                TypeSpecifiers::Extended(ExtendedType::Typeof {
+                    operand:     SyntaxOperand::Expression(_),
+                    unqualified: true,
+                })
+            ));
+            assert!(matches!(
+                declaration(p, 2).declaration_specifiers.type_specifiers,
+                TypeSpecifiers::Extended(ExtendedType::BitInt {
+                    signedness: Some(false),
+                    ..
+                })
+            ));
+            let BlockItem::Statement(statement) = block_items(function_definition(p, 3).body)[0]
+            else {
+                panic!("return")
+            };
+            let StatementType::Return(Some(ExpressionSlot::Parsed(expression))) = statement.kind
+            else {
+                panic!("return")
+            };
+            let ExpressionType::Generic(selection) = expression.kind else {
+                panic!("generic")
+            };
+            assert_eq!(selection.associations.len(), 2);
+            assert!(selection.associations[1].type_name.is_none());
+        },
+    );
+}
+
+#[test]
+fn attributes_cover_iso_grammar_positions_and_balanced_vendor_arguments() {
+    let source = "[[deprecated(\"old\")]] int object [[vendor::tag({[x](y)},\"a\")]]; struct \
+                  [[vendor::record]] S { [[maybe_unused]] int member [[vendor::field]]; }; enum \
+                  [[vendor::kind]] E { A [[deprecated]], B }; int f([[maybe_unused]] int x \
+                  [[vendor::parameter]]) { [[likely]] if(x) return 1; return sizeof(int \
+                  [[vendor::type]]); }";
+    clean(source, CStandard::C23);
+    with_parse_configuration(source, mode(CStandard::C17, ExtensionPolicy::Warn), |p| {
+        assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+        assert!(
+            extensions(p)
+                .iter()
+                .filter(|x| x.contains("[[...]]"))
+                .count()
+                >= 10
+        );
+    });
+    with_parse_configuration(
+        "int * [[vendor::pointer]] p;",
+        mode(CStandard::C23, ExtensionPolicy::Warn),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            assert!(
+                declaration(p, 0).init_declarators[0]
+                    .declarator
+                    .kind
+                    .iter()
+                    .any(|x| matches!(x, DirectDeclarator::Attributes(_)))
+            );
+        },
+    );
+}
+
+#[test]
+fn c2y_syntax_retains_selection_declarations_ranges_and_named_jumps() {
+    let source = "int f(void) { int a[3]; int n=_Countof a + _Countof(int[4]); \
+                  n+=_Generic(int,int:1,default:0); if(int x=1) n=x; else n=0; if(int x=2;x) n=x; \
+                  switch(int x=2) {case 1 ... 3: n=x; break;} outer: for(;;) {continue outer; \
+                  break outer;} return n; }";
+    clean(source, CStandard::C2y);
+    with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Warn), |p| {
+        assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+        for feature in [
+            "_Countof",
+            "type-controlling _Generic",
+            "selection declaration",
+            "case range",
+            "named loop control",
+        ] {
+            assert!(
+                extensions(p).iter().any(|x| x.contains(feature)),
+                "{feature}: {:?}",
+                p.errors
+            );
+        }
+    });
+}
+
+#[test]
+fn malformed_iso_constructs_preserve_following_declarations() {
+    for source in [
+        "_Static_assert(,\"x\"); int following;",
+        "_Atomic() broken; int following;",
+        "_Generic(1,int:,default:2); int following;",
+        "[[vendor::bad(]] int broken; int following;",
+        "enum E : { A }; int following;",
+        "_BitInt() bits; int following;",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Warn), |p| {
+            assert!(!p.errors.is_empty(), "{source}");
+            assert!(p.items.iter().any(|x|matches!(x,super::ExternalDeclaration::Declaration(d) if d.init_declarators.iter().any(|x|x.declarator.identifier().is_some_and(|i|p.parser.context.string_cache.at(i.name)=="following")))),"{source}: {:?}",p.items);
+        });
+    }
+}
+
+#[test]
+fn mode_edges_preserve_identifiers_and_only_diagnose_new_syntax() {
+    clean(
+        "int bool,true,false,nullptr,constexpr,typeof,typeof_unqual,static_assert,alignas,alignof,\
+         thread_local;",
+        CStandard::C17,
+    );
+    clean(
+        "struct S { int (*pointer)[]; int *array[3]; };",
+        CStandard::C89,
+    );
+    clean(
+        "typeof((1,2)) x; [[maybe_unused]]; int f(void) [[vendor::function]] { [[maybe_unused]] \
+         int x; [[vendor::statement]] x=1; return x; }",
+        CStandard::C23,
+    );
+    for standard in [CStandard::C99, CStandard::C11, CStandard::C17] {
+        with_parse_configuration(
+            "int f(int) {return 0;} _Static_assert(1); int x={};",
+            mode(standard, ExtensionPolicy::Warn),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+                for feature in [
+                    "unnamed parameter",
+                    "static assertion without message",
+                    "empty initializer",
+                ] {
+                    assert!(
+                        extensions(p).iter().any(|x| x.contains(feature)),
+                        "{feature}: {:?}",
+                        p.errors
+                    );
+                }
+            },
+        );
+    }
+}
+
+#[test]
+fn modern_grammar_truncations_terminate_with_restored_state() {
+    for source in [
+        "int f(void){return _Generic(1,int:2,default:3);}",
+        "_Atomic(int *) object;",
+        "[[vendor::tag(([x]{y}))]] int object;",
+        "enum E : unsigned int { A [[deprecated]]=1 };",
+        "int f(void){if(int x=1;x) return x;}",
+        "int f(void){switch(1){case 1 ... 3:break;} end:}",
+    ] {
+        for end in 0..=source.len() {
+            with_parse_configuration(
+                &source[..end],
+                mode(CStandard::C2y, ExtensionPolicy::Warn),
+                |p| {
+                    assert_eq!(p.parser.scopes.depth(), 0, "{source:?} at {end}");
+                    assert!(p.parser.frames.is_empty(), "{source:?} at {end}");
+                    assert!(p.parser.returned.is_none(), "{source:?} at {end}");
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_iso_operands_and_balanced_attributes_do_not_recurse() {
+    let nested = format!("{}int{} x;", "_Atomic(".repeat(256), ")".repeat(256));
+    clean(&nested, CStandard::C11);
+    let attributes = format!(
+        "[[vendor::tag({}1{})]] int object;",
+        "(".repeat(2_000),
+        ")".repeat(2_000)
+    );
+    clean(&attributes, CStandard::C23);
+}
+
+#[test]
+fn inspection_shows_every_iso_child_without_semantic_evaluation() {
+    let source = "[[vendor::tag(1)]] _Alignas(16) _Atomic(int) object; enum E : unsigned int { A \
+                  [[deprecated]] }; _Static_assert(0,\"later analysis\"); _Noreturn void f(int) { \
+                  int x=alignof(int); x=_Generic(x,int:1,default:2); label: int y=(static int){}; \
+                  if(int n=1;n) x=n; outer: for(;;){break outer;} switch(x){case 1 ... 3: break;} \
+                  return; }\n";
+    let tu = crate::util::bump::Bump::new();
+    let mut context = crate::translation_phases::Context::with_configuration(
+        &tu,
+        mode(CStandard::C2y, ExtensionPolicy::Warn),
+    );
+    let pp = crate::util::bump::Bump::new();
+    let parse = crate::util::bump::Bump::new();
+    let preprocessor = crate::translation_phases::preprocessing::Preprocessor::new(
+        &pp,
+        &mut context,
+        std::path::PathBuf::from("<iso-inspection>").into_boxed_path(),
+        source,
+        crate::util::shared::SharedVec::default(),
+        crate::util::shared::SharedVec::default(),
+    );
+    let unit =
+        super::super::Parser::new(preprocessor, &mut context, &parse).parse_translation_unit();
+    let output = unit.inspect(
+        context.tu_arena(),
+        &context,
+        super::super::InspectionOptions::default(),
+    );
+    for text in [
+        "attribute-specifier [[...]]",
+        "alignment",
+        "atomic-type",
+        "underlying-type",
+        "static-assert",
+        "function-specifiers=_Noreturn",
+        "alignof type",
+        "generic-selection",
+        "generic-association default",
+        "labeled-declaration",
+        "storage=static",
+        "selection-declaration",
+        "break outer",
+        "case-range",
+    ] {
+        assert!(output.contains(text), "{text}: {output}");
+    }
+    assert!(!output.contains("missing"), "{output}");
+    assert!(context.pop_pending_error().is_none());
+}
+
+#[test]
+fn declaration_only_iso_specifiers_are_rejected_in_type_names_and_members() {
+    for source in [
+        "struct S { _Thread_local int member; }; int following;",
+        "struct S { constexpr int member; }; int following;",
+        "struct S { _Noreturn int member; }; int following;",
+        "int x=sizeof(_Thread_local int); int following;",
+        "int x=sizeof(_Noreturn int); int following;",
+        "int x=sizeof(constexpr int); int following;",
+        "enum E : unsigned int * { A }; int following;",
+        "[[vendor::broken(a]b)]] int broken; int following;",
+        "[[vendor::]] int broken; int following;",
+        "[[first second]] int broken; int following;",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Warn), |p| {
+            assert!(parser_errors(p).count() > 0, "{source}: {:?}", p.errors);
+            assert!(p.items.iter().any(|x|matches!(x,super::ExternalDeclaration::Declaration(d) if d.init_declarators.iter().any(|x|x.declarator.identifier().is_some_and(|i|p.parser.context.string_cache.at(i.name)=="following")))),"{source}: {:?}",p.items);
+        });
+    }
+}
+
+#[test]
+fn modern_reserved_spellings_remain_structured_under_every_policy() {
+    let source = "_Alignas(16) _Atomic(int) object; _Thread_local int thread; _Noreturn void \
+                  f(int) { int a[3]; int n=_Generic(a,int*:1,default:0); \
+                  n+=_Alignof(int)+_Countof a; label: int x={}; return; } _Static_assert(1); \
+                  [[vendor::tag(1)]] unsigned _BitInt(8) bits;";
+    for standard in [
+        CStandard::C89,
+        CStandard::C95,
+        CStandard::C99,
+        CStandard::C11,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            with_parse_configuration(source, mode(standard, policy), |p| {
+                assert_eq!(
+                    parser_errors(p).count(),
+                    0,
+                    "{standard:?}/{policy:?}: {:?}",
+                    p.errors
+                );
+                assert_eq!(p.items.len(), 5, "{standard:?}/{policy:?}: {:?}", p.items);
+                if policy == ExtensionPolicy::Allow || standard == CStandard::C2y {
+                    assert!(extensions(p).is_empty(), "{:?}", p.errors);
+                } else {
+                    assert_ne!(extensions(p), Vec::<String>::new());
+                    assert!(p.errors.iter().all(|e| e.severity()
+                        == if policy == ExtensionPolicy::Deny {
+                            ErrorSeverity::Error
+                        } else {
+                            ErrorSeverity::Warning
+                        }));
+                }
+            });
+        }
+    }
+}
+
+#[test]
+fn attributes_attach_to_prefix_parameters_abstract_declarators_and_labels() {
+    clean(
+        "int f([[vendor::parameter]] int x, int (* [[vendor::pointer]] cb)(int)) { \
+         [[vendor::label]] label: [[vendor::statement]] x++; return sizeof(int [3] \
+         [[vendor::array]]) + sizeof(int (* [[vendor::abstract]])(int)); }",
+        CStandard::C23,
+    );
+}
+
+#[test]
+fn array_parameter_additions_follow_the_c99_syntax_policy() {
+    let source = "void f(int a[static const 3], int b[*]);";
+    clean(source, CStandard::C99);
+    with_parse_configuration(source, mode(CStandard::C89, ExtensionPolicy::Warn), |p| {
+        assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+        for text in [
+            "qualified array parameter",
+            "static array parameter",
+            "variable length array marker",
+        ] {
+            assert!(
+                extensions(p).iter().any(|x| x.contains(text)),
+                "{text}: {:?}",
+                p.errors
+            );
+        }
+    });
+}
+
+#[test]
+fn iso_nodes_retain_macro_provenance_after_compaction() {
+    with_parse_configuration(
+        "#define ATTR [[vendor::tag(42)]]\n#define TYPE _Atomic(int)\nATTR TYPE \
+         object;\n_Static_assert(1,\"message\");",
+        mode(CStandard::C23, ExtensionPolicy::Warn),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let specifiers = declaration(p, 0).declaration_specifiers;
+            let super::super::modern::SpecifierExtensionKind::Attributes(attributes) =
+                specifiers.extensions.unwrap().kind
+            else {
+                panic!("attributes")
+            };
+            let vectors = p
+                .parser
+                .context
+                .get_source_vectors(attributes.source_vectors);
+            assert_ne!(vectors, []);
+            assert!(
+                vectors
+                    .iter()
+                    .all(|v| v.line == 1 && v.source_file_index == 0)
+            );
+            let token = attributes
+                .tokens
+                .iter()
+                .find(|t| {
+                    matches!(
+                        t.kind,
+                        crate::translation_phases::preprocessing::TokenType::Integer(_)
+                    )
+                })
+                .unwrap();
+            assert_eq!(
+                p.parser.context.get_source_vectors(token.source_vectors)[0].line,
+                1
+            );
+            let TypeSpecifiers::Extended(ExtendedType::Atomic(type_name)) =
+                specifiers.type_specifiers
+            else {
+                panic!("atomic")
+            };
+            assert!(
+                p.parser
+                    .context
+                    .get_source_vectors(type_name.source_vectors)
+                    .iter()
+                    .all(|v| v.line == 2)
+            );
+            assert!(declaration(p, 1).assertion.unwrap().message.is_some());
+        },
+    );
+}
+
+#[test]
+fn c23_standalone_labels_require_compound_block_positions() {
+    clean(
+        "int f(void) { first: second: [[vendor::tag]] int x; third: fourth: }",
+        CStandard::C23,
+    );
+    for source in [
+        "int f(void){if(1) label: int x;}",
+        "int f(void){if(1) label:}",
+        "int f(void){while(1) label: int x;}",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Warn), |p| {
+            assert!(
+                parser_errors(p).any(|e| matches!(
+                    e,
+                    super::super::errors::ParserErrorType::ExpectedIsoSyntax(
+                        "a statement after a label outside a compound block",
+                        _
+                    )
+                )),
+                "{source}: {:?}",
+                p.errors
+            );
+        });
+    }
+}
+
+#[test]
+fn c2y_selection_declarations_restore_typedef_scope_and_validate_shape() {
+    clean(
+        "typedef int T; int f(void){ if(int T=1;T) T=2; else T=3; T after; switch(int T=1){case \
+         1: T=2;break;} T again; return 0; }",
+        CStandard::C2y,
+    );
+    clean(
+        "int f(void){ if(int x=1,y=2;x+y) return x+y; return 0; }",
+        CStandard::C2y,
+    );
+    for source in [
+        "int f(void){if(int x) return 1;}",
+        "int f(void){if(int x=1,y=2) return 1;}",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C2y, ExtensionPolicy::Warn), |p| {
+            assert!(
+                parser_errors(p).any(|e| matches!(
+                    e,
+                    super::super::errors::ParserErrorType::ExpectedIsoSyntax(
+                        "a single initialized declaration in selection header",
+                        _
+                    )
+                )),
+                "{source}: {:?}",
+                p.errors
+            );
+        });
+    }
+}
+
+#[test]
+fn implicit_return_types_support_pointer_and_parenthesized_declarators() {
+    for standard in [
+        CStandard::C89,
+        CStandard::C95,
+        CStandard::C99,
+        CStandard::C23,
+    ] {
+        with_parse_configuration(
+            "*f(void){return 0;} (g)(void){return 0;}",
+            mode(standard, ExtensionPolicy::Warn),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{standard:?}: {:?}", p.errors);
+                assert_eq!(p.items.len(), 2);
+                assert_eq!(
+                    extensions(p).len(),
+                    if standard < CStandard::C99 { 0 } else { 2 }
+                );
+                assert_eq!(
+                    function_definition(p, 0)
+                        .declaration_specifiers
+                        .type_specifiers,
+                    TypeSpecifiers::Int
+                );
+            },
+        );
+    }
+}

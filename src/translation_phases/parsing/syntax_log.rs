@@ -24,14 +24,26 @@ use super::{
         TypeName,
         TypeQualifiers,
     },
+    modern::{
+        AttributeSpecifier,
+        ExtendedType,
+        GenericAssociation,
+        GenericSelection,
+        SpecifierExtension,
+        StaticAssertion,
+    },
     syntax::{
+        AttributedStatement,
         BlockItem,
+        CaseRange,
         Expression,
         FunctionDefinition,
         Identifier,
+        SelectionHeader,
         Statement,
     },
 };
+use crate::translation_phases::preprocessing::Token;
 
 /// A node kind allocated in the translation-unit arena.
 ///
@@ -54,28 +66,37 @@ pub(super) trait TreeNode<'tu>: Sized + 'tu {
     reason = "A test-only log of every allocated node, compiled only under `cfg(test)`."
 )]
 pub(super) struct SyntaxLog<'tu> {
-    nodes:                usize,
-    expressions:          Vec<&'tu Expression<'tu>>,
-    type_names:           Vec<&'tu TypeName<'tu>>,
-    initializers:         Vec<&'tu Initializer<'tu>>,
-    initializer_elements: Vec<&'tu InitializerElement<'tu>>,
-    designations:         Vec<&'tu Designation<'tu>>,
-    designators:          Vec<&'tu Designator<'tu>>,
-    declarations:         Vec<&'tu Declaration<'tu>>,
-    init_declarators:     Vec<&'tu InitDeclarator<'tu>>,
-    direct_declarators:   Vec<&'tu DirectDeclarator<'tu>>,
-    parenthesized:        Vec<&'tu ParenthesizedDeclarator<'tu>>,
-    parameters:           Vec<&'tu ParameterDeclaration<'tu>>,
-    struct_or_unions:     Vec<&'tu StructOrUnionSpecifier<'tu>>,
-    struct_declarations:  Vec<&'tu StructDeclaration<'tu>>,
-    struct_declarators:   Vec<&'tu StructDeclarator<'tu>>,
-    enum_specifiers:      Vec<&'tu EnumSpecifier<'tu>>,
-    enumerators:          Vec<&'tu Enumerator<'tu>>,
-    type_qualifiers:      Vec<&'tu TypeQualifiers>,
-    identifiers:          Vec<&'tu Identifier>,
-    statements:           Vec<&'tu Statement<'tu>>,
-    block_items:          Vec<&'tu BlockItem<'tu>>,
-    function_definitions: Vec<&'tu FunctionDefinition<'tu>>,
+    extended_types:        Vec<&'tu ExtendedType<'tu>>,
+    specifier_extensions:  Vec<&'tu SpecifierExtension<'tu>>,
+    attributes:            Vec<&'tu AttributeSpecifier<'tu>>,
+    generics:              Vec<&'tu GenericSelection<'tu>>,
+    associations:          Vec<&'tu GenericAssociation<'tu>>,
+    assertions:            Vec<&'tu StaticAssertion<'tu>>,
+    attributed_statements: Vec<&'tu AttributedStatement<'tu>>,
+    selection_headers:     Vec<&'tu SelectionHeader<'tu>>,
+    case_ranges:           Vec<&'tu CaseRange<'tu>>,
+    nodes:                 usize,
+    expressions:           Vec<&'tu Expression<'tu>>,
+    type_names:            Vec<&'tu TypeName<'tu>>,
+    initializers:          Vec<&'tu Initializer<'tu>>,
+    initializer_elements:  Vec<&'tu InitializerElement<'tu>>,
+    designations:          Vec<&'tu Designation<'tu>>,
+    designators:           Vec<&'tu Designator<'tu>>,
+    declarations:          Vec<&'tu Declaration<'tu>>,
+    init_declarators:      Vec<&'tu InitDeclarator<'tu>>,
+    direct_declarators:    Vec<&'tu DirectDeclarator<'tu>>,
+    parenthesized:         Vec<&'tu ParenthesizedDeclarator<'tu>>,
+    parameters:            Vec<&'tu ParameterDeclaration<'tu>>,
+    struct_or_unions:      Vec<&'tu StructOrUnionSpecifier<'tu>>,
+    struct_declarations:   Vec<&'tu StructDeclaration<'tu>>,
+    struct_declarators:    Vec<&'tu StructDeclarator<'tu>>,
+    enum_specifiers:       Vec<&'tu EnumSpecifier<'tu>>,
+    enumerators:           Vec<&'tu Enumerator<'tu>>,
+    type_qualifiers:       Vec<&'tu TypeQualifiers>,
+    identifiers:           Vec<&'tu Identifier>,
+    statements:            Vec<&'tu Statement<'tu>>,
+    block_items:           Vec<&'tu BlockItem<'tu>>,
+    function_definitions:  Vec<&'tu FunctionDefinition<'tu>>,
 }
 
 /// A node kind that tests can count and visit.
@@ -103,6 +124,15 @@ macro_rules! tree_nodes {
 }
 
 tree_nodes! {
+    ExtendedType => extended_types,
+    SpecifierExtension => specifier_extensions,
+    AttributeSpecifier => attributes,
+    GenericSelection => generics,
+    GenericAssociation => associations,
+    StaticAssertion => assertions,
+    AttributedStatement => attributed_statements,
+    SelectionHeader => selection_headers,
+    CaseRange => case_ranges,
     Expression => expressions,
     TypeName => type_names,
     Initializer => initializers,
@@ -149,6 +179,11 @@ macro_rules! plain_tree_nodes {
 plain_tree_nodes! {
     TypeQualifiers => type_qualifiers,
     Identifier => identifiers,
+}
+
+impl TreeNode<'_> for Token {
+    #[cfg(test)]
+    fn log(_: &mut SyntaxLog<'_>, _: &Self) {}
 }
 
 /// Call arguments are lists of expression references; the expressions

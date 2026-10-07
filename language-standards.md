@@ -1,10 +1,12 @@
-# Language standards foundation
+# Language standards
 
-Phase A provides configuration, CLI selection, predefined version macros,
-keyword classification, and shared extension diagnostics. This is a syntax-only
-front end: selecting a mode does **not** yet implement that mode's full grammar
-or lexical rules. The completed C99 parser remains the baseline. No semantic
-analysis or code generation is added.
+The foundation provides configuration, CLI selection, predefined version macros,
+keyword classification, and shared extension diagnostics. The ISO parser now
+implements phase-7 syntax through C23 and the C2y subset listed below, including
+policy diagnostics for earlier modes. Lexical/preprocessing additions and GNU/MSVC
+grammar remain assigned to their workstreams. This is a syntax-only front end;
+mode selection is not a full conformance claim. No semantic analysis or code
+generation is added.
 
 ## CLI reference
 
@@ -87,8 +89,9 @@ use their own origin independently of their canonical parser kind.
 reserved interner prefix. `KeywordClassification` returns the canonical kind,
 original static spelling, and optional origin. Existing C99 keyword IDs remain
 stable. Adding parser grammar should consume these kinds and should not add a
-second spelling classifier. Unsupported kinds currently enter existing diagnostic
-and synchronization paths; Phase A does not add grammar or AST nodes.
+second spelling classifier. ISO parser consumers use the canonical kinds and
+retain original tokens for spelling and provenance. Unsupported vendor kinds
+continue through diagnostic and synchronization paths until their owners land.
 
 ## Feature matrix
 
@@ -105,7 +108,8 @@ necessary. Workstream owners update their own rows as behavior lands.
 
 The foundation's mode/flags, version macros, complete keyword spelling recognition,
 and shared policy diagnostic plumbing are **implemented** for all modes. All
-additional lexical, preprocessing, and parser behavior below is delegated.
+ISO parser additions are implemented; lexical, preprocessing, and vendor parser
+behavior below remains delegated.
 
 | Feature (`Feature` variant) | C89 | C95 | C99 | C11 | C17 | C23 | C2y | Acceptance | Status / owner |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -129,42 +133,42 @@ additional lexical, preprocessing, and parser behavior below is delegated.
 | HexFloats | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (lexpp) |
 | VariadicMacros | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (lexpp) |
 | EmptyMacroArguments | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (lexpp) |
-| Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| Restrict | - | - | Y | Y | Y | Y | Y | native | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| Bool | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| Complex | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| Imaginary | - | - | Y | Y | Y | Y | Y | extension | implemented unsupported-type diagnostic; pending (parse-std) |
-| ImplicitInt | Y | Y | - | - | - | - | - | extension | pending (parse-std) |
-| MixedDeclarations | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| ForDeclarations | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| DesignatedInitializers | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| CompoundLiterals | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| FlexibleArrayMembers | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| LongLong | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| TrailingEnumComma | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| Func | - | - | Y | Y | Y | Y | Y | extension | implemented C99 behavior; pending mode checks/diagnostics (parse-std) |
-| StaticAssert | - | - | - | Y | Y | Y | Y | extension | pending (parse-std) |
-| Generic | - | - | - | Y | Y | Y | Y | extension | pending (parse-std) |
-| Alignas | - | - | - | Y | Y | Y | Y | extension | pending (parse-std) |
-| Alignof | - | - | - | Y | Y | Y | Y | extension | pending (parse-std) |
-| Noreturn | - | - | - | Y | Y | Y | Y | extension | pending (parse-std) |
-| ThreadLocal | - | - | - | Y | Y | Y | Y | extension | pending (parse-std) |
-| Atomic | - | - | - | Y | Y | Y | Y | extension | pending (parse-std) |
-| AnonymousAggregates | - | - | - | Y | Y | Y | Y | extension | pending (parse-std) |
-| C23Keywords | - | - | - | - | - | Y | Y | native | pending (parse-std) |
-| Attributes | - | - | - | - | - | Y | Y | extension | pending (parse-std) |
-| BitInt | - | - | - | - | - | Y | Y | extension | pending (parse-std) |
-| DecimalTypes | - | - | - | - | - | Y | Y | extension | pending (parse-std) |
-| EmptyInitializers | - | - | - | - | - | Y | Y | extension | pending (parse-std) |
-| EnumUnderlyingType | - | - | - | - | - | Y | Y | extension | pending (parse-std) |
-| AutoTypeInference | - | - | - | - | - | Y | Y | extension | pending (parse-std) |
-| Constexpr | - | - | - | - | - | Y | Y | extension | pending (parse-std) |
-| Nullptr | - | - | - | - | - | Y | Y | extension | pending (parse-std) |
-| Countof | - | - | - | - | - | - | Y | extension | pending (parse-std) |
-| IfSwitchDeclarations | - | - | - | - | - | - | Y | extension | pending (parse-std) |
-| NamedLoops | - | - | - | - | - | - | Y | extension | pending (parse-std) |
-| GenericTypeOperand | - | - | - | - | - | - | Y | extension | pending (parse-std) |
-| CaseRanges | - | - | - | - | - | - | Y | extension | pending (parse-gnu) |
+| Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | implemented syntax and mode diagnostics (parse-std) |
+| Restrict | - | - | Y | Y | Y | Y | Y | native | implemented syntax and mode diagnostics (parse-std) |
+| Bool | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Complex | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Imaginary | - | - | Y | Y | Y | Y | Y | extension | implemented unsupported-type diagnostic (parse-std); imaginary semantics remain out of scope |
+| ImplicitInt | Y | Y | - | - | - | - | - | extension | implemented syntax and mode diagnostics (parse-std) |
+| MixedDeclarations | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| ForDeclarations | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| DesignatedInitializers | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| CompoundLiterals | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| FlexibleArrayMembers | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| LongLong | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| TrailingEnumComma | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Func | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| StaticAssert | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Generic | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Alignas | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Alignof | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Noreturn | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| ThreadLocal | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Atomic | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| AnonymousAggregates | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| C23Keywords | - | - | - | - | - | Y | Y | native | implemented syntax and mode diagnostics (parse-std) |
+| Attributes | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| BitInt | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| DecimalTypes | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| EmptyInitializers | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| EnumUnderlyingType | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| AutoTypeInference | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Constexpr | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Nullptr | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| Countof | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| IfSwitchDeclarations | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| NamedLoops | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| GenericTypeOperand | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
+| CaseRanges | - | - | - | - | - | - | Y | extension | implemented ISO syntax (parse-std); GNU-origin policy pending (parse-gnu) |
 | GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
@@ -210,7 +214,8 @@ The lexical workstream also owns exact prefix/suffix recognition, `//` treatment
 in GNU89 pedantic mode, `#elifndef`, `#sccs`, `, ## __VA_ARGS__`, and predicates
 for builtins represented by their grouped feature rows. Parser rows encompass
 all positions of GNU attributes; basic/extended/goto asm and declarator asm labels;
-GNU range/old-style designators; syntax-only nested functions; and the C2y subset.
+GNU range/old-style designators; and syntax-only nested functions. The ISO C2y
+subset is implemented by parse-std.
 
 ## Decisions and handoff
 
@@ -237,9 +242,50 @@ GNU range/old-style designators; syntax-only nested functions; and the C2y subse
   diagnostic; classification does not claim imaginary type semantics.
 - Phase A mechanically removes the old C99-only exhaustive matches around
   existing preprocessor extension policy. Their behavior is otherwise unchanged.
-- No lexer mode behavior, parser production, AST node, or semantic rule is
-  introduced here. Avoid editing configuration, CLI, token classification, and
+- Phase A introduced no lexer mode behavior, parser production, AST node or
+  semantic rule. The ISO parser additions above build on its prepared seams. Avoid editing configuration, CLI, token classification, and
   shared diagnostic surfaces in parallel later workstreams unless a missing seam
   is coordinated. Use the prepared feature vocabulary and keyword variants.
 - Validation uses the existing pinned LLVM installation through an ignored
   worktree-local `target/llvm` junction; no tracked build setting is changed.
+
+## ISO parser implementation and handoff
+
+Evidence: [mode, policy, recovery, AST and inspection tests](src/translation_phases/parsing/tests/standards.rs),
+[CLI mode tests](tests/cli.rs), [token-seam snapshot](tests/fixtures/lexing/iso_parser_token_seam.snap),
+[policy diagnostic goldens](tests/fixtures/diagnostics/language/iso-c89-warning.stderr),
+and [zero-global-allocation coverage](tests/allocation_count.rs).
+
+| Revision | Implemented phase-7 surface | Later analysis boundary |
+| --- | --- | --- |
+| C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, __func__, and unambiguous qualified/static/[*] array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout remain semantic |
+| C99 | Existing full grammar; implicit int is retained with a policy diagnostic | Type/name/control-flow constraints remain as documented in the C99 checklist |
+| C11/C17 | _Alignas expression/type operands, _Alignof types, _Atomic type/qualifier, _Generic associations, _Noreturn, _Static_assert, _Thread_local, anonymous untagged aggregates | Alignment validity, atomic eligibility, generic type compatibility/selection, assertion evaluation, storage-class combinations and aggregate layout |
+| C23 | All [[...]] attribute positions with standard/vendor names and balanced arguments; bool/true/false, nullptr, constexpr, typeof/typeof_unqual, message-optional static_assert, alignas/alignof/thread_local aliases; labels before declarations and at block end; {}; _BitInt with signedness; fixed enum underlying specifier-qualifier lists; auto inferred type; unnamed definition parameters; decimal types; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal support, literal object lifetime and removed old-style function constraints |
+| C2y subset | _Countof unary expression or parenthesized type; type-controlling _Generic; if/switch declaration headers with optional following expression; case ranges; break/continue label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
+
+Reserved keywords are diagnosed by the foundation's token classifier, so parser
+consumers do not duplicate keyword-origin diagnostics. Unambiguous grammar-only
+features report through the shared extension emitter and keep their AST under
+Deny. Non-reserved C23 aliases remain identifiers in earlier strict modes.
+The ISO parser does not change lexer or preprocessing behavior.
+
+New operands, assertions, generic selections, specifier additions and attributes
+are immutable arena nodes. `ModernFrame` owns delimiters and delegates expression
+and type children to the existing machine; no recursive grammar calls are added.
+Node sizes are pinned. Inspection visits every new child, including compound-
+literal storage, generic default arms, and fixed enum underlying types.
+
+`AttributeSpecifier` retains a syntax discriminator, balanced original tokens,
+provenance and recovery state. GNU `__attribute__` and MSVC `__declspec` owners
+can add discriminator variants and delimiter entry paths while sharing its
+immutable representation and declarator/specifier/statement attachment points.
+Neither vendor grammar is implemented in this workstream.
+
+C2y grammar follows WG14 [N3388 selection declarations](https://open-std.org/jtc1/sc22/wg14/www/docs/n3388.htm),
+[N3355 named loops](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3355.htm),
+[N3260 generic type operands](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3260.pdf),
+[N3370 case ranges](https://www.open-std.org/JTC1/SC22/WG14/www/docs/n3370.htm), and the draft _Countof grammar implemented in the
+[GCC primary implementation patch](https://gcc.gnu.org/pipermail/gcc-patches/2025-May/683845.html).
+The C2y subset intentionally excludes draft semantic analysis and lexer-owned
+octal prefixes/delimited escapes.

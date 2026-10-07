@@ -12,6 +12,7 @@ mod expressions;
 mod limits;
 mod node_sizes;
 mod parameter_regressions;
+mod standards;
 mod statement_regressions;
 mod statements;
 mod translation_unit;

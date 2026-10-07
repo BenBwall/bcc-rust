@@ -860,10 +860,84 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// PDF p. 120), and `inline` (§6.7.4, p. 112; PDF p. 124); typedef-name
     /// is a type-specifier under §6.7.2, p. 99; PDF p. 111. `_Imaginary` is
     /// accepted here so the specifier frame can diagnose it.
+    /// Reports a syntax feature through the shared mode policy.
+    /// C99: §5.1.1.3, p. 11; PDF p. 23. Later ISO syntax is an extension.
+    pub(super) fn extension(
+        &mut self,
+        feature: crate::configuration::Feature,
+        spelling: &'static str,
+        token: Token,
+    ) {
+        self.context
+            .report_extension(feature, spelling, token.source_vectors);
+    }
+
+    /// Reports unambiguous C99 grammar absent from the grouped feature table.
+    /// C99: array declarators §6.7.5 paragraph 1, p. 114; PDF p. 126.
+    pub(super) fn c99_syntax_extension(&mut self, spelling: &'static str, token: Token) {
+        self.context.report_extension_since(
+            spelling,
+            crate::configuration::FeatureOrigin::Standard(crate::configuration::CStandard::C99),
+            token.source_vectors,
+        );
+    }
+
+    pub(super) fn attributes_precede_declaration(&self) -> bool {
+        let mut offset = 0usize;
+        let mut token = self.cursor.current();
+        loop {
+            let mut brackets = 0usize;
+            while let Some(current) = token {
+                match current.kind {
+                    | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) => brackets += 1,
+                    | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) => {
+                        brackets = brackets.saturating_sub(1);
+                    },
+                    | _ => {},
+                }
+                token = self.cursor.lookahead(offset);
+                offset += 1;
+                if brackets == 0 {
+                    break;
+                }
+            }
+            let Some(current) = token else { return false };
+            if current.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                && self.cursor.lookahead(offset).is_some_and(|x| {
+                    x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                })
+            {
+                continue;
+            }
+            return self.declaration_starter(current)
+                || current.kind == TokenType::Operator(OperatorTokenType::Semicolon);
+        }
+    }
+
+    pub(super) fn attribute_starter(&self, token: Option<Token>) -> bool {
+        token
+            .is_some_and(|x| x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket))
+            && self.cursor.following().is_some_and(|x| {
+                x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+            })
+    }
+
     pub(super) fn declaration_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(
-                KeywordTokenType::Auto
+                KeywordTokenType::Alignas
+                | KeywordTokenType::Atomic
+                | KeywordTokenType::Noreturn
+                | KeywordTokenType::ThreadLocal
+                | KeywordTokenType::BitInt
+                | KeywordTokenType::Decimal32
+                | KeywordTokenType::Decimal64
+                | KeywordTokenType::Decimal128
+                | KeywordTokenType::Constexpr
+                | KeywordTokenType::Typeof
+                | KeywordTokenType::TypeofUnqual
+                | KeywordTokenType::StaticAssert
+                | KeywordTokenType::Auto
                 | KeywordTokenType::Char
                 | KeywordTokenType::Complex
                 | KeywordTokenType::Const
@@ -889,7 +963,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => false,
+            | _ => self.attribute_starter(Some(token)),
         }
     }
 
@@ -902,7 +976,15 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     pub(super) fn type_name_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(
-                KeywordTokenType::Char
+                KeywordTokenType::Alignas
+                | KeywordTokenType::Atomic
+                | KeywordTokenType::BitInt
+                | KeywordTokenType::Decimal32
+                | KeywordTokenType::Decimal64
+                | KeywordTokenType::Decimal128
+                | KeywordTokenType::Typeof
+                | KeywordTokenType::TypeofUnqual
+                | KeywordTokenType::Char
                 | KeywordTokenType::Complex
                 | KeywordTokenType::Const
                 | KeywordTokenType::Double
@@ -922,7 +1004,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => false,
+            | _ => self.attribute_starter(Some(token)),
         }
     }
 
@@ -1087,12 +1169,27 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 type_name,
                 initializer,
             } => type_name.recovered || initializer.recovered,
-            | ExpressionType::SizeofType(type_name) => type_name.recovered,
+            | ExpressionType::SizeofType(type_name) | ExpressionType::AlignofType(type_name) =>
+                type_name.recovered,
+            | ExpressionType::Countof(operand) => match operand {
+                | super::modern::SyntaxOperand::Type(x) => x.recovered,
+                | super::modern::SyntaxOperand::Expression(x) => x.recovered,
+            },
+            | ExpressionType::Generic(selection) =>
+                (match selection.controlling {
+                    | super::modern::SyntaxOperand::Type(x) => x.recovered,
+                    | super::modern::SyntaxOperand::Expression(x) => x.recovered,
+                }) || selection
+                    .associations
+                    .iter()
+                    .any(|x| x.expression.recovered || x.type_name.is_some_and(|x| x.recovered)),
             | ExpressionType::Cast {
                 target_type,
                 operand_expression,
             } => target_type.recovered || expression_recovered(operand_expression),
             | ExpressionType::Error => true,
+            | ExpressionType::Boolean(_)
+            | ExpressionType::Nullptr
             | ExpressionType::Identifier(..)
             | ExpressionType::Constant(..)
             | ExpressionType::StringLiteral(..) => false,

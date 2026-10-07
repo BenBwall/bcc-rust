@@ -47,6 +47,7 @@ mod function_definition;
 mod initializer;
 mod inspection;
 mod machine;
+mod modern;
 mod parameter_list;
 mod recovery;
 mod scope;

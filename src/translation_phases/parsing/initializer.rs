@@ -264,12 +264,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     // C99 §6.7.8p1: an initializer-list has at least one
                     // initializer; `{}` is not C99.
                     if self.elements.is_empty() {
-                        parser.report(
-                            ParserErrorType::ExpectedStatementExpression(
-                                "nonempty initializer list",
-                                Some(close.kind),
-                            ),
-                            Some(close),
+                        parser.extension(
+                            crate::configuration::Feature::EmptyInitializers,
+                            "empty initializer",
+                            close,
                         );
                     }
                     self.closing_brace_source_vectors = Some(close.source_vectors);
@@ -326,6 +324,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 if let Some(designator) = token
                     && designator.kind == TokenType::Operator(OperatorTokenType::Period)
                 {
+                    parser.extension(
+                        crate::configuration::Feature::DesignatedInitializers,
+                        "designated initializer",
+                        designator,
+                    );
                     self.merge_designation_source(parser.context, designator.source_vectors);
                     self.designation_state().current_designator_source =
                         Some(designator.source_vectors);
@@ -336,6 +339,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     && designator.kind
                         == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
                 {
+                    parser.extension(
+                        crate::configuration::Feature::DesignatedInitializers,
+                        "designated initializer",
+                        designator,
+                    );
                     self.merge_designation_source(parser.context, designator.source_vectors);
                     self.designation_state().current_designator_source =
                         Some(designator.source_vectors);
