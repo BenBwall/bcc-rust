@@ -469,6 +469,76 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// Placemarkers left by `##` are dropped here (C99: §6.10.3.4 paragraph
     /// 1, p. 155; PDF p. 167), and a name met while its macro is being
     /// replaced is marked unavailable for good (§6.10.3.4 paragraph 2).
+    /// Executes the C99 string-form pragma operator.
+    /// C99: §6.10.9p1, p. 161; PDF p. 173.
+    fn expand_pragma_operator(&mut self) {
+        _ =
+            self.expect_token_preserving_rejected::<true>(
+                |_, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
+                |_, token| {
+                    ControlFlow::Break(PreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(
+                                token.kind,
+                            ),
+                        source_vectors: token.source_vectors,
+                    })
+                },
+                "parsing pragma operator",
+            );
+
+        let Some(string_token) = self.expect_token_preserving_rejected::<true>(
+            |_, t| t.kind == PreprocessorTokenType::String,
+            |_, token| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     PreprocessorErrorType::MissingStringLiteralInPragmaOperator(
+                        token.kind,
+                    ),
+                    source_vectors: token.source_vectors,
+                })
+            },
+            "parsing pragma operator",
+        ) else {
+            return;
+        };
+
+        let input = Self::prepare_pragma_operator_string(self.context, string_token.contents);
+
+        let tokenizer = take(&mut self.tokenizer);
+        // Each operator gets its own identity:
+        // diagnostics rendered later must quote this
+        // payload, not the most recent one.
+        let pragma_string = self
+            .context
+            .add_synthetic_source_file(Path::new("<pragma string>"), input);
+        self.tokenizer = TokenSource::new(self.context, self.scratch, pragma_string, input);
+        self.pushed_frames += 1;
+        _ = self.parse_pragma_directive(string_token);
+        if self.tokenizer.next_item(self.context).is_some() {
+            let source_vectors = self.current_location();
+            self.context.preprocessor_error(PreprocessorError {
+                error_type: PreprocessorErrorType::ExtraTokensAfterPragmaOperator,
+                source_vectors,
+            });
+        }
+        self.tokenizer = tokenizer;
+
+        _ =
+            self.expect_token_preserving_rejected::<true>(
+                |_, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
+                |_, token| {
+                    ControlFlow::Break(PreprocessorError {
+                        error_type:
+                            PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(
+                                token.kind,
+                            ),
+                        source_vectors: token.source_vectors,
+                    })
+                },
+                "parsing pragma operator",
+            );
+    }
+
     pub(super) fn next_preprocessor_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
     ) -> Option<PreprocessorToken> {
@@ -535,7 +605,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     }
                 }
             }
-            if token.kind == PreprocessorTokenType::Placeholder {
+            if token.kind == PreprocessorTokenType::Placeholder && !self.state.retain_placeholders {
                 continue 'base;
             }
             if !token.kind.is_identifier()
@@ -608,6 +678,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 self.capture_cross_frame_call(token, argument_names, is_variadic)
                             else {
                                 break 'base Some(token);
+                            };
+                            let tokenizer = if is_variadic {
+                                self.prepare_variadic_body(token, tokenizer, arguments)
+                            } else {
+                                tokenizer
                             };
                             self.push_tokenizer_frame(TokenizerFrame {
                                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
@@ -698,8 +773,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                                 i + 1
                                             };
                                             if argument_count != 0 {
+                                                if !has_argument_token {
+                                                    self.context.report_extension(crate::configuration::Feature::EmptyMacroArguments, "empty macro argument", token.source_vectors);
+                                                }
                                                 arguments.push(FunctionLikeMacroArgument {
                                                     expanded: self.scratch.alloc(OnceCell::new()),
+                                                    omitted: false,
                                                     name: at!(),
                                                     tokenizer,
                                                     enclosing_arguments,
@@ -716,8 +795,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                         if token.kind == PreprocessorTokenType::Comma
                                             && paren_depth == 1 =>
                                     {
+                                        if !has_argument_token {
+                                            self.report_empty_macro_argument(token.source_vectors);
+                                        }
                                         arguments.push(FunctionLikeMacroArgument {
                                             expanded: self.scratch.alloc(OnceCell::new()),
+                                            omitted: false,
                                             name: at!(),
                                             tokenizer,
                                             enclosing_arguments,
@@ -778,7 +861,14 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             // omitting it is a common extension (§4p6), which
                             // the extension policy governs.
                             let extension_policy = self.context.configuration.extension_policy();
-                            if extension_policy != ExtensionPolicy::Allow {
+                            if extension_policy != ExtensionPolicy::Allow
+                                && self.context.configuration.standard()
+                                    < crate::configuration::CStandard::C23
+                                && !self
+                                    .context
+                                    .configuration
+                                    .accepts(crate::configuration::Feature::MsVaArgs)
+                            {
                                 self.context.preprocessor_error(PreprocessorError {
                                     error_type:     PreprocessorErrorType::MissingVariadicArgument(
                                         extension_policy,
@@ -804,11 +894,13 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             arguments.push(FunctionLikeMacroArgument {
                                 expanded: self.scratch.alloc(OnceCell::new()),
                                 name: self.context.string_cache.intern("__VA_ARGS__"),
+                                omitted: closed_at.is_some(),
                                 tokenizer: va_args_tokenizer,
                                 enclosing_arguments,
                                 disabled_macros,
                             });
                             let mut paren_depth = 1isize;
+                            let mut has_va_argument = false;
 
                             if closed_at.is_none() {
                                 loop {
@@ -818,6 +910,19 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                                 == PreprocessorTokenType::ClosingParenthesis =>
                                         {
                                             if paren_depth == 1 {
+                                                if !has_va_argument
+                                                    && argument_names.is_empty()
+                                                    && self.context.configuration.gnu_extensions()
+                                                {
+                                                    arguments
+                                                        .last_mut()
+                                                        .expect("variadic argument")
+                                                        .omitted = true;
+                                                } else if !has_va_argument {
+                                                    self.report_empty_macro_argument(
+                                                        token.source_vectors,
+                                                    );
+                                                }
                                                 break;
                                             }
                                             paren_depth -= 1;
@@ -827,9 +932,15 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                                 == PreprocessorTokenType::OpeningParenthesis =>
                                         {
                                             paren_depth += 1;
+                                            has_va_argument = true;
                                             continue;
                                         },
-                                        | Some(_) => {
+                                        | Some(token) => {
+                                            has_va_argument |= !matches!(
+                                                token.kind,
+                                                PreprocessorTokenType::Whitespace
+                                                    | PreprocessorTokenType::Newline
+                                            );
                                             continue;
                                         },
                                         | None => {
@@ -847,6 +958,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 }
                             }
                         }
+                        let arguments = arguments.leak();
+                        let tokenizer = if is_variadic {
+                            self.prepare_variadic_body(token, tokenizer, arguments)
+                        } else {
+                            tokenizer
+                        };
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                 invocation_end: SourceVector::new(
@@ -856,7 +973,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 ),
                                 invocation: self.invocation_location(token),
                                 name: token.identifier_id(self.context),
-                                arguments: arguments.leak(),
+                                arguments,
                                 is_variadic,
                             },
                             tokenizer,
@@ -952,71 +1069,16 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             // pp-tokens of a `#pragma`, and all four tokens
                             // are removed.
                             | "_Pragma" => {
-                                _ = self.expect_token_preserving_rejected::<true>(
-                                |_, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
-                                |_, token|
-                                    ControlFlow::Break(PreprocessorError {
-                                            error_type:     PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(token.kind),
-                                            source_vectors: token.source_vectors,
-                                        },
-                                    ),
-                                "parsing pragma operator",
-                            );
-
-                                let Some(string_token) = self.expect_token_preserving_rejected::<true>(
-                                |_, t| t.kind == PreprocessorTokenType::String,
-                                |_, token|
-                                    ControlFlow::Break(PreprocessorError {
-                                            error_type:     PreprocessorErrorType::MissingStringLiteralInPragmaOperator(token.kind),
-                                            source_vectors: token.source_vectors,
-                                        },
-                                    ),
-                                "parsing pragma operator",
-                            ) else {
+                                self.expand_pragma_operator();
                                 continue 'base;
-                            };
-
-                                let input = Self::prepare_pragma_operator_string(
-                                    self.context,
-                                    string_token.contents,
-                                );
-
-                                let tokenizer = take(&mut self.tokenizer);
-                                // Each operator gets its own identity:
-                                // diagnostics rendered later must quote this
-                                // payload, not the most recent one.
-                                let pragma_string = self
-                                    .context
-                                    .add_synthetic_source_file(Path::new("<pragma string>"), input);
-                                self.tokenizer = TokenSource::new(
-                                    self.context,
-                                    self.scratch,
-                                    pragma_string,
-                                    input,
-                                );
-                                self.pushed_frames += 1;
-                                _ = self.parse_pragma_directive(string_token);
-                                if self.tokenizer.next_item(self.context).is_some() {
-                                    let source_vectors = self.current_location();
-                                    self.context.preprocessor_error(PreprocessorError {
-                                        error_type:
-                                            PreprocessorErrorType::ExtraTokensAfterPragmaOperator,
-                                        source_vectors,
-                                    });
+                            },
+                            | name if super::language_features::LANGUAGE_BUILTINS
+                                .iter()
+                                .any(|(spelling, _)| *spelling == name) =>
+                            {
+                                if let Some(result) = self.language_builtin(token) {
+                                    break 'base Some(result);
                                 }
-                                self.tokenizer = tokenizer;
-
-                                _ = self.expect_token_preserving_rejected::<true>(
-                                |_, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
-                                |_, token|
-                                    ControlFlow::Break(PreprocessorError {
-                                            error_type:     PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(token.kind),
-                                            source_vectors: token.source_vectors,
-                                        },
-                                    ),
-                                "parsing pragma operator",
-                            );
-
                                 continue 'base;
                             },
                             | s => unreachable!(

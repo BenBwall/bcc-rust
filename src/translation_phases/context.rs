@@ -389,6 +389,7 @@ impl<'tu> Context<'tu> {
         self.tu.alloc_slice_copy(values)
     }
 
+    #[cfg(test)]
     pub(crate) fn new(tu: &'tu Bump) -> Self {
         Self::with_configuration(tu, CompilerConfiguration::default())
     }
@@ -1094,7 +1095,7 @@ impl<'tu> Context<'tu> {
         index
     }
 
-    pub(crate) fn get_source_file(&self, index: u32) -> &Path {
+    pub(crate) fn get_source_file(&self, index: u32) -> &'tu Path {
         self.source_files[index]
     }
 
@@ -1110,6 +1111,24 @@ impl<'tu> Context<'tu> {
     /// The directories searched for a header named in a file, in order: for
     /// a `"…"` name the including file's directory and the quote
     /// directories, then for both forms the system directories.
+    /// Configured include search entries, with stable indices for GNU
+    /// `include_next`. C99: implementation-defined search, §6.10.2p2-3, pp.
+    /// 149-150; PDF pp. 161-162.
+    pub(crate) fn configured_include_directories(
+        &self,
+        system: bool,
+    ) -> impl Iterator<Item = (usize, &'tu Path)> + Clone + use<'tu> {
+        let quote_count = self.quote_include_directories.len();
+        let quote: &'tu [&'tu Path] = self.quote_include_directories;
+        let system_directories: &'tu [&'tu Path] = self.system_include_directories;
+        quote
+            .iter()
+            .chain(system_directories)
+            .copied()
+            .enumerate()
+            .filter(move |(index, _)| !system || *index >= quote_count)
+    }
+
     pub(crate) fn include_search_directories(
         &self,
         including_file: u32,

@@ -28,6 +28,7 @@ use super::{
     PreprocessorTokenizerErrorType,
 };
 use crate::{
+    configuration::Feature,
     translation_phases::{
         Context,
         SourcePosition,
@@ -113,6 +114,7 @@ pub(crate) fn logical_characters<'a>(
     arena: &'a Bump,
     source: &str,
     range: Range<usize>,
+    trigraphs: bool,
 ) -> ArenaVec<'a, LogicalCharacter> {
     let bytes = &source.as_bytes()[..range.end];
     let mut characters = ArenaVec::new_in(arena);
@@ -121,7 +123,8 @@ pub(crate) fn logical_characters<'a>(
         let rest = &bytes[index..];
         let splice = match rest {
             | [b'\\', after @ ..] => line_ending_length(after).map(|ending| 1 + ending),
-            | [b'?', b'?', b'/', after @ ..] => line_ending_length(after).map(|ending| 3 + ending),
+            | [b'?', b'?', b'/', after @ ..] if trigraphs =>
+                line_ending_length(after).map(|ending| 3 + ending),
             | _ => None,
         };
         if let Some(length) = splice {
@@ -129,7 +132,8 @@ pub(crate) fn logical_characters<'a>(
             continue;
         }
         let (character, length) = match rest {
-            | [b'?', b'?', third, ..] if let Some(replacement) = trigraph_replacement(*third) =>
+            | [b'?', b'?', third, ..]
+                if trigraphs && let Some(replacement) = trigraph_replacement(*third) =>
                 (replacement, 3),
             | _ => {
                 let character = source[index..]
@@ -176,7 +180,7 @@ pub(crate) fn position_after(source: &str, from: SourcePosition, to: usize) -> S
 /// advancing together. A buffer that needs changes is copied into `scratch`.
 /// C99: §5.1.1.2p1-2, pp. 9-10; PDF pp. 21-22; trigraph mapping §5.2.1.1p1,
 /// p. 18; PDF p. 30.
-fn splice<'a>(source: &'a str, scratch: &'a Bump) -> (&'a str, &'a [Remap]) {
+fn splice<'a>(source: &'a str, scratch: &'a Bump, trigraphs: bool) -> (&'a str, &'a [Remap]) {
     let bytes = source.as_bytes();
     let mut special = byte_scan::find_phase2_special(bytes);
     if special == bytes.len() {
@@ -218,7 +222,7 @@ fn splice<'a>(source: &'a str, scratch: &'a Bump) -> (&'a str, &'a [Remap]) {
                 },
             },
             | [b'?', b'?', third, after @ ..]
-                if let Some(replacement) = trigraph_replacement(*third) =>
+                if trigraphs && let Some(replacement) = trigraph_replacement(*third) =>
                 match line_ending_length(after) {
                     // `??/` splices like a backslash.
                     | Some(ending) if replacement == '\\' => {
@@ -380,6 +384,12 @@ impl<'a> PositionTracker<'a> {
 /// A diagnostic raised while lexing, replayed whenever its token is read.
 #[derive(Clone, Copy, Debug)]
 enum LexDiagnostic {
+    Extension {
+        feature:  Feature,
+        spelling: &'static str,
+        start:    SourcePosition,
+        length:   usize,
+    },
     Tokenizer {
         error_type: PreprocessorTokenizerErrorType,
         start:      SourcePosition,
@@ -545,8 +555,9 @@ impl<'a> LexedFile<'a> {
         source: &str,
     ) -> Self {
         let scratch = Bump::new();
-        let (text, remaps) = splice(source, &scratch);
-        let terminal_splice = terminal_splice_length(source);
+        let trigraphs = context.configuration.accepts(Feature::Trigraphs);
+        let (text, remaps) = splice(source, &scratch, trigraphs);
+        let terminal_splice = terminal_splice_length(source, trigraphs);
         let file = Lexer::new(context, arena, &scratch, text, remaps, source.is_empty())
             .with_terminal_splice(terminal_splice.is_some())
             .run();
@@ -747,6 +758,18 @@ impl<'a> LexedFile<'a> {
             .take_while(|(owner, _)| *owner == entry)
         {
             match *diagnostic {
+                | LexDiagnostic::Extension {
+                    feature,
+                    spelling,
+                    mut start,
+                    length,
+                } =>
+                    if !context.ignore_tokenizer_errors() {
+                        start.line = start.line.wrapping_add(line_delta);
+                        let vectors =
+                            context.create_source_vectors(start, source_file_index, length);
+                        context.report_extension(feature, spelling, vectors);
+                    },
                 | LexDiagnostic::Tokenizer {
                     error_type,
                     start,
@@ -904,6 +927,38 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         }
     }
 
+    /// Digraph-only diagnostics stay outside the common token completion path.
+    /// C95 amendment 1 introduced the alternative token spellings.
+    fn digraph(&mut self, start: usize, end: usize, kind: PreprocessorTokenType) -> Lexed {
+        let position = self.tracker.advance(start);
+        self.record_extension(Feature::Digraphs, "digraph", position, end - start);
+        self.spelled(start, end, kind)
+    }
+
+    /// Keeps extension diagnostics beside their entry, so skipped groups stay
+    /// silent. C99: §5.1.1.3p1, p. 11; PDF p. 23; GNU lexical extensions.
+    fn record_extension(
+        &mut self,
+        feature: Feature,
+        spelling: &'static str,
+        start: SourcePosition,
+        length: usize,
+    ) {
+        if !self.context.configuration.is_native(feature)
+            || matches!(feature, Feature::DollarIdentifiers)
+        {
+            self.file.diagnostics.push((
+                Self::checked_entry_index(self.file.entries.len()),
+                LexDiagnostic::Extension {
+                    feature,
+                    spelling,
+                    start,
+                    length,
+                },
+            ));
+        }
+    }
+
     /// Finishes a token whose spelling differs from its source text.
     fn respelled(&mut self, end: usize, kind: PreprocessorTokenType, spelling: &str) -> Lexed {
         self.pos = end;
@@ -997,6 +1052,33 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
                     self.lex_quoted(start, position, start + 2, quote),
                 | _ => self.lex_identifier(start, start + 1),
             },
+            | b'u' | b'U'
+                if self
+                    .context
+                    .configuration
+                    .accepts(Feature::UnicodeLiteralPrefixes) =>
+            {
+                let mut end = start + 1;
+                if byte == b'u' && self.peek(end) == Some(b'8') {
+                    end += 1;
+                }
+                match self.peek(end) {
+                    | Some(quote @ (b'"' | b'\''))
+                        if end == start + 1
+                            || quote == b'"'
+                            || self
+                                .context
+                                .configuration
+                                .accepts(Feature::Utf8CharacterConstants) =>
+                        self.lex_quoted(start, position, end + 1, quote),
+                    | _ => self.lex_identifier(start, end),
+                }
+            },
+            | b'$' if self
+                .context
+                .configuration
+                .accepts(Feature::DollarIdentifiers) =>
+                self.lex_extended_identifier(start, start),
             | b'\\' if super::ucn::decode(&self.text[start..], true).is_some() =>
                 self.lex_identifier(start, start),
             | b'A'..=b'Z' | b'a'..=b'z' | b'_' => self.lex_identifier(start, start + 1),
@@ -1013,7 +1095,8 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             | b' ' | b'\t' | b'\x0b' | b'\x0c' => self.lex_whitespace(start + 1),
             | b'/' => match self.peek(start + 1) {
                 | Some(b'=') => self.spelled(start, start + 2, T::ForwardSlashEquals),
-                | Some(b'/') => {
+                | Some(b'/') if self.context.configuration.accepts(Feature::LineComments) => {
+                    self.record_extension(Feature::LineComments, "//", position, 2);
                     let end = self.skip_line_comment(start + 2);
                     self.lex_whitespace(end)
                 },
@@ -1025,19 +1108,23 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             },
             | b'%' => match self.peek(start + 1) {
                 | Some(b'=') => self.spelled(start, start + 2, T::PercentEquals),
-                | Some(b'>') => self.spelled(start, start + 2, T::ClosingCurlyBrace),
-                | Some(b':') => match self.peek(start + 2) {
-                    | Some(b'%') => match self.peek(start + 3) {
-                        | Some(b':') => self.spelled(start, start + 4, T::HashHash),
-                        | _ => self.spelled(start, start + 2, T::Hash),
+                | Some(b'>') if self.context.configuration.accepts(Feature::Digraphs) =>
+                    self.digraph(start, start + 2, T::ClosingCurlyBrace),
+                | Some(b':') if self.context.configuration.accepts(Feature::Digraphs) =>
+                    match self.peek(start + 2) {
+                        | Some(b'%') => match self.peek(start + 3) {
+                            | Some(b':') => self.digraph(start, start + 4, T::HashHash),
+                            | _ => self.digraph(start, start + 2, T::Hash),
+                        },
+                        | _ => self.digraph(start, start + 2, T::Hash),
                     },
-                    | _ => self.spelled(start, start + 2, T::Hash),
-                },
                 | _ => self.spelled(start, start + 1, T::Percent),
             },
             | b'<' => match self.peek(start + 1) {
-                | Some(b':') => self.spelled(start, start + 2, T::OpeningSquareBracket),
-                | Some(b'%') => self.spelled(start, start + 2, T::OpeningCurlyBrace),
+                | Some(b':') if self.context.configuration.accepts(Feature::Digraphs) =>
+                    self.digraph(start, start + 2, T::OpeningSquareBracket),
+                | Some(b'%') if self.context.configuration.accepts(Feature::Digraphs) =>
+                    self.digraph(start, start + 2, T::OpeningCurlyBrace),
                 | Some(b'=') => self.spelled(start, start + 2, T::LessThanEquals),
                 | Some(b'<') => match self.peek(start + 2) {
                     | Some(b'=') => self.spelled(start, start + 3, T::LessThanLessThanEquals),
@@ -1057,7 +1144,10 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             | b';' => self.spelled(start, start + 1, T::SemiColon),
             | b'?' => self.spelled(start, start + 1, T::QuestionMark),
             | b'~' => self.spelled(start, start + 1, T::Tilde),
-            | b':' => self.one_of(start, T::Colon, &[(b'>', T::ClosingSquareBracket)]),
+            | b':' if self.peek(start + 1) == Some(b'>')
+                && self.context.configuration.accepts(Feature::Digraphs) =>
+                self.digraph(start, start + 2, T::ClosingSquareBracket),
+            | b':' => self.spelled(start, start + 1, T::Colon),
             | b'+' => self.one_of(
                 start,
                 T::Plus,
@@ -1136,7 +1226,14 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
     /// PDF pp. 159-160.
     fn lex_identifier(&mut self, start: usize, mut end: usize) -> Lexed {
         end += byte_scan::identifier_run(&self.bytes[end..]);
-        if matches!(self.peek(end), Some(b'\\' | 0x80..)) {
+        let next = self.peek(end);
+        if matches!(next, Some(b'\\' | 0x80..))
+            || (next == Some(b'$')
+                && self
+                    .context
+                    .configuration
+                    .accepts(Feature::DollarIdentifiers))
+        {
             return self.lex_extended_identifier(start, end);
         }
         let kind = if &self.bytes[start..end] == b"defined" {
@@ -1156,6 +1253,16 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         loop {
             end += byte_scan::identifier_run(&self.bytes[end..]);
             match self.peek(end) {
+                | Some(b'$')
+                    if self
+                        .context
+                        .configuration
+                        .accepts(Feature::DollarIdentifiers) =>
+                {
+                    let position = self.tracker.advance_past_deletions(end);
+                    self.record_extension(Feature::DollarIdentifiers, "$", position, 1);
+                    end += 1;
+                },
                 | Some(b'\\') if super::ucn::decode(&self.text[end..], end == start).is_some() => {
                     end += super::ucn::decode(&self.text[end..], end == start)
                         .unwrap()
@@ -1197,6 +1304,25 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
                 continue;
             }
             match self.peek(end) {
+                | Some(b'\'')
+                    if self.context.configuration.accepts(Feature::DigitSeparators)
+                        && let Some(after) = self.number_separator_end(end) =>
+                {
+                    let ascii_nondigit = after == end + 2;
+                    end = after;
+                    if ascii_nondigit
+                        && matches!(self.bytes[end - 1], b'e' | b'E' | b'p' | b'P')
+                        && matches!(self.peek(end), Some(b'+' | b'-'))
+                    {
+                        end += 1;
+                    }
+                },
+                | Some(b'$')
+                    if self
+                        .context
+                        .configuration
+                        .accepts(Feature::DollarIdentifiers) =>
+                    end += 1,
                 | Some(b'\\') if super::ucn::decode(&self.text[end..], false).is_some() =>
                     end += super::ucn::decode(&self.text[end..], false).unwrap().1,
                 | Some(0x80..) if self.char_at(end).is_alphanumeric() =>
@@ -1222,6 +1348,25 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         }
     }
 
+    /// C23 pp-number separator grammar admits digits and identifier
+    /// nondigits; conversion subsequently requires digits of the radix.
+    fn number_separator_end(&mut self, apostrophe: usize) -> Option<usize> {
+        let index = apostrophe + 1;
+        match self.peek(index)? {
+            | byte if byte.is_ascii_alphanumeric() || byte == b'_' => Some(index + 1),
+            | b'$' if self
+                .context
+                .configuration
+                .accepts(Feature::DollarIdentifiers) =>
+                Some(index + 1),
+            | b'\\' =>
+                super::ucn::decode(&self.text[index..], false).map(|(_, length)| index + length),
+            | 0x80.. if self.char_at(index).is_alphanumeric() =>
+                Some(index + self.char_at(index).len_utf8()),
+            | _ => None,
+        }
+    }
+
     /// Continues a whitespace token from `end`; comments join it.
     /// C99: comment replacement and whitespace choice §5.1.1.2p3, p. 10;
     /// PDF p. 22; comments §6.4.9p1-2, p. 66; PDF p. 78.
@@ -1230,7 +1375,11 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             end += byte_scan::horizontal_space_run(&self.bytes[end..]);
             match self.peek(end) {
                 | Some(b'/') => match self.peek(end + 1) {
-                    | Some(b'/') => end = self.skip_line_comment(end + 2),
+                    | Some(b'/') if self.context.configuration.accepts(Feature::LineComments) => {
+                        let position = self.tracker.advance_past_deletions(end);
+                        self.record_extension(Feature::LineComments, "//", position, 2);
+                        end = self.skip_line_comment(end + 2);
+                    },
                     | Some(b'*') => end = self.skip_block_comment(end + 2),
                     | _ => break,
                 },

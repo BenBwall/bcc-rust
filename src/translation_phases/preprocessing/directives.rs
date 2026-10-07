@@ -40,7 +40,10 @@ use super::{
     },
 };
 use crate::{
-    configuration::ExtensionPolicy,
+    configuration::{
+        ExtensionPolicy,
+        Feature,
+    },
     translation_phases::{
         Context,
         SourcePosition,
@@ -340,13 +343,65 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             | "ifdef" => self.parse_ifdef_directive(directive),
             | "ifndef" => self.parse_ifndef_directive(directive),
             | "elif" => self.parse_elif_directive(directive),
+            | "elifdef" | "elifndef" if self.context.configuration.accepts(Feature::Elifdef) => {
+                self.context.report_extension(
+                    Feature::Elifdef,
+                    "#elifdef/#elifndef",
+                    directive.source_vectors,
+                );
+                self.parse_elif_directive(directive);
+            },
             | "else" => self.parse_else_directive(directive),
             | "endif" => self.parse_endif_directive(directive),
             | "include" => self.parse_include_directive(directive),
+            | "include_next" => {
+                self.context.report_extension(
+                    Feature::IncludeNext,
+                    "#include_next",
+                    directive.source_vectors,
+                );
+                self.parse_include_directive(directive);
+            },
+            | "embed" if self.context.configuration.accepts(Feature::Embed) =>
+                self.parse_embed_directive(directive),
+            | "ident" | "sccs" => {
+                self.context.report_extension(
+                    Feature::IdentDirective,
+                    "#ident/#sccs",
+                    directive.source_vectors,
+                );
+                let operand = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+                if operand.is_none_or(|t| t.kind != PreprocessorTokenType::String) {
+                    self.language_error(
+                        "expected a string literal after #ident/#sccs",
+                        directive.source_vectors,
+                    );
+                }
+                if operand.is_none_or(|t| t.kind != PreprocessorTokenType::Newline) {
+                    self.skip_until_newline();
+                }
+                self.last_was_newline = true;
+                self.current_is_newline = true;
+            },
             | "define" => self.parse_define_directive(directive),
             | "undef" => self.parse_undef_directive(directive),
             | "line" => self.parse_line_directive(directive),
             | "error" => self.parse_error_directive(directive),
+            | "warning"
+                if self
+                    .context
+                    .configuration
+                    .accepts(Feature::WarningDirective) =>
+            {
+                self.context.report_extension(
+                    Feature::WarningDirective,
+                    "#warning",
+                    directive.source_vectors,
+                );
+                self.parse_error_directive(directive);
+                self.last_was_newline = true;
+                self.current_is_newline = true;
+            },
             | "pragma" => {
                 if !self.parse_pragma_directive(directive) {
                     self.skip_until_newline();
@@ -453,6 +508,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         operand: SourceVectors,
         path: &Path,
         is_system_header: bool,
+        next: bool,
     ) -> Option<u32> {
         let source_file_index = if path.is_absolute() {
             path.is_file()
@@ -460,22 +516,43 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         } else {
             // The including file's directory and the quote directories come
             // first for `"…"` names.
-            let directories = self
-                .context
-                .include_search_directories(including_file, is_system_header);
+            let start = if next {
+                self.state
+                    .include_origins
+                    .get(&including_file)
+                    .map_or(0, |index| index + 1)
+            } else {
+                0
+            };
+            let local = (!next && !is_system_header)
+                .then(|| self.context.get_source_file(including_file).parent())
+                .flatten();
+            let directories = local.into_iter().map(|directory| (None, directory)).chain(
+                self.context
+                    .configured_include_directories(if next { false } else { is_system_header })
+                    .filter(move |(index, _)| *index >= start)
+                    .map(|(index, directory)| (Some(index), directory)),
+            );
             let mut found = None;
-            for directory in directories.clone() {
+            for (search_index, directory) in directories.clone() {
                 // Each candidate is spelled in the expansion arena and taken
                 // back before the next one, so a lookup leaves nothing there.
                 let mut buffer = ArenaVec::new_in(self.scratch);
                 let candidate = join_path(&mut buffer, directory, path);
                 if candidate.is_file() {
-                    found = Some(self.context.intern_source_file(candidate));
+                    let index = self.context.intern_source_file(candidate);
+                    if let Some(search_index) = search_index {
+                        _ = self.state.include_origins.insert(index, search_index);
+                    }
+                    found = Some(index);
                     break;
                 }
             }
             if found.is_none() {
-                let searched = self.context.tu_arena().alloc_slice_fill_iter(directories);
+                let searched = self
+                    .context
+                    .tu_arena()
+                    .alloc_slice_fill_iter(directories.map(|(_, directory)| directory));
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::HeaderNotFound {
                         name: self.context.diagnostic_text(&path.to_string_lossy()),
@@ -579,7 +656,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     .context
                     .source_text(physical)
                     .expect("source files record their text");
-                let characters = logical_characters(self.scratch, source, vector.range());
+                let characters = logical_characters(
+                    self.scratch,
+                    source,
+                    vector.range(),
+                    self.context.configuration.accepts(Feature::Trigraphs),
+                );
                 closing = characters
                     .iter()
                     .position(|character| character.character == '>')
@@ -605,12 +687,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 .context
                 .source_text(physical)
                 .expect("source files record their text");
-            let open_index = logical_characters(self.scratch, source, open_vector.range())
-                .first()
-                .expect("the operand starts with `<`")
-                .index;
-            let characters =
-                logical_characters(self.scratch, source, open_index + 1..closing.unwrap_or(end));
+            let open_index = logical_characters(
+                self.scratch,
+                source,
+                open_vector.range(),
+                self.context.configuration.accepts(Feature::Trigraphs),
+            )
+            .first()
+            .expect("the operand starts with `<`")
+            .index;
+            let characters = logical_characters(
+                self.scratch,
+                source,
+                open_index + 1..closing.unwrap_or(end),
+                self.context.configuration.accepts(Feature::Trigraphs),
+            );
             let written = header_name_from_source(self.scratch, source, anchor, &characters, true);
             let unclosed_at = closing
                 .is_none()
@@ -683,7 +774,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 .context
                 .source_text(physical)
                 .expect("source files record their text");
-            let characters = logical_characters(self.scratch, source, vector.range());
+            let characters = logical_characters(
+                self.scratch,
+                source,
+                vector.range(),
+                self.context.configuration.accepts(Feature::Trigraphs),
+            );
             // The first character is the opening quote. With the backslash
             // extension, a backslash is ordinary header-name text, so the
             // first following quote closes the header even if phase 3 lexed
@@ -1000,6 +1096,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 header.source_vectors,
                 Path::new(header.name),
                 header.is_system_header,
+                self.context.string_cache.at(directive.contents) == "include_next",
             )
         } else {
             None
@@ -1175,6 +1272,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         // Collected in the expansion arena; the definition keeps a copy.
         let mut argument_names = ArenaVec::new_in(self.scratch);
         let mut is_variadic = false;
+        let mut variadic_alias = None;
         let is_function_like =
             probe.is_some_and(|token| token.kind == PreprocessorTokenType::OpeningParenthesis);
         let (body, first) = if is_function_like {
@@ -1247,7 +1345,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     break;
                 }
                 let Some(comma_or_closing_parent) = self.expect_token_from_previous_phase::<true>(
-                    |_, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
+                    |_, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis || (t.kind == PreprocessorTokenType::Ellipsis && !is_variadic),
                     |_, token|
                         ControlFlow::Break(PreprocessorError {
                                 error_type:     PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(token.kind),
@@ -1257,6 +1355,33 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     ,
                     "parsing macro definition",
                 ) else {break;};
+                if comma_or_closing_parent.kind == PreprocessorTokenType::Ellipsis {
+                    variadic_alias = argument_names.pop();
+                    is_variadic = true;
+                    self.context.report_extension(
+                        Feature::NamedVariadicMacros,
+                        "named variadic macro",
+                        name_or_ellipsis.source_vectors,
+                    );
+                    let Some(closing) = self.expect_token_from_previous_phase::<true>(
+                        |_, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
+                        |_, token| {
+                            ControlFlow::Break(PreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::VariadicMacroMustBeLastParameter(
+                                        "named variadic macro",
+                                    ),
+                                source_vectors: token.source_vectors,
+                            })
+                        },
+                        "parsing named variadic macro",
+                    ) else {
+                        is_valid = false;
+                        break;
+                    };
+                    _ = closing;
+                    break;
+                }
                 if comma_or_closing_parent.kind == PreprocessorTokenType::ClosingParenthesis {
                     break;
                 }
@@ -1309,6 +1434,40 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 source_vectors: name.source_vectors,
             });
         }
+        if is_variadic {
+            self.context.report_extension(
+                Feature::VariadicMacros,
+                "variadic macro",
+                name.source_vectors,
+            );
+        }
+        if !self.validate_variadic_body(body.clone(), is_variadic) {
+            self.last_was_newline = true;
+            self.current_is_newline = true;
+            return;
+        }
+        let body = if let Some(alias) = variadic_alias {
+            let mut body = body;
+            let mut tokens = ArenaVec::new_in(self.scratch);
+            while let Some(mut token) = body.next_item(self.context) {
+                if token.kind.is_identifier() && token.identifier_id(self.context) == alias {
+                    token.contents = self.context.string_cache.intern("__VA_ARGS__");
+                }
+                let last = token.kind == PreprocessorTokenType::Newline;
+                tokens.push(token);
+                if last {
+                    break;
+                }
+            }
+            TokenSource::replay(
+                self.context,
+                self.scratch,
+                &[&tokens],
+                crate::translation_phases::SourceVector::default(),
+            )
+        } else {
+            body
+        };
         let tokenizer = self.state.lexed_files.persist(&body);
         let definition = if is_function_like {
             MacroDefinition::FunctionLike {
@@ -1642,9 +1801,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             );
         }
         self.context.preprocessor_error(PreprocessorError {
-            error_type:     PreprocessorErrorType::ErrorDirective(
-                self.context.diagnostic_text(&contents),
-            ),
+            error_type:     if self.context.string_cache.at(directive.contents) == "warning" {
+                PreprocessorErrorType::WarningDirective(self.context.diagnostic_text(&contents))
+            } else {
+                PreprocessorErrorType::ErrorDirective(self.context.diagnostic_text(&contents))
+            },
             source_vectors: directive.source_vectors,
         });
     }

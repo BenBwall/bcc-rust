@@ -45,5 +45,6 @@ pub use cli::{
     CompileStep,
     MainError,
     compile_file_measured,
+    compile_file_with_arguments_measured,
     run,
 };

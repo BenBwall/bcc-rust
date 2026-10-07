@@ -48,7 +48,9 @@ mod tests {
     }
 
     fn run(fixture: &Path) -> Output {
+        let flags = fs::read_to_string(fixture.with_extension("args")).unwrap_or_default();
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(flags.split_whitespace())
             .arg(fixture.file_name().expect("fixture must have a file name"))
             .current_dir(fixture_directory())
             .env("NO_COLOR", "1")

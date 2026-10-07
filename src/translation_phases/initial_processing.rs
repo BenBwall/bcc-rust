@@ -102,9 +102,9 @@ impl GetSourceVectors for InitialProcessorError {
 /// `source`, spelled before trigraph replacement and line splicing.
 /// C99: trigraph replacement §5.2.1.1p1, p. 18; PDF p. 30; line splicing
 /// §5.1.1.2p2, p. 10; PDF p. 22.
-pub(crate) fn terminal_splice_length(source: &str) -> Option<usize> {
+pub(crate) fn terminal_splice_length(source: &str, trigraphs: bool) -> Option<usize> {
     ["\\\r\n", "??/\r\n", "\\\n", "??/\n", "\\\r", "??/\r"]
         .into_iter()
-        .find(|suffix| source.ends_with(suffix))
+        .find(|suffix| (trigraphs || !suffix.starts_with("??")) && source.ends_with(suffix))
         .map(str::len)
 }

@@ -4,6 +4,7 @@ mod encoding_regressions;
 mod expression_regressions;
 mod header_name_regressions;
 mod keyword_regressions;
+mod language_modes;
 mod literal_regressions;
 mod macro_regressions;
 mod observables;

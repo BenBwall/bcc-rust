@@ -1,6 +1,6 @@
 # Diagnostic golden corpus
 
-Each top-level `.c` is run as `bcc-rust <file-name>` with this directory as the current directory. Its sibling `.stderr` stores the exact bytes, including the summary. `NO_COLOR=1` is set; `CLICOLOR_FORCE`, `CPATH`, and `C_INCLUDE_PATH` are removed. `RUST_BACKTRACE=0` keeps crash regressions from depending on an inherited backtrace setting. No paths, whitespace, source spellings, or panic output are normalized.
+Each top-level `.c` is run as `bcc-rust <file-name>` with this directory as the current directory. An optional sibling `.args` supplies whitespace-separated CLI flags before the filename. Its sibling `.stderr` stores the exact bytes, including the summary. `NO_COLOR=1` is set; `CLICOLOR_FORCE`, `CPATH`, and `C_INCLUDE_PATH` are removed. `RUST_BACKTRACE=0` keeps crash regressions from depending on an inherited backtrace setting. No paths, whitespace, source spellings, or panic output are normalized.
 
 Run `cargo test --test diagnostics_golden`. Use `BLESS=1 cargo test --test diagnostics_golden` to rewrite every snapshot. The guard remains active while blessing and runs every C fixture again. Both tests accumulate failures so one mismatch does not hide later fixtures.
 
@@ -56,7 +56,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **229 C inputs and 229 stderr snapshots**, plus two supporting headers. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **134/140 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40.
+There are **234 C inputs and 234 stderr snapshots**, plus two supporting headers and five mode/policy `.args` sidecars. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **136/142 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -82,6 +82,8 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 
 | Variant | Status | Fixture or reason |
 | --- | --- | --- |
+| `LanguageConstraint` | rendered | [C23 literal encodings, optional replacement and missing embed](lexpp-c23-constraints.c), [C2y delimited escapes](lexpp-c2y-escapes.c); structured mode tests also cover malformed queries and embed parameters |
+| `WarningDirective` | rendered | [GNU89 warning message and extension policy](lexpp-gnu89-extensions.c); structured tests cover native C23 warnings and earlier strict rejection |
 | `InvalidHexadecimalFloatLiteral` | rendered | [pp-invalid-hexadecimal-float-literal.c](pp-invalid-hexadecimal-float-literal.c) |
 | `InvalidDecimalFloatLiteral` | rendered | [pp-invalid-decimal-float-literal.c](pp-invalid-decimal-float-literal.c) |
 | `FloatConstantOutOfRange` | rendered | [pp-float-constant-out-of-range-underflow.c](pp-float-constant-out-of-range-underflow.c), [pp-float-constant-out-of-range.c](pp-float-constant-out-of-range.c) |
@@ -348,3 +350,28 @@ Allow/Warn/Deny and original alternate spellings. CLI goldens under
 `language/` cover policy severity and macro-expansion provenance. Newly recognized
 unsupported keywords also have parser recovery coverage; recognition is separate
 from implementing their grammar. See the root language-standards.md matrix.
+
+
+## Lexical and preprocessing modes
+
+The lexpp fixtures added on 8 October 2026 render standard, GNU and MSVC
+behavior selected by their `.args` files:
+
+| Fixture | Flags | Observed coverage |
+| --- | --- | --- |
+| [C89 extensions](lexpp-c89-extensions.c) | `-std=c89 -pedantic` | Variadic definitions, empty fixed and variadic arguments, long-long integer suffixes and hexadecimal floats report C99 origin. |
+| [GNU89 extensions](lexpp-gnu89-extensions.c) | `-std=gnu89 -pedantic` | Named variadic macros, dollar identifiers, binary constants, line comments, `#warning`, `#ident`, and counter expansion retain spelling/provenance and policy severity. |
+| [C23 constraints](lexpp-c23-constraints.c) | `-std=c23` | Incompatible string encodings, a UTF-8 character needing multiple code units, an invalid `__VA_OPT__` paste boundary, missing resource inclusion, a query outside conditional inclusion, and following declaration recovery. |
+| [C2y escapes](lexpp-c2y-escapes.c) | `-std=c2y` | Empty, invalid-radix and excessive numeric delimited escapes with following declaration recovery. |
+| [MSVC pragma](lexpp-ms-pragma.c) | `-std=c17 -fms-pragma -pedantic` | Independent MSVC operator policy diagnostic plus the existing structured pragma-switch diagnostic at the original payload. |
+
+`TranslationError::Extension` is exercised by these rendered goldens and by the
+seven-revision strict/GNU snapshot in
+[`language_modes_lexpp.snap`](../lexing/language_modes_lexpp.snap). Structured
+preprocessor tests cover Allow/Warn/Deny, C89/C95 lexical boundaries, all modern
+literal gates and values, GNU suffix orders, native and extension directives,
+query results, real include-next/resource paths, every standard optional-paste
+example, independent MSVC comma elision, and malformed/truncated input. The
+allocation harness reads the same `.args` before its measured compiler/reporting
+intervals; it still requires every golden fixture to produce diagnostics and
+requires zero global allocations while rendering them.

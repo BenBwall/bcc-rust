@@ -22,6 +22,62 @@ mod tests {
     };
 
     #[test]
+    fn lexpp_cli_modes_convert_modern_literals_and_preserve_old_prefixes() {
+        for (mode, expected) in [
+            ("c99", "identifier `u8`"),
+            ("c11", "u8\"x\""),
+            ("c23", "unsigned _BitInt(3)"),
+            ("c2y", "= 7"),
+        ] {
+            let source = match mode {
+                | "c99" | "c11" => "u8\"x\"\n",
+                | "c23" => "7uwb\n",
+                | _ => "0o7\n",
+            };
+            let flag = format!("-std={mode}");
+            let output = run(&[&flag, "--tokens", "--input", source]);
+            let tokens = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !tokens.contains("error:") && !tokens.contains("warning:"),
+                "{mode}: {output:?}"
+            );
+            assert!(tokens.contains(expected), "{mode}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn lexpp_cli_pedantic_and_independent_ms_flags_reach_preprocessing() {
+        let output = run(&[
+            "-std=c89",
+            "-pedantic-errors",
+            "--tokens",
+            "--input",
+            "1LL\n",
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("error: 'long long integer constant' is a C99 extension"),
+            "{stderr}"
+        );
+        for flag in ["-fms-pragma", "-fms-extensions"] {
+            let output = run(&[
+                "-std=c89",
+                flag,
+                "--tokens",
+                "--input",
+                "__pragma(STDC FP_CONTRACT ON) after\n",
+            ]);
+            let stdout = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !stdout.contains("error:") && !stdout.contains("warning:"),
+                "{output:?}"
+            );
+            assert!(stdout.contains("identifier `after`"), "{stdout}");
+            assert!(!stdout.contains("__pragma"), "{stdout}");
+        }
+    }
+
+    #[test]
     fn invalid_standard_prints_exact_clang_notes() {
         let expected =
             "error: invalid value 'c98' in '-std=c98'\nnote: use 'c89', 'c90', or 'iso9899:1990' \
@@ -135,7 +191,11 @@ mod tests {
             ("asm", "__asm"),
             ("pragma", "__pragma"),
         ] {
-            let source = format!("{spelling}\n");
+            let source = if feature == "pragma" {
+                "__pragma(STDC FP_CONTRACT ON)\n".to_owned()
+            } else {
+                format!("{spelling}\n")
+            };
             let enable = format!("-fms-{feature}");
             let disable = format!("-fno-ms-{feature}");
             for (flags, enabled) in [
@@ -153,7 +213,15 @@ mod tests {
                     "{output:?}"
                 );
                 let stdout = String::from_utf8_lossy(&output.stderr);
-                assert_eq!(stdout.contains("keyword"), enabled, "{feature}: {stdout}");
+                if feature == "pragma" {
+                    assert_eq!(
+                        stdout.contains("identifier `__pragma`"),
+                        !enabled,
+                        "{stdout}"
+                    );
+                } else {
+                    assert_eq!(stdout.contains("keyword"), enabled, "{feature}: {stdout}");
+                }
             }
         }
         for feature in ["anonymous-structs", "va-args"] {
@@ -198,9 +266,7 @@ mod tests {
         let error = stderr
             .find("error: expected an expression")
             .expect("parser error");
-        let warning = stderr
-            .find("warning: unknown preprocessing directive")
-            .expect("warning");
+        let warning = stderr.find("warning:  late").expect("warning");
         assert!(error < warning, "{stderr}");
         assert!(
             stderr.contains("1 error and 1 warning generated"),
@@ -218,9 +284,7 @@ mod tests {
         let first = stderr
             .find("error: expected an expression, found `;`")
             .expect("first error");
-        let warning = stderr
-            .find("warning: unknown preprocessing directive")
-            .expect("warning");
+        let warning = stderr.find("warning:  middle").expect("warning");
         let last = stderr
             .find("error: expected an expression, found `)`")
             .expect("macro error");

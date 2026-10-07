@@ -22,6 +22,7 @@ use super::{
     },
 };
 use crate::{
+    configuration::Feature,
     translation_phases::{
         Context,
         SourceVector,
@@ -164,6 +165,28 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     }
                     self.context.set_ignore_tokenizer_errors(true);
                     at_line_start = true;
+                },
+                | "elifdef" | "elifndef"
+                    if innermost && self.context.configuration.accepts(Feature::Elifdef) =>
+                {
+                    if !self.check_conditional_arm(name, false) || mode == SkipMode::ToEndif {
+                        continue 'lines;
+                    }
+                    self.context.set_ignore_tokenizer_errors(false);
+                    self.context.report_extension(
+                        Feature::Elifdef,
+                        "#elifdef/#elifndef",
+                        name.source_vectors,
+                    );
+                    let wants_defined = self.context.string_cache.at(name.contents) == "elifdef";
+                    let taken = self.eval_macro_test(wants_defined);
+                    at_line_start = true;
+                    if taken {
+                        self.last_was_newline = true;
+                        self.current_is_newline = true;
+                        return;
+                    }
+                    self.context.set_ignore_tokenizer_errors(true);
                 },
                 | "else" if innermost => {
                     let valid = self.check_conditional_arm(name, true);
@@ -316,6 +339,17 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             self.context,
             directive,
         ));
+        if self.eval_macro_test(wants_defined) {
+            self.last_was_newline = true;
+            self.current_is_newline = true;
+        } else {
+            self.skip_over_dead_code(true, SkipMode::FalseGroup);
+        }
+    }
+
+    /// C23: §6.10.2p16, p. 168; PDF p. 181: elifdef tests a macro name
+    /// directly.
+    fn eval_macro_test(&mut self, wants_defined: bool) -> bool {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
             |_, token| {
@@ -334,8 +368,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 "parsing ifndef directive"
             },
         ) else {
-            self.skip_over_dead_code(false, SkipMode::FalseGroup);
-            return;
+            if !self.current_is_newline {
+                self.skip_until_newline();
+            }
+            return false;
         };
         if self
             .expect_token_from_previous_phase::<true>(
@@ -356,16 +392,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         {
             self.skip_until_newline();
         }
-        if self
-            .state
+        self.state
             .macro_definitions
             .contains_key(&name.identifier_id(self.context))
             == wants_defined
-        {
-            self.last_was_newline = true;
-            self.current_is_newline = true;
-        } else {
-            self.skip_over_dead_code(true, SkipMode::FalseGroup);
-        }
     }
 }

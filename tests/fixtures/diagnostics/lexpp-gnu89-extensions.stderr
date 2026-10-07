@@ -1,0 +1,61 @@
+warning: 'variadic macro' is a C99 extension
+ --> lexpp-gnu89-extensions.c:1:9
+  |
+1 | #define G(x,args...) x
+  |         ^
+
+warning: 'named variadic macro' is a GNU extension
+ --> lexpp-gnu89-extensions.c:1:13
+  |
+1 | #define G(x,args...) x
+  |             ^^^^
+
+warning: '$' is a GNU extension
+ --> lexpp-gnu89-extensions.c:2:5
+  |
+2 | int $a = G(0b1,);
+  |     ^
+
+warning: 'binary integer constant' is a C23 extension
+ --> lexpp-gnu89-extensions.c:2:12
+  |
+2 | int $a = G(0b1,);
+  |            ^^^
+
+warning: 'empty macro argument' is a C99 extension
+ --> lexpp-gnu89-extensions.c:2:16
+  |
+2 | int $a = G(0b1,);
+  |                ^
+
+warning: '//' is a C99 extension
+ --> lexpp-gnu89-extensions.c:3:1
+  |
+3 | // a line comment
+  | ^^
+
+warning: '#warning' is a C23 extension
+ --> lexpp-gnu89-extensions.c:4:2
+  |
+4 | #warning warning message
+  |  ^^^^^^^
+
+warning:  warning message
+ --> lexpp-gnu89-extensions.c:4:2
+  |
+4 | #warning warning message
+  |  ^^^^^^^
+
+warning: '#ident/#sccs' is a GNU extension
+ --> lexpp-gnu89-extensions.c:5:2
+  |
+5 | #ident "metadata"
+  |  ^^^^^
+
+warning: '__COUNTER__' is a GNU extension
+ --> lexpp-gnu89-extensions.c:6:13
+  |
+6 | int count = __COUNTER__;
+  |             ^^^^^^^^^^^
+
+10 warnings generated.

@@ -218,6 +218,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(_)
             | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
             | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
+            | PreprocessorErrorType::LanguageConstraint(..)
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy)
@@ -252,6 +253,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ExtraTokensAfterConditionalDirective(_)
             | PreprocessorErrorType::ExtraTokensAfterIfdefDirective
             | PreprocessorErrorType::ExtraTokensAfterIfndefDirective
+            | PreprocessorErrorType::WarningDirective(..)
             | PreprocessorErrorType::PragmaOnceInNonHeader => ErrorSeverity::Warning,
         }
     }
@@ -259,6 +261,10 @@ impl GetSeverity for PreprocessorError<'_> {
 
 #[derive(Debug)]
 pub(crate) enum PreprocessorErrorType<'tu> {
+    /// Later-standard lexical/directive constraint (C99 §5.1.1.3p1).
+    LanguageConstraint(&'tu str),
+    /// C23 #warning message; GNU extension in earlier modes.
+    WarningDirective(&'tu str),
     /// A pp-number with `0x` that is not a `hexadecimal-floating-constant`.
     ///
     /// C99: §6.4 paragraph 2, p. 49; PDF p. 61, and §6.4.4.2 paragraph 1,
@@ -1320,6 +1326,8 @@ impl PreprocessorErrorType<'_> {
             .note("C99 §6.10.6p2: each standard pragma takes an on-off switch"),
             | Self::PragmaOnceInNonHeader =>
                 new("`#pragma once` in main file").label("only affects files that are included"),
+            | Self::LanguageConstraint(message) | Self::WarningDirective(message) =>
+                new(format_in!(arena, "{message}")),
             | Self::ErrorDirective(message) => {
                 let message = message.trim();
                 new(if message.is_empty() {
