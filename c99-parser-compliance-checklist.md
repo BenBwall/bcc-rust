@@ -5,8 +5,9 @@
 This document is the implementation inventory for the non-recursive language
 parser implemented as `Parser`. It covers the C99 language-parser surface after
 preprocessing, not preprocessing directives or later code generation. The
-primary source is the repository-local [`c-spec.pdf`](./c-spec.pdf), identified
-in the document itself as WG14/N1256, ISO/IEC 9899:TC3 (C99 with Technical
+primary source is the repository-local
+[`standards/c99-n1256.pdf`](./standards/c99-n1256.pdf), identified in the
+document itself as WG14/N1256, ISO/IEC 9899:TC3 (C99 with Technical
 Corrigenda 1, 2, and 3). Citations give the exact clause or subclause, the
 printed standard page, and the 1-based PDF page.
 

@@ -29,7 +29,7 @@
 //! Standard references in this module cite WG14/N1256, ISO/IEC 9899:TC3
 //! (C99 with Technical Corrigenda 1, 2, and 3). Each reference gives the
 //! normative clause, the standard's printed page, and the one-based page in
-//! the repository's `c-spec.pdf`.
+//! the repository's `standards/c99-n1256.pdf`.
 
 mod compound_statement;
 mod declaration;

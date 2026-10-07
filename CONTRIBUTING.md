@@ -3,8 +3,8 @@
 ## Citing the C standard
 
 Compiler code says which part of the C standard it implements. The reference is
-the repository's [`c-spec.pdf`](c-spec.pdf), WG14/N1256 (ISO/IEC 9899:TC3: C99
-with Technical Corrigenda 1-3).
+the repository's [`standards/c99-n1256.pdf`](standards/c99-n1256.pdf),
+WG14/N1256 (ISO/IEC 9899:TC3: C99 with Technical Corrigenda 1-3).
 
 - Every module under `src/translation_phases/` opens with a `//!` comment that
   names the translation phases and clauses it implements, and where its

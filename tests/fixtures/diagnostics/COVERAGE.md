@@ -25,7 +25,7 @@ tokens consistently, preserve user-provided `#error` messages, and distinguish
 invalid shift counts from arithmetic result overflow. A standard citation must
 support the exact claim; missing citations alone are a documentation-quality
 issue, not evidence that the diagnostic is wrong. Use the repository's
-[N1256 reference](../../../c-spec.pdf): conditional replacement/arithmetic is
+[N1256 reference](../../../standards/c99-n1256.pdf): conditional replacement/arithmetic is
 §6.10.1p4, shift-count constraints are §6.5.7p3, line-number syntax is
 §6.10.4p3, pragma switches are §6.10.6p2, and repeated `inline` is §6.7.4p5.
 

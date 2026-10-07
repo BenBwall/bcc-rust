@@ -2,3 +2,7 @@
 # source lines and the blank separator at the end of a rendered diagnostic.
 tests/fixtures/lexing/directives_and_macros.snap whitespace=-blank-at-eof
 tests/fixtures/lexing/test_programs.snap whitespace=-trailing-space
+
+# PDFs are binary, even linearized ones that Git would detect as text: never
+# convert their line endings or diff them as text.
+*.pdf binary
