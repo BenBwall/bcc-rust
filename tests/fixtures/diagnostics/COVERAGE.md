@@ -122,7 +122,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `TernaryOperatorWithoutMhs` | rendered | [pp-ternary-operator-without-mhs.c](pp-ternary-operator-without-mhs.c) |
 | `TernaryOperatorWithoutRhs` | rendered | [pp-ternary-operator-without-rhs.c](pp-ternary-operator-without-rhs.c) |
 | `ColonWithoutMatchingQuestionMark` | rendered | [pp-colon-without-matching-question-mark.c](pp-colon-without-matching-question-mark.c) |
-| `CommaOperatorInPreprocessorExpression` | unavailable in default CLI | CompilerConfiguration::default selects ExtensionPolicy::Allow and the CLI has no strict-policy option. The emitter explicitly gates this variant on Warn or Deny. It is reachable through configured library/unit tests, but not bcc-rust <fixture>. |
+| `CommaOperatorInPreprocessorExpression` | reachable with policy flags | The CLI default allows extensions; `-pedantic`/`-Wpedantic` select Warn and `-pedantic-errors` selects Deny. Unit tests cover the specialized emitter. |
 | `BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression` | rendered | [pp-binary-operator-instead-of-unary-expression-in-preprocessor-expression.c](pp-binary-operator-instead-of-unary-expression-in-preprocessor-expression.c) |
 | `DivideByZero` | rendered | [pp-divide-by-zero.c](pp-divide-by-zero.c) |
 | `ModuloByZero` | rendered | [pp-modulo-by-zero.c](pp-modulo-by-zero.c) |
@@ -338,3 +338,13 @@ The scratch copy uses committed build configuration from `0165497c79a1fd577ec85d
 - `src/translation_phases/preprocessor_tokenizer.rs`: `75938a65383fe3013753df2b540971c1616cbc02039e63e55fc4bc032c4b9a0f`
 - `src/translation_phases/preprocessing.rs`: `297ba822934e344fa1bead583aca1fc5fc5ccc2ac04ac453ee6a5c932754fb0c`
 - `src/translation_phases/parsing.rs`: `b28b06587d7363d6ce812b0b1348fe7f708a6c721d00651faa70933ce5dbba5f`
+
+## Language-standard foundation
+
+The CLI now defaults to GNU17; configured library tests remain strict C99.
+`TranslationError::Extension` is shared by all phases and renders standard/GNU/
+MSVC origin with policy-selected severity. Keyword classification tests cover
+Allow/Warn/Deny and original alternate spellings. CLI goldens under
+`language/` cover policy severity and macro-expansion provenance. Newly recognized
+unsupported keywords also have parser recovery coverage; recognition is separate
+from implementing their grammar. See the root language-standards.md matrix.

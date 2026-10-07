@@ -5,6 +5,9 @@ targeting C99 syntax. Its non-recursive language parser is complete for the
 declared syntax scope, but semantic analysis and code generation are not yet
 implemented.
 
+See [language-standards.md](language-standards.md) for language modes, extension
+flags, shared configuration, and the implementation matrix.
+
 ## Current status
 
 The CLI accepts a C source file or an input string, runs preprocessing and the

@@ -35,6 +35,18 @@ _Avoid_: Source span
 The compilation-wide state shared by translation phases, including interned spellings, source files, source vectors, and pending diagnostics. The object running a phase (the parser, or the preprocessor while it reads input) holds the context exclusively for as long as it runs, rather than receiving it with each call.
 _Avoid_: Parser context
 
+**Language mode** (`LanguageMode`):
+An ordered ISO C revision and an independent GNU-dialect bit. C89/C90 share
+one revision; the C95 amendment is distinct. MSVC feature flags are independent
+of the language mode.
+
+**Compiler configuration** (`CompilerConfiguration`):
+The value object held by `Context` that owns language mode, MSVC feature flags,
+extension diagnostic policy, and derived feature bits. Feature acceptance means
+the syntax may be consumed, including as an extension; native availability means
+it belongs to the selected revision or dialect. Neither means its implementation
+is complete; the language-standards.md matrix records that status.
+
 ## Storage and lifetimes
 
 **Translation-unit arena** (`'tu`):
