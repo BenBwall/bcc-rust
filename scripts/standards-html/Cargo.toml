@@ -1,0 +1,10 @@
+[package]
+name = "standards-html"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "Converts the C standard drafts under standards/ into static paged HTML"
+publish = false
+
+[dependencies]
+lopdf = { version = "0.45.0", default-features = false }

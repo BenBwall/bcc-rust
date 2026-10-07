@@ -1,5 +1,6 @@
 /target
 /scripts/agentbus/target/
+/scripts/standards-html/target/
 *.log
 *.txt
 **/.DS_Store

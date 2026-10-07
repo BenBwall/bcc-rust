@@ -1,0 +1,2 @@
+# This standalone tool is not compiler code: the repository's arena-only
+# allocation rules in ../../.clippy.toml do not apply to it.
