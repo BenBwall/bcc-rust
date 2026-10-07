@@ -18,6 +18,12 @@ use std::fmt::{
 };
 
 use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        Feature,
+        FeatureOrigin,
+    },
     diagnostics::quote_spelling,
     float_parsing::LongDouble,
     translation_phases::{
@@ -155,6 +161,8 @@ impl Display for FloatTokenType {
 /// A `keyword`.
 ///
 /// C99: §6.4.1 paragraph 1, p. 50; PDF p. 62.
+/// C11: §6.4.1p1, p. 58; PDF p. 76. C23: §6.4.1p1, p. 53;
+/// PDF p. 66. GNU/MSVC entries and C2y `_Countof` are extensions.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum KeywordTokenType {
     Auto,
@@ -194,6 +202,59 @@ pub(crate) enum KeywordTokenType {
     Bool,
     Complex,
     Imaginary,
+    Alignas,
+    Alignof,
+    Atomic,
+    Generic,
+    Noreturn,
+    StaticAssert,
+    ThreadLocal,
+    BitInt,
+    Decimal32,
+    Decimal64,
+    Decimal128,
+    Constexpr,
+    True,
+    False,
+    Nullptr,
+    Typeof,
+    TypeofUnqual,
+    Countof,
+    Attribute,
+    Asm,
+    Extension,
+    BuiltinVaArg,
+    BuiltinOffsetof,
+    BuiltinTypesCompatible,
+    BuiltinChooseExpr,
+    LocalLabel,
+    Int128,
+    AutoType,
+    Real,
+    Imag,
+    Declspec,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Cdecl,
+    Stdcall,
+    Fastcall,
+    Vectorcall,
+    Thiscall,
+    Ptr32,
+    Ptr64,
+    Unaligned,
+    W64,
+    Sptr,
+    Uptr,
+    Forceinline,
+    Try,
+    Except,
+    Finally,
+    Leave,
+    MsAsm,
+    Pragma,
 }
 
 /// A `punctuator`. Digraphs map to the punctuators they behave as (§6.4.6
@@ -323,6 +384,37 @@ pub(crate) enum TokenType {
 }
 
 impl KeywordTokenType {
+    /// Alias spellings occupy the rest of the reserved interner prefix.
+    pub(crate) const ALIASES: &'static [&'static str] = &[
+        "bool",
+        "alignas",
+        "alignof",
+        "static_assert",
+        "thread_local",
+        "__inline",
+        "__inline__",
+        "__restrict",
+        "__restrict__",
+        "__const",
+        "__const__",
+        "__volatile",
+        "__volatile__",
+        "__signed",
+        "__signed__",
+        "__alignof",
+        "__alignof__",
+        "__complex",
+        "__complex__",
+        "__real",
+        "__imag",
+        "__typeof",
+        "__typeof__",
+        "__typeof_unqual",
+        "__typeof_unqual__",
+        "__attribute",
+        "asm",
+        "_asm",
+    ];
     /// Contexts reserve this contiguous prefix before interning source text.
     /// Keep this in discriminant order; the constructor and regression test
     /// verify that each spelling has its well-known ID.
@@ -364,7 +456,300 @@ impl KeywordTokenType {
         Self::Bool,
         Self::Complex,
         Self::Imaginary,
+        Self::Alignas,
+        Self::Alignof,
+        Self::Atomic,
+        Self::Generic,
+        Self::Noreturn,
+        Self::StaticAssert,
+        Self::ThreadLocal,
+        Self::BitInt,
+        Self::Decimal32,
+        Self::Decimal64,
+        Self::Decimal128,
+        Self::Constexpr,
+        Self::True,
+        Self::False,
+        Self::Nullptr,
+        Self::Typeof,
+        Self::TypeofUnqual,
+        Self::Countof,
+        Self::Attribute,
+        Self::Asm,
+        Self::Extension,
+        Self::BuiltinVaArg,
+        Self::BuiltinOffsetof,
+        Self::BuiltinTypesCompatible,
+        Self::BuiltinChooseExpr,
+        Self::LocalLabel,
+        Self::Int128,
+        Self::AutoType,
+        Self::Real,
+        Self::Imag,
+        Self::Declspec,
+        Self::Int8,
+        Self::Int16,
+        Self::Int32,
+        Self::Int64,
+        Self::Cdecl,
+        Self::Stdcall,
+        Self::Fastcall,
+        Self::Vectorcall,
+        Self::Thiscall,
+        Self::Ptr32,
+        Self::Ptr64,
+        Self::Unaligned,
+        Self::W64,
+        Self::Sptr,
+        Self::Uptr,
+        Self::Forceinline,
+        Self::Try,
+        Self::Except,
+        Self::Finally,
+        Self::Leave,
+        Self::MsAsm,
+        Self::Pragma,
     ];
+
+    /// Classification is an integer-index lookup and cheap configuration tests.
+    /// C99: §6.4.2.1p4, p. 51; PDF p. 63. Later/non-ISO keywords are
+    /// extensions; reserved aliases retain their own diagnostic origin.
+    pub(crate) fn classify(
+        id: StringCacheId,
+        configuration: CompilerConfiguration,
+    ) -> Option<KeywordClassification> {
+        let index = id.to_u32().checked_sub(1)? as usize;
+        if let Some(&kind) = Self::ALL.get(index) {
+            let (enabled, origin) = match kind {
+                | Self::Inline => (
+                    configuration.accepts(Feature::Inline),
+                    Some(Feature::Inline.origin()),
+                ),
+                | Self::Restrict => (
+                    configuration.accepts(Feature::Restrict),
+                    Some(Feature::Restrict.origin()),
+                ),
+                | Self::Bool => (true, Some(Feature::Bool.origin())),
+                | Self::Complex => (true, Some(Feature::Complex.origin())),
+                | Self::Imaginary => (true, Some(Feature::Imaginary.origin())),
+                | Self::Alignas => (
+                    configuration.accepts(Feature::Alignas),
+                    Some(Feature::Alignas.origin()),
+                ),
+                | Self::Alignof => (
+                    configuration.accepts(Feature::Alignof),
+                    Some(Feature::Alignof.origin()),
+                ),
+                | Self::Atomic => (
+                    configuration.accepts(Feature::Atomic),
+                    Some(Feature::Atomic.origin()),
+                ),
+                | Self::Generic => (
+                    configuration.accepts(Feature::Generic),
+                    Some(Feature::Generic.origin()),
+                ),
+                | Self::Noreturn => (
+                    configuration.accepts(Feature::Noreturn),
+                    Some(Feature::Noreturn.origin()),
+                ),
+                | Self::StaticAssert => (
+                    configuration.accepts(Feature::StaticAssert),
+                    Some(Feature::StaticAssert.origin()),
+                ),
+                | Self::ThreadLocal => (
+                    configuration.accepts(Feature::ThreadLocal),
+                    Some(Feature::ThreadLocal.origin()),
+                ),
+                | Self::BitInt => (
+                    configuration.accepts(Feature::BitInt),
+                    Some(Feature::BitInt.origin()),
+                ),
+                | Self::Decimal32 | Self::Decimal64 | Self::Decimal128 => (
+                    configuration.accepts(Feature::DecimalTypes),
+                    Some(Feature::DecimalTypes.origin()),
+                ),
+
+                | Self::Constexpr
+                | Self::True
+                | Self::False
+                | Self::Nullptr
+                | Self::TypeofUnqual => (
+                    configuration.accepts(Feature::C23Keywords),
+                    Some(Feature::C23Keywords.origin()),
+                ),
+
+                | Self::Typeof => (
+                    configuration.accepts(Feature::C23Keywords) || configuration.gnu_extensions(),
+                    Some(Feature::C23Keywords.origin()),
+                ),
+
+                | Self::Countof => (
+                    configuration.accepts(Feature::Countof),
+                    Some(Feature::Countof.origin()),
+                ),
+                | Self::Attribute => (
+                    configuration.accepts(Feature::GnuAttribute),
+                    Some(Feature::GnuAttribute.origin()),
+                ),
+                | Self::Asm => (
+                    configuration.accepts(Feature::GnuAsm),
+                    Some(Feature::GnuAsm.origin()),
+                ),
+                | Self::Extension => (
+                    configuration.accepts(Feature::ExtensionMarker),
+                    Some(Feature::ExtensionMarker.origin()),
+                ),
+                | Self::BuiltinVaArg => (
+                    configuration.accepts(Feature::BuiltinVaArg),
+                    Some(Feature::BuiltinVaArg.origin()),
+                ),
+                | Self::BuiltinOffsetof => (
+                    configuration.accepts(Feature::BuiltinOffsetof),
+                    Some(Feature::BuiltinOffsetof.origin()),
+                ),
+                | Self::BuiltinTypesCompatible => (
+                    configuration.accepts(Feature::BuiltinTypesCompatible),
+                    Some(Feature::BuiltinTypesCompatible.origin()),
+                ),
+                | Self::BuiltinChooseExpr => (
+                    configuration.accepts(Feature::BuiltinChooseExpr),
+                    Some(Feature::BuiltinChooseExpr.origin()),
+                ),
+                | Self::LocalLabel => (
+                    configuration.accepts(Feature::LocalLabels),
+                    Some(Feature::LocalLabels.origin()),
+                ),
+                | Self::Int128 => (
+                    configuration.accepts(Feature::Int128),
+                    Some(Feature::Int128.origin()),
+                ),
+                | Self::AutoType => (
+                    configuration.accepts(Feature::AutoType),
+                    Some(Feature::AutoType.origin()),
+                ),
+                | Self::Real | Self::Imag => (
+                    configuration.accepts(Feature::RealImag),
+                    Some(Feature::RealImag.origin()),
+                ),
+
+                | Self::Declspec => (
+                    configuration.accepts(Feature::MsDeclspec),
+                    Some(Feature::MsDeclspec.origin()),
+                ),
+                | Self::Int8 | Self::Int16 | Self::Int32 | Self::Int64 => (
+                    configuration.accepts(Feature::MsIntTypes),
+                    Some(Feature::MsIntTypes.origin()),
+                ),
+
+                | Self::Cdecl
+                | Self::Stdcall
+                | Self::Fastcall
+                | Self::Vectorcall
+                | Self::Thiscall => (
+                    configuration.accepts(Feature::MsCallingConventions),
+                    Some(Feature::MsCallingConventions.origin()),
+                ),
+
+                | Self::Ptr32
+                | Self::Ptr64
+                | Self::Unaligned
+                | Self::W64
+                | Self::Sptr
+                | Self::Uptr => (
+                    configuration.accepts(Feature::MsTypeQualifiers),
+                    Some(Feature::MsTypeQualifiers.origin()),
+                ),
+
+                | Self::Forceinline => (
+                    configuration.accepts(Feature::MsInline),
+                    Some(Feature::MsInline.origin()),
+                ),
+                | Self::Try | Self::Except | Self::Finally | Self::Leave => (
+                    configuration.accepts(Feature::MsSeh),
+                    Some(Feature::MsSeh.origin()),
+                ),
+
+                | Self::MsAsm => (
+                    configuration.accepts(Feature::MsAsm),
+                    Some(Feature::MsAsm.origin()),
+                ),
+                | Self::Pragma => (
+                    configuration.accepts(Feature::MsPragma),
+                    Some(Feature::MsPragma.origin()),
+                ),
+                | _ => (true, None),
+            };
+            return enabled.then_some(KeywordClassification {
+                kind,
+                origin,
+                spelling: kind.spelling(),
+            });
+        }
+        let (kind, enabled, origin) = match index.checked_sub(Self::ALL.len())? {
+            | 0 => (
+                Self::Bool,
+                configuration.accepts(Feature::C23Keywords),
+                FeatureOrigin::Standard(CStandard::C23),
+            ),
+            | 1 => (
+                Self::Alignas,
+                configuration.accepts(Feature::C23Keywords),
+                FeatureOrigin::Standard(CStandard::C23),
+            ),
+            | 2 => (
+                Self::Alignof,
+                configuration.accepts(Feature::C23Keywords),
+                FeatureOrigin::Standard(CStandard::C23),
+            ),
+            | 3 => (
+                Self::StaticAssert,
+                configuration.accepts(Feature::C23Keywords),
+                FeatureOrigin::Standard(CStandard::C23),
+            ),
+            | 4 => (
+                Self::ThreadLocal,
+                configuration.accepts(Feature::C23Keywords),
+                FeatureOrigin::Standard(CStandard::C23),
+            ),
+            | 5 | 6 => (Self::Inline, true, FeatureOrigin::Gnu),
+
+            | 7 | 8 => (Self::Restrict, true, FeatureOrigin::Gnu),
+
+            | 9 | 10 => (Self::Const, true, FeatureOrigin::Gnu),
+
+            | 11 | 12 => (Self::Volatile, true, FeatureOrigin::Gnu),
+
+            | 13 | 14 => (Self::Signed, true, FeatureOrigin::Gnu),
+
+            | 15 | 16 => (Self::Alignof, true, FeatureOrigin::Gnu),
+
+            | 17 | 18 => (Self::Complex, true, FeatureOrigin::Gnu),
+
+            | 19 => (Self::Real, true, FeatureOrigin::Gnu),
+            | 20 => (Self::Imag, true, FeatureOrigin::Gnu),
+            | 21 | 22 => (Self::Typeof, true, FeatureOrigin::Gnu),
+
+            | 23 | 24 => (Self::TypeofUnqual, true, FeatureOrigin::Gnu),
+
+            | 25 => (Self::Attribute, true, FeatureOrigin::Gnu),
+            | 26 => (
+                Self::Asm,
+                configuration.gnu_extensions(),
+                FeatureOrigin::Gnu,
+            ),
+            | 27 => (
+                Self::MsAsm,
+                configuration.accepts(Feature::MsAsm),
+                Feature::MsAsm.origin(),
+            ),
+            | _ => return None,
+        };
+        enabled.then_some(KeywordClassification {
+            kind,
+            origin: Some(origin),
+            spelling: Self::ALIASES[index - Self::ALL.len()],
+        })
+    }
 
     pub(crate) const fn cache_id(self) -> StringCacheId {
         StringCacheId::from_u32(self as u32 + 1)
@@ -375,6 +760,7 @@ impl KeywordTokenType {
     ///
     /// C99: a token that could be a keyword or an identifier is a keyword,
     /// §6.4.2.1 paragraph 4, p. 51; PDF p. 63.
+    #[cfg(test)]
     pub(crate) fn from_cache_id(id: StringCacheId) -> Option<Self> {
         Self::ALL.get((id.to_u32() - 1) as usize).copied()
     }
@@ -419,6 +805,59 @@ impl KeywordTokenType {
             | Self::Bool => "_Bool",
             | Self::Complex => "_Complex",
             | Self::Imaginary => "_Imaginary",
+            | Self::Alignas => "_Alignas",
+            | Self::Alignof => "_Alignof",
+            | Self::Atomic => "_Atomic",
+            | Self::Generic => "_Generic",
+            | Self::Noreturn => "_Noreturn",
+            | Self::StaticAssert => "_Static_assert",
+            | Self::ThreadLocal => "_Thread_local",
+            | Self::BitInt => "_BitInt",
+            | Self::Decimal32 => "_Decimal32",
+            | Self::Decimal64 => "_Decimal64",
+            | Self::Decimal128 => "_Decimal128",
+            | Self::Constexpr => "constexpr",
+            | Self::True => "true",
+            | Self::False => "false",
+            | Self::Nullptr => "nullptr",
+            | Self::Typeof => "typeof",
+            | Self::TypeofUnqual => "typeof_unqual",
+            | Self::Countof => "_Countof",
+            | Self::Attribute => "__attribute__",
+            | Self::Asm => "__asm__",
+            | Self::Extension => "__extension__",
+            | Self::BuiltinVaArg => "__builtin_va_arg",
+            | Self::BuiltinOffsetof => "__builtin_offsetof",
+            | Self::BuiltinTypesCompatible => "__builtin_types_compatible_p",
+            | Self::BuiltinChooseExpr => "__builtin_choose_expr",
+            | Self::LocalLabel => "__label__",
+            | Self::Int128 => "__int128",
+            | Self::AutoType => "__auto_type",
+            | Self::Real => "__real__",
+            | Self::Imag => "__imag__",
+            | Self::Declspec => "__declspec",
+            | Self::Int8 => "__int8",
+            | Self::Int16 => "__int16",
+            | Self::Int32 => "__int32",
+            | Self::Int64 => "__int64",
+            | Self::Cdecl => "__cdecl",
+            | Self::Stdcall => "__stdcall",
+            | Self::Fastcall => "__fastcall",
+            | Self::Vectorcall => "__vectorcall",
+            | Self::Thiscall => "__thiscall",
+            | Self::Ptr32 => "__ptr32",
+            | Self::Ptr64 => "__ptr64",
+            | Self::Unaligned => "__unaligned",
+            | Self::W64 => "__w64",
+            | Self::Sptr => "__sptr",
+            | Self::Uptr => "__uptr",
+            | Self::Forceinline => "__forceinline",
+            | Self::Try => "__try",
+            | Self::Except => "__except",
+            | Self::Finally => "__finally",
+            | Self::Leave => "__leave",
+            | Self::MsAsm => "__asm",
+            | Self::Pragma => "__pragma",
         }
     }
 }
@@ -484,7 +923,14 @@ impl TokenType {
     pub(crate) fn found(self, spelling: Option<&str>) -> impl Display {
         std::fmt::from_fn(move |f| {
             let kind = match self {
-                | Self::Keyword(keyword) => return write!(f, "keyword `{}`", keyword.spelling()),
+                | Self::Keyword(keyword) =>
+                    return write!(
+                        f,
+                        "keyword `{}`",
+                        spelling
+                            .filter(|text| !text.is_empty())
+                            .unwrap_or_else(|| keyword.spelling())
+                    ),
                 | Self::Operator(operator) => return write!(f, "`{}`", operator.spelling()),
                 | Self::Identifier => "identifier",
                 | Self::Integer(_) => "integer constant",
@@ -517,4 +963,12 @@ impl UnsignedIntegerLiteralType {
             | Self::UnsignedLongLong => "unsigned long long",
         }
     }
+}
+
+/// Classification retains spelling origin independently of the parser kind.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct KeywordClassification {
+    pub(crate) spelling: &'static str,
+    pub(crate) kind:     KeywordTokenType,
+    pub(crate) origin:   Option<FeatureOrigin>,
 }

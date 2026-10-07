@@ -761,3 +761,47 @@ fn lexing_commits_the_entries_written_not_a_capacity() {
         pp.committed()
     );
 }
+
+#[test]
+fn language_modes_classify_keywords_after_macro_expansion() {
+    use crate::configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+    };
+    let source = "#define K __const__\nK _Bool inline restrict bool __typeof__ __declspec\n";
+    let mut snapshot = Snapshot::new("language_modes_classify_keywords_after_macro_expansion");
+    for (standard, gnu, msvc) in [
+        (CStandard::C89, false, false),
+        (CStandard::C99, true, false),
+        (CStandard::C23, false, true),
+    ] {
+        let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Warn)
+            .with_gnu_extensions(gnu)
+            .with_msvc_extensions(msvc);
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::with_configuration(&tu, configuration);
+        let pp_arena = crate::util::bump::Bump::new();
+        let mut pp = Preprocessor::new(
+            &pp_arena,
+            &mut context,
+            PathBuf::from("<test>").into_boxed_path(),
+            source,
+            SharedVec::default(),
+            SharedVec::default(),
+        );
+        let mut events = Vec::new();
+        pp.for_each_iterator_item(&mut context, |context, token| {
+            drain_diagnostics(context, &mut events);
+            events.push(format!(
+                "{:?} {} {:?}",
+                token.kind,
+                describe_token(token, context, &tu),
+                context.get_source_vectors(token.source_vectors)
+            ));
+        });
+        drain_diagnostics(&mut context, &mut events);
+        snapshot.record(&format!("{standard:?}, GNU={gnu}, MSVC={msvc}"), &events);
+    }
+    snapshot.finish();
+}

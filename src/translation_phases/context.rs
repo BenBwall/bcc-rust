@@ -403,6 +403,9 @@ impl<'tu> Context<'tu> {
                 "keywords must occupy the reserved prefix"
             );
         }
+        for &spelling in KeywordTokenType::ALIASES {
+            _ = string_cache.intern(spelling);
+        }
         Self {
             tu,
             configuration,

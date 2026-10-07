@@ -580,7 +580,8 @@ fn statement_keyword_after_an_operand_ends_the_expression() {
 // pr33382.c, pr33173.c): a GNU statement expression `({ ... })` is not C99,
 // but the brace group directly inside a `(` is one error operand. The
 // enclosing call or parenthesis keeps its `)`, and the statements after the
-// expression parse normally.
+// expression parse normally. The recognized but unsupported __extension__
+// keyword has its own diagnostic until GNU grammar lands.
 #[test]
 fn brace_group_directly_inside_parentheses_is_one_error_operand() {
     let source =
@@ -590,7 +591,10 @@ fn brace_group_directly_inside_parentheses_is_one_error_operand() {
     with_run(source, |outcome| {
         assert_eq!(
             outcome.locations(),
-            [offset_of(source, "{\n    int v")],
+            [
+                offset_of(source, "__extension__"),
+                offset_of(source, "{\n    int v")
+            ],
             "{:?}",
             outcome.errors
         );
@@ -752,7 +756,14 @@ fn brace_list_after_a_parenthesized_expression_is_skipped_with_it() {
         with_run(source, |outcome| {
             assert_eq!(
                 outcome.locations(),
-                [offset_of(source, location)],
+                if source.contains("__attribute__") {
+                    vec![
+                        offset_of(source, "__attribute__"),
+                        offset_of(source, location),
+                    ]
+                } else {
+                    vec![offset_of(source, location)]
+                },
                 "{source}: {:?}",
                 outcome.errors
             );

@@ -1,0 +1,88 @@
+=== C89, GNU=false, MSVC=false
+diagnostic [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 9 }]
+warning: '__const__' is a GNU extension
+ --> <test>:1:11
+  |
+1 | #define K __const__
+  |           ^^^^^^^^^
+
+
+Keyword(Const) <test>:1:11: keyword `__const__` [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 9 }]
+diagnostic [SourceVector { index: 22, column: 3, line: 2, source_file_index: 0, length: 5 }]
+warning: '_Bool' is a C99 extension
+ --> <test>:2:3
+  |
+2 | K _Bool inline restrict bool __typeof__ __declspec
+  |   ^^^^^
+
+
+Keyword(Bool) <test>:2:3: keyword `_Bool` [SourceVector { index: 22, column: 3, line: 2, source_file_index: 0, length: 5 }]
+Identifier <test>:2:9: identifier `inline` [SourceVector { index: 28, column: 9, line: 2, source_file_index: 0, length: 6 }]
+Identifier <test>:2:16: identifier `restrict` [SourceVector { index: 35, column: 16, line: 2, source_file_index: 0, length: 8 }]
+Identifier <test>:2:25: identifier `bool` [SourceVector { index: 44, column: 25, line: 2, source_file_index: 0, length: 4 }]
+diagnostic [SourceVector { index: 49, column: 30, line: 2, source_file_index: 0, length: 10 }]
+warning: '__typeof__' is a GNU extension
+ --> <test>:2:30
+  |
+2 | K _Bool inline restrict bool __typeof__ __declspec
+  |                              ^^^^^^^^^^
+
+
+Keyword(Typeof) <test>:2:30: keyword `__typeof__` [SourceVector { index: 49, column: 30, line: 2, source_file_index: 0, length: 10 }]
+Identifier <test>:2:41: identifier `__declspec` [SourceVector { index: 60, column: 41, line: 2, source_file_index: 0, length: 10 }]
+=== C99, GNU=true, MSVC=false
+diagnostic [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 9 }]
+warning: '__const__' is a GNU extension
+ --> <test>:1:11
+  |
+1 | #define K __const__
+  |           ^^^^^^^^^
+
+
+Keyword(Const) <test>:1:11: keyword `__const__` [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 9 }]
+Keyword(Bool) <test>:2:3: keyword `_Bool` [SourceVector { index: 22, column: 3, line: 2, source_file_index: 0, length: 5 }]
+Keyword(Inline) <test>:2:9: keyword `inline` [SourceVector { index: 28, column: 9, line: 2, source_file_index: 0, length: 6 }]
+Keyword(Restrict) <test>:2:16: keyword `restrict` [SourceVector { index: 35, column: 16, line: 2, source_file_index: 0, length: 8 }]
+Identifier <test>:2:25: identifier `bool` [SourceVector { index: 44, column: 25, line: 2, source_file_index: 0, length: 4 }]
+diagnostic [SourceVector { index: 49, column: 30, line: 2, source_file_index: 0, length: 10 }]
+warning: '__typeof__' is a GNU extension
+ --> <test>:2:30
+  |
+2 | K _Bool inline restrict bool __typeof__ __declspec
+  |                              ^^^^^^^^^^
+
+
+Keyword(Typeof) <test>:2:30: keyword `__typeof__` [SourceVector { index: 49, column: 30, line: 2, source_file_index: 0, length: 10 }]
+Identifier <test>:2:41: identifier `__declspec` [SourceVector { index: 60, column: 41, line: 2, source_file_index: 0, length: 10 }]
+=== C23, GNU=false, MSVC=true
+diagnostic [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 9 }]
+warning: '__const__' is a GNU extension
+ --> <test>:1:11
+  |
+1 | #define K __const__
+  |           ^^^^^^^^^
+
+
+Keyword(Const) <test>:1:11: keyword `__const__` [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 9 }]
+Keyword(Bool) <test>:2:3: keyword `_Bool` [SourceVector { index: 22, column: 3, line: 2, source_file_index: 0, length: 5 }]
+Keyword(Inline) <test>:2:9: keyword `inline` [SourceVector { index: 28, column: 9, line: 2, source_file_index: 0, length: 6 }]
+Keyword(Restrict) <test>:2:16: keyword `restrict` [SourceVector { index: 35, column: 16, line: 2, source_file_index: 0, length: 8 }]
+Keyword(Bool) <test>:2:25: keyword `bool` [SourceVector { index: 44, column: 25, line: 2, source_file_index: 0, length: 4 }]
+diagnostic [SourceVector { index: 49, column: 30, line: 2, source_file_index: 0, length: 10 }]
+warning: '__typeof__' is a GNU extension
+ --> <test>:2:30
+  |
+2 | K _Bool inline restrict bool __typeof__ __declspec
+  |                              ^^^^^^^^^^
+
+
+Keyword(Typeof) <test>:2:30: keyword `__typeof__` [SourceVector { index: 49, column: 30, line: 2, source_file_index: 0, length: 10 }]
+diagnostic [SourceVector { index: 60, column: 41, line: 2, source_file_index: 0, length: 10 }]
+warning: '__declspec' is an MSVC extension
+ --> <test>:2:41
+  |
+2 | K _Bool inline restrict bool __typeof__ __declspec
+  |                                         ^^^^^^^^^^
+
+
+Keyword(Declspec) <test>:2:41: keyword `__declspec` [SourceVector { index: 60, column: 41, line: 2, source_file_index: 0, length: 10 }]

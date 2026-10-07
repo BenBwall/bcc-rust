@@ -1,0 +1,7 @@
+warning: '__const__' is a GNU extension
+ --> <input>:1:14
+  |
+1 | #define QUAL __const__
+  |              ^^^^^^^^^
+
+1 warning generated.

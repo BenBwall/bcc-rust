@@ -934,9 +934,21 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             | PreprocessorTokenType::UnavailableUniversalIdentifier
             | PreprocessorTokenType::Defined => {
                 let contents = token.identifier_id(self.context);
+                let classification =
+                    KeywordTokenType::classify(contents, self.context.configuration);
+                if let Some(keyword) = classification
+                    && let Some(origin) = keyword.origin
+                {
+                    self.context.report_extension_since(
+                        keyword.spelling,
+                        origin,
+                        token.source_vectors,
+                    );
+                }
                 Token {
-                    kind: KeywordTokenType::from_cache_id(contents)
-                        .map_or(TokenType::Identifier, TokenType::Keyword),
+                    kind: classification.map_or(TokenType::Identifier, |keyword| {
+                        TokenType::Keyword(keyword.kind)
+                    }),
                     contents,
                     source_vectors: token.source_vectors,
                 }
