@@ -263,6 +263,21 @@ fn va_opt_and_gnu_named_variadic_macros_expand_with_empty_and_nonempty_arguments
 }
 
 #[test]
+fn named_variadic_redefinitions_compare_original_names_and_normalized_bodies() {
+    let source = "#define N(args...) args\n#define N(args...) args\nN(1)\n#define U(args...) \
+                  2\n#define U(other...) 2\nU(0)\n#undef N\n#define N(other...) other\nN(3)\n";
+    for gnu in [false, true] {
+        let (tokens, errors) = observe(source, mode(CStandard::C23).with_gnu_extensions(gnu));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("redefined differently"), "{errors:?}");
+        let tokens = spellings(&tokens);
+        for value in ["= 1", "= 2", "= 3"] {
+            assert!(tokens.contains(value), "{tokens}");
+        }
+    }
+}
+
+#[test]
 fn optional_replacements_follow_the_standard_paste_and_stringification_examples() {
     let source = "#define H2(X,Y,...) __VA_OPT__(X ## Y,) __VA_ARGS__\nH2(a,b,c,d)\n#define \
                   H3(X,...) #__VA_OPT__(X##X X##X)\nH3(,0)\n#define H4(X,...) __VA_OPT__(a X ## \

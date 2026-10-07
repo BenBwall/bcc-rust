@@ -669,6 +669,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         argument_names,
                         tokenizer,
                         is_variadic,
+                        ..
                     } => {
                         if !matches!(
                             self.tokenizer_stack.last().map(|f| &f.frame_type),

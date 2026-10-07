@@ -326,6 +326,9 @@ variadic arguments; pre-C23 pedantic modes retain the existing omission
 diagnostic. C89 fixed and variadic empty arguments and variadic definitions
 report C99 origin. Named `args...` definitions normalize the name to the same
 variadic machinery and report GNU origin.
+Original named variadic parameter IDs remain in definition metadata so identical
+redefinitions compare normalized bodies without losing parameter-name checks,
+even when the variadic parameter is unused.
 
 GNU `, ## __VA_ARGS__` elides a comma for an omitted variadic argument, preserves
 it for an explicitly empty argument, and substitutes supplied arguments without

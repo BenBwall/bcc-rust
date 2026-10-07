@@ -1408,7 +1408,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             (tokenizer, probe)
         };
         let (list_is_valid, lists_match) =
-            self.read_replacement_list(first, is_variadic, old_tokenizer.as_mut());
+            self.read_replacement_list(first, is_variadic, variadic_alias, old_tokenizer.as_mut());
         if !(is_valid && list_is_valid) {
             self.last_was_newline = true;
             self.current_is_newline = true;
@@ -1420,9 +1420,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             | Some(MacroDefinition::FunctionLike {
                 argument_names: old_argument_names,
                 is_variadic: old_is_variadic,
+                variadic_alias: old_alias,
                 ..
             }) if is_function_like =>
-                argument_names[..] == old_argument_names[..] && is_variadic == *old_is_variadic,
+                argument_names[..] == old_argument_names[..]
+                    && is_variadic == *old_is_variadic
+                    && variadic_alias == *old_alias,
             | _ => true,
         };
         if old_tokenizer.is_some() && !(parameters_match && lists_match) {
@@ -1474,6 +1477,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 tokenizer,
                 argument_names: self.state.arena.alloc_slice_copy(&argument_names),
                 is_variadic,
+                variadic_alias,
             }
         } else {
             MacroDefinition::ObjectLike { tokenizer }
@@ -1503,6 +1507,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         mut first: Option<PreprocessorToken>,
         is_variadic: bool,
+        variadic_alias: Option<StringCacheId>,
         mut old: Option<&mut TokenSource<'_>>,
     ) -> (bool, bool) {
         let mut lists_match = true;
@@ -1516,8 +1521,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             };
             if lists_match && let Some(old) = old.as_deref_mut() {
                 let old_next = old.next_item(self.context);
+                let mut comparable = next;
+                if let (Some(alias), Some(token)) = (variadic_alias, comparable.as_mut())
+                    && token.kind.is_identifier()
+                    && token.identifier_id(self.context) == alias
+                {
+                    token.contents = self.context.string_cache.intern("__VA_ARGS__");
+                }
                 lists_match =
-                    same_replacement_token(self.context, old_next.as_ref(), next.as_ref());
+                    same_replacement_token(self.context, old_next.as_ref(), comparable.as_ref());
             }
             let Some(token) = next.filter(|token| token.kind != PreprocessorTokenType::Newline)
             else {

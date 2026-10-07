@@ -78,6 +78,22 @@ mod tests {
     }
 
     #[test]
+    fn identical_named_variadic_definitions_expand_without_redefinition_errors() {
+        let output = run(&[
+            "-std=gnu17",
+            "--tokens",
+            "--input",
+            "#define N(args...) args\n#define N(args...) args\nN(1)\n",
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("error:") && !stderr.contains("warning:"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("= 1 (int)"), "{stderr}");
+    }
+
+    #[test]
     fn invalid_standard_prints_exact_clang_notes() {
         let expected =
             "error: invalid value 'c98' in '-std=c98'\nnote: use 'c89', 'c90', or 'iso9899:1990' \

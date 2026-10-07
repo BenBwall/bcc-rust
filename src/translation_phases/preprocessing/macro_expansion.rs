@@ -78,6 +78,8 @@ pub(crate) enum MacroDefinition<'pp> {
         argument_names: &'pp [StringCacheId],
         tokenizer:      TokenSource<'pp>,
         is_variadic:    bool,
+        /// Original GNU parameter spelling, before body normalization.
+        variadic_alias: Option<StringCacheId>,
     },
     /// A predefined macro or the `_Pragma` operator, expanded by the driver.
     ///
