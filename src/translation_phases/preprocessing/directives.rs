@@ -40,10 +40,7 @@ use super::{
     },
 };
 use crate::{
-    configuration::{
-        CStandard,
-        ExtensionPolicy,
-    },
+    configuration::ExtensionPolicy,
     translation_phases::{
         Context,
         SourcePosition,
@@ -988,9 +985,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         // A backslash in a `"…"` name is undefined by C99 §6.4.7p3; reading
         // it as a path character is an extension (§4p6).
         if let Some(source_vectors) = header.backslash {
-            let policy = match self.context.configuration.standard() {
-                | CStandard::C99 => self.context.configuration.extension_policy(),
-            };
+            let policy = self.context.configuration.extension_policy();
             if policy != ExtensionPolicy::Allow {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(policy),

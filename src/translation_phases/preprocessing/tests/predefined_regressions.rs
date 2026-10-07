@@ -285,3 +285,40 @@ fn translation_timestamp_without_a_representable_epoch_spells_the_local_time() {
         );
     }
 }
+
+#[test]
+fn version_and_strict_ansi_macros_follow_every_mode() {
+    use crate::configuration::{
+        CStandard,
+        ExtensionPolicy,
+    };
+    for (standard, version) in [
+        (CStandard::C89, None),
+        (CStandard::C95, Some(199_409)),
+        (CStandard::C99, Some(199_901)),
+        (CStandard::C11, Some(201_112)),
+        (CStandard::C17, Some(201_710)),
+        (CStandard::C23, Some(202_311)),
+        (CStandard::C2y, Some(202_400)),
+    ] {
+        for gnu in [false, true] {
+            let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(gnu);
+            let result = observe_with(
+                "#ifdef __STDC_VERSION__\nversion __STDC_VERSION__\n#endif\n#ifdef \
+                 __STRICT_ANSI__\nstrict __STRICT_ANSI__\n#endif\n#ifdef \
+                 __GNUC__\nbad_gnu\n#endif\n#ifdef _MSC_VER\nbad_ms\n#endif\n",
+                configuration,
+            );
+            let mut expected = Vec::new();
+            if let Some(version) = version {
+                expected.extend(["version".to_owned(), format!("{version}L")]);
+            }
+            if !gnu {
+                expected.extend(["strict".to_owned(), "1".to_owned()]);
+            }
+            assert_eq!(result.spellings, expected, "{standard:?}, gnu={gnu}");
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+        }
+    }
+}

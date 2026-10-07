@@ -108,7 +108,7 @@ use crate::{
 /// defined names of §6.10.8 paragraph 2, p. 161; PDF p. 173, is defined.
 /// `_Pragma` is an operator (§6.10.9, p. 161; PDF p. 173), not a macro; it
 /// is registered here so that rescanning recognizes it.
-const PREDEFINED_MACRO_NAMES: [&str; 9] = [
+const PREDEFINED_MACRO_NAMES: [&str; 10] = [
     "__LINE__",
     "__FILE__",
     "__DATE__",
@@ -116,6 +116,7 @@ const PREDEFINED_MACRO_NAMES: [&str; 9] = [
     "_Pragma",
     "__STDC__",
     "__STDC_VERSION__",
+    "__STRICT_ANSI__",
     "__STDC_HOSTED__",
     "__STDC_MB_MIGHT_NEQ_WC__",
 ];
@@ -353,6 +354,12 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         context.set_include_directories(quote_include_directories, system_include_directories);
         let mut macro_definitions = ArenaMap::with_hasher_in(FxBuildHasher, pp);
         for name in PREDEFINED_MACRO_NAMES {
+            if (name == "__STDC_VERSION__"
+                && context.configuration.standard().version_macro().is_none())
+                || (name == "__STRICT_ANSI__" && !context.configuration.strict_ansi())
+            {
+                continue;
+            }
             _ = macro_definitions
                 .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn);
         }

@@ -41,7 +41,12 @@ use rustc_hash::FxBuildHasher;
 use thiserror::Error;
 
 use crate::{
-    configuration::CompilerConfiguration,
+    configuration::{
+        CompilerConfiguration,
+        ExtensionPolicy,
+        LanguageMode,
+        MsvcFeature,
+    },
     diagnostics::{
         ColorChoice as RenderColor,
         Diagnostic,
@@ -90,6 +95,15 @@ use crate::{
 struct Cli {
     #[command(flatten)]
     input: CliInput,
+    /// Select ISO C or a GNU dialect (also accepts GCC -std=VALUE).
+    #[arg(long = "std", default_value = "gnu17", value_parser = StandardParser, action = clap::ArgAction::Set,
+        overrides_with = "standard")]
+    standard: LanguageMode,
+    /// GCC language flags: -pedantic, -Wpedantic, -pedantic-errors,
+    /// -fms-extensions, and -f[no-]ms-{declspec,int-types,calling-conventions,
+    /// type-qualifiers,inline,seh,asm,pragma,anonymous-structs,va-args}.
+    #[arg(long, hide = true)]
+    language_option: Vec<String>,
     /// Add directory to include search path.
     #[clap(short = 'q', long = "iquote")]
     quote_include: Vec<PathBuf>,
@@ -115,6 +129,138 @@ struct Cli {
         value_parser = SourceDateEpochParser
     )]
     source_date_epoch: Option<SourceDateEpoch>,
+}
+
+/// Exact clang-style explanation, deliberately omitting deprecated aliases.
+const STANDARD_NOTES: &str =
+    "note: use 'c89', 'c90', or 'iso9899:1990' for 'ISO C 1990' standard\nnote: use \
+     'iso9899:199409' for 'ISO C 1990 with amendment 1' standard\nnote: use 'gnu89' or 'gnu90' \
+     for 'ISO C 1990 with GNU extensions' standard\nnote: use 'c99' or 'iso9899:1999' for 'ISO C \
+     1999' standard\nnote: use 'gnu99' for 'ISO C 1999 with GNU extensions' standard\nnote: use \
+     'c11' or 'iso9899:2011' for 'ISO C 2011' standard\nnote: use 'gnu11' for 'ISO C 2011 with \
+     GNU extensions' standard\nnote: use 'c17', 'iso9899:2017', 'c18', or 'iso9899:2018' for 'ISO \
+     C 2017' standard\nnote: use 'gnu17' or 'gnu18' for 'ISO C 2017 with GNU extensions' \
+     standard\nnote: use 'c23' or 'iso9899:2024' for 'ISO C 2023' standard\nnote: use 'gnu23' for \
+     'ISO C 2023 with GNU extensions' standard\nnote: use 'c2y' for 'Working Draft for ISO C2y' \
+     standard\nnote: use 'gnu2y' for 'Working Draft for ISO C2y with GNU extensions' standard\n";
+
+#[derive(Clone)]
+struct StandardParser;
+impl TypedValueParser for StandardParser {
+    type Value = LanguageMode;
+
+    #[expect(
+        clippy::disallowed_macros,
+        reason = "Clap argument errors own their startup message."
+    )]
+    fn parse_ref(
+        &self,
+        _cmd: &Command,
+        _arg: Option<&Arg>,
+        value: &OsStr,
+    ) -> Result<LanguageMode, clap::Error> {
+        value.to_str().and_then(LanguageMode::parse).ok_or_else(|| {
+            clap::Error::raw(
+                clap::error::ErrorKind::InvalidValue,
+                format!(
+                    "invalid value '{}' in '-std={}'\n{STANDARD_NOTES}",
+                    value.to_string_lossy(),
+                    value.to_string_lossy()
+                ),
+            )
+        })
+    }
+}
+
+/// Normalize GCC's single-dash long options before clap. Values and tokens
+/// after `--` are opaque, including an input string that looks like a flag.
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Startup argv normalization owns OS strings beside clap; never a compilation buffer."
+)]
+fn normalize_language_arguments(
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    let mut normalized = Vec::new();
+    let mut opaque_value = true; // argv[0]
+    let mut positional = false;
+    for argument in arguments {
+        if opaque_value || positional {
+            opaque_value = false;
+            normalized.push(argument);
+            continue;
+        }
+        let Some(text) = argument.to_str() else {
+            normalized.push(argument);
+            continue;
+        };
+        if text == "--" {
+            positional = true;
+        }
+        if let Some(value) = text.strip_prefix("-std=") {
+            normalized.push(format!("--std={value}").into());
+        } else if text == "-std" {
+            normalized.push("--std".into());
+            opaque_value = true;
+        } else if matches!(text, "-pedantic" | "-Wpedantic" | "-pedantic-errors")
+            || valid_msvc_flag(text)
+        {
+            normalized.push(format!("--language-option={text}").into());
+        } else {
+            opaque_value = matches!(
+                text,
+                "--std"
+                    | "--input"
+                    | "-i"
+                    | "--iquote"
+                    | "-q"
+                    | "--isystem"
+                    | "-s"
+                    | "--source-date-epoch"
+                    | "--language-option"
+            );
+            normalized.push(argument);
+        }
+    }
+    normalized
+}
+fn valid_msvc_flag(text: &str) -> bool {
+    text.strip_prefix("-fms-")
+        .or_else(|| text.strip_prefix("-fno-ms-"))
+        .is_some_and(|name| name == "extensions" || MsvcFeature::parse(name).is_some())
+}
+impl Cli {
+    fn configuration(&self) -> CompilerConfiguration {
+        let mut configuration =
+            CompilerConfiguration::new(self.standard.standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(self.standard.gnu);
+        for option in &self.language_option {
+            match option.as_str() {
+                | "-pedantic" | "-Wpedantic" =>
+                    configuration = configuration.with_extension_policy(ExtensionPolicy::Warn),
+                | "-pedantic-errors" =>
+                    configuration = configuration.with_extension_policy(ExtensionPolicy::Deny),
+                | text => {
+                    let (name, enabled) = if let Some(name) = text.strip_prefix("-fms-") {
+                        (name, true)
+                    } else if let Some(name) = text.strip_prefix("-fno-ms-") {
+                        (name, false)
+                    } else {
+                        continue;
+                    };
+                    configuration = if name == "extensions" {
+                        configuration.with_msvc_extensions(enabled)
+                    } else if let Some(feature) = MsvcFeature::parse(name) {
+                        configuration.with_msvc_feature(feature, enabled)
+                    } else {
+                        configuration
+                    };
+                },
+            }
+        }
+        configuration.with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
+    }
 }
 
 /// The seconds since the Unix epoch that `__DATE__` and `__TIME__` spell,
@@ -198,7 +344,7 @@ struct ParserOutput {
 )]
 struct CliInput {
     /// Input string to be parsed.
-    #[clap(short, long, conflicts_with = "input_file")]
+    #[clap(short, long, conflicts_with = "input_file", allow_hyphen_values = true)]
     input:      Option<String>,
     /// Input file to be parsed.
     #[clap(conflicts_with = "input")]
@@ -246,7 +392,7 @@ fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
 
 #[doc(hidden)]
 pub fn run() -> Result<(), MainError> {
-    let mut args = Cli::try_parse()?;
+    let mut args = Cli::try_parse_from(normalize_language_arguments(std::env::args_os()))?;
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) =
         match (&args.input.input, &args.input.input_file) {
@@ -268,8 +414,7 @@ pub fn run() -> Result<(), MainError> {
     system_include.extend(include_path_from_env("C_INCLUDE_PATH"));
     let quote_include = tu.alloc_slice_fill_iter(args.quote_include.iter().map(Path::new));
     let system_include = tu.alloc_slice_fill_iter(system_include.iter().map(Path::new));
-    let configuration = CompilerConfiguration::default()
-        .with_source_date_epoch(args.source_date_epoch.and_then(|epoch| epoch.0));
+    let configuration = args.configuration();
     let mut context = Context::with_configuration(&tu, configuration);
 
     if args.output.tokens {
@@ -423,7 +568,7 @@ pub(crate) fn describe_token<'a>(
     }
     _ = match token.kind {
         | TokenType::Identifier => write!(line, "identifier `{spelling}`"),
-        | TokenType::Keyword(keyword) => write!(line, "keyword `{}`", keyword.spelling()),
+        | TokenType::Keyword(_) => write!(line, "keyword `{spelling}`"),
         | TokenType::Operator(operator) => write!(line, "punctuator `{}`", operator.spelling()),
         | TokenType::String(StringTokenType::String(_)) => write!(line, "string literal {literal}"),
         | TokenType::String(StringTokenType::WideString(_)) =>
@@ -783,6 +928,56 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Startup argv tests use owned OS strings as clap does."
+    )]
+    fn language_flags_apply_in_order_and_input_values_stay_opaque() {
+        for (flags, seh) in [
+            (["-fms-extensions", "-fno-ms-seh", "-fms-seh"], true),
+            (["-fms-seh", "-fms-extensions", "-fno-ms-seh"], false),
+        ] {
+            let arguments = [
+                "bcc-rust",
+                "-std=c89",
+                flags[0],
+                flags[1],
+                flags[2],
+                "-pedantic-errors",
+                "--input",
+                "-std=c98",
+            ];
+            let cli = Cli::try_parse_from(normalize_language_arguments(
+                arguments.map(std::ffi::OsString::from),
+            ))
+            .unwrap();
+            let configuration = cli.configuration();
+            assert_eq!(
+                configuration.standard(),
+                crate::configuration::CStandard::C89
+            );
+            assert_eq!(configuration.extension_policy(), ExtensionPolicy::Deny);
+            assert_eq!(configuration.msvc_feature(MsvcFeature::Seh), seh);
+            assert!(configuration.msvc_feature(MsvcFeature::Declspec));
+            assert_eq!(cli.input.input.as_deref(), Some("-std=c98"));
+        }
+        let repeated =
+            Cli::try_parse_from(["bcc-rust", "--std=c89", "--std=gnu23", "--input", "int x;"])
+                .unwrap();
+        assert_eq!(
+            repeated.configuration().standard(),
+            crate::configuration::CStandard::C23
+        );
+        assert!(repeated.configuration().gnu_extensions());
+        let cli = Cli::try_parse_from(["bcc-rust", "--input", "int x;"]).unwrap();
+        assert_eq!(
+            cli.configuration().standard(),
+            crate::configuration::CStandard::C17
+        );
+        assert!(cli.configuration().gnu_extensions());
+    }
 
     struct CountDiagnostics(usize);
 

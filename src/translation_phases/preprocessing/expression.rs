@@ -38,10 +38,7 @@ use super::{
     token_conversion::IntegerRepresentation,
 };
 use crate::{
-    configuration::{
-        CStandard,
-        ExtensionPolicy,
-    },
+    configuration::ExtensionPolicy,
     translation_phases::{
         Context,
         SourceVectors,
@@ -1716,9 +1713,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 self.expression_parser
                     .operand_stack
                     .emit_faults(self.context, operand.arithmetic_faults);
-                let extension_policy = match self.context.configuration.standard() {
-                    | CStandard::C99 => self.context.configuration.extension_policy(),
-                };
+                let extension_policy = self.context.configuration.extension_policy();
                 if operand.contains_evaluated_comma && extension_policy != ExtensionPolicy::Allow {
                     let source_vectors = self.current_location();
                     self.context.preprocessor_error(PreprocessorError {

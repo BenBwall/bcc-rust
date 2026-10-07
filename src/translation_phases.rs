@@ -7,6 +7,7 @@
 //! p. 11; PDF p. 23.
 
 mod context;
+mod extension;
 pub(crate) mod initial_processing;
 pub(crate) mod parsing;
 pub(crate) mod preprocessing;
@@ -58,6 +59,8 @@ pub(crate) enum TranslationError<'tu> {
     Preprocessing(PreprocessorError<'tu>),
     #[error(transparent)]
     Parsing(ParserError<'tu>),
+    #[error(transparent)]
+    Extension(extension::ExtensionDiagnostic<'tu>),
 }
 
 impl TranslationError<'_> {
@@ -71,6 +74,7 @@ impl TranslationError<'_> {
             | Self::InitialProcessing(_) | Self::PreprocessorTokenizining(_) => {},
             | Self::Preprocessing(error) => visit(&mut error.source_vectors),
             | Self::Parsing(error) => error.for_each_source_vectors_mut(visit),
+            | Self::Extension(error) => visit(&mut error.source_vectors),
         }
     }
 }
@@ -82,6 +86,7 @@ impl GetSeverity for TranslationError<'_> {
             | Self::PreprocessorTokenizining(error) => error.severity(),
             | Self::Preprocessing(error) => error.severity(),
             | Self::Parsing(error) => error.severity(),
+            | Self::Extension(error) => error.severity(),
         }
     }
 }
@@ -98,6 +103,7 @@ impl ToDiagnostic for TranslationError<'_> {
             | Self::PreprocessorTokenizining(error) => error.diagnostic_in(context, source, arena),
             | Self::Preprocessing(error) => error.diagnostic_in(context, source, arena),
             | Self::Parsing(error) => error.diagnostic_in(context, source, arena),
+            | Self::Extension(error) => error.diagnostic_in(context, source, arena),
         }
     }
 }
@@ -109,6 +115,7 @@ impl GetPosition for TranslationError<'_> {
             | Self::PreprocessorTokenizining(error) => error.position(context),
             | Self::Preprocessing(error) => error.position(context),
             | Self::Parsing(error) => error.position(context),
+            | Self::Extension(error) => error.position(context),
         }
     }
 }
@@ -120,6 +127,7 @@ impl GetSourceVectors for TranslationError<'_> {
             | Self::PreprocessorTokenizining(error) => error.source_vectors(context),
             | Self::Preprocessing(error) => error.source_vectors(context),
             | Self::Parsing(error) => error.source_vectors(context),
+            | Self::Extension(error) => error.source_vectors(context),
         }
     }
 }
