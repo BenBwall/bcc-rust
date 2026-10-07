@@ -544,10 +544,10 @@ impl CompilerConfiguration {
         let mut index = 0;
         while index < Feature::ALL.len() {
             let feature = Feature::ALL[index];
-            let native = if matches!(feature, Feature::ImplicitInt) {
-                (self.standard as u8) < CStandard::C99 as u8
-            } else {
-                self.origin_is_native(feature.origin())
+            let native = match feature {
+                | Feature::ImplicitInt => (self.standard as u8) < CStandard::C99 as u8,
+                | Feature::Trigraphs => (self.standard as u8) <= CStandard::C17 as u8,
+                | _ => self.origin_is_native(feature.origin()),
             };
             if native {
                 self.native |= feature.bit();
@@ -640,7 +640,7 @@ mod tests {
                 let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
                     .with_gnu_extensions(gnu);
                 for &feature in Feature::ALL {
-                    if feature == Feature::ImplicitInt {
+                    if matches!(feature, Feature::ImplicitInt | Feature::Trigraphs) {
                         continue;
                     }
                     assert_eq!(
@@ -679,6 +679,10 @@ mod tests {
                 assert_eq!(
                     configuration.is_native(Feature::ImplicitInt),
                     standard < CStandard::C99
+                );
+                assert_eq!(
+                    configuration.is_native(Feature::Trigraphs),
+                    standard <= CStandard::C17
                 );
                 assert!(configuration.accepts(Feature::StaticAssert));
                 assert!(!configuration.accepts(Feature::MsSeh));

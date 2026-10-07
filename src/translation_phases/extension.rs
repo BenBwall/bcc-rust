@@ -121,7 +121,8 @@ impl Context<'_> {
         source: SourceVectors,
     ) {
         if self.configuration.is_native(feature)
-            && matches!(feature.origin(), FeatureOrigin::Standard(_))
+            && (matches!(feature.origin(), FeatureOrigin::Standard(_))
+                || feature == Feature::ImplicitInt)
         {
             return;
         }
@@ -152,6 +153,7 @@ mod tests {
                 let mut context = Context::with_configuration(&tu, configuration);
                 let source = context.push_source_vectors(&[]);
                 context.report_extension(Feature::StaticAssert, "_Static_assert", source);
+                context.report_extension(Feature::ImplicitInt, "implicit int", source);
                 context.report_extension(Feature::GnuAttribute, "__attribute__", source);
                 context.report_extension_since(
                     "__declspec",
@@ -160,10 +162,9 @@ mod tests {
                 );
                 let expected = if policy == ExtensionPolicy::Allow {
                     0
-                } else if standard >= CStandard::C11 {
-                    2
                 } else {
-                    3
+                    2 + usize::from(standard < CStandard::C11)
+                        + usize::from(standard >= CStandard::C99)
                 };
                 assert_eq!(context.pending_error_count(), expected);
                 while let Some(error) = context.pop_pending_error() {
