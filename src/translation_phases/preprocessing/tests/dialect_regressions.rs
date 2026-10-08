@@ -389,3 +389,22 @@ fn elifdef_diagnostics_name_their_directive() {
     );
     assert_eq!(errors, ["Warning: '#elifndef' is a C23 extension"]);
 }
+
+/// `#warning` is reported like `#error`: its message is trimmed and the
+/// directive is named, even when the message is empty (C23 §6.10.7).
+#[test]
+fn warning_directive_formats_its_message_like_error() {
+    let (tokens, errors) = observe(
+        "#warning late  \n#warning\n#error  stop \nint z;\n",
+        mode(CStandard::C23),
+    );
+    assert_eq!(texts(&tokens), "int z ;");
+    assert_eq!(
+        errors,
+        [
+            "Warning: #warning late",
+            "Warning: #warning",
+            "Error: #error stop"
+        ]
+    );
+}

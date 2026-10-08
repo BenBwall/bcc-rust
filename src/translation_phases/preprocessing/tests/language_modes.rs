@@ -205,7 +205,7 @@ fn conditional_directives_and_warning_are_gated_and_recover() {
     assert!(tokens.contains("identifier `yes2`"));
     assert!(!tokens.contains("identifier `no`"));
     assert!(tokens.contains("identifier `after`"));
-    assert_eq!(errors, ["Warning:  a message"]);
+    assert_eq!(errors, ["Warning: #warning a message"]);
     let (_, errors) = observe("#warning message\n", mode(CStandard::C17));
     assert!(
         errors

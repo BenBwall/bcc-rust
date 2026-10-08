@@ -40,11 +40,11 @@ warning: '#warning' is a C23 extension
 4 | #warning warning message
   |  ^^^^^^^
 
-warning:  warning message
+warning: #warning warning message
  --> lexpp-gnu89-extensions.c:4:2
   |
 4 | #warning warning message
-  |  ^^^^^^^
+  |  ^^^^^^^ `#warning` directive
 
 warning: '#ident/#sccs' is a GNU extension
  --> lexpp-gnu89-extensions.c:5:2

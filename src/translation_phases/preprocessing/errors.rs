@@ -267,7 +267,9 @@ impl GetSeverity for PreprocessorError<'_> {
 pub(crate) enum PreprocessorErrorType<'tu> {
     /// Later-standard lexical/directive constraint (C99 §5.1.1.3p1).
     LanguageConstraint(&'tu str),
-    /// C23 #warning message; GNU extension in earlier modes.
+    /// A `#warning` and its message, reported like `#error` but without
+    /// failing translation. C23: §6.10.7 paragraph 1, p. 186; PDF p. 199;
+    /// a GNU extension in earlier modes.
     WarningDirective(&'tu str),
     /// A pp-number with `0x` that is not a `hexadecimal-floating-constant`.
     ///
@@ -1351,8 +1353,16 @@ impl PreprocessorErrorType<'_> {
             .note("C99 §6.10.6p2: each standard pragma takes an on-off switch"),
             | Self::PragmaOnceInNonHeader =>
                 new("`#pragma once` in main file").label("only affects files that are included"),
-            | Self::LanguageConstraint(message) | Self::WarningDirective(message) =>
-                new(format_in!(arena, "{message}")),
+            | Self::LanguageConstraint(message) => new(format_in!(arena, "{message}")),
+            | Self::WarningDirective(message) => {
+                let message = message.trim();
+                new(if message.is_empty() {
+                    "#warning"
+                } else {
+                    format_in!(arena, "#warning {message}")
+                })
+                .label("`#warning` directive")
+            },
             | Self::ErrorDirective(message) => {
                 let message = message.trim();
                 new(if message.is_empty() {
