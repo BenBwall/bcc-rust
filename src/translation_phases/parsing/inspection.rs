@@ -1682,6 +1682,8 @@ fn unary_operator_spelling(operator: UnaryOperator) -> &'static str {
 /// PDF p. 67; a character constant has type `int` and a wide one `wchar_t`
 /// (§6.4.4.4 paragraphs 10-11, p. 61; PDF p. 73), and a multi-character
 /// constant's value is implementation-defined (§6.4.4.4 paragraph 10).
+/// GNU imaginary constants extend C99 under §4 paragraph 6, p. 7; PDF p. 19.
+/// Inspection retains their imaginary suffix as well as the component type.
 fn constant_label(constant: &Constant) -> impl Display {
     fmt::from_fn(move |f| match *constant {
         | Constant::Integer(integer) => {
@@ -1694,7 +1696,7 @@ fn constant_label(constant: &Constant) -> impl Display {
                         if unsigned { "unsigned " } else { "" }
                     ),
                 | IntegerTokenType::Imaginary(value, component) =>
-                    (i128::from(value.get()), component.type_name()),
+                    return write!(f, "{}i ({})", value.get(), component.type_name()),
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),
                 | IntegerTokenType::Long(value) => (i128::from(value.get()), "long"),
                 | IntegerTokenType::LongLong(value) => (i128::from(value.get()), "long long"),

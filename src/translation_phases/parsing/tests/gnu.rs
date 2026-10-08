@@ -558,3 +558,64 @@ fn label_attributes_before_extension_expressions_preserve_statement_ownership() 
         },
     );
 }
+
+#[test]
+fn imaginary_integer_components_survive_parsing_and_inspection() {
+    use crate::translation_phases::{
+        parsing::syntax::{
+            Constant,
+            Expression,
+            ExpressionType,
+        },
+        preprocessing::IntegerTokenType,
+    };
+
+    let source = "double _Complex a[]={1i,2Li,3LLj,4ui,5ULj,6ULLi,7.0fi,8.0j,9.0Li};\n";
+    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let integers: Vec<_> = p
+            .parser
+            .syntax
+            .iter::<Expression<'_>>()
+            .filter_map(|expression| match expression.kind {
+                | ExpressionType::Constant(Constant::Integer(IntegerTokenType::Imaginary(
+                    value,
+                    kind,
+                ))) => Some((value.get(), kind.type_name())),
+                | _ => None,
+            })
+            .collect();
+        assert_eq!(
+            integers,
+            [
+                (1, "int _Complex"),
+                (2, "long _Complex"),
+                (3, "long long _Complex"),
+                (4, "unsigned int _Complex"),
+                (5, "unsigned long _Complex"),
+                (6, "unsigned long long _Complex")
+            ]
+        );
+    });
+    super::with_parsed(source, |unit, context| {
+        assert!(context.pop_pending_error().is_none());
+        let output = unit.inspect(
+            context.tu_arena(),
+            context,
+            super::super::InspectionOptions::default(),
+        );
+        for text in [
+            "1i (int _Complex)",
+            "2i (long _Complex)",
+            "3i (long long _Complex)",
+            "4i (unsigned int _Complex)",
+            "5i (unsigned long _Complex)",
+            "6i (unsigned long long _Complex)",
+            "7i (float _Complex)",
+            "8i (double _Complex)",
+            "0x1.2p+3i (long double _Complex)",
+        ] {
+            assert!(output.contains(text), "{text}: {output}");
+        }
+    });
+}

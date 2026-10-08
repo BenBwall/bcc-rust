@@ -18,7 +18,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:3:1: punctuator `/`
 <test>:3:2: punctuator `/`
 <test>:3:4: identifier `comment`
@@ -51,7 +51,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -76,7 +76,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:3:1: punctuator `/`
 <test>:3:2: punctuator `/`
 <test>:3:4: identifier `comment`
@@ -105,7 +105,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -128,7 +128,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -151,7 +151,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -172,7 +172,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -193,7 +193,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -214,7 +214,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -235,7 +235,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (int)
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -253,7 +253,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (_BitInt(5))
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -271,7 +271,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (_BitInt(5))
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -288,7 +288,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (_BitInt(5))
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`
@@ -305,7 +305,7 @@ Warning: '__COUNTER__' is a GNU extension
 <test>:2:10: integer constant `8wb` = 8 (_BitInt(5))
 <test>:2:14: integer constant `1LL` = 1 (long long)
 <test>:2:18: floating constant `0x1p0` = 1 (double)
-<test>:2:24: integer constant `2j` = 2 (int _Complex)
+<test>:2:24: integer constant `2j` = 2i (int _Complex)
 <test>:4:1: punctuator `[`
 <test>:4:4: punctuator `]`
 <test>:5:1: identifier `$foo`

@@ -604,8 +604,18 @@ pub(crate) fn describe_token<'a>(
                     );
                     return line.into_str();
                 },
-                | IntegerTokenType::Imaginary(value, component) =>
-                    (i128::from(value.get()), component.type_name()),
+                | IntegerTokenType::Imaginary(value, component) => {
+                    // GNU imaginary integer constants extend C99 §6.4.4.1
+                    // under §4p6; preserve the imaginary component as for
+                    // floats.
+                    _ = write!(
+                        line,
+                        "integer constant `{spelling}` = {}i ({})",
+                        value.get(),
+                        component.type_name()
+                    );
+                    return line.into_str();
+                },
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),
                 | IntegerTokenType::Long(value) => (i128::from(value.get()), "long"),
                 | IntegerTokenType::LongLong(value) => (i128::from(value.get()), "long long"),
