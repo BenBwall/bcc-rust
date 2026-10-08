@@ -4,10 +4,10 @@ warning: `#pragma once` in main file
 1 | #pragma once extra
   |         ^^^^ only affects files that are included
 
-warning: unexpected identifier `once` after `#pragma once`
- --> pp-extra-tokens-after-pragma-once.c:1:9
+warning: unexpected identifier `extra` after `#pragma once`
+ --> pp-extra-tokens-after-pragma-once.c:1:14
   |
 1 | #pragma once extra
-  |         ^^^^ `#pragma once` takes no arguments
+  |              ^^^^^ `#pragma once` takes no arguments
 
 2 warnings generated.

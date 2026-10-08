@@ -41,7 +41,6 @@ fail. Rerun the linked fixtures before changing behavior or blessing snapshots.
 | --- | --- |
 | [Missing declaration semicolon](parser-expected-declaration-continuation-after-declarator-missing-semicolon.stderr) | Prefer the missing declaration terminator as the primary error instead of diagnosing a function body after interpreting later declarations as parameters. |
 | [Invalid assignment left operand](parser-expected-statement-expression-assignment.stderr) | The cannot-assign label points at `=`; retain and label the offending left expression. |
-| [Extra pragma tokens](pp-extra-tokens-after-pragma-once.stderr) | The extra-token diagnostic names and labels `once` instead of `extra`. |
 | [Pragma switch](pp-missing-on-off-switch-in-s-t-d-c-pragma.stderr) | Name `FP_CONTRACT` as the pragma requiring a switch, rather than saying the switch belongs after `MAYBE`. |
 | [System header lookup](pp-header-not-found-system.stderr) | Distinguish an empty search-path list from an absolute header path. |
 | [Left shift](pp-left-shift-overflow.stderr), [right shift](pp-right-shift-overflow.stderr) | Describe an invalid shift count separately from an overflowing result. |

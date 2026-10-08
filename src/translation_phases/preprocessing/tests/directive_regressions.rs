@@ -415,6 +415,36 @@ fn malformed_line_tails_do_not_escape_or_remap_the_directive_line() {
 }
 
 #[test]
+fn extra_tokens_after_pragma_once_are_reported_at_the_first_extra_token() {
+    with_directive_tokens_at_path(
+        "#pragma once  extra 1\nafter\n",
+        Path::new("<directive-test>"),
+        |tokens, context| {
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(context.string_cache.at(tokens[0].contents), "after");
+            let errors = context.take_pending_errors();
+            let extra = errors
+                .iter()
+                .filter_map(|error| match error {
+                    | TranslationError::Preprocessing(
+                        error @ PreprocessorError {
+                            error_type: PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..),
+                            ..
+                        },
+                    ) => Some(error),
+                    | _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [error] = extra.as_slice() else {
+                panic!("expected one extra-token diagnostic: {errors:#?}");
+            };
+            let vector = &context.get_source_vectors(error.source_vectors)[0];
+            assert_eq!((vector.line, vector.column, vector.length), (1, 15, 5));
+        },
+    );
+}
+
+#[test]
 fn recursive_include_reports_limit_once_and_preserves_surviving_input() {
     let headers = TempDir::new("directive");
     headers.write("loop.h", "#include \"loop.h\"\nheader_after\n");
