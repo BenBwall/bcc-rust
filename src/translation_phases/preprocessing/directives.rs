@@ -1372,11 +1372,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     );
                     let Some(closing) = self.expect_token_from_previous_phase::<true>(
                         |_, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
-                        |_, token| {
+                        |this, token| {
                             ControlFlow::Break(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::VariadicMacroMustBeLastParameter(
-                                        "named variadic macro",
+                                        this.context.diagnostic_text(
+                                            this.context.string_cache.at(name.contents),
+                                        ),
                                     ),
                                 source_vectors: token.source_vectors,
                             })

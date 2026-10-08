@@ -450,3 +450,16 @@ fn has_embed_accepts_parameters_without_a_clause() {
     );
     assert_eq!(errors.len(), 1, "{errors:?}");
 }
+
+/// A named variadic parameter that is not last is reported under the
+/// macro's name (GNU named variadic macros; C99 §6.10.3p12 for `...`).
+#[test]
+fn misplaced_named_variadic_parameter_names_its_macro() {
+    let (tokens, errors) = observe(
+        "#define F(a, args..., b) x\nint z;\n",
+        mode(CStandard::C17).with_gnu_extensions(true),
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("`F`"), "{errors:?}");
+    assert_eq!(texts(&tokens), "int z ;");
+}
