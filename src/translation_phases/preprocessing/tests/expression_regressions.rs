@@ -397,3 +397,71 @@ fn decimal_constants_above_intmax_warn_and_are_unsigned_in_controlling_expressio
         },
     );
 }
+
+/// Each diagnostic of `#if {expression}` as its kind and `line:column`.
+fn expression_diagnostics(expression: &str) -> Vec<String> {
+    let source = format!("#if {expression}\n#endif\n");
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let mut pp = Preprocessor::new(
+        &preprocess_arena,
+        &mut context,
+        PathBuf::from("<test>").into_boxed_path(),
+        &source,
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    pp.for_each_iterator_item(&mut context, |_, _| {});
+    context
+        .take_pending_errors()
+        .into_iter()
+        .map(|error| {
+            let TranslationError::Preprocessing(PreprocessorError { error_type, .. }) = &error
+            else {
+                panic!("{expression}: {error:#?}");
+            };
+            let kind = format!("{error_type:?}");
+            let sources = error.source_vectors(&mut context);
+            let vector = &context.get_source_vectors(sources)[0];
+            format!("{kind}@{}:{}", vector.line, vector.column)
+        })
+        .collect()
+}
+
+/// A `:` where an operand belongs reports the operand that the operator
+/// before it lacks, and only a `?` there lacks the middle operand (C99
+/// §6.5.15p1). A placeholder takes the missing operand's place, so
+/// reduction cannot take an operand from outside that operator.
+#[test]
+fn colon_in_operand_position_reports_the_operator_before_it() {
+    for (expression, expected) in [
+        ("1 ? : 2", &["TernaryOperatorWithoutMhs@1:9"][..]),
+        (
+            "1 + : 2",
+            &[
+                "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(BinaryPlus)@1:9",
+                "ColonWithoutMatchingQuestionMark@1:9",
+                "ExpectedBinaryOperatorInPreprocessorExpression@2:1",
+            ],
+        ),
+        (
+            "1 ? 1 : :",
+            &[
+                "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(Conditional)@1:13",
+                "ColonWithoutMatchingQuestionMark@1:13",
+            ],
+        ),
+        (
+            "1 ? 2 : 3 * :",
+            &[
+                "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(Multiply)@1:17",
+                "ColonWithoutMatchingQuestionMark@1:17",
+            ],
+        ),
+        ("1 ? - : 2", &["UnaryMinusWithoutOperand@1:11"]),
+        (": 2", &["ColonWithoutMatchingQuestionMark@1:5"]),
+    ] {
+        assert_eq!(expression_diagnostics(expression), expected, "{expression}");
+    }
+}

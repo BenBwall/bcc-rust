@@ -1304,11 +1304,24 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         },
                     ),
                     (PreprocessorTokenType::Colon, state) => {
-                        if state == UNARY {
+                        // C99 §6.5.15p1: an operand belongs here. The
+                        // operator before the `:` lacks it, so a recovered
+                        // operand takes its place before reduction; with no
+                        // operator, only the unmatched `:` is reported.
+                        if state == UNARY
+                            && let Some(operator) = self.expression_parser.operator_stack.last().map(|operator| operator.kind)
+                            && operator != PreprocessorExpressionOperator::OpeningParenthesis
+                        {
+                            let error_type = if operator == PreprocessorExpressionOperator::QuestionMark {
+                                PreprocessorErrorType::TernaryOperatorWithoutMhs
+                            } else {
+                                operator.operand_missing_while_reading()
+                            };
                             self.context.preprocessor_error(PreprocessorError {
-                                error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
+                                error_type,
                                 source_vectors: token.source_vectors,
                             });
+                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
                         }
                         let mut matched_question_mark = false;
                         while let Some(last) = self.expression_parser.operator_stack.last() {
@@ -1329,9 +1342,6 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             }
                         }
                         if matched_question_mark {
-                            if state == UNARY {
-                                self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
-                            }
                             self.expression_parser.state = UNARY;
                         } else {
                             self.context.preprocessor_error(PreprocessorError {
