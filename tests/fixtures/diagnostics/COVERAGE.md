@@ -55,9 +55,9 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **250 top-level C inputs and 250 stderr snapshots**, plus two supporting headers and sixteen mode/policy `.args` sidecars. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **136 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 117 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **251 top-level C inputs and 251 stderr snapshots**, plus two supporting headers and sixteen mode/policy `.args` sidecars. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **136 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 117 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
-The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
+The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
 ### InitialProcessorError
 
@@ -150,7 +150,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression` | rendered | [pp-defined-operator-instead-of-binary-operator-in-preprocessor-expression.c](pp-defined-operator-instead-of-binary-operator-in-preprocessor-expression.c) |
 | `AddressOfOperatorNotSupportedInPreprocessorExpression` | rendered | [pp-address-of-operator-not-supported-in-preprocessor-expression.c](pp-address-of-operator-not-supported-in-preprocessor-expression.c) |
 | `DereferenceOperatorNotSupportedInPreprocessorExpression` | rendered | [pp-dereference-operator-not-supported-in-preprocessor-expression.c](pp-dereference-operator-not-supported-in-preprocessor-expression.c) |
-| `ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression` | rendered | [pp-expected-right-hand-side-of-binary-operator-in-preprocessor-expression.c](pp-expected-right-hand-side-of-binary-operator-in-preprocessor-expression.c) |
+| `ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression` | rendered | [pp-colon-in-operand-position.c](pp-colon-in-operand-position.c), [pp-expected-right-hand-side-of-binary-operator-in-preprocessor-expression.c](pp-expected-right-hand-side-of-binary-operator-in-preprocessor-expression.c) |
 | `NumberInsteadOfBinaryOperatorInPreprocessorExpression` | rendered | [pp-number-instead-of-binary-operator-in-preprocessor-expression.c](pp-number-instead-of-binary-operator-in-preprocessor-expression.c) |
 | `IdentifierInsteadOfBinaryOperatorInPreprocessorExpression` | rendered | [pp-identifier-instead-of-binary-operator-in-preprocessor-expression.c](pp-identifier-instead-of-binary-operator-in-preprocessor-expression.c) |
 | `CharacterInsteadOfBinaryOperatorInPreprocessorExpression` | rendered | [pp-character-instead-of-binary-operator-in-preprocessor-expression.c](pp-character-instead-of-binary-operator-in-preprocessor-expression.c) |

@@ -109,6 +109,7 @@ pp	ExpectedIdentifierInMacroDefinition	pp-expected-identifier-in-macro-definitio
 pp	ExpectedIdentifierInUndefDirective	pp-expected-identifier-in-undef-directive.c	rendered
 pp	ExpectedIncludeStringOrAngleBracketString	pp-expected-include-string-or-angle-bracket-string.c	rendered
 pp	ExpectedNewlineAfterUndefDirective	pp-expected-newline-after-undef-directive.c	rendered
+pp	ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression	pp-colon-in-operand-position.c	rendered
 pp	ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression	pp-expected-right-hand-side-of-binary-operator-in-preprocessor-expression.c	rendered
 pp	ExtraTokensAfterIfdefDirective	pp-extra-tokens-after-ifdef-directive.c	rendered
 pp	ExtraTokensAfterIfndefDirective	pp-extra-tokens-after-ifndef-directive.c	rendered
