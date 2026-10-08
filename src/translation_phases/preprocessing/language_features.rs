@@ -609,22 +609,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                         self.language_error("defined is not permitted in an embed limit", source);
                         return None;
                     }
-                    let end = PreprocessorToken {
-                        kind:           T::Newline,
-                        contents:       self.context.string_cache.intern("\n"),
-                        source_vectors: source,
-                    };
-                    let old = std::mem::replace(
-                        &mut self.tokenizer,
-                        TokenSource::replay(
-                            self.context,
-                            self.scratch,
-                            &[body, &[end]],
-                            SourceVector::default(),
-                        ),
-                    );
-                    let value = self.eval_resource_limit();
-                    self.tokenizer = old;
+                    let value = self.eval_fenced_resource_limit(body, source);
                     result.limit = value;
                     _ = value?;
                 },
@@ -635,6 +620,51 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             }
         }
         Some(result)
+    }
+
+    /// Evaluates a `limit` operand as its own fenced frame, ended by a
+    /// sentinel new-line, like an argument prescan. The operand may come from
+    /// a replacement list that is still being read: its frames and cursors
+    /// stay below the fence, so the sentinel cannot end them.
+    /// C23: §6.10.4.2 paragraph 1, p. 174; PDF p. 187.
+    fn eval_fenced_resource_limit(
+        &mut self,
+        body: &[PreprocessorToken],
+        source: SourceVectors,
+    ) -> Option<u64> {
+        let end = PreprocessorToken {
+            kind:           T::Newline,
+            contents:       self.context.string_cache.intern("\n"),
+            source_vectors: source,
+        };
+        let location = self
+            .context
+            .get_source_vectors(source)
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let tokenizer = TokenSource::replay(self.context, self.scratch, &[body, &[end]], location);
+        let hash_hash_stack =
+            std::mem::replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
+        let generate_placeholders = self.generate_placeholders;
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::Rescan,
+            tokenizer,
+        });
+        let depth = self.tokenizer_stack.len();
+        let operand_fence = std::mem::replace(&mut self.operand_fence, 0);
+        let expansion_fence = std::mem::replace(&mut self.expansion_fence, depth);
+        let value = self.eval_resource_limit();
+        // An expression that stopped early leaves its remaining operand
+        // frames above the fence.
+        while self.tokenizer_stack.len() >= depth {
+            self.pop_tokenizer_frame();
+        }
+        self.operand_fence = operand_fence;
+        self.expansion_fence = expansion_fence;
+        self.generate_placeholders = generate_placeholders;
+        self.hash_hash_stack = hash_hash_stack;
+        value
     }
 
     /// Replaces resource inclusion with ordinary integer preprocessing tokens.

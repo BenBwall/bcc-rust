@@ -11,11 +11,11 @@ use crate::{
     },
 };
 
-fn observe(source: &str, config: CompilerConfiguration) -> (Vec<String>, Vec<String>) {
+pub(super) fn observe(source: &str, config: CompilerConfiguration) -> (Vec<String>, Vec<String>) {
     observe_paths(source, config, PathBuf::from("<test>"), &[])
 }
 
-fn observe_paths(
+pub(super) fn observe_paths(
     source: &str,
     config: CompilerConfiguration,
     path: PathBuf,
@@ -46,10 +46,10 @@ fn observe_paths(
     (output, errors)
 }
 
-fn mode(standard: CStandard) -> CompilerConfiguration {
+pub(super) fn mode(standard: CStandard) -> CompilerConfiguration {
     CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
 }
-fn spellings(output: &[String]) -> String {
+pub(super) fn spellings(output: &[String]) -> String {
     output.join("\n")
 }
 
