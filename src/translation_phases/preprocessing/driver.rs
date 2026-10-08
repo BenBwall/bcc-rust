@@ -689,10 +689,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             else {
                                 break 'base Some(token);
                             };
-                            let tokenizer = if is_variadic {
+                            let (tokenizer, arguments) = if is_variadic {
                                 self.prepare_variadic_body(token, tokenizer, arguments)
                             } else {
-                                tokenizer
+                                (tokenizer, arguments)
                             };
                             self.push_tokenizer_frame(TokenizerFrame {
                                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
@@ -788,6 +788,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                                 }
                                                 arguments.push(FunctionLikeMacroArgument {
                                                     variadic: false,
+                                                    substituted: false,
                                                     expanded: self.scratch.alloc(OnceCell::new()),
                                                     omitted: false,
                                                     name: at!(),
@@ -811,6 +812,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                         }
                                         arguments.push(FunctionLikeMacroArgument {
                                             variadic: false,
+                                            substituted: false,
                                             expanded: self.scratch.alloc(OnceCell::new()),
                                             omitted: false,
                                             name: at!(),
@@ -905,6 +907,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             };
                             arguments.push(FunctionLikeMacroArgument {
                                 variadic: true,
+                                substituted: false,
                                 expanded: self.scratch.alloc(OnceCell::new()),
                                 name: variadic_name.expect("variadic parameter name"),
                                 omitted: closed_at.is_some(),
@@ -971,11 +974,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 }
                             }
                         }
-                        let arguments = arguments.leak();
-                        let tokenizer = if is_variadic {
+                        let arguments: MacroArguments<'x> = arguments.leak();
+                        let (tokenizer, arguments) = if is_variadic {
                             self.prepare_variadic_body(token, tokenizer, arguments)
                         } else {
-                            tokenizer
+                            (tokenizer, arguments)
                         };
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {

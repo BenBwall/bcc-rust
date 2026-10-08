@@ -654,6 +654,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         let depth = self.tokenizer_stack.len();
         let operand_fence = std::mem::replace(&mut self.operand_fence, 0);
         let expansion_fence = std::mem::replace(&mut self.expansion_fence, depth);
+        let verbatim_fence = std::mem::replace(&mut self.verbatim_fence, 0);
         let value = self.eval_resource_limit();
         // An expression that stopped early leaves its remaining operand
         // frames above the fence.
@@ -662,6 +663,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         }
         self.operand_fence = operand_fence;
         self.expansion_fence = expansion_fence;
+        self.verbatim_fence = verbatim_fence;
         self.generate_placeholders = generate_placeholders;
         self.hash_hash_stack = hash_hash_stack;
         value
