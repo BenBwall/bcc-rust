@@ -97,6 +97,36 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 binding.kind, binding.linkage, binding.duration
             );
         }
+        let _ = writeln!(out, "expressions: {}", self.expressions.len());
+        for (index, info) in self.expressions.iter().enumerate() {
+            let _ = write!(out, "expression {index}: ");
+            self.write_type(info.ty, context, arena, &mut out);
+            let _ = write!(out, "; {:?}", info.category);
+            if let Some(ty) = info.operation_type {
+                out.push_str("; operation=");
+                self.write_type(ty, context, arena, &mut out);
+            }
+            if let Some(value) = info.floating {
+                let _ = write!(out, "; real={}, imag={}", value.real, value.imag);
+            }
+            if let Some(value) = info.integer {
+                let _ = write!(out, "; integer={}", value.value);
+            }
+            let _ = writeln!(out, "; ICE={}, constant={:?}", info.ice, info.constant);
+        }
+        let mut identities = super::ArenaMap::with_hasher_in(super::FxBuildHasher, arena);
+        for (index, info) in self.expressions.iter().enumerate() {
+            _ = identities.insert(std::ptr::from_ref(info.expression).addr(), index);
+        }
+        for conversion in self.conversions {
+            let index = identities
+                .get(&std::ptr::from_ref(conversion.expression).addr())
+                .copied()
+                .unwrap_or(usize::MAX);
+            let _ = write!(out, "convert expression {index}: {:?} to ", conversion.kind);
+            self.write_type(conversion.ty, context, arena, &mut out);
+            out.push_str("\n");
+        }
         out.into_str()
     }
 

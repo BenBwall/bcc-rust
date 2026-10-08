@@ -1,6 +1,6 @@
 //! Phase-7 integer constant evaluation used by enums, bounds and bit-fields.
 //! C99: §6.6, pp. 95-96; PDF pp. 107-108; integer conversions §6.3.1.1-3,
-//! pp. 42-43; PDF pp. 54-55. Full expression typing is Stage 2.
+//! pp. 42-43; PDF pp. 54-55. Typed expression folding shares this arithmetic.
 
 use super::{
     Analyzer,
@@ -145,7 +145,16 @@ impl Integer {
                 i128::try_from(l.value.unsigned_abs().wrapping_mul(r.value.unsigned_abs()) & mask)
                     .ok()?
             },
-            | B::Multiplication => l.value.checked_mul(r.value)?,
+            | B::Multiplication => {
+                let magnitude = u128::from(u64::try_from(l.value.unsigned_abs()).ok()?)
+                    .wrapping_mul(u128::from(u64::try_from(r.value.unsigned_abs()).ok()?));
+                let value = i128::try_from(magnitude).ok()?;
+                if (l.value < 0) == (r.value < 0) {
+                    value
+                } else {
+                    -value
+                }
+            },
             | B::Division | B::Modulo => {
                 if r.value == 0 || (l.signed && l.value == l.minimum() && r.value == -1) {
                     return None;
@@ -302,9 +311,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         after_point = true;
                         continue;
                     }
-                    mantissa = mantissa
-                        .checked_mul(16)?
-                        .checked_add(u128::from(digit.to_digit(16)?))?;
+                    if mantissa > (u128::MAX >> 4) {
+                        return None;
+                    }
+                    mantissa = (mantissa << 4).checked_add(u128::from(digit.to_digit(16)?))?;
                     if after_point {
                         fractional += 4;
                     }
@@ -324,7 +334,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             });
         }
         let magnitude = if shift >= 0 {
-            mantissa.checked_mul(1_u128.checked_shl(u32::try_from(shift).ok()?)?)?
+            let shift = u32::try_from(shift).ok()?;
+            if shift >= 128 || mantissa > (u128::MAX >> shift) {
+                return None;
+            }
+            mantissa << shift
         } else if shift <= -128 {
             0
         } else {
@@ -512,6 +526,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// invalid ICE. C99: §6.6p6, p. 95; PDF p. 107; extensions follow §4p6,
     /// p. 7; PDF p. 19.
     pub(super) fn unanalyzed_constant(&self, expression: &'tu Expression<'tu>) -> bool {
+        if self
+            .expression_indices
+            .get(&std::ptr::from_ref(expression).addr())
+            .is_some_and(|&i| self.types.unanalyzed(self.expressions[i].ty))
+        {
+            return true;
+        }
         let mut pending = super::ArenaVec::new_in(self.scratch);
         pending.push(expression);
         while let Some(expression) = pending.pop() {
@@ -527,8 +548,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble(_),
                     ),
                 )
-                | ExpressionType::SizeofExpr(_)
-                | ExpressionType::AlignofExpr(_)
                 | ExpressionType::Builtin(_)
                 | ExpressionType::Generic(_)
                 | ExpressionType::Countof(_)
@@ -602,6 +621,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// operands/types. C99: §6.6p3-6, p. 95; PDF p. 107.
     pub(super) fn evaluate(&mut self, expression: &'tu Expression<'tu>) {
         use ExpressionType as E;
+        let info = self.expression_info(expression);
+        if self.types.unanalyzed(info.ty) {
+            self.integers.push(None);
+            return;
+        }
+        if self.context.configuration.gnu_extensions()
+            && info.constant == super::ConstantClass::Arithmetic
+            && info.integer.is_some()
+        {
+            self.integers.push(info.integer);
+            return;
+        }
         if !self.context.configuration.gnu_extensions() && !self.valid_ice_operands(expression) {
             self.integers.push(None);
             return;
@@ -732,6 +763,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     expression.source_vectors,
                 ));
                 self.work.push(Work::TypeName(name));
+            },
+            | E::SizeofExpr(_) | E::AlignofExpr(_) => {
+                let info = self.expression_info(expression);
+                self.integers
+                    .push(if info.ice { info.integer } else { None });
             },
             | _ => self.integers.push(None),
         }

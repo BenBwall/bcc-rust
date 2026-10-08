@@ -1,6 +1,7 @@
-//! Iterative discovery of declarations, nested scopes and expression type
+//! Iterative traversal of declarations, nested scopes and expression type
 //! names. C99: scopes §6.2.1, pp. 29-30; PDF pp. 41-42; statements §6.8,
-//! pp. 131-139; PDF pp. 143-151. No statement/expression typing is done here.
+//! pp. 131-139; PDF pp. 143-151. Expression constraints run after their
+//! children.
 
 use super::{
     Analyzer,
@@ -17,7 +18,10 @@ use super::{
 impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn expression_slot(&mut self, slot: ExpressionSlot<'tu>) {
         match slot {
-            | ExpressionSlot::Parsed(e) => self.work.push(Work::Expression(e)),
+            | ExpressionSlot::Parsed(e) => {
+                self.work.push(Work::ValueExpression(e));
+                self.work.push(Work::Expression(e));
+            },
             | ExpressionSlot::Selection(header) => {
                 if let Some(e) = header.expression {
                     self.work.push(Work::Slot(e));
@@ -50,6 +54,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::Statement(s, new_scope));
                 if let super::super::parsing::syntax::ConstantExpressionSlot::Parsed(e) = expression
                 {
+                    self.work.push(Work::RequireConstant(
+                        e.expression(),
+                        None,
+                        self.semantic_errors,
+                    ));
+                    self.work.push(Work::Eval(e.expression()));
                     self.work.push(Work::Expression(e.expression()));
                 }
             },
@@ -59,6 +69,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if let super::super::parsing::syntax::ConstantExpressionSlot::Parsed(e) =
                         expression
                     {
+                        self.work.push(Work::RequireConstant(
+                            e.expression(),
+                            None,
+                            self.semantic_errors,
+                        ));
+                        self.work.push(Work::Eval(e.expression()));
                         self.work.push(Work::Expression(e.expression()));
                     }
                 }
@@ -74,6 +90,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::Statement(s, true));
                 }
                 self.work.push(Work::Statement(then_statement, true));
+                self.work.push(Work::Condition(
+                    condition_expression,
+                    matches!(s.kind, S::Switch { .. }),
+                ));
                 self.expression_slot(condition_expression);
             },
             | S::Switch {
@@ -91,6 +111,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
                 self.work.push(Work::Statement(body_statement, true));
+                self.work.push(Work::Condition(
+                    condition_expression,
+                    matches!(s.kind, S::Switch { .. }),
+                ));
                 self.expression_slot(condition_expression);
             },
             | S::For(f) => {
@@ -101,6 +125,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.expression_slot(e);
                 }
                 if let Some(e) = f.condition_expression {
+                    self.work.push(Work::Condition(e, false));
                     self.expression_slot(e);
                 }
                 if let Some(initializer) = f.initializer {
@@ -115,10 +140,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Type names in casts/sizeof/compound literals are resolved without typing
-    /// operands. C99: §6.7.6, p. 122; PDF p. 134.
+    /// Resolve type names and type children before the enclosing expression.
+    /// C99: §6.7.6, p. 122; PDF p. 134.
     pub(super) fn expression(&mut self, e: &'tu Expression<'tu>) {
         use ExpressionType as E;
+        if self
+            .expression_indices
+            .contains_key(&std::ptr::from_ref(e).addr())
+        {
+            return;
+        }
+        self.taint(
+            e.recovered
+                || matches!(
+                    e.kind,
+                    E::Builtin(_)
+                        | E::Generic(_)
+                        | E::Countof(_)
+                        | E::StatementExpression(_)
+                        | E::LabelAddress(_)
+                        | E::Nullptr
+                ),
+        );
+        self.work.push(Work::ExpressionDone(e));
         match e.kind {
             | E::Parenthesized { expression }
             | E::Unary {
@@ -156,7 +200,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 type_name,
                 initializer,
             } => {
-                self.work.push(Work::Initializer(initializer));
+                _ = self.work.pop();
+                self.work.push(Work::CompoundInitializer(e, initializer));
                 self.work.push(Work::DiscardType);
                 self.work.push(Work::TypeName(type_name));
             },
@@ -167,6 +212,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 for &argument in arguments.iter().rev() {
                     self.work.push(Work::Expression(argument));
                 }
+                self.implicit_function(function_expression);
                 self.work.push(Work::Expression(function_expression));
             },
             | E::DirectMember {

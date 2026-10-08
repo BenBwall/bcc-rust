@@ -40,6 +40,14 @@ float string_to_float(char const *s, char **endptr);
 
 int long_double_classify(long_double_t value);
 
+/* C99 §6.6 / §6.3.1.8: translation-time arithmetic and rounding. Operation
+   codes: 0 add, 1 subtract, 2 multiply, 3 divide; precision: 1 float,
+   2 double, 3 long double. Results use the same padding-free carrier. */
+long_double_t long_double_arithmetic(long_double_t left, long_double_t right,
+                                    int operation, int precision);
+long_double_t long_double_from_double(double value);
+int long_double_compare(long_double_t left, long_double_t right);
+
 /* Writes the exact value as a C99 hexadecimal floating constant without
    consulting the C library's printf, so the text is identical on every
    host. Returns the number of bytes written, excluding the terminator. */

@@ -169,6 +169,7 @@ pub(crate) enum Feature {
     Complex,
     Imaginary,
     ImplicitInt,
+    ImplicitFunctionDeclaration,
     MixedDeclarations,
     ForDeclarations,
     DesignatedInitializers,
@@ -269,6 +270,7 @@ impl Feature {
         Self::Complex,
         Self::Imaginary,
         Self::ImplicitInt,
+        Self::ImplicitFunctionDeclaration,
         Self::MixedDeclarations,
         Self::ForDeclarations,
         Self::DesignatedInitializers,
@@ -402,7 +404,7 @@ impl Feature {
 
             // C99: Foreword paragraph 5, p. xii; PDF p. 10 lists "remove
             // implicit int" among the changes from C89.
-            | Self::ImplicitInt => FeatureOrigin::Removed {
+            | Self::ImplicitInt | Self::ImplicitFunctionDeclaration => FeatureOrigin::Removed {
                 since:   CStandard::C89,
                 removed: CStandard::C99,
             },

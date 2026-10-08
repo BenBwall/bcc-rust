@@ -52,6 +52,7 @@ mod modern;
 pub(crate) use modern::{
     ExtendedType,
     SpecifierExtensionKind,
+    StaticAssertion,
     SyntaxOperand,
 };
 mod msvc;

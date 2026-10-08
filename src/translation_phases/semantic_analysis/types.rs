@@ -1,7 +1,7 @@
 //! Phase-7 semantic types, interning, compatibility and object layout.
 //! C99: §6.2.5, pp. 33-37; PDF pp. 45-49; §6.2.7, pp. 40-41;
 //! PDF pp. 52-53; §6.7.2-§6.7.6, pp. 99-124; PDF pp. 111-136.
-//! Expression typing and initializer completion belong to later stages.
+//! Expression constraints and initializer completion use this canonical graph.
 
 use std::cell::Cell;
 

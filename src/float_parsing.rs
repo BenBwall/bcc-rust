@@ -44,7 +44,7 @@ const LONG_DOUBLE_BYTES: usize = ffi::LONG_DOUBLE_BYTES as _;
 const LONG_DOUBLE_HEX_CAPACITY: usize = ffi::LONG_DOUBLE_HEX_CAPACITY as _;
 
 impl LongDouble {
-    const ZERO: Self = Self {
+    pub(crate) const ZERO: Self = Self {
         value: [0; LONG_DOUBLE_BYTES],
     };
 
@@ -66,6 +66,43 @@ impl LongDouble {
         } else {
             FloatClass::Nonzero
         }
+    }
+
+    /// C99: §6.6p4, p. 95; PDF p. 107; §6.3.1.8, pp. 44-45;
+    /// PDF pp. 56-57. Native arithmetic shares the literal carrier.
+    pub(crate) fn arithmetic(self, right: Self, operation: i32, precision: i32) -> Option<Self> {
+        // SAFETY: Both carriers are initialized finite native representations;
+        // the C function returns a fully initialized carrier by value.
+        let result = unsafe {
+            ffi::long_double_arithmetic(self.to_ffi(), right.to_ffi(), operation, precision)
+        };
+        // SAFETY: C initializes all bytes, including padding.
+        let result = Self {
+            // SAFETY: The C function initializes all carrier bytes.
+            value: unsafe { result.bytes },
+        };
+        matches!(result.classify(), FloatClass::Zero | FloatClass::Nonzero).then_some(result)
+    }
+
+    pub(crate) fn from_double(value: f64) -> Self {
+        // SAFETY: The C function accepts a scalar and initializes all carrier
+        // bytes.
+        let result = unsafe { ffi::long_double_from_double(value) };
+        // SAFETY: All union bytes are initialized by C.
+        Self {
+            // SAFETY: The C function initializes all carrier bytes.
+            value: unsafe { result.bytes },
+        }
+    }
+
+    pub(crate) fn compare(self, right: Self) -> i32 {
+        // SAFETY: Both carriers contain valid native values and are passed by
+        // copy.
+        unsafe { ffi::long_double_compare(self.to_ffi(), right.to_ffi()) }
+    }
+
+    pub(crate) fn is_zero(self) -> bool {
+        self.classify() == FloatClass::Zero
     }
 }
 
