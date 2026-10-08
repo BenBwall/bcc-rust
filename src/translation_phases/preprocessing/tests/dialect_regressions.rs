@@ -281,3 +281,75 @@ fn failed_embed_header_name_restores_the_line_start() {
         assert_eq!(texts(&tokens), "int z = 1 ;", "{source}");
     }
 }
+
+/// C23 adds `#elifdef` and `#elifndef` (§6.10.2p16); GNU modes accept them
+/// earlier as an extension, while strict C89-C17 leave them unrecognized, so
+/// a skipped one is ignored and an active one is an unknown directive.
+#[test]
+fn elifdef_selects_groups_by_mode_on_skip_and_active_paths() {
+    let skip = "#define YES\n#if 0\nskipped\n#elifdef YES\nyes\n#else\nno\n#endif\n#if \
+                0\n#elifndef YES\nwrong\n#elifndef NO\nyes2\n#endif\nafter\n";
+    let active = "#define YES\n#if 1\nfirst\n#elifdef YES\nwrong\n#elifndef \
+                  YES\nwrong\n#else\nwrong\n#endif\nafter\n";
+    for (standard, gnu) in [
+        (CStandard::C89, false),
+        (CStandard::C17, false),
+        (CStandard::C89, true),
+        (CStandard::C17, true),
+        (CStandard::C23, false),
+        (CStandard::C23, true),
+    ] {
+        let recognized = gnu || standard >= CStandard::C23;
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            let config = CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu);
+            let case = format!("{standard:?} gnu={gnu} {policy:?}");
+            let extension =
+                recognized && standard < CStandard::C23 && policy != ExtensionPolicy::Allow;
+            let severity = if policy == ExtensionPolicy::Deny {
+                "Error:"
+            } else {
+                "Warning:"
+            };
+
+            let (tokens, errors) = observe(skip, config);
+            if recognized {
+                assert_eq!(texts(&tokens), "yes yes2 after", "{case}");
+                // Each recognized directive that is reached is reported.
+                assert_eq!(
+                    errors.len(),
+                    if extension { 3 } else { 0 },
+                    "{case}: {errors:?}"
+                );
+                assert!(
+                    errors
+                        .iter()
+                        .all(|error| error.starts_with(severity)
+                            && error.contains("is a C23 extension")),
+                    "{case}: {errors:?}"
+                );
+            } else {
+                assert_eq!(texts(&tokens), "no after", "{case}");
+                assert!(errors.is_empty(), "{case}: {errors:?}");
+            }
+
+            let (tokens, errors) = observe(active, config);
+            if recognized {
+                assert_eq!(texts(&tokens), "first after", "{case}");
+                assert_eq!(errors.len(), usize::from(extension), "{case}: {errors:?}");
+            } else {
+                assert_eq!(texts(&tokens), "first wrong wrong after", "{case}");
+                assert_eq!(errors.len(), 2, "{case}: {errors:?}");
+                assert!(
+                    errors
+                        .iter()
+                        .all(|error| error.contains("unknown preprocessing directive")),
+                    "{case}: {errors:?}"
+                );
+            }
+        }
+    }
+}
