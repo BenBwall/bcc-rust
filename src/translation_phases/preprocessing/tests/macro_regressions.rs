@@ -5,6 +5,7 @@ use std::fmt::Write;
 use super::{
     assert_expansion,
     expansion_of,
+    with_tokens_of,
 };
 use crate::translation_phases::{
     TranslationError,
@@ -159,6 +160,220 @@ fn generated_wide_literal_pastes_accept_values_starting_with_l() {
         "#define W(x) L ## x\n#define XW(x) W(x)\n#define S(x) #x\n#define XS(x) \
          S(x)\nXS(XW(S(Long))) ; XS(XW(S(foo)))\n",
         "\"L\\\"Long\\\"\" ; \"L\\\"foo\\\"\"",
+    );
+}
+
+// C99 §6.10.3.3p3 leaves the order of `##` evaluation unspecified, but each
+// operator pastes the operands written beside it: a parameter stands for its
+// argument as written and an empty argument for a placemarker. Expected
+// spellings come from `clang -E -P`.
+
+#[test]
+fn paste_chains_replace_every_parameter_operand() {
+    for (source, expected) in [
+        ("#define P(a,b) a##c##b\nP(x,y)\n", "xcy"),
+        ("#define P(a,b) a##_##b\nP(x,y)\n", "x_y"),
+        ("#define P(a,b) a##b##c\nP(x,y)\n", "xyc"),
+        ("#define P(N,I,J) N##I##J\nP(d,0,0)\n", "d00"),
+        (
+            "#define F(type,n) type type##_##n\nF(float,min1)\n",
+            "float float_min1",
+        ),
+        // Three and four operators.
+        ("#define C(a,b,c,d) a##b##c##d\nC(w,x,y,z)\n", "wxyz"),
+        ("#define C(a,b) a##_##b##_##a\nC(p,q)\n", "p_q_p"),
+        (
+            "#define C(a,b,c,d,e) a ## b ## c ## d ## e\nC(v,w,x,y,z) C(1,2,3,4,5)\n",
+            "vwxyz 12345",
+        ),
+        // Only the last token of a left argument and the first of a right one
+        // take part.
+        ("#define J(a,b,c) a##b##c\nJ(p q, r s, t u)\n", "p qr st u"),
+        // Results that are not identifiers.
+        (
+            "#define J(a,b,c) a##b##c\n#define S(x) #x\n#define XS(x) S(x)\nXS(J(1,.,5)) ; \
+             XS(J(<,<,=)) ; XS(J(1,e,+))\n",
+            "\"1.5\" ; \"<<=\" ; \"1e+\"",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn paste_chains_treat_empty_arguments_as_placemarkers() {
+    // C99 §6.10.3.3p2-3: an empty argument operand is a placemarker, which
+    // pastes to the other operand, and two placemarkers paste to one.
+    for (invocations, expected) in [
+        ("J(,,) end", "end"),
+        ("J(x,,) J(,y,) J(,,z) J(x,,z)", "x y z xz"),
+        ("J(, y z ,) J( ,  , ) end", "y z end"),
+        ("U(,) U(x,) U(,y)", "_ x_ _y"),
+        ("M(,) M(x,) M(,y)", "c xc cy"),
+        ("T(,) end", "__ end"),
+        ("Q(,b,,) end", "b end"),
+    ] {
+        assert_expansion(
+            &format!(
+                "#define J(a,b,c) a##b##c\n#define U(a,b) a##_##b\n#define M(a,b) \
+                 a##c##b\n#define T(a,b) a##_##b##_##a\n#define Q(a,b,c,d) \
+                 a##b##c##d\n{invocations}\n"
+            ),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn paste_chains_take_stringified_operands() {
+    // C99 §6.10.3.2p2: here `#` applies before an adjacent `##`.
+    assert_expansion(
+        "#define W(p,a,s) p ## #a ## s\n#define H(a,b) #a ## b ## b\nW(, x y, ) ; W( ,, ) ; H(x \
+         y, ) ; H(, )\n",
+        "\"x y\" ; \"\" ; \"x y\" ; \"\"",
+    );
+    assert_expansion("#define W(p,a,s) p ## #a ## s\nW(L, x y, )\n", "L\"x y\"");
+}
+
+#[test]
+fn paste_chains_take_variadic_arguments() {
+    for (source, expected) in [
+        (
+            "#define V(a, ...) a##_##__VA_ARGS__\nV(p, q) V(p) V(p,) V(p, q r)\n",
+            "p_q p_ p_ p_q r",
+        ),
+        (
+            "#define V(...) pre##__VA_ARGS__##post\nV(x) V() V(a,b)\n",
+            "prexpost prepost prea , bpost",
+        ),
+        (
+            "#define V(a, ...) a##__VA_ARGS__##a\nV(m,n) V(m)\n",
+            "mnm mm",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn paste_chain_operands_are_not_macro_replaced() {
+    // C99 §6.10.3.1p1: a `##` operand is its argument as written. The
+    // result is rescanned with the rest of the replacement list
+    // (§6.10.3.4p1).
+    for (invocations, expected) in [
+        ("P(x,y) J(x,y,_)", "done xy_"),
+        ("J(_,FOO,_) J(F,O,O)", "_FOO_ bar"),
+        ("U(FOO,x)", "FOO_x"),
+    ] {
+        assert_expansion(
+            &format!(
+                "#define x 1\n#define y 2\n#define FOO bar\n#define xcy done\n#define P(a,b) \
+                 a##c##b\n#define J(a,b,c) a##b##c\n#define U(a,b) a##_##b\n{invocations}\n"
+            ),
+            expected,
+        );
+    }
+    // A chain written in an argument of a nested invocation pastes the
+    // enclosing macro's arguments.
+    for (source, expected) in [
+        (
+            "#define CAT(a,b) a##b\n#define Q(a) CAT(a##b##c, a)\nQ(k)\n",
+            "kbck",
+        ),
+        (
+            "#define J(a,b,c) a##b##c\n#define R(a,b) J(a,b,z)\nR(m n, o)\n",
+            "m noz",
+        ),
+        // The result is a `#` operand as written, but rescanned elsewhere.
+        (
+            "#define S(x) #x\n#define I(x) x\n#define kbc oops\n#define Q(a) S(a##b##c) \
+             I(a##b##c)\nQ(k)\n",
+            "\"kbc\" oops",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn paste_chains_report_each_invalid_paste() {
+    // C99 §6.10.3.3p3: each paste that forms no valid preprocessing token is
+    // diagnosed, left to right.
+    expansion_of("#define J(a,b,c) a##b##c\nJ(.,.,.)\n", |_, errors| {
+        let pastes: Vec<_> = errors
+            .iter()
+            .map(|error| match error {
+                | TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
+                    ..
+                }) => (*lhs, *rhs),
+                | other => panic!("unexpected diagnostic: {other:#?}"),
+            })
+            .collect();
+        assert_eq!(pastes, [(".", "."), (".", ".")]);
+    });
+    expansion_of("#define J(a,b,c) a##b##c\nJ(x,+,y)\n", |_, errors| {
+        assert!(
+            matches!(
+                errors,
+                [TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::TokenMergingError("x", "+"),
+                    ..
+                })]
+            ),
+            "{errors:#?}"
+        );
+    });
+}
+
+#[test]
+fn paste_chain_results_locate_every_operand() {
+    // The result spans its operands in order: `x` and `y` in the invocation,
+    // `c` in the definition.
+    with_tokens_of(
+        "#define P(a,b) a##c##b\nP(x,y)\n",
+        "<test>",
+        |tokens, context| {
+            assert!(context.take_pending_errors().is_empty());
+            let [token] = tokens else {
+                panic!("expected one token: {tokens:#?}");
+            };
+            assert_eq!(context.string_cache.at(token.contents), "xcy");
+            let locations: Vec<_> = context
+                .get_source_vectors(token.source_vectors)
+                .iter()
+                .map(|vector| (vector.line, vector.column, vector.length))
+                .collect();
+            assert_eq!(locations, [(2, 3, 1), (1, 19, 1), (2, 5, 1)]);
+        },
+    );
+    // The tokens after a chain's first output token keep their locations
+    // when provenance is compacted between output tokens.
+    with_tokens_of(
+        "#define J(a,b,c) a##b##c\nJ(m n, o, p q)\n",
+        "<test>",
+        |tokens, context| {
+            assert!(context.take_pending_errors().is_empty());
+            let tokens: Vec<_> = tokens
+                .iter()
+                .map(|token| {
+                    let locations: Vec<_> = context
+                        .get_source_vectors(token.source_vectors)
+                        .iter()
+                        .map(|vector| (vector.line, vector.column))
+                        .collect();
+                    (context.string_cache.at(token.contents), locations)
+                })
+                .collect();
+            assert_eq!(
+                tokens,
+                [
+                    ("m", vec![(2, 3)]),
+                    ("nop", vec![(2, 5), (2, 8), (2, 11)]),
+                    ("q", vec![(2, 13)]),
+                ]
+            );
+        },
     );
 }
 

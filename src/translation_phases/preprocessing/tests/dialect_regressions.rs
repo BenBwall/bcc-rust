@@ -332,6 +332,27 @@ fn va_opt_follows_the_standard_examples() {
     }
 }
 
+/// C23 §6.10.5.1p7: a `__VA_OPT__` result is a single operand of a `##`
+/// chain, and a chain inside it pastes every parameter's argument (C99
+/// §6.10.3.3p3). Expected spellings come from `clang -std=c2x -E -P`.
+#[test]
+fn va_opt_results_paste_within_and_beside_paste_chains() {
+    for (source, expected) in [
+        (
+            "#define V(a, ...) a ## __VA_OPT__(x ## a) ## b\nV(p,1) V(p) V(,1)\n",
+            "pxpb pb xb",
+        ),
+        (
+            "#define V(a, ...) [__VA_OPT__(a##a##a)]\nV(q,1) V(,1)\n",
+            "[ qqq ] [ ]",
+        ),
+    ] {
+        let (tokens, errors) = observe(source, mode(CStandard::C23));
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        assert_eq!(texts(&tokens), expected, "{source}");
+    }
+}
+
 /// C23 §6.10.5.1p7: the operand of `#` is the result before rescanning, so a
 /// function-like name it contains is not invoked.
 #[test]
