@@ -24,14 +24,11 @@ use super::{
     parser_errors,
     with_parse_configuration,
 };
-use crate::{
-    configuration::{
-        CStandard,
-        CompilerConfiguration,
-        ExtensionPolicy,
-        MsvcFeature,
-    },
-    translation_phases::GetSeverity,
+use crate::configuration::{
+    CStandard,
+    CompilerConfiguration,
+    ExtensionPolicy,
+    MsvcFeature,
 };
 
 const FEATURES: &[(MsvcFeature, &str)] = &[
@@ -91,15 +88,7 @@ fn asm_alias_selects_gnu_parentheses_and_msvc_blocks_or_instructions() {
                         1
                     );
                     assert_eq!(p.parser.syntax.iter::<MsAsm<'_>>().count(), 4);
-                    let extensions: Vec<_> = p
-                        .errors
-                        .iter()
-                        .filter_map(|x| match x {
-                            | crate::translation_phases::TranslationError::Extension(x) =>
-                                Some(x.to_string()),
-                            | _ => None,
-                        })
-                        .collect();
+                    let extensions = super::extensions(p);
                     if policy == ExtensionPolicy::Allow {
                         assert_eq!(extensions.len(), 0, "{extensions:?}");
                     } else {
@@ -175,33 +164,25 @@ fn enabled_features_keep_the_ast_under_all_extension_policies() {
                 CompilerConfiguration::new(CStandard::C17, policy).with_msvc_feature(feature, true),
                 |p| {
                     assert_eq!(parser_errors(p).count(), 0, "{feature:?}: {:?}", p.errors);
-                    let extensions: Vec<_> = p
-                        .errors
-                        .iter()
-                        .filter_map(|x| {
-                            if let crate::translation_phases::TranslationError::Extension(x) = x {
-                                Some(x)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+                    let extensions = super::extensions(p);
                     if policy == ExtensionPolicy::Allow {
                         assert_eq!(extensions.len(), 0, "{extensions:?}");
                     } else {
                         assert!(!extensions.is_empty(), "{feature:?}");
                         assert!(
-                            extensions
-                                .iter()
-                                .all(|x| x.to_string().contains("MSVC extension")),
+                            extensions.iter().all(|x| x.contains("MSVC extension")),
                             "{extensions:?}"
                         );
-                        assert!(extensions.iter().all(|x| x.severity()
-                            == if policy == ExtensionPolicy::Warn {
-                                crate::translation_phases::ErrorSeverity::Warning
-                            } else {
-                                crate::translation_phases::ErrorSeverity::Error
-                            }));
+                        assert!(
+                            super::extension_severities(p)
+                                .iter()
+                                .all(|severity| *severity
+                                    == if policy == ExtensionPolicy::Warn {
+                                        crate::translation_phases::ErrorSeverity::Warning
+                                    } else {
+                                        crate::translation_phases::ErrorSeverity::Error
+                                    })
+                        );
                     }
                 },
             );

@@ -5,6 +5,7 @@
 use super::{
     Parsed,
     declaration,
+    extensions,
     identifier_name,
     parser_errors,
     sourced_text,
@@ -46,17 +47,6 @@ use crate::{
 
 fn mode(standard: CStandard, gnu: bool, policy: ExtensionPolicy) -> CompilerConfiguration {
     CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu)
-}
-
-fn extensions(parsed: &Parsed<'_, '_>) -> Vec<String> {
-    parsed
-        .errors
-        .iter()
-        .filter_map(|error| match error {
-            | TranslationError::Extension(extension) => Some(extension.to_string()),
-            | _ => None,
-        })
-        .collect()
 }
 
 fn assert_clean_parse(parsed: &Parsed<'_, '_>, source: &str) {
