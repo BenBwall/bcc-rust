@@ -250,9 +250,10 @@ fn attributes_cover_iso_grammar_positions_and_balanced_vendor_arguments() {
         mode(CStandard::C23, ExtensionPolicy::Warn),
         |p| {
             assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let declarator = declaration(p, 0).init_declarators[0].declarator;
+            assert!(declarator.pointer.levels[0].attributes.is_some());
             assert!(
-                declaration(p, 0).init_declarators[0]
-                    .declarator
+                !declarator
                     .kind
                     .iter()
                     .any(|x| matches!(x, DirectDeclarator::Attributes(_)))
@@ -855,6 +856,98 @@ fn enum_colons_without_a_following_type_belong_to_the_enclosing_grammar() {
                 panic!("expected enum");
             };
             assert!(enumeration.underlying_type.is_some());
+        },
+    );
+}
+
+fn inspect(source: &str, configuration: CompilerConfiguration) -> String {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = crate::translation_phases::Context::with_configuration(&tu, configuration);
+    let pp = crate::util::bump::Bump::new();
+    let parse = crate::util::bump::Bump::new();
+    let preprocessor = crate::translation_phases::preprocessing::Preprocessor::new(
+        &pp,
+        &mut context,
+        std::path::PathBuf::from("<pointer-attributes>").into_boxed_path(),
+        source,
+        crate::util::shared::SharedVec::default(),
+        crate::util::shared::SharedVec::default(),
+    );
+    let unit =
+        super::super::Parser::new(preprocessor, &mut context, &parse).parse_translation_unit();
+    let output = unit.inspect(
+        context.tu_arena(),
+        &context,
+        super::super::InspectionOptions::default(),
+    );
+    output.to_owned()
+}
+
+#[test]
+fn pointer_attributes_belong_to_the_pointer_level_they_follow() {
+    let output = inspect(
+        "int * [[a]] * const [[b]] [[c]] p;\n",
+        mode(CStandard::C23, ExtensionPolicy::Deny),
+    );
+    let lines: Vec<_> = output
+        .lines()
+        .map(str::trim)
+        .filter(|x| !x.starts_with("token [") && !x.starts_with("token ]"))
+        .collect();
+    let start = lines
+        .iter()
+        .position(|x| x.starts_with("pointer 0"))
+        .expect("pointer level");
+    assert_eq!(
+        lines[start..],
+        [
+            "pointer 0 qualifiers=none",
+            "attribute-specifier [[...]]",
+            "token a",
+            "pointer 1 qualifiers=const",
+            "attribute-specifier [[...]]",
+            "token b",
+            "attribute-specifier [[...]]",
+            "token c",
+            "identifier p",
+        ],
+        "{output}"
+    );
+}
+
+#[test]
+fn pointer_levels_keep_gnu_and_iso_attribute_chains_in_place() {
+    with_parse_configuration(
+        "int * __attribute__((a)) * const __attribute__((b)) [[c]] p, q;",
+        mode(CStandard::C23, ExtensionPolicy::Allow).with_gnu_extensions(true),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let declarator = declaration(p, 0).init_declarators[0].declarator;
+            let chain = |level: usize| {
+                let mut names = Vec::new();
+                let mut link = declarator.pointer.levels[level].attributes;
+                while let Some(x) = link {
+                    let super::super::modern::SpecifierExtensionKind::Attributes(attributes) =
+                        x.kind
+                    else {
+                        panic!("pointer attributes");
+                    };
+                    names.push(super::sourced_text(p, attributes.source_vectors));
+                    link = x.next;
+                }
+                names.reverse();
+                names
+            };
+            assert_eq!(chain(0), ["__attribute__((a))"]);
+            assert_eq!(chain(1), ["__attribute__((b))", "[[c]]"]);
+            assert!(
+                declarator
+                    .kind
+                    .iter()
+                    .all(|x| !matches!(x, DirectDeclarator::Attributes(_)))
+            );
+            let plain = declaration(p, 0).init_declarators[1].declarator;
+            assert!(plain.pointer.levels.is_empty());
         },
     );
 }

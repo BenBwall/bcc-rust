@@ -331,8 +331,12 @@ fn pointer_modifiers_belong_to_their_pointer_level() {
                 .declarator
                 .pointer;
             assert_eq!(
-                pointer.type_qualifiers_list.as_slice(),
-                &[
+                pointer
+                    .levels
+                    .iter()
+                    .map(|x| x.qualifiers)
+                    .collect::<Vec<_>>(),
+                [
                     TypeQualifiers::PTR32 | TypeQualifiers::SPTR,
                     TypeQualifiers::PTR64 | TypeQualifiers::UPTR
                 ]

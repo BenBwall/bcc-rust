@@ -899,7 +899,7 @@ fn leading_attributes_do_not_turn_a_grouping_parenthesis_into_parameters() {
                     .map(|x| match x {
                         | DirectDeclarator::Parenthesized(x) => format!(
                             "grouped({} {:?})",
-                            x.declarator.pointer.type_qualifiers_list.len(),
+                            x.declarator.pointer.levels.len(),
                             super::identifier_name(p, x.declarator)
                         ),
                         | DirectDeclarator::Function { .. } => "function".to_owned(),

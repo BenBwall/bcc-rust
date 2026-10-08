@@ -124,8 +124,11 @@ fn ordinary_pointer_and_typedef_declarations_are_reachable() {
             let pointer = pointer_declaration.init_declarators[0]
                 .declarator
                 .pointer
-                .type_qualifiers_list;
-            assert_eq!(*pointer, [TypeQualifiers::CONST, TypeQualifiers::VOLATILE]);
+                .levels;
+            assert_eq!(
+                pointer.iter().map(|x| x.qualifiers).collect::<Vec<_>>(),
+                [TypeQualifiers::CONST, TypeQualifiers::VOLATILE]
+            );
         },
     );
 }

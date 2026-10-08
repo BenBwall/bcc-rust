@@ -865,18 +865,28 @@ impl DeclarationSpecifiers<'_> {
 /// - \* type-qualifier-list?
 /// - \* type-qualifier-list? pointer
 ///
-/// Each element in the `type_qualifiers_list` represents the type qualifiers
-/// for one level of indirection. For example, this declaration: `*const
-/// *volatile *x` would be parsed as: `[TypeQualifiers::CONST,
-/// TypeQualifiers::VOLATILE, TypeQualifiers::empty()]`
+/// Each element in `levels` is one level of indirection, outermost first. For
+/// example, `*const *volatile *x` has the qualifiers `[TypeQualifiers::CONST,
+/// TypeQualifiers::VOLATILE, TypeQualifiers::empty()]`.
 ///
 /// C99: §6.7.5 paragraph 1, p. 114; PDF p. 126, and pointer derivation
 /// §6.7.5.1 paragraph 1, p. 115; PDF p. 127.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct PointerDeclarator<'tu> {
-    /// Each element represents the type qualifiers for one level of
-    /// indirection.
-    pub(crate) type_qualifiers_list: ArenaList<'tu, TypeQualifiers>,
+    pub(crate) levels: ArenaList<'tu, PointerLevel<'tu>>,
+}
+
+/// One `*` with the qualifiers and attributes written after it.
+///
+/// C99: §6.7.5.1 paragraph 1, p. 115; PDF p. 127. C23: the attributes after
+/// a `*` appertain to that pointer, §6.7.7.2 paragraph 1, p. 127;
+/// PDF p. 140. GNU and MSVC attributes in the same place share it.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct PointerLevel<'tu> {
+    pub(crate) qualifiers: TypeQualifiers,
+    /// Attribute specifiers in reverse source order, as in
+    /// [`super::modern::SpecifierExtension`] chains.
+    pub(crate) attributes: Option<&'tu super::modern::SpecifierExtension<'tu>>,
 }
 
 /// declarator:
@@ -1078,7 +1088,7 @@ impl<'tu> Declarator<'tu> {
             let first = direct.next();
             if let Some(candidate) = direct.next() {
                 suffix = Some(*candidate);
-            } else if !declarator.pointer.type_qualifiers_list.is_empty() {
+            } else if !declarator.pointer.levels.is_empty() {
                 suffix = None;
             }
             let Some(DirectDeclarator::Parenthesized(parenthesized)) = first else {

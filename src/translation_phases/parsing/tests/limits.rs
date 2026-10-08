@@ -446,7 +446,7 @@ fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_>) {
 #[test]
 fn mixed_declarator_translation_floor_uses_the_typed_tree() {
     fn count_derivations(declarator: Declarator<'_>) -> (usize, usize, usize) {
-        let mut counts = (declarator.pointer.type_qualifiers_list.len(), 0, 0);
+        let mut counts = (declarator.pointer.levels.len(), 0, 0);
         for direct in declarator.kind {
             match *direct {
                 | DirectDeclarator::Parenthesized(parenthesized) => {
