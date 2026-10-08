@@ -484,7 +484,14 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
                 } else if is_operator(token, OperatorTokenType::Ellipsis)
-                    || token.is_some_and(|token| parser.declaration_starter(token) && !matches!(token.kind, TokenType::Keyword(k) if super::msvc::calling_convention(k) || super::msvc::type_modifier(k))) {
+                    || if parser.attribute_starter(token) {
+                        // Leading attributes may start a parameter or a
+                        // grouped declarator, so classify what follows them.
+                        parser.attributes_precede_declaration()
+                    } else {
+                        token.is_some_and(|token| parser.declaration_starter(token) && !matches!(token.kind, TokenType::Keyword(k) if super::msvc::calling_convention(k) || super::msvc::type_modifier(k)))
+                    }
+                {
                     self.phase = DeclaratorPhase::AwaitParameterList;
                     Self::push_parameter_list(parser, false)
                 } else {

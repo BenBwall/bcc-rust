@@ -869,3 +869,60 @@ fn attribute_missing_its_second_closer_finishes_before_the_declaration() {
         );
     }
 }
+
+#[test]
+fn leading_attributes_do_not_turn_a_grouping_parenthesis_into_parameters() {
+    use super::super::declaration_syntax::DirectDeclarator;
+    let parameter_shape = |source: &str| {
+        with_parse_configuration(
+            &format!("{source}\n"),
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Warn)
+                .with_gnu_extensions(true),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{source}: {:?}", p.errors);
+                assert!(
+                    !p.errors
+                        .iter()
+                        .any(|x| x.to_string().contains("implicit int")),
+                    "{source}: {:?}",
+                    p.errors
+                );
+                let DirectDeclarator::Function { parameter_list, .. } =
+                    super::declaration(p, 0).init_declarators[0].declarator.kind[1]
+                else {
+                    panic!("{source}: expected a function declarator");
+                };
+                let declarator = parameter_list[0].declarator.expect("parameter declarator");
+                declarator
+                    .kind
+                    .iter()
+                    .map(|x| match x {
+                        | DirectDeclarator::Parenthesized(x) => format!(
+                            "grouped({} {:?})",
+                            x.declarator.pointer.type_qualifiers_list.len(),
+                            super::identifier_name(p, x.declarator)
+                        ),
+                        | DirectDeclarator::Function { .. } => "function".to_owned(),
+                        | other => format!("{other:?}"),
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
+    };
+    assert_eq!(
+        parameter_shape("void f(int (__attribute__((unused)) *b));"),
+        ["grouped(1 Some(\"b\"))"]
+    );
+    assert_eq!(
+        parameter_shape("void f(int (__attribute__((unused)) __attribute__((x)) *));"),
+        ["grouped(1 None)"]
+    );
+    assert_eq!(
+        parameter_shape("void f(int (__attribute__((unused)) int x));"),
+        ["function"]
+    );
+    assert_eq!(
+        parameter_shape("void f(int ([[maybe_unused]] int x));"),
+        ["function"]
+    );
+}
