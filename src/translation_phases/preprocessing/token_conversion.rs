@@ -32,6 +32,7 @@ use super::{
         IntegerTokenType,
         KeywordTokenType,
         LiteralEncoding,
+        LiteralId,
         LiteralUnit,
         OperatorTokenType,
         SignedIntegerLiteralType,
@@ -351,13 +352,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         };
         let contents = self.context.intern_literal(&builder.units);
         let token = Token {
-            kind:           if let Some(encoding) = encoding {
-                TokenType::String(StringTokenType::EncodedString(contents, encoding))
-            } else if wide {
-                TokenType::String(StringTokenType::WideString(contents))
-            } else {
-                TokenType::String(StringTokenType::String(contents))
-            },
+            kind:           TokenType::String(string_token_type(contents, encoding, wide)),
             contents:       self.context.string_cache.intern(&*builder.spelling),
             source_vectors: self.context.merge_vector_list(&builder.sources),
         };
@@ -753,6 +748,16 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         let string = context.string_cache.at(token.contents);
         let prefix = string.find(['"', '\'']).unwrap_or(0);
         let wide = prefix != 0 && !string.starts_with("u8");
+        // The largest value a numeric escape may give one code unit of the
+        // literal's element type: C99 §6.4.4.4p9, p. 61; PDF p. 73, with
+        // C11's 16-bit `u` literals.
+        let max_escape = if string.starts_with('u') && !string.starts_with("u8") {
+            65535
+        } else if wide {
+            u32::MAX
+        } else {
+            255
+        };
         let mut index = prefix + 1;
         let quote = string.as_bytes().get(index - 1).copied();
         let end = if string.len() > index && string.as_bytes().last().copied() == quote {
@@ -813,14 +818,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                             None
                         } else {
                             index += 1;
-                            let max = if string.starts_with('u') && !string.starts_with("u8") {
-                                65535
-                            } else if wide {
-                                u32::MAX
-                            } else {
-                                255
-                            };
-                            if let Some(value) = value.filter(|v| *v <= max) {
+                            if let Some(value) = value.filter(|v| *v <= max_escape) {
                                 Some(LiteralUnit::Numeric(value))
                             } else {
                                 error = Some(PreprocessorErrorType::LanguageConstraint(
@@ -852,16 +850,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                         if count == 0 {
                             error = Some(PreprocessorErrorType::InvalidHexEscapeSequence);
                             None
-                        } else if let Some(value) = value.filter(|value| {
-                            *value
-                                <= if string.starts_with('u') && !string.starts_with("u8") {
-                                    65535
-                                } else if wide {
-                                    u32::MAX
-                                } else {
-                                    255
-                                }
-                        }) {
+                        } else if let Some(value) = value.filter(|value| *value <= max_escape) {
                             Some(LiteralUnit::Numeric(value))
                         } else {
                             error = Some(if hex {
@@ -1091,18 +1080,12 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         _ = Self::eval_escape_sequences(self.context, token, &mut units);
         let cached_contents = self.context.intern_literal(&units);
         self.state.literal_scratch.return_units(units);
-        if let Some(encoding) = literal_encoding(self.context.string_cache.at(token.contents)) {
-            StringTokenType::EncodedString(cached_contents, encoding)
-        } else if self
-            .context
-            .string_cache
-            .at(token.contents)
-            .starts_with('L')
-        {
-            StringTokenType::WideString(cached_contents)
-        } else {
-            StringTokenType::String(cached_contents)
-        }
+        let spelling = self.context.string_cache.at(token.contents);
+        string_token_type(
+            cached_contents,
+            literal_encoding(spelling),
+            spelling.starts_with('L'),
+        )
     }
 
     pub(super) fn parse_character(&mut self, token: PreprocessorToken) -> CharacterTokenType {
@@ -1261,13 +1244,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                 let id = self.context.intern_literal(&units);
                 self.state.literal_scratch.return_units(units);
                 Token {
-                    kind: TokenType::String(if let Some(encoding) = encoding {
-                        StringTokenType::EncodedString(id, encoding)
-                    } else if wide {
-                        StringTokenType::WideString(id)
-                    } else {
-                        StringTokenType::String(id)
-                    }),
+                    kind: TokenType::String(string_token_type(id, encoding, wide)),
                     ..Self::build_token(token, TokenType::Identifier)
                 }
             },
@@ -1429,6 +1406,19 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                 return None;
             },
         })
+    }
+}
+
+/// A string literal's token type: encoding-prefixed, wide (`L`), or plain.
+fn string_token_type(
+    contents: LiteralId,
+    encoding: Option<LiteralEncoding>,
+    wide: bool,
+) -> StringTokenType {
+    match encoding {
+        | Some(encoding) => StringTokenType::EncodedString(contents, encoding),
+        | None if wide => StringTokenType::WideString(contents),
+        | None => StringTokenType::String(contents),
     }
 }
 
