@@ -288,3 +288,42 @@ isolate function-local label/switch state while preserving enclosing typedef vis
 **Extension marker**:
 GNU `__extension__` syntax wrapping an expression or declaration and suppressing
 pedantic extension diagnostics within that owner. It does not repair malformed syntax.
+
+## Declaration semantic analysis
+
+**Semantic translation unit** (`SemanticTranslationUnit<'tu>`):
+The retained result of declaration analysis after parsing: a canonical type graph,
+nominal tags and members, resolved declaration occurrences, scope identities,
+resolved type names, and parameter metadata. It borrows the translation-unit arena.
+Syntax remains immutable and separately inspectable.
+
+**Semantic working arena** (`'s`):
+A phase arena for semantic continuations, integer-evaluation values, hash-cons
+lookup, visible-binding lookup and scope restoration. It is dropped before the
+semantic translation unit is returned; no retained result borrows it.
+
+**Canonical type identity** (`TypeId`):
+An unqualified type graph index plus a compact qualifier set. Structurally identical
+derived types share their unqualified identity. Distinct tagged types retain nominal
+identity even when their members/layout are equal. Identity is stronger than C type
+compatibility, which may form a composite type across different array/prototype shapes.
+
+**Nominal tag** (`Tag`):
+The identity and completion state of one structure, union or enumeration. Tag lookup
+has a separate namespace from ordinary bindings; member names belong to their own
+nominal aggregate. Completion adds retained members and layout without changing identity.
+
+**Semantic binding** (`Binding`):
+One source declaration occurrence with its resolved type, semantic scope, ordinary
+binding kind, linkage and storage duration. A semantic scope is independent of the
+parser's typedef-name classification; redeclarations merge compatible linked types.
+
+**Target layout** (`TargetLayout`):
+The explicit scalar, pointer and alias representation used by token conversion and
+semantic layout, defaulting to x86-64 System V LP64. It describes the C target rather
+than Rust's host ABI.
+
+**Unanalyzed type** (`TypeKind::Unknown`):
+A conservative result for accepted syntax whose semantics are outside the implemented
+stage. It suppresses dependent compatibility/layout diagnostics without pretending
+that an extension has a C99 scalar representation.

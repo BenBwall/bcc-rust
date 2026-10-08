@@ -58,9 +58,11 @@ translation floors, diagnoses invalid phase-7 input, and has deterministic
 truncation/property coverage. The integrated language modes also cover C23
 attributes and feature queries, resource embedding into initializers, modern
 literals, GNU macros/keywords/imaginary constants, and MSVC macro pragmas and
-empty variadic calls through the CLI. Semantic analysis—including
-type/lvalue constraints, constant-expression evaluation, initializer
-current-object rules, and linkage—and code generation remain unimplemented.
+empty variadic calls through the CLI. Declaration semantic analysis now follows parsing in the default CLI mode;
+`--semantic-types` inspects resolved declaration types, linkage and duration.
+See [semantic-analysis.md](semantic-analysis.md) for implemented boundaries and
+validation gaps. Full expression/statement typing, initializer current-object
+rules and code generation remain unimplemented.
 This is not yet a production-ready or conforming C99 compiler.
 
 ## Prerequisites
