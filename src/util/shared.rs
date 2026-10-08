@@ -36,9 +36,6 @@ where
             #[cold]
             #[inline(never)]
             fn drop_slow<T: ?Sized>(this: &mut Shared<T>) {
-                // SAFETY: This is okay because self.ref_count and self.contents
-                // point at valid boxes and we only drop them
-                // when the ref count is 0.
                 #[expect(
                     clippy::multiple_unsafe_ops_per_block,
                     reason = "The safety comment explains why both operations are okay."
@@ -141,50 +138,24 @@ where
         }
     }
 
-    #[expect(
-        dead_code,
-        reason = "Reference-count inspection is retained for debugging callers."
-    )]
-    pub(crate) fn strong_reference_count(&self) -> usize {
-        self.ref_cnt().get()
-    }
-
     /// The caller of this function must maintain the invariant that the ref
     /// count accurately reflects how many references there are to the contents.
-    /// This function is not marked unsafe because it's private to this module.
+    /// It is private to this module, which keeps that invariant, rather than
+    /// `unsafe`.
     fn ref_cnt(&self) -> &Cell<usize> {
         // SAFETY: self.ref_count always points to a valid instance of
-        // Cell<usize>. This function should arguably be unsafe, but
-        // it's not marked as such to avoid unsafe contamination. It's
-        // private to this module to our invariants aren't
-        // broken in external code.
+        // Cell<usize>.
         unsafe { self.ref_count.as_ref() }
     }
 }
 
 impl SharedString {
-    #[expect(
-        dead_code,
-        reason = "The explicit string view is retained for API ergonomics."
-    )]
-    pub(crate) fn as_str(&self) -> &str {
-        self
-    }
-
     pub(crate) fn from_string(s: String) -> Self {
         Self::from_boxed(s.into_boxed_str())
     }
 }
 
 impl<T> SharedVec<T> {
-    #[expect(
-        dead_code,
-        reason = "The explicit slice view is retained for API ergonomics."
-    )]
-    pub(crate) fn as_slice(&self) -> &[T] {
-        self
-    }
-
     pub(crate) fn from_vec(v: Vec<T>) -> Self {
         Self::from_boxed(v.into_boxed_slice())
     }
