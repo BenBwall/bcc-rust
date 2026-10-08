@@ -550,8 +550,9 @@ pub(crate) fn describe_token<'a>(
         .at(token.contents)
         .trim_end_matches('\0');
     let literal = match token.kind {
-        | TokenType::String(StringTokenType::String(contents)) =>
-            context.literal_spelling_in(scratch, scratch, contents, false),
+        | TokenType::String(
+            StringTokenType::String(contents) | StringTokenType::EncodedString(contents, _),
+        ) => context.literal_spelling_in(scratch, scratch, contents, false),
         | TokenType::String(StringTokenType::WideString(contents)) =>
             context.literal_spelling_in(scratch, scratch, contents, true),
         | _ => "",
@@ -570,11 +571,19 @@ pub(crate) fn describe_token<'a>(
         | TokenType::Identifier => write!(line, "identifier `{spelling}`"),
         | TokenType::Keyword(_) => write!(line, "keyword `{spelling}`"),
         | TokenType::Operator(operator) => write!(line, "punctuator `{}`", operator.spelling()),
+        | TokenType::String(StringTokenType::EncodedString(_, encoding)) => write!(
+            line,
+            "{} string literal {}{literal}",
+            encoding.type_name(),
+            encoding.prefix()
+        ),
         | TokenType::String(StringTokenType::String(_)) => write!(line, "string literal {literal}"),
         | TokenType::String(StringTokenType::WideString(_)) =>
             write!(line, "wide string literal {literal}"),
         | TokenType::Character(character) => {
             let (value, type_name) = match character {
+                | CharacterTokenType::EncodedChar(c, encoding) =>
+                    (i64::from(c), encoding.type_name()),
                 | CharacterTokenType::Char(c) => (i64::from(u32::from(c)), "int"),
                 | CharacterTokenType::WideChar(c) => (i64::from(c), "wchar_t"),
                 | CharacterTokenType::MultiChar(value) => (i64::from(value), "int"),
@@ -586,6 +595,17 @@ pub(crate) fn describe_token<'a>(
         },
         | TokenType::Integer(integer) => {
             let (value, type_name) = match integer {
+                | IntegerTokenType::BitInt(value, width, unsigned) => {
+                    _ = write!(
+                        line,
+                        "integer constant `{spelling}` = {} ({}_BitInt({width}))",
+                        value.get(),
+                        if unsigned { "unsigned " } else { "" }
+                    );
+                    return line.into_str();
+                },
+                | IntegerTokenType::Imaginary(value, component) =>
+                    (i128::from(value.get()), component.type_name()),
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),
                 | IntegerTokenType::Long(value) => (i128::from(value.get()), "long"),
                 | IntegerTokenType::LongLong(value) => (i128::from(value.get()), "long long"),
@@ -666,7 +686,7 @@ pub enum CompileStep {
     Report,
 }
 
-/// Compiles the file at `path` as the CLI does without options, writing its
+/// Compiles the file at `path` in the library's default mode, writing its
 /// diagnostics and their summary to `out` without color. Each step runs
 /// inside `measure`, so a caller can observe one step alone; the allocation
 /// tests count the global allocations each makes.
@@ -678,11 +698,48 @@ pub enum CompileStep {
 pub fn compile_file_measured(
     path: &Path,
     out: &mut dyn Write,
+    measure: impl FnMut(CompileStep, &mut dyn FnMut()),
+) -> io::Result<()> {
+    compile_file_configured_measured(path, CompilerConfiguration::default(), out, measure)
+}
+
+/// Measures compilation with CLI standard, dialect and policy arguments.
+/// Argument parsing runs before either measured interval. Include-path and
+/// output options are not applied by this diagnostic measurement adapter.
+///
+/// # Errors
+///
+/// Invalid CLI arguments, reading `path`, or writing to `out` can fail.
+#[doc(hidden)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "CLI argument normalization owns OS strings before measured compiler intervals."
+)]
+pub fn compile_file_with_arguments_measured(
+    path: &Path,
+    arguments: &[&str],
+    out: &mut dyn Write,
+    measure: impl FnMut(CompileStep, &mut dyn FnMut()),
+) -> io::Result<()> {
+    let args = Cli::try_parse_from(normalize_language_arguments(
+        ["bcc-rust", "--input", ""]
+            .into_iter()
+            .chain(arguments.iter().copied())
+            .map(std::ffi::OsString::from),
+    ))
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    compile_file_configured_measured(path, args.configuration(), out, measure)
+}
+
+fn compile_file_configured_measured(
+    path: &Path,
+    configuration: CompilerConfiguration,
+    out: &mut dyn Write,
     mut measure: impl FnMut(CompileStep, &mut dyn FnMut()),
 ) -> io::Result<()> {
     let tu = Bump::new();
     let source = tu.read_to_str_lossy(path)?;
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(&tu, configuration);
     measure(CompileStep::Parse, &mut || {
         drop(parse_translation_unit(&mut context, path, source, &[], &[]));
     });

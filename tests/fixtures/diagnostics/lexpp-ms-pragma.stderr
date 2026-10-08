@@ -1,0 +1,15 @@
+warning: '__pragma' is an MSVC extension
+ --> lexpp-ms-pragma.c:1:1
+  |
+1 | __pragma(STDC FP_CONTRACT MAYBE)
+  | ^^^^^^^^
+
+error: expected `ON`, `OFF`, or `DEFAULT` after `MAYBE`
+ --> lexpp-ms-pragma.c:1:27
+  |
+1 | __pragma(STDC FP_CONTRACT MAYBE)
+  |                           ^^^^^ expected an on-off switch
+  |
+  = note: C99 §6.10.6p2: each standard pragma takes an on-off switch
+
+1 error and 1 warning generated.

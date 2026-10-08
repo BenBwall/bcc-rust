@@ -142,7 +142,6 @@ fn unused_other_preprocessing_tokens_do_not_diagnose() {
 fn surviving_other_tokens_keep_their_actual_character_locations() {
     for (source, character, index, line, column, length) in [
         ("@ after\n", '@', 0, 1, 1, 1),
-        ("$ after\n", '$', 0, 1, 1, 1),
         ("` after\n", '`', 0, 1, 1, 1),
         ("\u{1} after\n", '\u{1}', 0, 1, 1, 1),
         ("\\\n@ after\n", '@', 2, 2, 1, 1),

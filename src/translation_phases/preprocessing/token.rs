@@ -112,13 +112,41 @@ pub(crate) enum IntegerTokenType {
     UnsignedInt(u32),
     UnsignedLong(Packed<u64>),
     UnsignedLongLong(Packed<u64>),
+    /// C23 bit-precise suffix: magnitude, minimum width, unsignedness.
+    BitInt(Packed<u64>, u8, bool),
+    /// GNU imaginary integer constant.
+    Imaginary(Packed<u64>, ImaginaryIntegerKind),
 }
 
+/// GNU imaginary integer component types (extension to C99 §6.4.4.1).
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum ImaginaryIntegerKind {
+    Int,
+    Long,
+    LongLong,
+    UnsignedInt,
+    UnsignedLong,
+    UnsignedLongLong,
+}
+impl ImaginaryIntegerKind {
+    pub(crate) fn type_name(self) -> &'static str {
+        match self {
+            | Self::Int => "int _Complex",
+            | Self::Long => "long _Complex",
+            | Self::LongLong => "long long _Complex",
+            | Self::UnsignedInt => "unsigned int _Complex",
+            | Self::UnsignedLong => "unsigned long _Complex",
+            | Self::UnsignedLongLong => "unsigned long long _Complex",
+        }
+    }
+}
 impl From<IntegerTokenType> for i128 {
     fn from(v: IntegerTokenType) -> Self {
         match v {
-            | IntegerTokenType::UnsignedLong(v) | IntegerTokenType::UnsignedLongLong(v) =>
-                i128::from(v.get()),
+            | IntegerTokenType::UnsignedLong(v)
+            | IntegerTokenType::UnsignedLongLong(v)
+            | IntegerTokenType::BitInt(v, _, _)
+            | IntegerTokenType::Imaginary(v, _) => i128::from(v.get()),
             | IntegerTokenType::Long(v) | IntegerTokenType::LongLong(v) => i128::from(v.get()),
             | IntegerTokenType::UnsignedInt(v) => i128::from(v),
             | IntegerTokenType::Int(v) => i128::from(v),
@@ -135,6 +163,10 @@ pub(crate) enum FloatTokenType {
     Float(f32),
     Double(Packed<f64>),
     LongDouble(LongDouble),
+    /// GNU imaginary floating constants preserve their component precision.
+    ImaginaryFloat(f32),
+    ImaginaryDouble(Packed<f64>),
+    ImaginaryLongDouble(LongDouble),
 }
 
 impl FloatTokenType {
@@ -144,6 +176,9 @@ impl FloatTokenType {
             | Self::Float(_) => "float",
             | Self::Double(_) => "double",
             | Self::LongDouble(_) => "long double",
+            | Self::ImaginaryFloat(_) => "float _Complex",
+            | Self::ImaginaryDouble(_) => "double _Complex",
+            | Self::ImaginaryLongDouble(_) => "long double _Complex",
         }
     }
 }
@@ -152,8 +187,11 @@ impl Display for FloatTokenType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             | Self::Float(v) => write!(f, "{v}"),
+            | Self::ImaginaryFloat(v) => write!(f, "{v}i"),
             | Self::Double(v) => write!(f, "{v}"),
+            | Self::ImaginaryDouble(v) => write!(f, "{v}i"),
             | Self::LongDouble(v) => write!(f, "{v}"),
+            | Self::ImaginaryLongDouble(v) => write!(f, "{v}i"),
         }
     }
 }
@@ -328,6 +366,31 @@ pub(crate) enum LiteralUnit {
     Numeric(u32),
 }
 
+/// Literal encodings introduced by C11 §6.4.5p1 and C23 §6.4.4.4p1.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum LiteralEncoding {
+    Utf8,
+    Utf16,
+    Utf32,
+}
+impl LiteralEncoding {
+    pub(crate) fn prefix(self) -> &'static str {
+        match self {
+            | Self::Utf8 => "u8",
+            | Self::Utf16 => "u",
+            | Self::Utf32 => "U",
+        }
+    }
+
+    pub(crate) fn type_name(self) -> &'static str {
+        match self {
+            | Self::Utf8 => "char8_t",
+            | Self::Utf16 => "char16_t",
+            | Self::Utf32 => "char32_t",
+        }
+    }
+}
+
 /// A character or wide `string-literal`, decoded into literal units.
 ///
 /// C99: §6.4.5 paragraphs 1-2, p. 62; PDF p. 74.
@@ -335,6 +398,8 @@ pub(crate) enum LiteralUnit {
 pub(crate) enum StringTokenType {
     String(LiteralId),
     WideString(LiteralId),
+    /// C11/C23 encoding-prefixed literal, retaining code-point/numeric units.
+    EncodedString(LiteralId, LiteralEncoding),
 }
 
 /// A `character-constant` and its value.
@@ -346,6 +411,7 @@ pub(crate) enum CharacterTokenType {
     /// A narrow constant of one byte, held as that byte.
     Char(char),
     WideChar(u32),
+    EncodedChar(u32, LiteralEncoding),
     /// Packed integer value of an ordinary multi-character constant.
     ///
     /// The value is implementation-defined (§6.4.4.4 paragraph 10): each
@@ -362,7 +428,8 @@ impl From<CharacterTokenType> for i64 {
     fn from(v: CharacterTokenType) -> Self {
         match v {
             | CharacterTokenType::Char(c) => i64::from(u32::from(c)),
-            | CharacterTokenType::WideChar(c) => i64::from(c),
+            | CharacterTokenType::WideChar(c) | CharacterTokenType::EncodedChar(c, _) =>
+                i64::from(c),
             | CharacterTokenType::MultiChar(value) => i64::from(value),
         }
     }

@@ -164,7 +164,7 @@ Other "\\" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, l
 at SourcePosition { index: 1, line: 1, column: 2 }
 Whitespace " " [SourceVector { index: 1, column: 2, line: 1, source_file_index: 0, length: 1 }]
 at SourcePosition { index: 2, line: 1, column: 3 }
-Other "$" [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 1 }]
+Identifier "$" [SourceVector { index: 2, column: 3, line: 1, source_file_index: 0, length: 1 }]
 at SourcePosition { index: 3, line: 1, column: 4 }
 Whitespace " " [SourceVector { index: 3, column: 4, line: 1, source_file_index: 0, length: 1 }]
 at SourcePosition { index: 4, line: 1, column: 5 }

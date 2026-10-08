@@ -121,6 +121,9 @@ fn every_keyword_spelling_respects_its_gate_and_survives_expansion() {
         .iter()
         .map(|keyword| keyword.spelling())
         .chain(KeywordTokenType::ALIASES.iter().copied())
+        // __pragma is consumed as a phase-4 operator when enabled; its flag has
+        // dedicated lexpp tests rather than phase-7 keyword expectations.
+        .filter(|spelling| *spelling != "__pragma")
         .collect::<Vec<_>>()
         .join(" ")
         + "\n";

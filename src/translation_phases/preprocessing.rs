@@ -21,6 +21,7 @@ mod directives;
 mod driver;
 mod errors;
 mod expression;
+mod language_features;
 mod macro_expansion;
 #[cfg(test)]
 #[expect(
@@ -136,6 +137,11 @@ enum OutputPurpose {
 
 /// State kept from the start of preprocessing to its end.
 struct PreprocessorState<'pp> {
+    counter:               u64,
+    query_depth:           usize,
+    conditional_queries:   bool,
+    retain_placeholders:   bool,
+    include_origins:       ArenaMap<'pp, u32, usize>,
     arena:                 &'pp Bump,
     once_set:              ArenaSet<'pp, u32>,
     macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
@@ -363,6 +369,12 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             _ = macro_definitions
                 .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn);
         }
+        for &(name, feature) in language_features::LANGUAGE_BUILTINS {
+            if context.configuration.accepts(feature) {
+                _ = macro_definitions
+                    .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn);
+            }
+        }
         let source_file_index = context.intern_source_file(source_name);
         let mut lexed_files = LexedFiles::new_in(pp);
         let tokenizer = lexed_files.open(context, source_file_index, source);
@@ -381,6 +393,11 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         Self {
             resting: Some(Resting {
                 state: PreprocessorState {
+                    counter: 0,
+                    query_depth: 0,
+                    conditional_queries: false,
+                    retain_placeholders: false,
+                    include_origins: ArenaMap::with_hasher_in(FxBuildHasher, pp),
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     macro_definitions,

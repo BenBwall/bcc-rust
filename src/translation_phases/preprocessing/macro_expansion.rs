@@ -36,6 +36,7 @@ use super::{
     },
 };
 use crate::{
+    configuration::Feature,
     translation_phases::{
         Context,
         GetPosition,
@@ -77,6 +78,8 @@ pub(crate) enum MacroDefinition<'pp> {
         argument_names: &'pp [StringCacheId],
         tokenizer:      TokenSource<'pp>,
         is_variadic:    bool,
+        /// Original GNU parameter spelling, before body normalization.
+        variadic_alias: Option<StringCacheId>,
     },
     /// A predefined macro or the `_Pragma` operator, expanded by the driver.
     ///
@@ -109,6 +112,7 @@ pub(crate) enum HashHash {
 /// 1, p. 153; PDF p. 165).
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct FunctionLikeMacroArgument<'x> {
+    pub(super) omitted:             bool,
     pub(super) name:                StringCacheId,
     pub(super) tokenizer:           TokenSource<'x>,
     pub(super) enclosing_arguments: Option<MacroArguments<'x>>,
@@ -347,6 +351,293 @@ impl<'x> MacroCallCursor<'x> {
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
 )]
 impl<'x> Expander<'_, '_, '_, 'x> {
+    /// Expands the inner replacement as a unit before outer #/##; it is not
+    /// rescanned. C23: §6.10.5.1p7, p. 180; PDF p. 193.
+    fn expand_optional_replacement(
+        &mut self,
+        invocation: PreprocessorToken,
+        arguments: MacroArguments<'x>,
+        selected: &[PreprocessorToken],
+    ) -> ArenaVec<'x, PreprocessorToken> {
+        let saved_hashes = replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
+        let newlines = (self.last_was_newline, self.current_is_newline);
+        let placeholder_mode = self.generate_placeholders;
+        let retain_placeholders = replace(&mut self.state.retain_placeholders, true);
+        let newline = PreprocessorToken {
+            kind:           PreprocessorTokenType::Newline,
+            contents:       self.context.string_cache.intern("\n"),
+            source_vectors: invocation.source_vectors,
+        };
+        let location = self
+            .context
+            .get_source_vectors(invocation.source_vectors)
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let tokenizer = TokenSource::replay(
+            self.context,
+            self.scratch,
+            &[selected, &[newline]],
+            location.clone(),
+        );
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
+                name: invocation.identifier_id(self.context),
+                invocation: location.clone(),
+                invocation_end: location,
+                arguments,
+                is_variadic: true,
+            },
+            tokenizer,
+        });
+        let depth = self.tokenizer_stack.len();
+        let saved_operand = replace(&mut self.operand_fence, depth);
+        let saved_expansion = replace(&mut self.expansion_fence, depth);
+        let mut result = ArenaVec::new_in(self.scratch);
+        while let Some(token) = self.next_preprocessor_token::<false>() {
+            result.push(token);
+        }
+        self.operand_fence = saved_operand;
+        self.expansion_fence = saved_expansion;
+        self.hash_hash_stack = saved_hashes;
+        self.generate_placeholders = placeholder_mode;
+        self.state.retain_placeholders = retain_placeholders;
+        (self.last_was_newline, self.current_is_newline) = newlines;
+        result
+    }
+
+    /// Validates the optional variadic replacement at definition time.
+    /// C23: §6.10.5.1p3, p. 179; PDF p. 192.
+    pub(super) fn validate_variadic_body(
+        &mut self,
+        mut body: TokenSource<'_>,
+        variadic: bool,
+    ) -> bool {
+        use PreprocessorTokenType as T;
+        let ignored = self.context.ignore_tokenizer_errors();
+        self.context.set_ignore_tokenizer_errors(true);
+        let mut valid = true;
+        while let Some(token) = body.next_item(self.context) {
+            if token.kind == T::Newline {
+                break;
+            }
+            if !token.kind.is_identifier()
+                || self.context.string_cache.at(token.contents) != "__VA_OPT__"
+            {
+                continue;
+            }
+            if !variadic || !self.context.configuration.accepts(Feature::VaOpt) {
+                self.language_error(
+                    "__VA_OPT__ requires an enabled variadic macro replacement",
+                    token.source_vectors,
+                );
+                valid = false;
+                continue;
+            }
+            self.context
+                .report_extension(Feature::VaOpt, "__VA_OPT__", token.source_vectors);
+            let open = Self::next_ignore_whitespace(&mut body, self.context);
+            if open.is_none_or(|t| t.kind != T::OpeningParenthesis) {
+                self.language_error("expected '(' after __VA_OPT__", token.source_vectors);
+                valid = false;
+                continue;
+            }
+            let mut depth = 1usize;
+            let mut first = None;
+            let mut last = None;
+            while let Some(inner) = body.next_item(self.context) {
+                if inner.kind == T::Newline {
+                    break;
+                }
+                if inner.kind == T::OpeningParenthesis {
+                    depth += 1;
+                }
+                if inner.kind == T::ClosingParenthesis {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                if inner.kind == T::Whitespace {
+                    continue;
+                }
+                if inner.kind.is_identifier()
+                    && self.context.string_cache.at(inner.contents) == "__VA_OPT__"
+                {
+                    self.language_error("__VA_OPT__ cannot be nested", inner.source_vectors);
+                    valid = false;
+                }
+                _ = first.get_or_insert(inner.kind);
+                last = Some(inner.kind);
+            }
+            if depth != 0 {
+                self.language_error("unterminated __VA_OPT__ replacement", token.source_vectors);
+                valid = false;
+            }
+            if first == Some(T::HashHash) || last == Some(T::HashHash) {
+                self.language_error(
+                    "## cannot begin or end a __VA_OPT__ replacement",
+                    token.source_vectors,
+                );
+                valid = false;
+            }
+        }
+        self.context.set_ignore_tokenizer_errors(ignored);
+        valid
+    }
+
+    /// Selects optional tokens and dialect comma elision before ordinary
+    /// substitution. C23: §6.10.5.1p2-7, pp. 179-180; PDF pp. 192-193.
+    /// GNU comma-paste and traditional MSVC comma elision are extensions.
+    pub(super) fn prepare_variadic_body(
+        &mut self,
+        invocation: PreprocessorToken,
+        mut body: TokenSource<'x>,
+        arguments: MacroArguments<'x>,
+    ) -> TokenSource<'x> {
+        use PreprocessorTokenType as T;
+        let original = body.clone();
+        let mut tokens = ArenaVec::new_in(self.scratch);
+        let mut optional = false;
+        let mut comma = false;
+        while let Some(token) = body.next_item(self.context) {
+            optional |= token.kind.is_identifier()
+                && self.context.string_cache.at(token.contents) == "__VA_OPT__";
+            comma |= token.kind == T::Comma;
+            tokens.push(token);
+            if token.kind == T::Newline {
+                break;
+            }
+        }
+        if !optional && !comma {
+            return original;
+        }
+        let va_name = self.context.string_cache.intern("__VA_ARGS__");
+        let Some(argument) = find_argument(arguments, va_name) else {
+            return original;
+        };
+        let empty = if optional || self.context.configuration.accepts(Feature::MsVaArgs) {
+            let mut expanded = self.expanded_argument(invocation, argument);
+            !std::iter::from_fn(|| expanded.next_item(self.context))
+                .any(|t| !matches!(t.kind, T::Whitespace | T::Newline | T::Placeholder))
+        } else {
+            false
+        };
+        let mut output = ArenaVec::new_in(self.scratch);
+        let mut index = 0;
+        while index < tokens.len() {
+            let token = tokens[index];
+            if token.kind.is_identifier()
+                && self.context.string_cache.at(token.contents) == "__VA_OPT__"
+            {
+                index += 1;
+                while tokens.get(index).is_some_and(|t| t.kind == T::Whitespace) {
+                    index += 1;
+                }
+                if tokens
+                    .get(index)
+                    .is_none_or(|t| t.kind != T::OpeningParenthesis)
+                {
+                    continue;
+                }
+                index += 1;
+                let start = index;
+                let mut depth = 1usize;
+                while index < tokens.len() {
+                    if tokens[index].kind == T::OpeningParenthesis {
+                        depth += 1;
+                    }
+                    if tokens[index].kind == T::ClosingParenthesis {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    index += 1;
+                }
+                let selected = if empty {
+                    ArenaVec::new_in(self.scratch)
+                } else {
+                    self.expand_optional_replacement(invocation, arguments, &tokens[start..index])
+                };
+                let hash = output
+                    .iter()
+                    .rposition(|t: &PreprocessorToken| t.kind != T::Whitespace)
+                    .filter(|&i| output[i].kind == T::Hash);
+                if let Some(hash) = hash {
+                    output.truncate(hash);
+                    let contents = Self::stringify(self.context, self.scratch, &selected);
+                    output.push(PreprocessorToken {
+                        kind: T::String,
+                        contents,
+                        source_vectors: token.source_vectors,
+                    });
+                } else if selected.is_empty() {
+                    output.push(PreprocessorToken {
+                        kind:           T::Placeholder,
+                        contents:       self.context.string_cache.intern(""),
+                        source_vectors: token.source_vectors,
+                    });
+                } else {
+                    output.extend_from_slice(&selected);
+                }
+                index += usize::from(index < tokens.len());
+                continue;
+            }
+            if token.kind == T::Comma {
+                let mut next = index + 1;
+                while tokens.get(next).is_some_and(|t| t.kind == T::Whitespace) {
+                    next += 1;
+                }
+                let paste = tokens.get(next).is_some_and(|t| t.kind == T::HashHash);
+                if paste {
+                    next += 1;
+                    while tokens.get(next).is_some_and(|t| t.kind == T::Whitespace) {
+                        next += 1;
+                    }
+                }
+                if tokens.get(next).is_some_and(|t| {
+                    t.kind.is_identifier() && t.identifier_id(self.context) == va_name
+                }) {
+                    if paste {
+                        self.context.report_extension(
+                            Feature::GnuVaArgs,
+                            ", ## __VA_ARGS__",
+                            token.source_vectors,
+                        );
+                        if !argument.omitted {
+                            output.push(token);
+                            output.push(tokens[next]);
+                        }
+                        index = next + 1;
+                        continue;
+                    }
+                    if empty && self.context.configuration.accepts(Feature::MsVaArgs) {
+                        self.context.report_extension(
+                            Feature::MsVaArgs,
+                            "empty __VA_ARGS__ comma elision",
+                            token.source_vectors,
+                        );
+                        index = next + 1;
+                        continue;
+                    }
+                }
+            }
+            output.push(token);
+            index += 1;
+        }
+        TokenSource::replay(
+            self.context,
+            self.scratch,
+            &[&output],
+            self.context
+                .get_source_vectors(invocation.source_vectors)
+                .first()
+                .cloned()
+                .unwrap_or_default(),
+        )
+    }
+
     /// Capture an invocation whose opening, arguments, or closing delimiter
     /// can come from different replacement/argument/source frames.
     ///
@@ -417,6 +708,25 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         } else {
             group_ends.len()
         };
+        if count != 0
+            && !(variadic
+                && names.is_empty()
+                && empty
+                && self.context.configuration.gnu_extensions())
+        {
+            let mut start = 0;
+            for &end in &group_ends {
+                if grouped[start..end].iter().all(|t| {
+                    matches!(
+                        t.kind,
+                        PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
+                    )
+                }) {
+                    self.report_empty_macro_argument(invocation.source_vectors);
+                }
+                start = end;
+            }
+        }
         if (!variadic && count != names.len()) || (variadic && count < names.len()) {
             self.context.preprocessor_error(PreprocessorError {
                 error_type:
@@ -430,7 +740,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             // C99 §6.10.3p4 requires an argument for `...`; omitting it is
             // an extension (§4p6), which the extension policy governs.
             let policy = self.context.configuration.extension_policy();
-            if policy != crate::configuration::ExtensionPolicy::Allow {
+            if policy != crate::configuration::ExtensionPolicy::Allow
+                && self.context.configuration.standard() < crate::configuration::CStandard::C23
+                && !self.context.configuration.accepts(Feature::MsVaArgs)
+            {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::MissingVariadicArgument(policy),
                     source_vectors: invocation.source_vectors,
@@ -467,6 +780,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             );
             arguments.push(FunctionLikeMacroArgument {
                 expanded: self.scratch.alloc(OnceCell::new()),
+                omitted: i >= group_ends.len()
+                    || (variadic
+                        && names.is_empty()
+                        && empty
+                        && self.context.configuration.gnu_extensions()),
                 name,
                 tokenizer,
                 enclosing_arguments: None,
@@ -805,8 +1123,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 spelling.push_str(contents.strip_suffix('\0').unwrap_or(contents)),
             | PreprocessorTokenType::GeneratedString => spell_string_literal(contents, escaped),
             | PreprocessorTokenType::WideGeneratedString => {
-                escaped('L');
-                spell_string_literal(&contents[1..], escaped);
+                let prefix_length = if contents.starts_with("u8") { 2 } else { 1 };
+                contents[..prefix_length].chars().for_each(&mut escaped);
+                spell_string_literal(&contents[prefix_length..], escaped);
             },
             | PreprocessorTokenType::String | PreprocessorTokenType::Character =>
                 contents.chars().for_each(escaped),
@@ -1061,6 +1380,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             }
         }
         let mut token = self.merge_tokens_impl(lhs, rhs)?;
+        if !self.context.configuration.is_native(Feature::Digraphs)
+            && let spelling @ ("<:" | ":>" | "<%" | "%>" | "%:" | "%:%:") =
+                self.context.string_cache.at(token.contents)
+        {
+            let spelling = match spelling {
+                | "<:" => "<:",
+                | ":>" => ":>",
+                | "<%" => "<%",
+                | "%>" => "%>",
+                | "%:" => "%:",
+                | _ => "%:%:",
+            };
+            self.context
+                .report_extension(Feature::Digraphs, spelling, token.source_vectors);
+        }
         if token.kind == PreprocessorTokenType::Identifier
             && self.context.string_cache.at(token.contents).contains('\\')
         {
@@ -1079,6 +1413,20 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         lhs: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
+        if !self.context.configuration.accepts(Feature::Digraphs)
+            && matches!(
+                (lhs.kind, rhs.kind),
+                (
+                    PreprocessorTokenType::LessThan,
+                    PreprocessorTokenType::Colon | PreprocessorTokenType::Percent
+                ) | (
+                    PreprocessorTokenType::Colon | PreprocessorTokenType::Percent,
+                    PreprocessorTokenType::GreaterThan
+                ) | (PreprocessorTokenType::Percent, PreprocessorTokenType::Colon)
+            )
+        {
+            return Some(self.create_merge_error(lhs, rhs));
+        }
         match (lhs.kind, rhs.kind) {
             // C99 §6.10.3.3p3: two placemarkers give one placemarker, and a
             // placemarker with another token gives that token.
@@ -1094,7 +1442,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 let rhs_contents = self.context.string_cache.at(rhs.contents);
                 // A pp-number with `.` or an exponent sign continues no
                 // identifier.
-                if rhs_contents.contains(['.', '+', '-']) {
+                if rhs_contents.contains(['.', '+', '-', '\'']) {
                     return Some(self.create_merge_error(lhs, rhs));
                 }
                 let rhs_range = if rhs.kind == PreprocessorTokenType::Number {
@@ -1128,9 +1476,26 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             ) => {
                 // C99 §6.10.3.3p3: `L ## "x"` forms the wide literal `L"x"`,
                 // so the right-hand side must still be a narrow literal.
-                if self.context.string_cache.at(lhs.contents) == "L"
+                let prefix = self.context.string_cache.at(lhs.contents);
+                let enabled = prefix == "L"
+                    || (matches!(prefix, "u" | "U" | "u8")
+                        && self
+                            .context
+                            .configuration
+                            .accepts(Feature::UnicodeLiteralPrefixes)
+                        && (prefix != "u8"
+                            || rhs.kind != PreprocessorTokenType::Character
+                            || self
+                                .context
+                                .configuration
+                                .accepts(Feature::Utf8CharacterConstants)));
+                if enabled
                     && (rhs.kind == PreprocessorTokenType::GeneratedString
-                        || !self.context.string_cache.at(rhs.contents).starts_with('L'))
+                        || self
+                            .context
+                            .string_cache
+                            .at(rhs.contents)
+                            .starts_with(['"', '\'']))
                 {
                     Some(self.merge_token_contents(
                         lhs,

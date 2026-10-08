@@ -280,7 +280,7 @@ mod tests {
     /// Compiles `path`, counting the global allocations of `measured` steps.
     fn compile(path: &Path, measured: &[CompileStep], capture: bool) -> Vec<(CompileStep, Totals)> {
         let mut totals = Vec::new();
-        bcc_rust::compile_file_measured(path, &mut io::sink(), |step, run| {
+        compile_fixture(path, &mut io::sink(), |step, run| {
             if measured.contains(&step) {
                 totals.push((step, count(capture, run)));
             } else {
@@ -289,6 +289,24 @@ mod tests {
         })
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         totals
+    }
+
+    fn compile_fixture(
+        path: &Path,
+        out: &mut dyn io::Write,
+        measure: impl FnMut(CompileStep, &mut dyn FnMut()),
+    ) -> io::Result<()> {
+        match fs::read_to_string(path.with_extension("args")) {
+            | Ok(arguments) => bcc_rust::compile_file_with_arguments_measured(
+                path,
+                &arguments.split_whitespace().collect::<Vec<_>>(),
+                out,
+                measure,
+            ),
+            | Err(error) if error.kind() == io::ErrorKind::NotFound =>
+                bcc_rust::compile_file_measured(path, out, measure),
+            | Err(error) => Err(error),
+        }
     }
 
     /// The counter sees an allocation made through the global allocator, so a
@@ -308,7 +326,7 @@ mod tests {
             // Room for the whole report, so writing it does not allocate.
             let mut stderr = Vec::with_capacity(1 << 20);
             let mut totals = (0, 0);
-            bcc_rust::compile_file_measured(&fixture, &mut stderr, |step, run| {
+            compile_fixture(&fixture, &mut stderr, |step, run| {
                 if step == CompileStep::Report {
                     totals = count(sites_requested(), run);
                 } else {

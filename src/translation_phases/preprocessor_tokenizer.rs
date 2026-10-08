@@ -346,6 +346,7 @@ pub(crate) enum PreprocessorTokenType {
     // Stringification: C99 §6.10.3.2p2, p. 153; PDF p. 165.
     // Expanded from hash operator
     GeneratedString,
+    // A generated string with an L, u, U or u8 prefix formed by pasting.
     WideGeneratedString,
 
     // Placemarkers are internal to phase 4: C99 §6.10.3.3p2,

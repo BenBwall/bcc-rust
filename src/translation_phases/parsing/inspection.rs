@@ -1327,6 +1327,13 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 },
                 | ExpressionType::StringLiteral(string) => {
                     return match string {
+                        | StringTokenType::EncodedString(contents, encoding) => write!(
+                            f,
+                            "{}-string {}{}",
+                            encoding.type_name(),
+                            encoding.prefix(),
+                            context.literal_spelling_in(scratch, scratch, *contents, false)
+                        ),
                         | StringTokenType::String(contents) => write!(
                             f,
                             "string {}",
@@ -1679,6 +1686,15 @@ fn constant_label(constant: &Constant) -> impl Display {
     fmt::from_fn(move |f| match *constant {
         | Constant::Integer(integer) => {
             let (value, type_name) = match integer {
+                | IntegerTokenType::BitInt(value, width, unsigned) =>
+                    return write!(
+                        f,
+                        "{} ({}_BitInt({width}))",
+                        value.get(),
+                        if unsigned { "unsigned " } else { "" }
+                    ),
+                | IntegerTokenType::Imaginary(value, component) =>
+                    (i128::from(value.get()), component.type_name()),
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),
                 | IntegerTokenType::Long(value) => (i128::from(value.get()), "long"),
                 | IntegerTokenType::LongLong(value) => (i128::from(value.get()), "long long"),
@@ -1691,6 +1707,8 @@ fn constant_label(constant: &Constant) -> impl Display {
             write!(f, "{value} ({type_name})")
         },
         | Constant::Float(float) => write!(f, "{float} ({})", float.type_name()),
+        | Constant::Char(CharacterTokenType::EncodedChar(c, encoding)) =>
+            write!(f, "{c} ({})", encoding.type_name()),
         | Constant::Char(CharacterTokenType::Char(c)) => {
             write_c_quoted(f, "", '\'', c.encode_utf8(&mut [0; 4]))?;
             f.write_str(" (int)")

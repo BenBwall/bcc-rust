@@ -1,0 +1,710 @@
+//! Later-standard and dialect preprocessing operations, translation phase 4.
+//!
+//! C99: §5.1.1.2p1 item 4, p. 10; PDF p. 22; extensions under §4p6,
+//! p. 7; PDF p. 19. C23: conditional queries §6.10.2, pp. 166-169;
+//! PDF pp. 179-182; resource inclusion §6.10.4, pp. 171-176;
+//! PDF pp. 184-189. Resource elements are 8-bit unsigned bytes.
+
+use std::{
+    fmt::Write,
+    io::Read,
+    path::Path,
+};
+
+use super::{
+    Expander,
+    driver::{
+        TokenizerFrame,
+        TokenizerFrameType,
+    },
+    errors::{
+        PreprocessorError,
+        PreprocessorErrorType,
+    },
+};
+use crate::{
+    configuration::Feature,
+    translation_phases::{
+        SourceVector,
+        SourceVectors,
+        TranslationPhase,
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType as T,
+            TokenSource,
+        },
+    },
+    util::bump::{
+        ArenaString,
+        ArenaVec,
+    },
+};
+
+pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
+    ("__COUNTER__", Feature::Counter),
+    ("__has_include", Feature::HasInclude),
+    ("__has_embed", Feature::HasEmbed),
+    ("__has_c_attribute", Feature::HasCAttribute),
+    ("__has_attribute", Feature::HasAttribute),
+    ("__has_builtin", Feature::HasBuiltin),
+    ("__pragma", Feature::MsPragma),
+    ("__STDC_EMBED_NOT_FOUND__", Feature::Embed),
+    ("__STDC_EMBED_FOUND__", Feature::Embed),
+    ("__STDC_EMBED_EMPTY__", Feature::Embed),
+];
+
+impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
+    /// C99 §6.10.3p4 permits empty arguments, unlike C89 §3.8.3.
+    pub(super) fn report_empty_macro_argument(&mut self, source: SourceVectors) {
+        self.context
+            .report_extension(Feature::EmptyMacroArguments, "empty macro argument", source);
+    }
+
+    /// Reports malformed later-standard operations with their original
+    /// provenance. C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn language_error(&mut self, message: &'static str, source_vectors: SourceVectors) {
+        self.context.preprocessor_error(PreprocessorError {
+            error_type: PreprocessorErrorType::LanguageConstraint(message),
+            source_vectors,
+        });
+    }
+
+    fn integer_pp_token(&mut self, value: u64, source_vectors: SourceVectors) -> PreprocessorToken {
+        let mut spelling = ArenaString::new_in(self.scratch);
+        _ = write!(spelling, "{value}\0");
+        PreprocessorToken {
+            kind: T::Number,
+            contents: self.context.string_cache.intern(&*spelling),
+            source_vectors,
+        }
+    }
+
+    /// Collects an operator argument with an explicit delimiter counter.
+    /// C99: preprocessing-token nesting, §6.10.3p11, p. 153; PDF p. 165.
+    fn query_arguments(
+        &mut self,
+        operator: PreprocessorToken,
+    ) -> Option<ArenaVec<'x, PreprocessorToken>> {
+        let open = loop {
+            match self.next_preprocessor_token::<false>() {
+                | Some(token) if token.kind == T::Whitespace => {},
+                | token => break token,
+            }
+        };
+        let Some(open) = open else {
+            self.language_error(
+                "expected '(' after preprocessing operator",
+                operator.source_vectors,
+            );
+            return None;
+        };
+        if open.kind != T::OpeningParenthesis {
+            self.language_error(
+                "expected '(' after preprocessing operator",
+                open.source_vectors,
+            );
+            let tokenizer = TokenSource::replay(
+                self.context,
+                self.scratch,
+                &[&[open]],
+                SourceVector::default(),
+            );
+            self.push_tokenizer_frame(TokenizerFrame {
+                frame_type: TokenizerFrameType::Rescan,
+                tokenizer,
+            });
+            return None;
+        }
+        let mut tokens = ArenaVec::new_in(self.scratch);
+        if matches!(
+            self.context.string_cache.at(operator.contents),
+            "__has_include" | "__has_embed"
+        ) {
+            self.collect_written_resource(&mut tokens);
+        }
+        if tokens.last().is_some_and(|t| t.kind == T::Newline) {
+            self.language_error("unterminated resource query", operator.source_vectors);
+            return None;
+        }
+        let resource_query = matches!(
+            self.context.string_cache.at(operator.contents),
+            "__has_include" | "__has_embed"
+        );
+        let mut resource_started = tokens.iter().any(|t| t.kind != T::Whitespace);
+        let mut in_header = false;
+        let mut depth = 1usize;
+        while let Some(token) = self.next_preprocessor_token::<false>() {
+            if resource_query && !resource_started && token.kind != T::Whitespace {
+                resource_started = true;
+                in_header = self
+                    .context
+                    .string_cache
+                    .at(token.contents)
+                    .starts_with('<');
+            }
+            if in_header && token.kind != T::Newline {
+                in_header = !self.context.string_cache.at(token.contents).contains('>');
+                tokens.push(token);
+                continue;
+            }
+            match token.kind {
+                | T::OpeningParenthesis => depth += 1,
+                | T::ClosingParenthesis => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(tokens);
+                    }
+                },
+                | T::Newline => {
+                    self.language_error(
+                        "unterminated preprocessing operator",
+                        operator.source_vectors,
+                    );
+                    return None;
+                },
+                | _ => {},
+            }
+            tokens.push(token);
+            if token.kind == T::Newline {
+                self.last_was_newline = true;
+                self.current_is_newline = true;
+            }
+        }
+        self.language_error(
+            "unterminated preprocessing operator",
+            operator.source_vectors,
+        );
+        None
+    }
+
+    /// A written header name is not macro-replaced inside its delimiters.
+    /// C99: §6.10.2p2-4, pp. 149-150; PDF pp. 161-162.
+    fn collect_written_resource(&mut self, tokens: &mut ArenaVec<'x, PreprocessorToken>) {
+        let position = self.position();
+        let ignored = self.context.ignore_tokenizer_errors();
+        self.context.set_ignore_tokenizer_errors(true);
+        let first = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+        self.context.set_ignore_tokenizer_errors(ignored);
+        self.set_position(position);
+        let Some(first) = first.filter(|t| {
+            t.kind == T::String || self.context.string_cache.at(t.contents).starts_with('<')
+        }) else {
+            return;
+        };
+        self.context.set_ignore_tokenizer_errors(true);
+        while let Some(token) = self.tokenizer.next_item(self.context) {
+            tokens.push(token);
+            if token.kind == T::Newline
+                || (first.kind == T::String && token.kind == T::String)
+                || self.context.string_cache.at(token.contents).contains('>')
+            {
+                break;
+            }
+        }
+        self.context.set_ignore_tokenizer_errors(ignored);
+    }
+
+    /// Reads the macro-expanded header operand common to queries and embedding.
+    /// C23: §6.10.2p7, pp. 166-167; PDF pp. 179-180.
+    fn resource_operand(
+        &mut self,
+        tokens: &[PreprocessorToken],
+        source: SourceVectors,
+    ) -> Option<(&'x str, bool, usize)> {
+        let mut index = 0;
+        while tokens.get(index).is_some_and(|t| t.kind == T::Whitespace) {
+            index += 1;
+        }
+        let Some(&first) = tokens.get(index) else {
+            self.language_error("expected a quoted or angle-bracket resource name", source);
+            return None;
+        };
+        let spelling = self.context.string_cache.at(first.contents);
+        let mut name = ArenaString::new_in(self.scratch);
+        if let Some(rest) = spelling.strip_prefix('<') {
+            name.push_str(rest);
+            index += 1;
+            while let Some(token) = tokens.get(index) {
+                index += 1;
+                let spelling = self.context.string_cache.at(token.contents);
+                if let Some(end) = spelling.find('>') {
+                    if end + 1 != spelling.len() {
+                        self.language_error(
+                            "extra tokens after resource header name",
+                            token.source_vectors,
+                        );
+                        return None;
+                    }
+                    name.push_str(&spelling[..end]);
+                    if let ([open], [close]) = (
+                        self.context.get_source_vectors(first.source_vectors),
+                        self.context.get_source_vectors(token.source_vectors),
+                    ) && open.source_file_index == close.source_file_index
+                        && open.index < close.index
+                        && let Some(text) = self.context.source_text(open.source_file_index)
+                        && text.as_bytes().get(open.index as usize) == Some(&b'<')
+                        && let Some(closing) =
+                            text.get(close.index as usize..(close.index + close.length) as usize)
+                        && let Some(offset) = closing.find('>')
+                    {
+                        name.clear();
+                        for c in
+                            crate::translation_phases::preprocessor_tokenizer::logical_characters(
+                                self.scratch,
+                                text,
+                                open.index as usize + 1..close.index as usize + offset,
+                                self.context.configuration.accepts(Feature::Trigraphs),
+                            )
+                        {
+                            name.push(c.character);
+                        }
+                    }
+                    if name.is_empty() {
+                        self.language_error("resource name must not be empty", source);
+                        return None;
+                    }
+                    return Some((name.into_str(), true, index));
+                }
+                name.push_str(spelling.trim_end_matches('\0'));
+            }
+        } else if first.kind == T::GeneratedString {
+            if !spelling.is_empty() {
+                name.push_str(spelling);
+                return Some((name.into_str(), false, index + 1));
+            }
+        } else if first.kind == T::String && spelling.starts_with('"') {
+            if let [location] = self.context.get_source_vectors(first.source_vectors)
+                && let Some(text) = self.context.source_text(location.source_file_index)
+                && text.as_bytes().get(location.index as usize) == Some(&b'"')
+            {
+                let characters =
+                    crate::translation_phases::preprocessor_tokenizer::logical_characters(
+                        self.scratch,
+                        text,
+                        location.index as usize + 1..(location.index + location.length) as usize,
+                        self.context.configuration.accepts(Feature::Trigraphs),
+                    );
+                let Some(end) = characters.iter().position(|c| c.character == '"') else {
+                    self.language_error("unterminated quoted resource name", source);
+                    return None;
+                };
+                if end + 1 != characters.len() {
+                    self.language_error("extra tokens after resource header name", source);
+                    return None;
+                }
+                for c in &characters[..end] {
+                    name.push(c.character);
+                }
+            } else if spelling.ends_with('"') && spelling.len() > 2 {
+                name.push_str(&spelling[1..spelling.len() - 1]);
+            }
+            if !name.is_empty() {
+                return Some((name.into_str(), false, index + 1));
+            }
+        }
+        self.language_error("expected a quoted or angle-bracket resource name", source);
+        None
+    }
+
+    /// Resolves a resource without diagnostics or pragma-once filtering.
+    /// C99: header search is implementation-defined, §6.10.2p2-3,
+    /// pp. 149-150; PDF pp. 161-162; C23 queries also inspect empty files.
+    fn find_resource(&mut self, name: &str, system: bool) -> Option<u32> {
+        let path = Path::new(name);
+        if path.is_absolute() {
+            return path
+                .is_file()
+                .then(|| self.context.intern_source_file(path));
+        }
+        for directory in self
+            .context
+            .include_search_directories(self.physical_source_file_index(), system)
+        {
+            let mut buffer = ArenaString::new_in(self.scratch);
+            if !directory.as_os_str().is_empty() {
+                _ = write!(
+                    buffer,
+                    "{}{sep}",
+                    directory.display(),
+                    sep = std::path::MAIN_SEPARATOR
+                );
+            }
+            buffer.push_str(name);
+            let candidate = Path::new(&*buffer);
+            if candidate.is_file() {
+                return Some(self.context.intern_source_file(candidate));
+            }
+        }
+        None
+    }
+
+    /// Evaluates query operators and consumes the MSVC token-form pragma
+    /// operator. C23: §6.10.2p6-11, pp. 165-167; PDF pp. 178-180.
+    pub(super) fn language_builtin(
+        &mut self,
+        token: PreprocessorToken,
+    ) -> Option<PreprocessorToken> {
+        // Invalid nested query operands must not exhaust the native call stack.
+        if self.state.query_depth == 64 {
+            self.language_error(
+                "preprocessing query nesting limit exceeded",
+                token.source_vectors,
+            );
+            return Some(self.integer_pp_token(0, token.source_vectors));
+        }
+        self.state.query_depth += 1;
+        let result = self.language_builtin_inner(token);
+        self.state.query_depth -= 1;
+        result
+    }
+
+    fn language_builtin_inner(&mut self, token: PreprocessorToken) -> Option<PreprocessorToken> {
+        let name = self.context.string_cache.at(token.contents);
+        let &(name, feature) = LANGUAGE_BUILTINS
+            .iter()
+            .find(|(spelling, _)| *spelling == name)
+            .expect("registered language builtin");
+        self.context
+            .report_extension(feature, name, token.source_vectors);
+        let name = self.context.string_cache.at(token.contents);
+        // C23 §6.10.2p11, p. 167; PDF p. 180: these names are
+        // conditional-inclusion operators, not ordinary expression macros.
+        if matches!(name, "__has_include" | "__has_embed" | "__has_c_attribute")
+            && !self.state.conditional_queries
+        {
+            self.language_error(
+                "resource and C attribute queries require a preprocessing conditional expression",
+                token.source_vectors,
+            );
+            drop(self.query_arguments(token));
+            return Some(self.integer_pp_token(0, token.source_vectors));
+        }
+        let value = match name {
+            | "__COUNTER__" => {
+                let value = self.state.counter;
+                self.state.counter = value.wrapping_add(1);
+                value
+            },
+            | "__STDC_EMBED_NOT_FOUND__" => 0,
+            | "__STDC_EMBED_FOUND__" => 1,
+            | "__STDC_EMBED_EMPTY__" => 2,
+            | _ => {
+                let tokens = self.query_arguments(token)?.leak();
+                let name = self.context.string_cache.at(token.contents);
+                if name == "__pragma" {
+                    let newline = PreprocessorToken {
+                        kind:           T::Newline,
+                        contents:       self.context.string_cache.intern("\n"),
+                        source_vectors: token.source_vectors,
+                    };
+                    let old = std::mem::replace(
+                        &mut self.tokenizer,
+                        TokenSource::replay(
+                            self.context,
+                            self.scratch,
+                            &[tokens, &[newline]],
+                            SourceVector::default(),
+                        ),
+                    );
+                    _ = self.parse_pragma_directive(token);
+                    self.tokenizer = old;
+                    return None;
+                }
+                if name == "__has_include" || name == "__has_embed" {
+                    let embed = name == "__has_embed";
+                    let (name, system, end) =
+                        self.resource_operand(tokens, token.source_vectors)?;
+                    let params =
+                        self.embed_parameters(&tokens[end..], token.source_vectors, embed, true)?;
+                    if !params.supported {
+                        return Some(self.integer_pp_token(0, token.source_vectors));
+                    }
+                    if let Some(path) = self.find_resource(name, system) {
+                        if embed
+                            && (params.limit == Some(0)
+                                || std::fs::metadata(self.context.get_source_file(path))
+                                    .is_ok_and(|m| m.len() == 0))
+                        {
+                            2
+                        } else {
+                            1
+                        }
+                    } else {
+                        0
+                    }
+                } else {
+                    let mut operand = ArenaString::new_in(self.scratch);
+                    for t in tokens.iter().filter(|t| t.kind != T::Whitespace) {
+                        let spelling = self.context.string_cache.at(t.contents);
+                        let spelling = if name != "__has_builtin" && t.kind.is_identifier() {
+                            spelling
+                                .strip_prefix("__")
+                                .and_then(|s| s.strip_suffix("__"))
+                                .unwrap_or(spelling)
+                        } else {
+                            spelling
+                        };
+                        operand.push_str(spelling);
+                    }
+                    let mut significant = ArenaVec::new_in(self.scratch);
+                    significant.extend(tokens.iter().filter(|t| t.kind != T::Whitespace).copied());
+                    if !matches!(&significant[..], [t] if t.kind.is_identifier())
+                        && !matches!(&significant[..], [a,b,c,d] if name != "__has_builtin" && a.kind.is_identifier() && b.kind == T::Colon && c.kind == T::Colon && d.kind.is_identifier())
+                    {
+                        self.language_error(
+                            "expected an identifier in preprocessing feature query",
+                            token.source_vectors,
+                        );
+                        return Some(self.integer_pp_token(0, token.source_vectors));
+                    }
+                    match (name, &*operand) {
+                        | (
+                            "__has_c_attribute",
+                            "deprecated" | "fallthrough" | "nodiscard" | "maybe_unused"
+                            | "noreturn" | "unsequenced" | "reproducible",
+                        ) => 202_311,
+                        | (
+                            "__has_attribute",
+                            "unused" | "deprecated" | "aligned" | "packed" | "noreturn" | "weak"
+                            | "section" | "visibility" | "format" | "always_inline" | "noinline",
+                        )
+                        | (
+                            "__has_builtin",
+                            "__builtin_va_arg"
+                            | "__builtin_offsetof"
+                            | "__builtin_types_compatible_p"
+                            | "__builtin_choose_expr",
+                        ) => 1,
+                        | _ => 0,
+                    }
+                }
+            },
+        };
+        Some(self.integer_pp_token(value, token.source_vectors))
+    }
+
+    fn embed_parameters(
+        &mut self,
+        tokens: &'x [PreprocessorToken],
+        source: SourceVectors,
+        allowed: bool,
+        query: bool,
+    ) -> Option<EmbedParameters<'x>> {
+        let mut result = EmbedParameters {
+            limit:     None,
+            prefix:    &[],
+            suffix:    &[],
+            if_empty:  &[],
+            supported: true,
+        };
+        let mut index = 0;
+        let mut seen = 0u8;
+        while index < tokens.len() {
+            if tokens[index].kind == T::Whitespace {
+                index += 1;
+                continue;
+            }
+            if !allowed {
+                self.language_error(
+                    "extra tokens after header query",
+                    tokens[index].source_vectors,
+                );
+                return None;
+            }
+            let name = self.context.string_cache.at(tokens[index].contents);
+            let bit = match name {
+                | "limit" | "__limit__" => 1,
+                | "prefix" | "__prefix__" => 2,
+                | "suffix" | "__suffix__" => 4,
+                | "if_empty" | "__if_empty__" => 8,
+                | _ =>
+                    if query {
+                        result.supported = false;
+                        0
+                    } else {
+                        self.language_error(
+                            "unsupported embed parameter",
+                            tokens[index].source_vectors,
+                        );
+                        return None;
+                    },
+            };
+            if seen & bit != 0 {
+                self.language_error("duplicate embed parameter", tokens[index].source_vectors);
+                return None;
+            }
+            seen |= bit;
+            index += 1;
+            if bit == 0 {
+                while tokens.get(index).is_some_and(|t| {
+                    t.kind == T::Whitespace || t.kind == T::Colon || t.kind.is_identifier()
+                }) {
+                    index += 1;
+                }
+            }
+            while tokens.get(index).is_some_and(|t| t.kind == T::Whitespace) {
+                index += 1;
+            }
+            if tokens
+                .get(index)
+                .is_none_or(|t| t.kind != T::OpeningParenthesis)
+            {
+                self.language_error("expected '(' after embed parameter", source);
+                return None;
+            }
+            index += 1;
+            let start = index;
+            let mut depth = 1usize;
+            while index < tokens.len() {
+                match tokens[index].kind {
+                    | T::OpeningParenthesis => depth += 1,
+                    | T::ClosingParenthesis => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    },
+                    | _ => {},
+                }
+                index += 1;
+            }
+            if depth != 0 {
+                self.language_error("unterminated embed parameter", source);
+                return None;
+            }
+            let body = &tokens[start..index];
+            index += 1;
+            match bit {
+                | 1 => {
+                    if body.iter().any(|t| t.kind == T::Defined) {
+                        self.language_error("defined is not permitted in an embed limit", source);
+                        return None;
+                    }
+                    let end = PreprocessorToken {
+                        kind:           T::Newline,
+                        contents:       self.context.string_cache.intern("\n"),
+                        source_vectors: source,
+                    };
+                    let old = std::mem::replace(
+                        &mut self.tokenizer,
+                        TokenSource::replay(
+                            self.context,
+                            self.scratch,
+                            &[body, &[end]],
+                            SourceVector::default(),
+                        ),
+                    );
+                    let value = self.eval_resource_limit();
+                    self.tokenizer = old;
+                    result.limit = value;
+                    _ = value?;
+                },
+                | 2 => result.prefix = body,
+                | 4 => result.suffix = body,
+                | 8 => result.if_empty = body,
+                | _ => {},
+            }
+        }
+        Some(result)
+    }
+
+    /// Replaces resource inclusion with ordinary integer preprocessing tokens.
+    /// C23: §6.10.4.1p7, p. 171; PDF p. 184, and §6.10.4.2p4,
+    /// p. 174; PDF p. 187.
+    pub(super) fn parse_embed_directive(&mut self, directive: PreprocessorToken) {
+        self.context
+            .report_extension(Feature::Embed, "#embed", directive.source_vectors);
+        let mut tokens = ArenaVec::new_in(self.scratch);
+        self.collect_written_resource(&mut tokens);
+        while tokens.last().is_none_or(|t| t.kind != T::Newline)
+            && let Some(token) = self.next_preprocessor_token::<false>()
+        {
+            if token.kind == T::Newline {
+                break;
+            }
+            tokens.push(token);
+        }
+        let tokens = tokens.leak();
+        let Some((name, system, end)) = self.resource_operand(tokens, directive.source_vectors)
+        else {
+            return;
+        };
+        let Some(params) =
+            self.embed_parameters(&tokens[end..], directive.source_vectors, true, false)
+        else {
+            return;
+        };
+        let Some(path) = self.find_resource(name, system) else {
+            self.language_error("embedded resource not found", directive.source_vectors);
+            return;
+        };
+        let Ok(mut file) = std::fs::File::open(self.context.get_source_file(path)) else {
+            self.language_error(
+                "embedded resource is inaccessible",
+                directive.source_vectors,
+            );
+            return;
+        };
+        let Ok(metadata) = file.metadata() else {
+            self.language_error(
+                "cannot determine embedded resource size",
+                directive.source_vectors,
+            );
+            return;
+        };
+        let length = metadata.len().min(params.limit.unwrap_or(u64::MAX));
+        let Ok(length) = usize::try_from(length) else {
+            self.language_error("embedded resource is too large", directive.source_vectors);
+            return;
+        };
+        let bytes = self
+            .scratch
+            .alloc_slice_fill_iter(std::iter::repeat_n(0u8, length));
+        if file.read_exact(bytes).is_err() {
+            self.language_error("cannot read embedded resource", directive.source_vectors);
+            return;
+        }
+        let mut output = ArenaVec::new_in(self.scratch);
+        if bytes.is_empty() {
+            output.extend_from_slice(params.if_empty);
+        } else {
+            output.extend_from_slice(params.prefix);
+            for (index, byte) in bytes.iter().enumerate() {
+                if index != 0 {
+                    output.push(PreprocessorToken {
+                        kind:           T::Comma,
+                        contents:       self.context.string_cache.intern(","),
+                        source_vectors: directive.source_vectors,
+                    });
+                }
+                output.push(self.integer_pp_token(u64::from(*byte), directive.source_vectors));
+            }
+            output.extend_from_slice(params.suffix);
+        }
+        output.push(PreprocessorToken {
+            kind:           T::Newline,
+            contents:       self.context.string_cache.intern("\n"),
+            source_vectors: directive.source_vectors,
+        });
+        let tokenizer = TokenSource::replay(
+            self.context,
+            self.scratch,
+            &[&output],
+            SourceVector::default(),
+        );
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::Rescan,
+            tokenizer,
+        });
+        self.last_was_newline = true;
+        self.current_is_newline = true;
+    }
+}
+
+struct EmbedParameters<'x> {
+    supported: bool,
+    limit:     Option<u64>,
+    prefix:    &'x [PreprocessorToken],
+    suffix:    &'x [PreprocessorToken],
+    if_empty:  &'x [PreprocessorToken],
+}

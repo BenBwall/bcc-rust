@@ -1423,6 +1423,51 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         &mut self,
         on_no_expression_error: PreprocessorErrorType<'tu>,
     ) -> bool {
+        let conditional_queries = replace(&mut self.state.conditional_queries, true);
+        let result = self
+            .eval_preprocessor_value(on_no_expression_error)
+            .is_none_or(|value| value.as_signed() != 0);
+        self.state.conditional_queries = conditional_queries;
+        result
+    }
+
+    /// C23: #embed limit uses an integer constant expression (§6.10.4.2p1).
+    pub(super) fn eval_resource_limit(&mut self) -> Option<u64> {
+        let saved_parser = replace(
+            &mut self.expression_parser,
+            PreprocessorExpressionParser::new(self.state.arena),
+        );
+        let newlines = (self.last_was_newline, self.current_is_newline);
+        let before = self.context.pending_error_count();
+        let result = self.eval_preprocessor_value(PreprocessorErrorType::LanguageConstraint(
+            "expected embed limit expression",
+        ));
+        self.expression_parser = saved_parser;
+        (self.last_was_newline, self.current_is_newline) = newlines;
+        let mut diagnostics = ArenaVec::new_in(self.scratch);
+        diagnostics.extend(self.context.split_off_pending_errors(before));
+        let failed = diagnostics.iter().any(|error| {
+            crate::translation_phases::GetSeverity::severity(error)
+                == crate::translation_phases::ErrorSeverity::Error
+        });
+        self.context.append_pending_errors(diagnostics);
+        if failed {
+            return None;
+        }
+        match result? {
+            | PreprocessorExpressionOperand::Signed(value) if value < 0 => {
+                let source = self.current_location();
+                self.language_error("embed limit must be nonnegative", source);
+                None
+            },
+            | value => Some(value.as_unsigned()),
+        }
+    }
+
+    fn eval_preprocessor_value(
+        &mut self,
+        on_no_expression_error: PreprocessorErrorType<'tu>,
+    ) -> Option<PreprocessorExpressionOperand> {
         const UNARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Unary;
         const BINARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Binary;
         self.expression_parser.reset();
@@ -1637,10 +1682,13 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             | TokenType::Integer(v) => match v {
                                 | IntegerTokenType::Int(i) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(i64::from(i))),
                                 | IntegerTokenType::Long(l) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(l.get())),
+                                | IntegerTokenType::Imaginary(_, _) => { self.language_error("imaginary constants are not permitted in preprocessing expressions", token.source_vectors); self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0)); },
+                                | IntegerTokenType::BitInt(ll, _, false) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(ll.get() as i64)),
+
                                 | IntegerTokenType::LongLong(ll) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(ll.get())),
                                 | IntegerTokenType::UnsignedInt(ui) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(u64::from(ui))),
                                 | IntegerTokenType::UnsignedLong(ul) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ul.get())),
-                                | IntegerTokenType::UnsignedLongLong(ull) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ull.get())),
+                                | IntegerTokenType::UnsignedLongLong(ull) | IntegerTokenType::BitInt(ull, _, true) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ull.get())),
                             },
                             _ => unreachable!("Compiler bug: parse_number should return a number token."),
                         }
@@ -1723,7 +1771,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         source_vectors,
                     });
                 }
-                operand.as_signed() != 0
+                Some(operand.value)
             },
             | 0 => {
                 let source_vectors = self.current_location();
@@ -1731,7 +1779,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     error_type: on_no_expression_error,
                     source_vectors,
                 });
-                true
+                None
             },
             | _ => {
                 let source_vectors = self.current_location();
@@ -1740,7 +1788,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         PreprocessorErrorType::ExpectedBinaryOperatorInPreprocessorExpression,
                     source_vectors,
                 });
-                true
+                None
             },
         }
     }

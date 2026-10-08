@@ -27,9 +27,11 @@ use super::{
     token::{
         CharacterTokenType,
         FloatTokenType,
+        ImaginaryIntegerKind,
         IntegerSuffix,
         IntegerTokenType,
         KeywordTokenType,
+        LiteralEncoding,
         LiteralUnit,
         OperatorTokenType,
         SignedIntegerLiteralType,
@@ -40,6 +42,7 @@ use super::{
     },
 };
 use crate::{
+    configuration::Feature,
     float_parsing::{
         ParseFloatError,
         string_to_double,
@@ -239,8 +242,15 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             return first;
         };
         let mut wide = matches!(first_kind, StringTokenType::WideString(_));
+        let mut encoding = if let StringTokenType::EncodedString(_, e) = first_kind {
+            Some(e)
+        } else {
+            None
+        };
         let first_contents = match first_kind {
-            | StringTokenType::String(contents) | StringTokenType::WideString(contents) => contents,
+            | StringTokenType::String(contents)
+            | StringTokenType::WideString(contents)
+            | StringTokenType::EncodedString(contents, _) => contents,
         };
         // Most literals stand alone: fill the reused builders only after
         // adjacency.
@@ -270,7 +280,25 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                     .extend(self.context.split_off_pending_errors(existing_errors));
                 break;
             };
+            let next_encoding = if let StringTokenType::EncodedString(_, e) = next_kind {
+                Some(e)
+            } else {
+                None
+            };
+            if (encoding.is_some() && next_encoding.is_some() && encoding != next_encoding)
+                || (wide && next_encoding.is_some())
+                || (encoding.is_some() && matches!(next_kind, StringTokenType::WideString(_)))
+            {
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::LanguageConstraint(
+                        "incompatible string literal encoding prefixes",
+                    ),
+                    source_vectors: next.source_vectors,
+                });
+            }
+            encoding = encoding.or(next_encoding);
             let next_contents = match next_kind {
+                | StringTokenType::EncodedString(contents, _)
                 | StringTokenType::String(contents) => contents,
                 | StringTokenType::WideString(contents) => {
                     wide = true;
@@ -303,7 +331,9 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         };
         let contents = self.context.intern_literal(&builder.units);
         let token = Token {
-            kind:           if wide {
+            kind:           if let Some(encoding) = encoding {
+                TokenType::String(StringTokenType::EncodedString(contents, encoding))
+            } else if wide {
                 TokenType::String(StringTokenType::WideString(contents))
             } else {
                 TokenType::String(StringTokenType::String(contents))
@@ -345,7 +375,24 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             let contents = self.context.string_cache.at(token.contents);
             let mut result = 0u64;
             let mut did_overflow = false;
-            while let Some(digit) = contents.char_at(index).and_then(|c| c.to_digit(radix)) {
+            loop {
+                if contents.as_bytes().get(index) == Some(&b'\'')
+                    && self.context.configuration.accepts(Feature::DigitSeparators)
+                    && (index > start_index || (radix == 8 && start_index == 1 && index == 1))
+                    && contents
+                        .char_at(index - 1)
+                        .and_then(|c| c.to_digit(radix))
+                        .is_some()
+                    && contents
+                        .char_at(index + 1)
+                        .and_then(|c| c.to_digit(radix))
+                        .is_some()
+                {
+                    index += 1;
+                }
+                let Some(digit) = contents.char_at(index).and_then(|c| c.to_digit(radix)) else {
+                    break;
+                };
                 let (new_result, overflow) = result.overflowing_mul(u64::from(radix));
                 if overflow {
                     did_overflow = true;
@@ -360,12 +407,42 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             }
             (result, did_overflow)
         };
-        let missing_digits = radix == 16 && index == start_index;
+        let missing_digits = index == start_index && (radix != 8 || start_index == 2);
         if did_overflow {
             self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::IntegerLiteralOverflow,
                 source_vectors: token.source_vectors,
             });
+        }
+        let contents = self.context.string_cache.at(token.contents);
+        let tail = &contents[index..contents.len() - 1];
+        if self.context.configuration.accepts(Feature::BitIntSuffixes)
+            && matches!(
+                tail,
+                "wb" | "WB" | "uwb" | "Uwb" | "uWB" | "UWB" | "wbu" | "wbU" | "WBu" | "WBU"
+            )
+            && !missing_digits
+        {
+            let unsigned = tail.contains(['u', 'U']);
+            let width = (64 - result.leading_zeros()).max(1) + u32::from(!unsigned);
+            return Self::build_token(
+                token,
+                TokenType::Integer(IntegerTokenType::BitInt(
+                    Packed::new(result),
+                    u8::try_from(width).expect("64-bit magnitudes require at most 65 bits"),
+                    unsigned,
+                )),
+            );
+        }
+        if matches!(
+            tail,
+            "ll" | "LL" | "ull" | "Ull" | "uLL" | "ULL" | "llu" | "llU" | "LLu" | "LLU"
+        ) {
+            self.context.report_extension(
+                Feature::LongLong,
+                "long long integer constant",
+                token.source_vectors,
+            );
         }
         let contents = self.context.string_cache.at(token.contents);
         let suffix_type = match (
@@ -472,8 +549,8 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         )
     }
 
-    /// `0b` and `0B` binary constants are an extension (C99 §4p6);
-    /// §6.4.4.1 has none. They are accepted without a diagnostic.
+    /// Converts an enabled `0b`/`0B` constant after the mode/policy check.
+    /// Native in C23 §6.4.4.1p1; a GNU extension in earlier GNU modes.
     fn parse_binary_integer(
         &mut self,
         token: PreprocessorToken,
@@ -528,6 +605,47 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
     ) -> Token {
         let contents = self.context.string_cache.at(token.contents);
 
+        let mut normalized = ArenaString::new_in(self.scratch);
+        if contents.contains('\'') && self.context.configuration.accepts(Feature::DigitSeparators) {
+            let hex = contents.starts_with("0x") || contents.starts_with("0X");
+            for (index, byte) in contents
+                .bytes()
+                .enumerate()
+                .filter(|(_, byte)| *byte == b'\'')
+            {
+                let radix = if hex && !contents[..index].contains(['p', 'P']) {
+                    16
+                } else {
+                    10
+                };
+                if index == 0
+                    || !contents
+                        .char_at(index - 1)
+                        .is_some_and(|c| c.is_digit(radix))
+                    || !contents
+                        .char_at(index + 1)
+                        .is_some_and(|c| c.is_digit(radix))
+                {
+                    self.context.preprocessor_error(PreprocessorError {
+                        error_type:     invalid_float_literal_error,
+                        source_vectors: token.source_vectors,
+                    });
+                    return Self::build_token(
+                        token,
+                        TokenType::Float(FloatTokenType::Double(Packed::new(0.0))),
+                    );
+                }
+                _ = byte;
+            }
+            for c in contents.chars().filter(|c| *c != '\'') {
+                normalized.push(c);
+            }
+        }
+        let contents = if normalized.is_empty() {
+            contents
+        } else {
+            &normalized
+        };
         let res = match contents.char_at(contents.len() - 2) {
             | Some('f' | 'F') => string_to_float(contents).map(FloatTokenType::Float),
             | Some('l' | 'L') => string_to_long_double(contents).map(FloatTokenType::LongDouble),
@@ -595,8 +713,9 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         units: &mut ArenaVec<'_, LiteralUnit>,
     ) -> bool {
         let string = context.string_cache.at(token.contents);
-        let wide = string.starts_with('L');
-        let mut index = usize::from(wide) + 1;
+        let prefix = string.find(['"', '\'']).unwrap_or(0);
+        let wide = prefix != 0 && !string.starts_with("u8");
+        let mut index = prefix + 1;
         let quote = string.as_bytes().get(index - 1).copied();
         let end = if string.len() > index && string.as_bytes().last().copied() == quote {
             string.len() - 1
@@ -627,6 +746,52 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                     | 't' => Some(LiteralUnit::Character('\t')),
                     | 'v' => Some(LiteralUnit::Character('\x0b')),
                     | '\'' | '"' | '?' | '\\' => Some(LiteralUnit::Character(c)),
+                    | 'x' | 'o'
+                        if string.as_bytes().get(index) == Some(&b'{')
+                            && context.configuration.accepts(Feature::DelimitedEscapes) =>
+                    {
+                        index += 1;
+                        let radix = if c == 'x' { 16 } else { 8 };
+                        let mut value = Some(0u32);
+                        let mut count = 0;
+                        while index < end {
+                            let Some(digit) = string.as_bytes()[index]
+                                .is_ascii()
+                                .then(|| char::from(string.as_bytes()[index]).to_digit(radix))
+                                .flatten()
+                            else {
+                                break;
+                            };
+                            value = value
+                                .and_then(|v| v.checked_mul(radix))
+                                .and_then(|v| v.checked_add(digit));
+                            count += 1;
+                            index += 1;
+                        }
+                        if count == 0 || string.as_bytes().get(index) != Some(&b'}') {
+                            error = Some(PreprocessorErrorType::LanguageConstraint(
+                                "invalid delimited escape sequence",
+                            ));
+                            None
+                        } else {
+                            index += 1;
+                            let max = if string.starts_with('u') && !string.starts_with("u8") {
+                                65535
+                            } else if wide {
+                                u32::MAX
+                            } else {
+                                255
+                            };
+                            if let Some(value) = value.filter(|v| *v <= max) {
+                                Some(LiteralUnit::Numeric(value))
+                            } else {
+                                error = Some(PreprocessorErrorType::LanguageConstraint(
+                                    "delimited escape sequence is too large",
+                                ));
+                                None
+                            }
+                        }
+                    },
                     | 'x' | '0'..='7' => {
                         let hex = c == 'x';
                         let radix = if hex { 16 } else { 8 };
@@ -649,7 +814,16 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                         if count == 0 {
                             error = Some(PreprocessorErrorType::InvalidHexEscapeSequence);
                             None
-                        } else if let Some(value) = value.filter(|value| wide || *value <= 255) {
+                        } else if let Some(value) = value.filter(|value| {
+                            *value
+                                <= if string.starts_with('u') && !string.starts_with("u8") {
+                                    65535
+                                } else if wide {
+                                    u32::MAX
+                                } else {
+                                    255
+                                }
+                        }) {
                             Some(LiteralUnit::Numeric(value))
                         } else {
                             error = Some(if hex {
@@ -681,9 +855,13 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                                 PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
                             });
                             None
-                        } else if let Some(character) = char::from_u32(value)
-                            .filter(|_| value >= 0xA0 || matches!(value, 0x24 | 0x40 | 0x60))
-                        {
+                        } else if let Some(character) = char::from_u32(value).filter(|_| {
+                            // C23 §6.4.3p2, p. 56; PDF p. 69 permits basic
+                            // and control characters inside literals.
+                            context.configuration.standard() >= crate::configuration::CStandard::C23
+                                || value >= 0xA0
+                                || matches!(value, 0x24 | 0x40 | 0x60)
+                        }) {
                             Some(LiteralUnit::Character(character))
                         } else {
                             error = Some(if c == 'u' {
@@ -745,16 +923,112 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         representation: IntegerRepresentation,
     ) -> Token {
         let contents = self.context.string_cache.at(token.contents);
+        let spelling = contents.trim_end_matches('\0');
+        let imaginary = match spelling.as_bytes() {
+            | [.., b'i' | b'I' | b'j' | b'J'] => Some(spelling.len() - 1),
+            | [.., b'i' | b'I' | b'j' | b'J', b'f' | b'F' | b'l' | b'L'] =>
+                Some(spelling.len() - 2),
+            | _ => None,
+        };
+        if self
+            .context
+            .configuration
+            .accepts(Feature::ImaginaryConstants)
+            && let Some(index) = imaginary
+        {
+            let mut real = ArenaString::new_in(self.scratch);
+            real.push_str(&spelling[..index]);
+            real.push_str(&spelling[index + 1..]);
+            real.push('\0');
+            let real_contents = self.context.string_cache.intern(&*real);
+            self.context.report_extension(
+                Feature::ImaginaryConstants,
+                "imaginary constant",
+                token.source_vectors,
+            );
+            let real_token = self.parse_plain_number(
+                PreprocessorToken {
+                    contents: real_contents,
+                    ..token
+                },
+                representation,
+            );
+            let kind = match real_token.kind {
+                | TokenType::Float(FloatTokenType::Float(v)) =>
+                    TokenType::Float(FloatTokenType::ImaginaryFloat(v)),
+                | TokenType::Float(FloatTokenType::Double(v)) =>
+                    TokenType::Float(FloatTokenType::ImaginaryDouble(v)),
+                | TokenType::Float(FloatTokenType::LongDouble(v)) =>
+                    TokenType::Float(FloatTokenType::ImaginaryLongDouble(v)),
+                | TokenType::Integer(v) => {
+                    let component = match v {
+                        | IntegerTokenType::Int(_) => ImaginaryIntegerKind::Int,
+                        | IntegerTokenType::Long(_) => ImaginaryIntegerKind::Long,
+                        | IntegerTokenType::LongLong(_) => ImaginaryIntegerKind::LongLong,
+                        | IntegerTokenType::UnsignedInt(_) => ImaginaryIntegerKind::UnsignedInt,
+                        | IntegerTokenType::UnsignedLong(_) => ImaginaryIntegerKind::UnsignedLong,
+                        | _ => ImaginaryIntegerKind::UnsignedLongLong,
+                    };
+                    TokenType::Integer(IntegerTokenType::Imaginary(
+                        Packed::new(
+                            u64::try_from(i128::from(v))
+                                .expect("integer constant magnitudes fit u64"),
+                        ),
+                        component,
+                    ))
+                },
+                | kind => kind,
+            };
+            return Self::build_token(token, kind);
+        }
+        self.parse_plain_number(token, representation)
+    }
+
+    /// Converts the real component without recursively stripping imaginary
+    /// suffixes. C99: §6.4.4.1-2, pp. 54-58; PDF pp. 66-70.
+    fn parse_plain_number(
+        &mut self,
+        token: PreprocessorToken,
+        representation: IntegerRepresentation,
+    ) -> Token {
+        let contents = self.context.string_cache.at(token.contents);
         let is_hex = contents.starts_with("0x") || contents.starts_with("0X");
         let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
+        let prefixed_octal = contents.starts_with("0o") || contents.starts_with("0O");
+        if prefixed_octal && self.context.configuration.accepts(Feature::OctalPrefix) {
+            return self.parse_integer_radix(
+                8,
+                2,
+                PreprocessorErrorType::InvalidOctalIntegerLiteral,
+                token,
+                representation,
+            );
+        }
         let is_octal = contents.starts_with('0') && !is_hex && !is_binary;
         if is_hex {
             if contents.contains(['.', 'p', 'P']) {
+                self.context.report_extension(
+                    Feature::HexFloats,
+                    "hexadecimal floating constant",
+                    token.source_vectors,
+                );
                 self.parse_hexadecimal_float(token)
             } else {
                 self.parse_hexadecimal_integer(token, representation)
             }
         } else if is_binary {
+            if self.context.configuration.accepts(Feature::BinaryConstants) {
+                self.context.report_extension(
+                    Feature::BinaryConstants,
+                    "binary integer constant",
+                    token.source_vectors,
+                );
+            } else {
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::InvalidBinaryIntegerLiteral,
+                    source_vectors: token.source_vectors,
+                });
+            }
             self.parse_binary_integer(token, representation)
         } else if contents.contains(['.', 'e', 'E']) {
             self.parse_decimal_float(token)
@@ -773,7 +1047,9 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         _ = Self::eval_escape_sequences(self.context, token, &mut units);
         let cached_contents = self.context.intern_literal(&units);
         self.state.literal_scratch.return_units(units);
-        if self
+        if let Some(encoding) = literal_encoding(self.context.string_cache.at(token.contents)) {
+            StringTokenType::EncodedString(cached_contents, encoding)
+        } else if self
             .context
             .string_cache
             .at(token.contents)
@@ -794,7 +1070,35 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             .at(token.contents)
             .starts_with('L');
         _ = self.context.intern_literal(&units);
-        let character = Self::character_value(self.context, token, &units, wide, had_escape_error);
+        let character = if let Some(encoding) =
+            literal_encoding(self.context.string_cache.at(token.contents))
+        {
+            let value = units.first().map_or(0, |unit| match *unit {
+                | LiteralUnit::Character(c) => u32::from(c),
+                | LiteralUnit::Numeric(v) => v,
+            });
+            let max = match encoding {
+                | LiteralEncoding::Utf8 if matches!(units.first(), Some(LiteralUnit::Numeric(_))) =>
+                    255,
+                | LiteralEncoding::Utf8 => 127,
+                | LiteralEncoding::Utf16 => 65535,
+                | LiteralEncoding::Utf32
+                    if matches!(units.first(), Some(LiteralUnit::Numeric(_))) =>
+                    u32::MAX,
+                | LiteralEncoding::Utf32 => 0x0010_FFFF,
+            };
+            if (units.len() != 1 && (!units.is_empty() || !had_escape_error)) || value > max {
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::LanguageConstraint(
+                        "character constant must encode exactly one code unit",
+                    ),
+                    source_vectors: token.source_vectors,
+                });
+            }
+            CharacterTokenType::EncodedChar(value, encoding)
+        } else {
+            Self::character_value(self.context, token, &units, wide, had_escape_error)
+        };
         self.state.literal_scratch.return_units(units);
         character
     }
@@ -904,13 +1208,18 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             | PreprocessorTokenType::GeneratedString
             | PreprocessorTokenType::WideGeneratedString => {
                 let wide = token.kind == PreprocessorTokenType::WideGeneratedString;
-                let text = &self.context.string_cache.at(token.contents)[usize::from(wide)..];
+                let spelling = self.context.string_cache.at(token.contents);
+                let encoding = wide.then(|| literal_encoding(spelling)).flatten();
+                let prefix_length = encoding.map_or(usize::from(wide), |e| e.prefix().len());
+                let text = &spelling[prefix_length..];
                 let mut units = self.state.literal_scratch.take_units();
                 units.extend(text.chars().map(LiteralUnit::Character));
                 let id = self.context.intern_literal(&units);
                 self.state.literal_scratch.return_units(units);
                 Token {
-                    kind: TokenType::String(if wide {
+                    kind: TokenType::String(if let Some(encoding) = encoding {
+                        StringTokenType::EncodedString(id, encoding)
+                    } else if wide {
                         StringTokenType::WideString(id)
                     } else {
                         StringTokenType::String(id)
@@ -1076,5 +1385,18 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                 return None;
             },
         })
+    }
+}
+
+/// C11 §6.4.5p1: the prefix determines the literal's encoding.
+fn literal_encoding(spelling: &str) -> Option<LiteralEncoding> {
+    if spelling.starts_with("u8") {
+        Some(LiteralEncoding::Utf8)
+    } else if spelling.starts_with('u') {
+        Some(LiteralEncoding::Utf16)
+    } else if spelling.starts_with('U') {
+        Some(LiteralEncoding::Utf32)
+    } else {
+        None
     }
 }

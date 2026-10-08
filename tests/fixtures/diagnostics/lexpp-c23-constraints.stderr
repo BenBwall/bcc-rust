@@ -1,0 +1,31 @@
+error: incompatible string literal encoding prefixes
+ --> lexpp-c23-constraints.c:1:16
+  |
+1 | char *a = u"a" U"b";
+  |                ^^^^
+
+error: character constant must encode exactly one code unit
+ --> lexpp-c23-constraints.c:2:9
+  |
+2 | int b = u8'é';
+  |         ^^^^^
+
+error: ## cannot begin or end a __VA_OPT__ replacement
+ --> lexpp-c23-constraints.c:3:16
+  |
+3 | #define V(...) __VA_OPT__(##)
+  |                ^^^^^^^^^^
+
+error: embedded resource not found
+ --> lexpp-c23-constraints.c:4:2
+  |
+4 | #embed "missing-lexpp-resource.bin"
+  |  ^^^^^
+
+error: resource and C attribute queries require a preprocessing conditional expression
+ --> lexpp-c23-constraints.c:5:13
+  |
+5 | int query = __has_include("missing.h");
+  |             ^^^^^^^^^^^^^
+
+5 errors generated.
