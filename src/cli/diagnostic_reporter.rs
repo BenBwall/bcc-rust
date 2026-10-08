@@ -119,23 +119,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             matches!(error, TranslationError::Parsing(error) if error.is_empty_translation_unit());
         let target =
             if diagnostic.severity == ErrorSeverity::Error && foldable && !location.is_empty() {
-                if parser {
-                    self.last_parser
-                        .filter(|&(index, last_consumed)| {
-                            last_consumed == consumed && self.pending[index].absorbs(location)
-                        })
-                        .map(|(index, _)| index)
-                        .or_else(|| {
-                            self.other_errors.get(location).copied().filter(|&index| {
-                                self.pending[index].absorbs(location)
-                                    && !(empty_translation_unit
-                                        && self.pending[index].preserve_empty_translation_unit)
-                            })
-                        })
-                } else {
-                    self.last_other
-                        .filter(|&index| self.pending[index].absorbs(location))
-                }
+                self.fold_target(parser.then_some(consumed), empty_translation_unit, location)
             } else {
                 None
             };
@@ -167,6 +151,36 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         } else {
             self.last_other = Some(index);
         }
+    }
+
+    /// The pending error that a foldable error at `location` folds into. A
+    /// parser error, which `parser_consumed` gives the input consumed before,
+    /// folds into the parser error just before it when nothing was consumed
+    /// between them, or else into a preprocessing error at that place; any
+    /// other error folds into the preprocessing error just before it.
+    fn fold_target(
+        &self,
+        parser_consumed: Option<usize>,
+        empty_translation_unit: bool,
+        location: &[SourceVector],
+    ) -> Option<usize> {
+        let Some(consumed) = parser_consumed else {
+            return self
+                .last_other
+                .filter(|&index| self.pending[index].absorbs(location));
+        };
+        self.last_parser
+            .filter(|&(index, last_consumed)| {
+                last_consumed == consumed && self.pending[index].absorbs(location)
+            })
+            .map(|(index, _)| index)
+            .or_else(|| {
+                self.other_errors.get(location).copied().filter(|&index| {
+                    self.pending[index].absorbs(location)
+                        && !(empty_translation_unit
+                            && self.pending[index].preserve_empty_translation_unit)
+                })
+            })
     }
 
     /// Reports every pending diagnostic of a parsed translation unit, in
