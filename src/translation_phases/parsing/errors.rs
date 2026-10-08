@@ -395,8 +395,9 @@ impl std::error::Error for ParserError<'_> {}
 ///
 /// Variants accepting `Option<TokenType>` use `Some` for an unexpected token
 /// and `None` for EOF, keeping token and EOF messages specific without
-/// stringly-typed context. Severity and display text are exhaustively defined
-/// below, so adding a new parser failure requires an explicit policy.
+/// stringly-typed context. The diagnostic code, which decides severity, and
+/// the display text are exhaustively defined below, so adding a new parser
+/// failure requires an explicit policy.
 ///
 /// C99: the obligation to diagnose syntax and constraint violations is
 /// §5.1.1.3, p. 11; PDF p. 23. Each variant below also cites the production,
@@ -706,88 +707,15 @@ pub(crate) enum ParserErrorType<'tu> {
 }
 
 impl GetSeverity for ParserErrorType<'_> {
+    /// Quality diagnostics, which C99 does not require, are warnings; every
+    /// other parser diagnostic is an error.
     fn severity(&self) -> ErrorSeverity {
-        match self {
-            | Self::EmptyTranslationUnit
-            | Self::ResourceLimitExceeded { .. }
-            | Self::ParserFrameConsumedAtEndOfInput(..)
-            | Self::ExpectedFunctionBody(..)
-            | Self::DeclarationListAfterParameterTypeList
-            | Self::ExpectedOpeningCurlyBraceInCompoundStatement(..)
-            | Self::ExpectedClosingCurlyBraceInCompoundStatement(..)
-            | Self::ExpectedStatement(..)
-            | Self::ExpectedGotoLabel(..)
-            | Self::ExpectedStatementExpression(..)
-            | Self::ExpectedMsSyntax(..)
-            | Self::ExpectedGnuSyntax(..)
-            | Self::ExpectedIsoSyntax(..)
-            | Self::ExpectedMemberIdentifier(..)
-            | Self::ExpectedClosingSquareBracketInSubscript(..)
-            | Self::ExpectedClosingSquareBracketInArrayDesignator(..)
-            | Self::ExpectedClosingCurlyBraceInInitializerList(..)
-            | Self::ExpectedEqualsAfterInitializerDesignation(..)
-            | Self::ExpectedOpeningParenthesisInStatement(..)
-            | Self::ExpectedClosingParenthesisInStatement(..)
-            | Self::ExpectedSemicolonInStatement(..)
-            | Self::ExpectedColonInLabel(..)
-            | Self::DuplicateDefaultLabel
-            | Self::ExpectedWhileAfterDoBody(..)
-            | Self::ExpectedDeclaratorInTypedef(..)
-            | Self::ExpectedDeclaratorInDeclaration(..)
-            | Self::ExpectedDeclarationContinuationAfterDeclarator(..)
-            | Self::UnexpectedEndBeforeDeclarationSpecifier
-            | Self::UnexpectedEndBeforeTypeSpecifier
-            | Self::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
-            | Self::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(..)
-            | Self::ExpectedClosingParenthesisAfterParenthesizedDeclarator(..)
-            | Self::ExpectedClosingSquareBracketInArrayDirectDeclarator(..)
-            | Self::UnexpectedEndOfFunctionDeclaratorParameterList
-            | Self::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
-            | Self::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(..)
-            | Self::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(..)
-            | Self::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(..)
-            | Self::ExpectedCommaOrClosingParenthesisInFunctionCall(..)
-            | Self::ExpectedStructOrUnionKeyword(..)
-            | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
-            | Self::ExpectedClosingCurlyBraceInStructDeclarationList(..)
-            | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList
-            | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(..)
-            | Self::ExpectedEnumKeyword(..)
-            | Self::EnumSpecifierWithoutNameAndBody(..)
-            | Self::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(..)
-            | Self::ExpectedEnumeratorBeforeClosingCurlyBrace
-            | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(..)
-            | Self::EmptyDeclarationSpecifiers(..)
-            | Self::NoTypeSpecifiersInDeclarationSpecifiers(..)
-            | Self::UnknownTypeName
-            | Self::IncompleteComplexTypeSpecifier
-            | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
-            | Self::BothStaticAndPointerInArrayDirectDeclarator
-            | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator
-            | Self::UnexpectedEndOfArrayDeclaratorAfterPointer
-            | Self::TypeQualifiersWithoutDeclarator
-            | Self::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
-                ..,
-            )
-            | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList
-            | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
-            | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
-            | Self::EmptyStructDeclarator
-            | Self::PointerSpecifiedTwice
-            | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(..)
-            | Self::UnsupportedImaginaryTypeSpecifier
-            | Self::DeclarationSpecifierNotAllowedHere(..)
-            | Self::StorageClassRedefinition(..)
-            | Self::StaticSpecifiedTwice
-            | Self::ConflictingTypeSpecifiers { .. }
-            | Self::TypeSpecifierSpecifiedTwice(..)
-            | Self::LongSpecifiedThrice
-            | Self::LongLongDoubleSpecified => ErrorSeverity::Error,
-            | Self::ConstSpecifiedTwice
-            | Self::VolatileSpecifiedTwice
-            | Self::RestrictSpecifiedTwice
-            | Self::InlineSpecifiedTwice
-            | Self::TypedefDeclaresNoName => ErrorSeverity::Warning,
+        match self.code() {
+            | ParserDiagnosticCode::Quality => ErrorSeverity::Warning,
+            | ParserDiagnosticCode::Syntax
+            | ParserDiagnosticCode::Constraint
+            | ParserDiagnosticCode::ResourceLimit
+            | ParserDiagnosticCode::InternalInvariant => ErrorSeverity::Error,
         }
     }
 }
@@ -855,7 +783,8 @@ const SPECIFIER_COMBINATIONS_NOTE: &str =
 impl ParserErrorType<'_> {
     /// Classifies the diagnostic: `Constraint` for a rule stated in a
     /// Constraints paragraph, `Syntax` for a grammar violation, both required
-    /// by §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    /// by §5.1.1.3 paragraph 1, p. 11; PDF p. 23, and `Quality` for one C99
+    /// does not require. Every variant is listed, so a new one needs a code.
     pub(super) fn code(&self) -> ParserDiagnosticCode {
         match self {
             | Self::ResourceLimitExceeded { .. } => ParserDiagnosticCode::ResourceLimit,
@@ -879,7 +808,65 @@ impl ParserErrorType<'_> {
             | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
             | Self::DeclarationListAfterParameterTypeList
             | Self::DuplicateDefaultLabel => ParserDiagnosticCode::Constraint,
-            | _ => ParserDiagnosticCode::Syntax,
+            | Self::EmptyTranslationUnit
+            | Self::ExpectedFunctionBody(..)
+            | Self::ExpectedOpeningCurlyBraceInCompoundStatement(..)
+            | Self::ExpectedClosingCurlyBraceInCompoundStatement(..)
+            | Self::ExpectedStatement(..)
+            | Self::ExpectedGotoLabel(..)
+            | Self::ExpectedStatementExpression(..)
+            | Self::ExpectedMsSyntax(..)
+            | Self::ExpectedGnuSyntax(..)
+            | Self::ExpectedIsoSyntax(..)
+            | Self::ExpectedMemberIdentifier(..)
+            | Self::ExpectedClosingSquareBracketInSubscript(..)
+            | Self::ExpectedClosingSquareBracketInArrayDesignator(..)
+            | Self::ExpectedClosingCurlyBraceInInitializerList(..)
+            | Self::ExpectedEqualsAfterInitializerDesignation(..)
+            | Self::ExpectedOpeningParenthesisInStatement(..)
+            | Self::ExpectedClosingParenthesisInStatement(..)
+            | Self::ExpectedSemicolonInStatement(..)
+            | Self::ExpectedColonInLabel(..)
+            | Self::ExpectedWhileAfterDoBody(..)
+            | Self::ExpectedDeclaratorInTypedef(..)
+            | Self::ExpectedDeclaratorInDeclaration(..)
+            | Self::ExpectedDeclarationContinuationAfterDeclarator(..)
+            | Self::UnexpectedEndBeforeDeclarationSpecifier
+            | Self::UnexpectedEndBeforeTypeSpecifier
+            | Self::DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis(..)
+            | Self::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(..)
+            | Self::ExpectedClosingParenthesisAfterParenthesizedDeclarator(..)
+            | Self::ExpectedClosingSquareBracketInArrayDirectDeclarator(..)
+            | Self::UnexpectedEndOfFunctionDeclaratorParameterList
+            | Self::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(..)
+            | Self::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(..)
+            | Self::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(..)
+            | Self::ExpectedParameterDeclarationAfterCommaInFunctionDeclarator(..)
+            | Self::ExpectedCommaOrClosingParenthesisInFunctionCall(..)
+            | Self::ExpectedStructOrUnionKeyword(..)
+            | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
+            | Self::ExpectedClosingCurlyBraceInStructDeclarationList(..)
+            | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList
+            | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(..)
+            | Self::ExpectedEnumKeyword(..)
+            | Self::EnumSpecifierWithoutNameAndBody(..)
+            | Self::ExpectedEnumerationConstantOrClosingCurlyInEnumeratorList(..)
+            | Self::ExpectedEnumeratorBeforeClosingCurlyBrace
+            | Self::ExpectedCommaOrClosingCurlyInEnumeratorList(..)
+            | Self::EmptyDeclarationSpecifiers(..)
+            | Self::NoTypeSpecifiersInDeclarationSpecifiers(..)
+            | Self::UnknownTypeName
+            | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator
+            | Self::UnexpectedEndOfArrayDeclaratorAfterPointer
+            | Self::TypeQualifiersWithoutDeclarator
+            | Self::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
+                ..,
+            )
+            | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList
+            | Self::EmptyStructDeclarator
+            | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(..)
+            | Self::UnsupportedImaginaryTypeSpecifier
+            | Self::DeclarationSpecifierNotAllowedHere(..) => ParserDiagnosticCode::Syntax,
         }
     }
 
